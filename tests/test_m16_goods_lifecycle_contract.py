@@ -1,10 +1,7 @@
 from pathlib import Path
 
-from app.cn.goods_lifecycle import (
-    GOODS_ITEM_IDENTITY_VERSION,
-    incoming_goods_sql,
-    scope_from_current_items_sql,
-)
+from app.cn.goods_lifecycle import GOODS_ITEM_IDENTITY_VERSION, scope_from_current_items_sql
+from app.cn.goods_lifecycle_sql import incoming_goods_sql as runtime_incoming_goods_sql
 
 
 def test_monthly_scope_is_rebuilt_from_durable_current_items():
@@ -16,8 +13,8 @@ def test_monthly_scope_is_rebuilt_from_durable_current_items():
     assert "item.class_no" in sql
 
 
-def test_goods_item_identity_uses_strict_source_fields_not_sequence_alone():
-    sql = incoming_goods_sql("00000000-0000-0000-0000-000000000001")
+def test_runtime_goods_item_identity_uses_strict_source_fields_not_sequence_alone():
+    sql = runtime_incoming_goods_sql("00000000-0000-0000-0000-000000000001")
     assert GOODS_ITEM_IDENTITY_VERSION == "CN_GOODS_ITEM_ID_V2_STRICT_SOURCE_FIELDS"
     assert "'|SEQ|', goods_sequence" in sql
     assert "'|GROUP|', similar_group" in sql
