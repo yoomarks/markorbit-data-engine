@@ -46,6 +46,8 @@ A later cross-package reconciliation layer may introduce stronger identity linki
 
 The first V2 audit passed with zero conflicting keys, but a subsequent 1999 replay still produced the retired item count. This exposed a second implementation defect: `ingest_m16.py` routes production through `app/cn/goods_lifecycle_sql.py`, while the audit/fixture path had already been updated in `goods_lifecycle.py`. Runtime SQL was therefore still using the retired sequence-oriented key. The runtime builder is now also V2 and the contract test targets that exact builder so this split cannot silently recur.
 
+For the 1999 package specifically, the V2 audit reports 6,091,001 staged rows and 82 exact duplicate excess rows with zero conflicting excess rows. Therefore the expected logical item count after a correct V2 production replay is 6,090,919. A replay that still produces 6,081,430 is evidence that the retired runtime identity is still in use.
+
 ## Item status mapping
 
 | raw | item semantic | source finality | operational effect |
