@@ -25,7 +25,10 @@ def _stage_goods(
         record = {
             "application_number": application_number,
             "class_no": "25",
-            "similar_group": f"250{index}",
+            # Identity V2 includes similar_group + normalized goods_name. Keep
+            # those fields stable for the same fixture item across packages;
+            # package-local row position must never define item identity.
+            "similar_group": f"250{sequence}",
             "goods_sequence": sequence,
             "goods_name": f"M16 fixture goods {sequence}",
             "goods_status_raw": status_code,
