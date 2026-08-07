@@ -1,6 +1,6 @@
 [project]
 name = "markorbit-data-engine"
-version = "0.3.0"
+version = "0.3.3"
 description = "MarkOrbit CN trademark data engine M1.5"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,7 +16,7 @@ dev = ["pytest==8.4.1", "ruff==0.12.7"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "0.3.3"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

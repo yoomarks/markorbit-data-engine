@@ -1,0 +1,33 @@
+MarkOrbit Data Engine — M1.5.3 Contract Freeze
+
+Purpose
+- Stop the lineage hotfix chain.
+- Freeze stage vs permanent lineage field contracts.
+- Eliminate ClickHouse 24.8 alias collisions/nested-aggregate false resolution.
+- Add a zero-data runtime preflight that compiles every production publish SQL path before any real ZIP retry.
+
+Changed / added files
+- app/cn/ingest.py
+- app/cn/validate_contract.py
+- database/clickhouse/init/001_fact_schema.sql
+- scripts/validate-cn-contract.ps1
+- scripts/retry-cn.ps1
+- tests/test_m15_schema_contract.py
+- tests/test_m153_sql_lineage_contract.py
+- docs/M1_5_3_CONTRACT_FREEZE.md
+- VERSION
+- pyproject.toml
+
+Local verification performed before packaging
+- python -m py_compile app/cn/ingest.py app/cn/validate_contract.py
+- PYTHONPATH=. pytest -q tests/test_clickhouse_sql_compat.py tests/test_m15_insert_contract.py tests/test_m15_schema_contract.py tests/test_m153_sql_lineage_contract.py
+- Result: 15 passed
+
+User run order after overlay
+1. docker compose build api worker
+2. docker compose up -d api worker
+3. powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-cn-contract.ps1
+4. Only if PASS: powershell.exe -ExecutionPolicy Bypass -File .\scripts\retry-cn.ps1
+
+Note
+retry-cn.ps1 now runs the same contract preflight first and refuses to start the real retry when preflight fails.
