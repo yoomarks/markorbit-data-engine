@@ -29,7 +29,7 @@ _LEGACY_CLEANUP_PARTIAL = legacy._cleanup_partial_outputs
 def _publish_m16(
     package_uuid: uuid.UUID,
     package_meta: dict[str, Any],
-) -> dict[str, int]:
+) -> dict[str, Any]:
     lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
 
     # The legacy publisher still owns case, party, relation, event and scope
@@ -45,6 +45,9 @@ def _publish_m16(
 
     metrics.update(lifecycle_metrics)
     metrics["goods_status_model_version"] = "M1.6"
+    # Emit the active identity contract in every real-package publish result so
+    # stale local source / stale Docker images are visible immediately in logs.
+    metrics["goods_item_identity_version"] = goods.GOODS_ITEM_IDENTITY_VERSION
     return metrics
 
 
