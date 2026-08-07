@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from app.cn.goods_lifecycle import incoming_goods_sql, scope_from_current_items_sql
+from app.cn.goods_lifecycle import (
+    GOODS_ITEM_IDENTITY_VERSION,
+    incoming_goods_sql,
+    scope_from_current_items_sql,
+)
 
 
 def test_monthly_scope_is_rebuilt_from_durable_current_items():
@@ -12,11 +16,13 @@ def test_monthly_scope_is_rebuilt_from_durable_current_items():
     assert "item.class_no" in sql
 
 
-def test_goods_item_identity_prefers_source_sequence():
+def test_goods_item_identity_uses_strict_source_fields_not_sequence_alone():
     sql = incoming_goods_sql("00000000-0000-0000-0000-000000000001")
-    assert "|SEQ|" in sql
-    assert "|NAME|" in sql
-    assert "goods_sequence != ''" in sql
+    assert GOODS_ITEM_IDENTITY_VERSION == "CN_GOODS_ITEM_ID_V2_STRICT_SOURCE_FIELDS"
+    assert "'|SEQ|', goods_sequence" in sql
+    assert "'|GROUP|', similar_group" in sql
+    assert "'|NAME|', lowerUTF8(goods_name)" in sql
+    assert "goods_sequence != ''" not in sql
 
 
 def test_ingest_entrypoint_routes_through_m16_wrapper():
