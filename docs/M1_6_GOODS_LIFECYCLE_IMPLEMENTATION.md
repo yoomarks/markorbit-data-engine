@@ -19,6 +19,7 @@ M1.5 aggregated each package directly into `cn_case_scope_current`. That is safe
 7. Code `1` is an item-level high-confidence inactive signal, not a cause code.
 8. Code `2` is an item-level final inactive signal, not a cause code.
 9. Legal causes such as refusal, opposition, cancellation, non-use cancellation, invalidation, voluntary cancellation, or non-renewal require separate evidence or a separately versioned inference model.
+10. A goods sequence value is not globally unique within one case/class and MUST NOT be used alone as item identity.
 
 ## New durable tables
 
@@ -27,6 +28,20 @@ M1.5 aggregated each package directly into `cn_case_scope_current`. That is safe
 - `cn_goods_scope_lifecycle_current`: class-level lifecycle counters derived from the complete item set.
 
 The existing `cn_case_scope_current` remains the compatibility/current search scope, but M1.6 reconstructs touched scopes from `cn_goods_item_current` rather than from the current package alone.
+
+## Goods item identity
+
+The 1999 real-package audit proved that `(application_number, class_no, goods_sequence)` is not a valid unique item key. Sequence `0` is commonly reused for many different goods, and non-zero sequence values can also repeat across different similar groups.
+
+M1.6 therefore uses identity version `CN_GOODS_ITEM_ID_V2_STRICT_SOURCE_FIELDS` with a deterministic source-observation key built from:
+
+`application_number + class_no + goods_sequence + similar_group + normalized goods_name`
+
+This deliberately favors preservation over aggressive merging. Exact repeated source rows may collapse to one logical item, but different goods names or similar groups must never be merged merely because their sequence values match.
+
+The identity key does **not** include goods status, because a status change must update the same goods item rather than create a new identity.
+
+A later cross-package reconciliation layer may introduce stronger identity linking if real monthly data proves that wording or similar-group values can change for the same legal goods item. Such linking must be evidence-based and must never silently overwrite the strict source observation identity.
 
 ## Item status mapping
 
@@ -43,6 +58,8 @@ Mapping evidence is labelled `EMPIRICAL_DOMAIN_MAPPING` and is intentionally not
 
 An existing M1.5 database has class-level scopes but no durable item history because successful package staging rows were cleaned. M1.6 refuses to ingest new packages when `cn_case_scope_current` is populated but `cn_goods_item_current` is empty.
 
+Any database populated with the retired sequence-only M1.6 identity must also be replayed after the V2 strict identity change. Those item keys are not compatible and must not be mixed.
+
 For development, use a clean replay from authoritative raw ZIP files. `scripts/reset-m16.ps1` preserves raw data, copies archived CN ZIPs back to the incoming replay queue, recreates the databases, and starts PostgreSQL/ClickHouse/API without the worker.
 
 ## Validation order
@@ -51,10 +68,11 @@ For development, use a clean replay from authoritative raw ZIP files. `scripts/r
 2. `scripts/validate-cn-contract.ps1`
 3. `scripts/validate-cn-fixture.ps1`
 4. `scripts/validate-m16-goods.ps1`
-5. replay base packages in source order
-6. run integrity audit
-7. only then test monthly packages
-8. only after monthly delta validation start the worker
+5. run `audit-m16-goods-identity.ps1` against the first real base package
+6. replay base packages in source order
+7. run integrity audit
+8. only then test monthly packages
+9. only after monthly delta validation start the worker
 
 The M1.6 goods fixture explicitly creates three baseline goods, applies a monthly patch containing only one changed item, and requires all three items to remain present after the patch.
 
