@@ -12,7 +12,7 @@ Observed interpretation:
 
 - blank / no negative code: no negative goods-status signal observed.
 - `0`: the item has been, or may currently be, in a renewal grace / transition-risk condition. The item may later recover (for example after a late renewal) and therefore MUST NOT be treated as finally invalid.
-- `1`: the item has passed a renewal/grace deadline or another loss-of-rights condition, but the office has not yet completed the final deletion/invalidation acknowledgement. Operationally it is likely ineffective, but it is not yet a final official inactive signal.
+- `1`: the item is strongly associated with expiration for non-renewal after the ordinary/grace renewal period has passed. In observed practice, these cases have generally already received a non-renewal invalidation/expiration notice, even though CNIPA's public status may remain unresolved/question-mark-like and the goods code may remain `1` indefinitely instead of being promoted to `2`. Operationally, code `1` should therefore be treated as a high-confidence inactive/non-renewed signal, but the system must preserve that it is not the same source code as `2` and must not invent a specific final administrative status label that the source did not provide.
 - `2`: a final negative outcome has been observed for the item, including non-renewal, cancellation, non-use cancellation, invalidation, voluntary cancellation, refusal or another finally effective loss event. Code `2` identifies final item inactivity; it does NOT by itself identify the legal cause.
 
 The system must preserve the raw code and distinguish observed fact from inferred legal effect.
@@ -50,6 +50,7 @@ Minimum logical fields:
 - status_code_raw
 - status_semantic
 - status_finality
+- operational_effect
 - source_package_kind
 - source_effective_date
 - source_file
@@ -70,28 +71,43 @@ Every base observation and monthly change should be traceable.
 
 Recommended semantic values:
 
-| raw code | semantic state | finality | treatment |
-|---|---|---|---|
-| blank | NO_NEGATIVE_SIGNAL | OPEN | count as currently effective unless contradicted by stronger evidence |
-| 0 | AT_RISK_OR_GRACE | REVERSIBLE | do not remove from effective scope; surface risk |
-| 1 | PENDING_INACTIVE | PROVISIONAL | likely ineffective operationally, but not final official deletion |
-| 2 | FINAL_INACTIVE | FINAL | remove from effective goods scope |
-| other | UNKNOWN | UNKNOWN | preserve raw code; no destructive inference |
+| raw code | semantic state | source finality | operational effect | treatment |
+|---|---|---|---|---|
+| blank | NO_NEGATIVE_SIGNAL | OPEN | EFFECTIVE_UNLESS_CONTRADICTED | count as currently effective unless contradicted by stronger evidence |
+| 0 | RENEWAL_GRACE_OR_RISK | REVERSIBLE | EFFECTIVE_AT_RISK | do not remove from effective scope; surface renewal/grace risk |
+| 1 | EXPIRED_NONRENEWAL_PENDING_SOURCE_CLOSE | SOURCE_NOT_FINALIZED | INACTIVE_HIGH_CONFIDENCE | normally exclude from operationally effective scope; preserve code `1` and do not relabel it as code `2` |
+| 2 | FINAL_INACTIVE | FINAL | INACTIVE_CONFIRMED | remove from effective goods scope |
+| other | UNKNOWN | UNKNOWN | UNKNOWN | preserve raw code; no destructive inference |
 
 The mapping must carry a version such as `CN_GOODS_STATUS_V2_LIFECYCLE` and an evidence label such as `EMPIRICAL_DOMAIN_MAPPING`.
+
+### Important distinction for code `1`
+
+Code `1` is **not** merely a transient "pending inactive" state that must later transition to `2`.
+
+Observed behavior indicates that code `1` can be terminal in the source dataset: the trademark has effectively expired for non-renewal, a non-renewal invalidation/expiration notice has generally been issued, but the office/public database may not convert the goods record to code `2` and may leave the overall status unresolved.
+
+Therefore:
+
+- do not require a `1 -> 2` transition;
+- do not keep code-1 goods in the operationally effective scope merely because the public status is unresolved;
+- do preserve a distinction between `INACTIVE_HIGH_CONFIDENCE` (`1`) and `INACTIVE_CONFIRMED` (`2`);
+- if another official event later proves renewal/restoration, that stronger later evidence may reactivate the item.
 
 ## 5. Scope reconstruction
 
 For each application number + class:
 
 - baseline_item_count: number of distinct goods established by the full/base observation;
-- effective_item_count: goods not in FINAL_INACTIVE;
+- operational_effective_item_count: goods whose current operational effect is `EFFECTIVE_UNLESS_CONTRADICTED` or `EFFECTIVE_AT_RISK`;
+- renewal_risk_item_count: status `0`;
+- nonrenewal_inactive_item_count: status `1`;
 - final_inactive_item_count: status `2`;
-- pending_inactive_item_count: status `1`;
-- at_risk_item_count: status `0`;
+- inactive_high_confidence_item_count: status `1` + status `2`;
 - unknown_item_count: unsupported codes;
-- partial_loss_flag: final_inactive_item_count > 0 AND effective_item_count > 0;
-- full_final_loss_flag: baseline_item_count > 0 AND final_inactive_item_count = baseline_item_count;
+- partial_final_loss_flag: final_inactive_item_count > 0 AND operational_effective_item_count > 0;
+- all_operationally_inactive_flag: baseline_item_count > 0 AND inactive_high_confidence_item_count = baseline_item_count;
+- full_final_loss_flag: baseline_item_count > 0 AND final_inactive_item_count = baseline_item_count.
 
 A monthly package that mentions only two changed goods must update those two items and then recompute these counts over the complete durable item set.
 
@@ -101,39 +117,50 @@ Goods status provides strong evidence but must not be overclaimed.
 
 Suggested inferred states:
 
-- all known goods FINAL_INACTIVE -> `ALL_GOODS_FINAL_INACTIVE`
-- some goods FINAL_INACTIVE, some remain -> `PARTIAL_GOODS_FINAL_INACTIVE`
-- no code 2 but one or more code 1 -> `LIKELY_INACTIVE_PENDING_OFFICIAL`
-- one or more code 0 -> `AT_RISK_OR_GRACE`
+- all known goods code `2` -> `ALL_GOODS_FINAL_INACTIVE`
+- some goods code `2`, some remain operationally effective -> `PARTIAL_GOODS_FINAL_INACTIVE`
+- all known goods are code `1` and/or `2`, with at least one code `1` -> `ALL_GOODS_OPERATIONALLY_INACTIVE_HIGH_CONFIDENCE`
+- one or more code `1`, while other goods remain effective -> `PARTIAL_NONRENEWAL_INACTIVE_HIGH_CONFIDENCE`
+- one or more code `0` -> `RENEWAL_GRACE_OR_RISK`
 - otherwise -> `NO_NEGATIVE_GOODS_SIGNAL`
 
 These are inferred operational states, not official case status labels.
 
 The cause of a code-2 loss MUST remain `UNKNOWN` unless another official source identifies refusal, cancellation, non-use cancellation, invalidation, non-renewal, voluntary cancellation, etc.
 
-## 7. Refusal / cancellation interpretation
+For code `1`, the inferred cause may be `NONRENEWAL_EXPIRATION_HIGH_CONFIDENCE` when supported by the empirical source behavior, but it must remain labelled as an inference unless a separate official event/notice confirms the cause for that case.
+
+## 7. Refusal / cancellation / non-renewal interpretation
 
 The goods lifecycle can materially improve outcome inference:
 
 - if all goods eventually become code `2`, the case/class has a strong final-loss signal;
 - if only part of the goods become code `2`, the system should infer a partial adverse result rather than total case invalidity;
+- if all goods are code `1`, the system should infer a strong non-renewal expiration condition even if the public database status remains unresolved;
 - if code `0` later returns to a non-negative state, this is evidence of a reversible grace/renewal recovery path;
-- transitions `0 -> 1 -> 2`, `1 -> 2`, `0 -> recovered`, and partial subsets changing to `2` should be explicitly measured once monthly data is loaded.
+- transitions `0 -> 1`, `0 -> 2`, direct blank -> `2`, persistent `1`, and partial subsets changing to `2` should all be measured once monthly data is loaded.
 
 ## 8. Required transition validation
 
 Before promoting the mapping from empirical to verified, build a longitudinal analyzer over monthly packages and report:
 
+- blank -> 0
+- blank -> 1
+- blank -> 2
 - 0 -> blank / recovered
 - 0 -> 1
 - 0 -> 2
-- 1 -> 2
-- 1 -> recovered
+- persistence duration of code `1`
+- 1 -> 2 (do not assume this is required)
+- 1 -> recovered / renewed
 - 2 -> any non-2 value (should be rare and investigated)
 - partial item subset -> 2
+- all items -> 1/2
 - all items -> 2
 
-Cross-check samples against known renewal, cancellation, invalidation, refusal and other official events when available.
+Cross-check samples against known renewal, non-renewal expiration, cancellation, invalidation, refusal and other official events when available.
+
+A particularly important empirical test is whether code `1` correlates with expired `valid_until` dates and known non-renewal notices while remaining code `1` for long periods. If confirmed at scale, this supports treating code `1` as operationally inactive without requiring a later code `2`.
 
 ## 9. Migration rule for the current M1.5 model
 
@@ -153,4 +180,4 @@ Required migration order:
 
 ## 10. Design invariant
 
-**Base package defines the known full goods set. Monthly package patches only changed goods. Omission is never deletion. Final case/class loss may be inferred only from the reconstructed complete goods set, never from the contents of one monthly patch.**
+**Base package defines the known full goods set. Monthly package patches only changed goods. Omission is never deletion. Code `1` is a high-confidence non-renewal inactivity signal that may remain terminal in the source data; code `2` is a confirmed final inactive goods signal. Final case/class conclusions must be inferred from the reconstructed complete goods set, never from the contents of one monthly patch.**
