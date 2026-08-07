@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,48 @@ def ensure_raw_directories() -> None:
         "temp",
     ):
         (root / relative).mkdir(parents=True, exist_ok=True)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _resolve_package_path(package: dict[str, Any], raw_root: Path) -> Path | None:
+    """Resolve a registered raw package without trusting a stale location.
+
+    Successful ingestion archives the authoritative ZIP. A process can fail after
+    that move but before PostgreSQL is updated, leaving file_path pointing at the
+    old incoming location. Recovery must use the registered SHA-256 rather than a
+    filename-only guess.
+    """
+    declared = Path(str(package["file_path"]))
+    if declared.exists():
+        return declared
+
+    file_name = str(package["file_name"])
+    expected_sha = str(package.get("sha256") or "").lower()
+    incoming = raw_root / "incoming" / "cn"
+    archive = raw_root / "archive" / "cn"
+
+    candidates: list[Path] = [incoming / file_name, archive / file_name]
+    stem = Path(file_name).stem
+    suffix = Path(file_name).suffix
+    if archive.exists():
+        candidates.extend(sorted(archive.glob(f"{stem}_*{suffix}")))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        if expected_sha and _file_sha256(candidate).lower() != expected_sha:
+            continue
+        return candidate
+    return None
 
 
 def scan_cn_incoming(trigger_type: str = "MANUAL") -> dict[str, int]:
@@ -68,7 +111,7 @@ def ingest_pending_cn(
         "packages": [],
     }
 
-    statuses = ("FAILED",) if include_failed else ("REGISTERED",)
+    statuses = ("FAILED", "MISSING_FILE") if include_failed else ("REGISTERED",)
     candidates = pending_packages(
         "CN",
         limit=max(limit * 20, 100),
@@ -79,9 +122,13 @@ def ingest_pending_cn(
         if result["attempted"] >= limit:
             break
 
-        path = Path(package["file_path"])
-        if not path.exists():
-            message = f"Source package file is missing: {path}"
+        path = _resolve_package_path(package, settings.raw_data_root)
+        if path is None:
+            declared = Path(str(package["file_path"]))
+            message = (
+                f"Source package file is missing and no SHA-256-matching archive copy "
+                f"was found: {declared}"
+            )
             update_package_status(
                 str(package["package_id"]),
                 "MISSING_FILE",
@@ -105,7 +152,7 @@ def ingest_pending_cn(
                 path,
                 settings.raw_data_root,
                 trigger_type=trigger_type,
-                retrying=package["status"] == "FAILED",
+                retrying=package["status"] in {"FAILED", "MISSING_FILE"},
             )
             result["success"] += 1
             result["packages"].append(
