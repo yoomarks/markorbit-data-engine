@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from app.cn.ingest import ingest_cn_package
+from app.cn.ingest_m16 import ingest_cn_package
 from app.config import get_settings
 from app.repository import (
     create_job_run,
