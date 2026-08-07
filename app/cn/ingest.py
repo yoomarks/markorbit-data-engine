@@ -551,46 +551,65 @@ def _case_aggregate_sql(package: str) -> str:
         (
             SELECT
                 case_id,
-                argMax(family_root_case_id, toUInt64(source_start_line)) AS family_root_case_id,
+                argMax(family_root_case_id, toUInt64(source_first_line)) AS family_root_case_id,
                 application_number,
-                argMax(case_family_root, toUInt64(source_start_line)) AS case_family_root,
-                argMax(suffix_path, toUInt64(source_start_line)) AS suffix_path,
-                argMax(filing_route, toUInt64(source_start_line)) AS filing_route,
-                argMax(number_family, toUInt64(source_start_line)) AS number_family,
-                argMax(international_registration_number, toUInt64(source_start_line))
+                argMax(case_family_root, toUInt64(source_first_line)) AS case_family_root,
+                argMax(suffix_path, toUInt64(source_first_line)) AS suffix_path,
+                argMax(filing_route, toUInt64(source_first_line)) AS filing_route,
+                argMax(number_family, toUInt64(source_first_line)) AS number_family,
+                argMax(international_registration_number, toUInt64(source_first_line))
                     AS international_registration_number,
                 max(is_derived_case) AS is_derived_case,
-                argMax(relation_id, toUInt64(source_start_line)) AS relation_id,
-                argMax(mark_name_raw, toUInt64(source_start_line)) AS mark_name_raw,
-                argMax(mark_type_raw, toUInt64(source_start_line)) AS mark_type_raw,
-                argMax(mark_form_raw, toUInt64(source_start_line)) AS mark_form_raw,
-                argMax(agent_code, toUInt64(source_start_line)) AS agent_code,
+                argMax(relation_id, toUInt64(source_first_line)) AS relation_id,
+                argMax(mark_name_raw, toUInt64(source_first_line)) AS mark_name_raw,
+                argMax(mark_type_raw, toUInt64(source_first_line)) AS mark_type_raw,
+                argMax(mark_form_raw, toUInt64(source_first_line)) AS mark_form_raw,
+                argMax(agent_code, toUInt64(source_first_line)) AS agent_code,
                 min(filing_date) AS filing_date,
-                argMax(prelim_pub_date, toUInt64(source_start_line)) AS prelim_pub_date,
-                argMax(prelim_pub_issue, toUInt64(source_start_line)) AS prelim_pub_issue,
-                argMax(registration_pub_date, toUInt64(source_start_line)) AS registration_pub_date,
-                argMax(registration_pub_issue, toUInt64(source_start_line)) AS registration_pub_issue,
-                argMax(exclusive_start_date, toUInt64(source_start_line)) AS exclusive_start_date,
-                argMax(exclusive_end_date, toUInt64(source_start_line)) AS exclusive_end_date,
-                argMax(exclusive_period, toUInt64(source_start_line)) AS exclusive_period,
-                argMax(design_description, toUInt64(source_start_line)) AS design_description,
-                argMax(color_description, toUInt64(source_start_line)) AS color_description,
-                argMax(exclusive_rights_disclaimer, toUInt64(source_start_line))
+                argMax(prelim_pub_date, toUInt64(source_first_line)) AS prelim_pub_date,
+                argMax(prelim_pub_issue, toUInt64(source_first_line)) AS prelim_pub_issue,
+                argMax(registration_pub_date, toUInt64(source_first_line)) AS registration_pub_date,
+                argMax(registration_pub_issue, toUInt64(source_first_line)) AS registration_pub_issue,
+                argMax(exclusive_start_date, toUInt64(source_first_line)) AS exclusive_start_date,
+                argMax(exclusive_end_date, toUInt64(source_first_line)) AS exclusive_end_date,
+                argMax(exclusive_period, toUInt64(source_first_line)) AS exclusive_period,
+                argMax(design_description, toUInt64(source_first_line)) AS design_description,
+                argMax(color_description, toUInt64(source_first_line)) AS color_description,
+                argMax(exclusive_rights_disclaimer, toUInt64(source_first_line))
                     AS exclusive_rights_disclaimer,
                 max(is_3d_mark) AS is_3d_mark,
                 max(is_co_application) AS is_co_application,
-                argMax(geo_indication_info, toUInt64(source_start_line)) AS geo_indication_info,
-                argMax(color_mark_flag, toUInt64(source_start_line)) AS color_mark_flag,
+                argMax(geo_indication_info, toUInt64(source_first_line)) AS geo_indication_info,
+                argMax(color_mark_flag, toUInt64(source_first_line)) AS color_mark_flag,
                 max(is_well_known_mark) AS is_well_known_mark,
                 arraySort(groupUniqArray(class_no)) AS classes,
                 arraySort(arrayDistinct(arrayFlatten(groupArray(date_quality_flags))))
                     AS data_quality_flags,
-                argMin(source_file, toUInt64(source_start_line)) AS source_file,
-                    min(toUInt64(source_start_line)) AS source_first_line,
-                max(toUInt64(source_end_line)) AS source_last_line,
+                argMin(source_file, toUInt64(source_first_line)) AS source_file,
+                min(toUInt64(source_first_line)) AS source_first_line,
+                max(toUInt64(source_last_line)) AS source_last_line,
                 hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|')))
                     AS source_row_hash
-            FROM markorbit_facts.cn_stage_basic
+            FROM (
+                SELECT
+                    package_id, case_id, family_root_case_id, application_number,
+                    case_family_root, suffix_path, filing_route, number_family,
+                    international_registration_number, is_derived_case, relation_id,
+                    class_no, filing_date, filing_date_raw, mark_name_raw,
+                    mark_type_raw, agent_code, agent_relation_id,
+                    agent_relation_key, agent_mention_id, agent_entity_id,
+                    prelim_pub_issue, prelim_pub_date, prelim_pub_date_raw,
+                    registration_pub_issue, registration_pub_date,
+                    registration_pub_date_raw, exclusive_start_date,
+                    exclusive_start_date_raw, exclusive_end_date,
+                    exclusive_end_date_raw, exclusive_period, design_description,
+                    color_description, exclusive_rights_disclaimer, is_3d_mark,
+                    is_co_application, mark_form_raw, geo_indication_info,
+                    color_mark_flag, is_well_known_mark, date_quality_flags,
+                    source_file, source_start_line AS source_first_line,
+                    source_end_line AS source_last_line, row_hash
+                FROM markorbit_facts.cn_stage_basic
+            ) AS stage_basic
             WHERE package_id = toUUID('{package}')
             GROUP BY case_id, application_number
         ) AS aggregated
@@ -628,7 +647,7 @@ def _scope_aggregate_sql(package: str) -> str:
                 toUInt32(countIf(goods_status_bucket = 'ACTIVE')) AS interpreted_active_item_count,
                 toUInt32(countIf(goods_status_bucket = 'INACTIVE')) AS interpreted_inactive_item_count,
                 toUInt32(countIf(goods_status_bucket = 'UNKNOWN')) AS unmapped_status_item_count,
-                argMax(goods_status_mapping_version, toUInt64(source_start_line))
+                argMax(goods_status_mapping_version, toUInt64(source_first_line))
                     AS goods_status_mapping_version,
                 arraySort(groupUniqArray(if(goods_status_raw = '', '<BLANK>', goods_status_raw)))
                     AS observed_status_codes,
@@ -642,12 +661,22 @@ def _scope_aggregate_sql(package: str) -> str:
                 arraySort(arrayFilter(
                     x -> x != '', groupUniqArrayIf(similar_group, goods_status_bucket = 'ACTIVE')
                 )) AS active_similar_groups,
-                argMin(source_file, toUInt64(source_start_line)) AS source_file,
-                    min(toUInt64(source_start_line)) AS source_first_line,
-                max(toUInt64(source_end_line)) AS source_last_line,
+                argMin(source_file, toUInt64(source_first_line)) AS source_file,
+                min(toUInt64(source_first_line)) AS source_first_line,
+                max(toUInt64(source_last_line)) AS source_last_line,
                 hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|')))
                     AS source_row_hash
-            FROM markorbit_facts.cn_stage_goods
+            FROM (
+                SELECT
+                    package_id, case_id, application_number, class_no,
+                    similar_group, goods_sequence, goods_name, goods_status_raw,
+                    goods_status_bucket, goods_status_reason,
+                    goods_status_mapping_version, source_file,
+                    source_start_line AS source_first_line,
+                    source_end_line AS source_last_line,
+                    row_hash
+                FROM markorbit_facts.cn_stage_goods
+            ) AS stage_goods
             WHERE package_id = toUUID('{package}')
             GROUP BY case_id, application_number, class_no
         ) AS aggregated
@@ -658,8 +687,6 @@ def _party_aggregate_sql(package: str) -> str:
     return f"""
         SELECT
             party.*,
-            party.source_first_line AS source_start_line,
-            party.source_last_line AS source_last_line,
             hex(SHA256(concat(
                 application_number, '|', role, '|', relation_key, '|', raw_name, '|',
                 raw_address, '|', arrayStringConcat(arrayMap(x -> toString(x), class_nos), ',')
@@ -672,24 +699,34 @@ def _party_aggregate_sql(package: str) -> str:
                 'OWNER' AS role,
                 relation_id,
                 relation_key,
-                argMax(mention_id, toUInt64(source_start_line)) AS mention_id,
-                argMax(entity_id, toUInt64(source_start_line)) AS entity_id,
+                argMax(mention_id, toUInt64(source_first_line)) AS mention_id,
+                argMax(entity_id, toUInt64(source_first_line)) AS entity_id,
                 '' AS agent_code,
-                argMax(raw_name, toUInt64(source_start_line)) AS raw_name,
-                argMax(normalized_name, toUInt64(source_start_line)) AS normalized_name,
-                argMax(raw_address, toUInt64(source_start_line)) AS raw_address,
-                argMax(normalized_address, toUInt64(source_start_line)) AS normalized_address,
-                argMax(country_code, toUInt64(source_start_line)) AS country_code,
-                argMax(region_code, toUInt64(source_start_line)) AS region_code,
-                argMax(city, toUInt64(source_start_line)) AS city,
+                argMax(raw_name, toUInt64(source_first_line)) AS raw_name,
+                argMax(normalized_name, toUInt64(source_first_line)) AS normalized_name,
+                argMax(raw_address, toUInt64(source_first_line)) AS raw_address,
+                argMax(normalized_address, toUInt64(source_first_line)) AS normalized_address,
+                argMax(country_code, toUInt64(source_first_line)) AS country_code,
+                argMax(region_code, toUInt64(source_first_line)) AS region_code,
+                argMax(city, toUInt64(source_first_line)) AS city,
                 arraySort(groupUniqArray(class_no)) AS class_nos,
                 max(geo_confidence) * 100 AS confidence_score,
-                argMin(source_file, toUInt64(source_start_line)) AS source_file,
-                    min(toUInt64(source_start_line)) AS source_first_line,
-                max(toUInt64(source_end_line)) AS source_last_line,
+                argMin(source_file, toUInt64(source_first_line)) AS source_file,
+                min(toUInt64(source_first_line)) AS source_first_line,
+                max(toUInt64(source_last_line)) AS source_last_line,
                 hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|')))
                     AS source_row_hash
-            FROM markorbit_facts.cn_stage_applicant
+            FROM (
+                SELECT
+                    package_id, case_id, application_number, class_no, relation_id,
+                    relation_key, mention_id, entity_id, raw_name,
+                    normalized_name, raw_address, normalized_address, country_code,
+                    region_code, city, geo_confidence, source_file,
+                    source_start_line AS source_first_line,
+                    source_end_line AS source_last_line,
+                    row_hash
+                FROM markorbit_facts.cn_stage_applicant
+            ) AS applicant_source
             WHERE package_id = toUUID('{package}')
             GROUP BY case_id, application_number, relation_id, relation_key
 
@@ -701,25 +738,41 @@ def _party_aggregate_sql(package: str) -> str:
                 'CO_OWNER' AS role,
                 co.relation_id,
                 co.relation_key,
-                argMax(co.mention_id, co.source_start_line) AS mention_id,
-                argMax(co.entity_id, co.source_start_line) AS entity_id,
+                argMax(co.mention_id, toUInt64(co.source_first_line)) AS mention_id,
+                argMax(co.entity_id, toUInt64(co.source_first_line)) AS entity_id,
                 '' AS agent_code,
-                argMax(co.raw_name, co.source_start_line) AS raw_name,
-                argMax(co.normalized_name, co.source_start_line) AS normalized_name,
-                argMax(co.raw_address, co.source_start_line) AS raw_address,
-                argMax(co.normalized_address, co.source_start_line) AS normalized_address,
-                argMax(co.country_code, co.source_start_line) AS country_code,
-                argMax(co.region_code, co.source_start_line) AS region_code,
-                argMax(co.city, co.source_start_line) AS city,
+                argMax(co.raw_name, toUInt64(co.source_first_line)) AS raw_name,
+                argMax(co.normalized_name, toUInt64(co.source_first_line)) AS normalized_name,
+                argMax(co.raw_address, toUInt64(co.source_first_line)) AS raw_address,
+                argMax(co.normalized_address, toUInt64(co.source_first_line)) AS normalized_address,
+                argMax(co.country_code, toUInt64(co.source_first_line)) AS country_code,
+                argMax(co.region_code, toUInt64(co.source_first_line)) AS region_code,
+                argMax(co.city, toUInt64(co.source_first_line)) AS city,
                 arraySort(groupUniqArray(b.class_no)) AS class_nos,
                 max(co.geo_confidence) * 100 AS confidence_score,
-                argMin(co.source_file, toUInt64(co.source_start_line)) AS source_file,
-                min(toUInt64(co.source_start_line)) AS source_first_line,
-                max(toUInt64(co.source_end_line)) AS source_last_line,
+                argMin(co.source_file, toUInt64(co.source_first_line)) AS source_file,
+                min(toUInt64(co.source_first_line)) AS source_first_line,
+                max(toUInt64(co.source_last_line)) AS source_last_line,
                 hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(co.row_hash))), '|')))
                     AS source_row_hash
-            FROM markorbit_facts.cn_stage_coowner AS co
-            LEFT JOIN markorbit_facts.cn_stage_basic AS b
+            FROM (
+                SELECT
+                    package_id, case_id, application_number, relation_id,
+                    relation_key, mention_id, entity_id, raw_name,
+                    normalized_name, raw_address, normalized_address, country_code,
+                    region_code, city, geo_confidence, source_file,
+                    source_start_line AS source_first_line,
+                    source_end_line AS source_last_line,
+                    row_hash
+                FROM markorbit_facts.cn_stage_coowner
+            ) AS co
+            LEFT JOIN (
+                SELECT
+                    package_id, application_number, class_no, source_file,
+                    source_start_line AS source_first_line,
+                    source_end_line AS source_last_line
+                FROM markorbit_facts.cn_stage_basic
+            ) AS b
               ON b.package_id = co.package_id
              AND b.application_number = co.application_number
             WHERE co.package_id = toUUID('{package}')
@@ -736,24 +789,39 @@ def _party_aggregate_sql(package: str) -> str:
                 b.agent_mention_id AS mention_id,
                 b.agent_entity_id AS entity_id,
                 b.agent_code AS agent_code,
-                if(argMax(a.agent_name, a.source_start_line) = '', b.agent_code,
-                   argMax(a.agent_name, a.source_start_line)) AS raw_name,
-                if(argMax(a.agent_name_norm, a.source_start_line) = '', lowerUTF8(b.agent_code),
-                   argMax(a.agent_name_norm, a.source_start_line)) AS normalized_name,
+                if(argMax(a.agent_name, toUInt64(a.source_first_line)) = '', b.agent_code,
+                   argMax(a.agent_name, toUInt64(a.source_first_line))) AS raw_name,
+                if(argMax(a.agent_name_norm, toUInt64(a.source_first_line)) = '', lowerUTF8(b.agent_code),
+                   argMax(a.agent_name_norm, toUInt64(a.source_first_line))) AS normalized_name,
                 '' AS raw_address,
                 '' AS normalized_address,
                 'CN' AS country_code,
                 '' AS region_code,
                 '' AS city,
                 arraySort(groupUniqArray(b.class_no)) AS class_nos,
-                if(argMax(a.agent_name, a.source_start_line) = '', 40, 90) AS confidence_score,
-                argMin(b.source_file, toUInt64(b.source_start_line)) AS source_file,
-                min(toUInt64(b.source_start_line)) AS source_first_line,
-                max(toUInt64(b.source_end_line)) AS source_last_line,
+                if(argMax(a.agent_name, toUInt64(a.source_first_line)) = '', 40, 90) AS confidence_score,
+                argMin(b.source_file, toUInt64(b.source_first_line)) AS source_file,
+                min(toUInt64(b.source_first_line)) AS source_first_line,
+                max(toUInt64(b.source_last_line)) AS source_last_line,
                 hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(b.row_hash))), '|')))
                     AS source_row_hash
-            FROM markorbit_facts.cn_stage_basic AS b
-            LEFT JOIN markorbit_facts.cn_stage_agent AS a
+            FROM (
+                SELECT
+                    package_id, case_id, application_number, class_no,
+                    agent_code, agent_relation_id, agent_relation_key,
+                    agent_mention_id, agent_entity_id, source_file,
+                    source_start_line AS source_first_line,
+                    source_end_line AS source_last_line,
+                    row_hash
+                FROM markorbit_facts.cn_stage_basic
+            ) AS b
+            LEFT JOIN (
+                SELECT
+                    package_id, agent_code, agent_name, agent_name_norm,
+                    source_file, source_start_line AS source_first_line,
+                    source_end_line AS source_last_line
+                FROM markorbit_facts.cn_stage_agent
+            ) AS a
               ON a.package_id = b.package_id
              AND a.agent_code = b.agent_code
             WHERE b.package_id = toUUID('{package}')
@@ -845,7 +913,8 @@ def _insert_case_events(
                 CAST(NULL, 'Nullable(UInt8)'), '{field_name}',
                 {old_value}, {new_value}, 'OFFICIAL_FACT_OBSERVATION',
                 'NOT_DETERMINED', 1.0, toUUID('{package}'), '{package_kind}',
-                incoming.source_file, incoming.source_first_line, {source_rank},
+                incoming.source_file, incoming.source_first_line, incoming.source_last_line,
+                incoming.source_row_hash, {source_rank},
                 hex(SHA256(concat(
                     incoming.application_number, '|', {event_type}, '|', '{field_name}', '|',
                     {old_value}, '|', {new_value}, '|', toString({source_rank})
@@ -896,7 +965,8 @@ def _publish(
             )),
             'OFFICIAL_FACT_OBSERVATION', 'NOT_DETERMINED', 1.0,
             toUUID('{package}'), '{package_kind}', incoming.source_file,
-            incoming.source_first_line, {source_rank},
+            incoming.source_first_line, incoming.source_last_line,
+            incoming.source_row_hash, {source_rank},
             hex(SHA256(concat(
                 incoming.application_number, '|GOODS|', toString(incoming.class_no), '|',
                 if(cur.application_number = '', '', cur.scope_hash), '|',
@@ -922,7 +992,8 @@ def _publish(
                              'relation_key', cur.relation_key)),
             '', 'OFFICIAL_DATA_RELATION_REPLACEMENT', 'NOT_DETERMINED', 0.95,
             toUUID('{package}'), '{package_kind}', touched.source_file,
-            touched.source_first_line, {source_rank},
+            touched.source_first_line, touched.source_last_line,
+            touched.source_row_hash, {source_rank},
             hex(SHA256(concat(
                 cur.application_number, '|', cur.role, '|SUPERSEDED|',
                 cur.relation_key, '|', toString({source_rank})
@@ -931,8 +1002,10 @@ def _publish(
         INNER JOIN
         (
             SELECT application_number, role,
-                   argMin(source_file, toUInt64(source_start_line)) AS source_file,
-                    min(toUInt64(source_start_line)) AS source_first_line
+                   argMin(source_file, toUInt64(source_first_line)) AS source_file,
+                    min(toUInt64(source_first_line)) AS source_first_line,
+                   max(toUInt64(source_last_line)) AS source_last_line,
+                   argMin(source_row_hash, toUInt64(source_first_line)) AS source_row_hash
             FROM ({party_agg})
             GROUP BY application_number, role
         ) AS touched
@@ -960,7 +1033,8 @@ def _publish(
                 'entity_id', ifNull(toString(incoming.entity_id), '')
             )), 'OFFICIAL_FACT_OBSERVATION', 'NOT_DETERMINED', 1.0,
             toUUID('{package}'), '{package_kind}', incoming.source_file,
-            incoming.source_first_line, {source_rank},
+            incoming.source_first_line, incoming.source_last_line,
+            incoming.source_row_hash, {source_rank},
             hex(SHA256(concat(
                 incoming.application_number, '|', incoming.role, '|OBSERVED|',
                 incoming.relation_key, '|', toString({source_rank})
@@ -982,7 +1056,8 @@ def _publish(
             cur.role, 'SUPERSEDED', {effective_expr}, cur.relation_key,
             cur.mention_id, cur.entity_id, cur.raw_name, cur.raw_address,
             toUUID('{package}'), '{package_kind}', touched.source_file,
-            touched.source_first_line, {source_rank},
+            touched.source_first_line, touched.source_last_line,
+            touched.source_row_hash, {source_rank},
             hex(SHA256(concat(
                 cur.application_number, '|', cur.role, '|', cur.relation_key,
                 '|SUPERSEDED|', toString({source_rank})
@@ -991,8 +1066,10 @@ def _publish(
         INNER JOIN
         (
             SELECT application_number, role,
-                   argMin(source_file, toUInt64(source_start_line)) AS source_file,
-                    min(toUInt64(source_start_line)) AS source_first_line
+                   argMin(source_file, toUInt64(source_first_line)) AS source_file,
+                    min(toUInt64(source_first_line)) AS source_first_line,
+                   max(toUInt64(source_last_line)) AS source_last_line,
+                   argMin(source_row_hash, toUInt64(source_first_line)) AS source_row_hash
             FROM ({party_agg})
             GROUP BY application_number, role
         ) AS touched
@@ -1015,7 +1092,8 @@ def _publish(
             {effective_expr}, incoming.relation_key, incoming.mention_id,
             incoming.entity_id, incoming.raw_name, incoming.raw_address,
             toUUID('{package}'), '{package_kind}', incoming.source_file,
-            incoming.source_first_line, {source_rank},
+            incoming.source_first_line, incoming.source_last_line,
+            incoming.source_row_hash, {source_rank},
             hex(SHA256(concat(
                 incoming.application_number, '|', incoming.role, '|',
                 incoming.relation_key, '|OBSERVED|', toString({source_rank})
@@ -1042,9 +1120,9 @@ def _publish(
         INNER JOIN
         (
             SELECT application_number, role,
-                   argMin(source_file, toUInt64(source_start_line)) AS source_file,
-                    min(toUInt64(source_start_line)) AS source_first_line,
-                   max(toUInt64(source_end_line)) AS source_last_line
+                   argMin(source_file, toUInt64(source_first_line)) AS source_file,
+                    min(toUInt64(source_first_line)) AS source_first_line,
+                   max(toUInt64(source_last_line)) AS source_last_line
             FROM ({party_agg})
             GROUP BY application_number, role
         ) AS touched
@@ -1139,11 +1217,13 @@ def _publish(
         INSERT INTO markorbit_facts.cn_agent_current
         SELECT
             b.agent_code, b.agent_mention_id, b.agent_entity_id,
-            if(argMax(a.agent_name, a.source_start_line) = '', b.agent_code,
-               argMax(a.agent_name, a.source_start_line)),
-            if(argMax(a.agent_name_norm, a.source_start_line) = '', lowerUTF8(b.agent_code),
-               argMax(a.agent_name_norm, a.source_start_line)),
-            argMin(b.source_file, b.source_start_line), min(b.source_start_line),
+            if(argMax(a.agent_name, toUInt64(a.source_first_line)) = '', b.agent_code,
+               argMax(a.agent_name, toUInt64(a.source_first_line))),
+            if(argMax(a.agent_name_norm, toUInt64(a.source_first_line)) = '', lowerUTF8(b.agent_code),
+               argMax(a.agent_name_norm, toUInt64(a.source_first_line))),
+            argMin(b.source_file, toUInt64(b.source_first_line)),
+            min(toUInt64(b.source_first_line)),
+            max(toUInt64(b.source_last_line)),
             hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(b.row_hash))), '|'))),
             toUUID('{package}'), {source_rank}, now64(3), 0
         FROM markorbit_facts.cn_stage_basic AS b
@@ -1157,15 +1237,17 @@ def _publish(
         INSERT INTO markorbit_facts.cn_priority_current
         SELECT
             application_number, class_no, priority_number,
-            argMax(priority_type, toUInt64(source_start_line)),
-            argMax(priority_date, toUInt64(source_start_line)),
-            argMax(priority_goods, toUInt64(source_start_line)),
-            argMax(priority_country_region, toUInt64(source_start_line)),
-            argMin(source_file, toUInt64(source_start_line)), min(source_start_line),
+            argMax(priority_type, toUInt64(source_first_line)),
+            argMax(priority_date, toUInt64(source_first_line)),
+            argMax(priority_goods, toUInt64(source_first_line)),
+            argMax(priority_country_region, toUInt64(source_first_line)),
+            argMin(source_file, toUInt64(source_first_line)),
+            min(toUInt64(source_first_line)),
+            max(toUInt64(source_last_line)),
             hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|'))),
             hex(SHA256(concat(
                 application_number, '|', toString(class_no), '|', priority_number, '|',
-                argMax(priority_goods, toUInt64(source_start_line))
+                argMax(priority_goods, toUInt64(source_first_line))
             ))), toUUID('{package}'), {source_rank}, now64(3), 0
         FROM markorbit_facts.cn_stage_priority
         WHERE package_id = toUUID('{package}')
@@ -1176,19 +1258,21 @@ def _publish(
         INSERT INTO markorbit_facts.cn_madrid_current
         SELECT
             application_number, international_registration_number,
-            argMax(international_registration_date, toUInt64(source_start_line)),
-            argMax(international_notification_date, toUInt64(source_start_line)),
-            argMax(application_language, toUInt64(source_start_line)),
-            argMax(application_type, toUInt64(source_start_line)),
-            argMax(international_pub_issue, toUInt64(source_start_line)),
-            argMax(international_pub_date, toUInt64(source_start_line)),
-            argMax(subsequent_designation_date, toUInt64(source_start_line)),
-            argMax(basic_registration_date, toUInt64(source_start_line)),
-            argMin(source_file, toUInt64(source_start_line)), min(source_start_line),
+            argMax(international_registration_date, toUInt64(source_first_line)),
+            argMax(international_notification_date, toUInt64(source_first_line)),
+            argMax(application_language, toUInt64(source_first_line)),
+            argMax(application_type, toUInt64(source_first_line)),
+            argMax(international_pub_issue, toUInt64(source_first_line)),
+            argMax(international_pub_date, toUInt64(source_first_line)),
+            argMax(subsequent_designation_date, toUInt64(source_first_line)),
+            argMax(basic_registration_date, toUInt64(source_first_line)),
+            argMin(source_file, toUInt64(source_first_line)),
+            min(toUInt64(source_first_line)),
+            max(toUInt64(source_last_line)),
             hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|'))),
             hex(SHA256(concat(
                 application_number, '|', international_registration_number, '|',
-                ifNull(toString(argMax(international_registration_date, toUInt64(source_start_line))), '')
+                ifNull(toString(argMax(international_registration_date, toUInt64(source_first_line))), '')
             ))), toUUID('{package}'), {source_rank}, now64(3), 0
         FROM markorbit_facts.cn_stage_madrid
         WHERE package_id = toUUID('{package}')
@@ -1209,6 +1293,7 @@ def _publish(
             incoming.international_registration_number, 0.95,
             'SUFFIX_AND_ROOT_NUMBER_OBSERVED', toUUID('{package}'),
             '{package_kind}', incoming.source_file, incoming.source_first_line,
+            incoming.source_last_line, incoming.source_row_hash,
             hex(SHA256(concat(
                 incoming.case_family_root, '|', incoming.application_number,
                 '|DERIVED_CASE|', incoming.suffix_path
@@ -1233,7 +1318,8 @@ def _publish(
                 'derivation_reason', 'UNKNOWN'
             )), 'STRUCTURAL_INFERENCE', 'NOT_DETERMINED', 0.95,
             toUUID('{package}'), '{package_kind}', incoming.source_file,
-            incoming.source_first_line, {source_rank},
+            incoming.source_first_line, incoming.source_last_line,
+            incoming.source_row_hash, {source_rank},
             hex(SHA256(concat(
                 incoming.application_number, '|DERIVED_CASE|', incoming.case_family_root,
                 '|', incoming.suffix_path, '|', toString({source_rank})
@@ -1252,7 +1338,8 @@ def _publish(
             if(source.application_number = '', 'TARGET_SCOPE_ONLY',
                'ROOT_AND_TARGET_SCOPE_OBSERVED'),
             if(source.application_number = '', 0.55, 0.75),
-            toUUID('{package}'), target.source_file, target.source_start_line,
+            toUUID('{package}'), target.source_file, target.source_first_line,
+            target.source_last_line, target.source_row_hash,
             hex(SHA256(concat(
                 relation.source_application_number, '|',
                 relation.target_application_number, '|', toString(target.class_no), '|',
