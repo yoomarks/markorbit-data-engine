@@ -5,14 +5,15 @@ import threading
 import uuid
 from typing import Any
 
+from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
-from app.cn.goods_lifecycle import (
-    cleanup_goods_outputs,
-    ensure_m16_goods_replay_boundary,
-    ensure_m16_goods_schema,
-    publish_goods_lifecycle,
-    scope_from_current_items_sql,
-)
+from app.cn.goods_lifecycle_sql import incoming_goods_sql
+
+
+# ClickHouse 24.8 resolves aliases aggressively inside aggregate queries. Keep
+# the lifecycle orchestration in goods_lifecycle.py, but install the M1.6 query
+# builder that enforces raw -> private aggregate aliases -> permanent aliases.
+goods.incoming_goods_sql = incoming_goods_sql
 
 
 # M1.6 intentionally wraps the proven M1.5 parser/case/party publisher instead
@@ -29,14 +30,14 @@ def _publish_m16(
     package_uuid: uuid.UUID,
     package_meta: dict[str, Any],
 ) -> dict[str, int]:
-    lifecycle_metrics = publish_goods_lifecycle(package_uuid, package_meta)
+    lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
 
     # The legacy publisher still owns case, party, relation, event and scope
     # persistence. For M1.6 only its scope source is replaced: touched scopes are
     # reconstructed from the complete durable goods-item current table rather
     # than from the rows present in this package.
     original_scope = legacy._scope_aggregate_sql
-    legacy._scope_aggregate_sql = lambda package: scope_from_current_items_sql(package)
+    legacy._scope_aggregate_sql = lambda package: goods.scope_from_current_items_sql(package)
     try:
         metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
     finally:
@@ -49,7 +50,7 @@ def _publish_m16(
 
 def _cleanup_partial_outputs_m16(package_uuid: uuid.UUID) -> None:
     _LEGACY_CLEANUP_PARTIAL(package_uuid)
-    cleanup_goods_outputs(package_uuid)
+    goods.cleanup_goods_outputs(package_uuid)
 
 
 def ingest_cn_package(
@@ -61,8 +62,8 @@ def ingest_cn_package(
 ) -> dict[str, Any]:
     """M1.6 entry point preserving M1.5 parsing with item-level goods deltas."""
     with _LOCK:
-        ensure_m16_goods_schema()
-        ensure_m16_goods_replay_boundary()
+        goods.ensure_m16_goods_schema()
+        goods.ensure_m16_goods_replay_boundary()
 
         original_publish = legacy._publish
         original_cleanup = legacy._cleanup_partial_outputs
