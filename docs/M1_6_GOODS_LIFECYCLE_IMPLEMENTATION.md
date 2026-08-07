@@ -20,6 +20,7 @@ M1.5 aggregated each package directly into `cn_case_scope_current`. That is safe
 8. Code `2` is an item-level final inactive signal, not a cause code.
 9. Legal causes such as refusal, opposition, cancellation, non-use cancellation, invalidation, voluntary cancellation, or non-renewal require separate evidence or a separately versioned inference model.
 10. A goods sequence value is not globally unique within one case/class and MUST NOT be used alone as item identity.
+11. Production ingest SQL and validation/audit SQL MUST implement the same identity version; tests must exercise the runtime SQL builder used by `ingest_m16.py`.
 
 ## New durable tables
 
@@ -42,6 +43,8 @@ This deliberately favors preservation over aggressive merging. Exact repeated so
 The identity key does **not** include goods status, because a status change must update the same goods item rather than create a new identity.
 
 A later cross-package reconciliation layer may introduce stronger identity linking if real monthly data proves that wording or similar-group values can change for the same legal goods item. Such linking must be evidence-based and must never silently overwrite the strict source observation identity.
+
+The first V2 audit passed with zero conflicting keys, but a subsequent 1999 replay still produced the retired item count. This exposed a second implementation defect: `ingest_m16.py` routes production through `app/cn/goods_lifecycle_sql.py`, while the audit/fixture path had already been updated in `goods_lifecycle.py`. Runtime SQL was therefore still using the retired sequence-oriented key. The runtime builder is now also V2 and the contract test targets that exact builder so this split cannot silently recur.
 
 ## Item status mapping
 
