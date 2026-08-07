@@ -1,0 +1,22 @@
+[project]
+name = "markorbit-data-engine"
+version = "0.3.0"
+description = "MarkOrbit CN trademark data engine M1.5"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.116.1",
+  "uvicorn[standard]==0.35.0",
+  "pydantic-settings==2.10.1",
+  "psycopg[binary]==3.2.9",
+  "clickhouse-connect==0.8.18"
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.4.1", "ruff==0.12.7"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

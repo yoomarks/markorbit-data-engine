@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MarkOrbit Data Engine M1.5</title>
+  <style>
+    :root{font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;color:#172033;background:#f4f6fa}
+    body{margin:0}header{background:#fff;border-bottom:1px solid #e3e7ef;padding:22px 32px}
+    h1{margin:0;font-size:22px}header small{color:#667085;margin-left:8px}
+    main{max-width:1280px;margin:24px auto;padding:0 20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+    .card{background:#fff;border:1px solid #e3e7ef;border-radius:12px;padding:18px;overflow:auto}
+    .label{color:#667085;font-size:13px}.value{margin-top:8px;font-size:25px;font-weight:650}
+    button{border:0;border-radius:8px;padding:10px 16px;cursor:pointer;background:#172033;color:#fff}
+    input{border:1px solid #d0d5dd;border-radius:8px;padding:10px 12px;min-width:240px}
+    table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:10px 8px;vertical-align:top}
+    code{white-space:pre-wrap;word-break:break-all}.section{margin-top:18px}.status-SUCCESS{color:#067647;font-weight:600}
+    .status-FAILED{color:#b42318;font-weight:600}.status-RUNNING{color:#b54708;font-weight:600}
+    .muted{color:#667085;font-size:13px}.warning{color:#b54708}
+    @media(max-width:900px){.grid{grid-template-columns:1fr 1fr}}@media(max-width:600px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<header><h1>MarkOrbit Data Engine <small>M1.5</small></h1></header>
+<main>
+  <div class="grid">
+    <div class="card"><div class="label">API</div><div id="api" class="value">—</div></div>
+    <div class="card"><div class="label">PostgreSQL</div><div id="postgres" class="value">—</div></div>
+    <div class="card"><div class="label">ClickHouse</div><div id="clickhouse" class="value">—</div></div>
+    <div class="card"><div class="label">案件数量</div><div id="case-count" class="value">—</div></div>
+  </div>
+  <div class="card section">
+    <button onclick="runCn()">扫描并导入中国数据</button>
+    <button onclick="retryCn()" style="margin-left:8px;background:#667085">重试失败包</button>
+    <span id="scan-result" class="muted" style="margin-left:12px"></span>
+  </div>
+  <div class="card section">
+    <h2>中国数据摘要</h2>
+    <div id="cn-summary" class="muted">加载中…</div>
+  </div>
+  <div class="card section">
+    <h2>案件字段检查</h2>
+    <input id="case-input" placeholder="例如 G602365A">
+    <button onclick="findCase()">查询</button>
+    <div id="case-result" style="margin-top:14px"></div>
+  </div>
+  <div class="card section">
+    <h2>最近任务</h2>
+    <table><thead><tr><th>任务</th><th>状态</th><th>开始</th><th>完成</th><th>指标</th></tr></thead><tbody id="runs"></tbody></table>
+  </div>
+  <div class="card section">
+    <h2>来源包</h2>
+    <table><thead><tr><th>文件</th><th>类型</th><th>分区</th><th>大小</th><th>状态</th><th>来源排序</th></tr></thead><tbody id="packages"></tbody></table>
+  </div>
+</main>
+<script>
+async function getJson(url,options){const r=await fetch(url,options);if(!r.ok)throw new Error(await r.text());return r.json()}
+function fmtBytes(v){if(!v)return"0 B";const u=["B","KB","MB","GB","TB"];let i=0,n=v;while(n>=1024&&i<u.length-1){n/=1024;i++}return`${n.toFixed(i?1:0)} ${u[i]}`}
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+async function refresh(){
+ const h=await getJson("/api/health");for(const k of["api","postgres","clickhouse"])document.getElementById(k).textContent=h[k];
+ const summary=await getJson("/api/cn/summary");const map=Object.fromEntries(summary.tables.map(x=>[x.table_name,x.row_count]));
+ document.getElementById("case-count").textContent=(map.cn_case_current??0).toLocaleString();
+ const g=summary.goods_status||{};document.getElementById("cn-summary").innerHTML=`
+   案件类别范围：<b>${(map.cn_case_scope_current??0).toLocaleString()}</b>　
+   当前主体关系：<b>${(map.cn_case_party_current??0).toLocaleString()}</b>　
+   派生关系：<b>${(map.cn_case_relation_current??0).toLocaleString()}</b><br><br>
+   来源商品：<b>${Number(g.source_goods_items??0).toLocaleString()}</b>　
+   已解释有效：<b>${Number(g.interpreted_active_items??0).toLocaleString()}</b>　
+   已知非有效：<b>${Number(g.interpreted_inactive_items??0).toLocaleString()}</b>　
+   <span class="warning">状态未映射：<b>${Number(g.unmapped_status_items??0).toLocaleString()}</b></span>`;
+ const runs=await getJson("/api/job-runs?limit=20");document.getElementById("runs").innerHTML=runs.map(x=>`<tr><td>${esc(x.job_type)}</td><td class="status-${esc(x.status)}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.finished_at)}</td><td><code>${esc(JSON.stringify(x.metrics??{}))}</code></td></tr>`).join("");
+ const packages=await getJson("/api/source-packages?limit=20");document.getElementById("packages").innerHTML=packages.map(x=>`<tr><td>${esc(x.file_name)}</td><td>${esc(x.package_kind)}</td><td>${esc(x.partition_dimension)} ${esc(x.partition_value)}</td><td>${fmtBytes(x.file_size)}</td><td class="status-${esc(x.status)}">${esc(x.status)}</td><td>${esc(x.source_rank)}</td></tr>`).join("")
+}
+async function runCn(){const t=document.getElementById("scan-result");t.textContent="运行中…";try{const r=await getJson("/api/jobs/cn/run",{method:"POST"});t.textContent=JSON.stringify(r);await refresh()}catch(e){t.textContent=e.message}}
+async function retryCn(){const t=document.getElementById("scan-result");t.textContent="重试中…";try{const r=await getJson("/api/jobs/cn/retry",{method:"POST"});t.textContent=JSON.stringify(r);await refresh()}catch(e){t.textContent=e.message}}
+async function findCase(){const value=document.getElementById("case-input").value.trim();const target=document.getElementById("case-result");if(!value)return;target.textContent="查询中…";try{const r=await getJson(`/api/cn/cases/${encodeURIComponent(value)}`);target.innerHTML=`<pre><code>${esc(JSON.stringify(r,null,2))}</code></pre>`}catch(e){target.textContent=e.message}}
+refresh().catch(console.error);setInterval(()=>refresh().catch(console.error),15000);
+</script>
+</body>
+</html>
