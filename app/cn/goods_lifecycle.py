@@ -7,6 +7,8 @@ import uuid
 from app.db import clickhouse_client
 
 
+GOODS_ITEM_IDENTITY_VERSION = "CN_GOODS_ITEM_ID_V2_STRICT_SOURCE_FIELDS"
+
 REQUIRED_M16_GOODS_COLUMNS = {
     ("cn_goods_item_current", "goods_item_key"),
     ("cn_goods_item_current", "operational_effect"),
@@ -148,16 +150,12 @@ def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
                     goods_status_bucket,
                     goods_status_reason,
                     goods_status_mapping_version,
-                    if(
-                        goods_sequence != '',
-                        hex(SHA256(concat(
-                            application_number, '|', toString(class_no), '|SEQ|', goods_sequence
-                        ))),
-                        hex(SHA256(concat(
-                            application_number, '|', toString(class_no), '|NAME|',
-                            lowerUTF8(goods_name), '|GROUP|', similar_group
-                        )))
-                    ) AS goods_item_key,
+                    hex(SHA256(concat(
+                        application_number, '|', toString(class_no),
+                        '|SEQ|', goods_sequence,
+                        '|GROUP|', similar_group,
+                        '|NAME|', lowerUTF8(goods_name)
+                    ))) AS goods_item_key,
                     source_file,
                     source_start_line AS stage_source_start_line,
                     source_end_line AS stage_source_end_line,
