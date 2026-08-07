@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import uuid
 
+from app.cn.goods_lifecycle import GOODS_ITEM_IDENTITY_VERSION
 from app.cn.ingest import StageBatchWriter, _cleanup_stage, _other_stage_row
 from app.cn.reader import iter_member_rows
 from app.cn.zipio import iter_package_members
@@ -26,7 +27,19 @@ def _resolve_raw_package(file_name: str) -> Path:
     )
 
 
+def _strict_item_key_sql() -> str:
+    return """
+        hex(SHA256(concat(
+            application_number, '|', toString(class_no),
+            '|SEQ|', goods_sequence,
+            '|GROUP|', similar_group,
+            '|NAME|', lowerUTF8(goods_name)
+        )))
+    """.strip()
+
+
 def _identity_summary_sql(package: str) -> str:
+    item_key = _strict_item_key_sql()
     return f"""
         SELECT
             sum(source_rows_per_key) AS source_rows,
@@ -44,9 +57,6 @@ def _identity_summary_sql(package: str) -> str:
                 item_key_internal,
                 count() AS source_rows_per_key,
                 uniqExact(tuple(
-                    goods_sequence,
-                    similar_group,
-                    goods_name,
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason
@@ -62,16 +72,7 @@ def _identity_summary_sql(package: str) -> str:
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason,
-                    if(
-                        goods_sequence != '',
-                        hex(SHA256(concat(
-                            application_number, '|', toString(class_no), '|SEQ|', goods_sequence
-                        ))),
-                        hex(SHA256(concat(
-                            application_number, '|', toString(class_no), '|NAME|',
-                            lowerUTF8(goods_name), '|GROUP|', similar_group
-                        )))
-                    ) AS item_key_internal
+                    {item_key} AS item_key_internal
                 FROM markorbit_facts.cn_stage_goods
                 WHERE package_id = toUUID('{package}')
             ) AS prepared_rows
@@ -81,36 +82,37 @@ def _identity_summary_sql(package: str) -> str:
 
 
 def _conflict_samples_sql(package: str) -> str:
+    item_key = _strict_item_key_sql()
     return f"""
         SELECT
             application_number,
             class_no,
             goods_sequence,
+            similar_group,
+            goods_name,
             source_rows_per_key,
             variant_count,
-            sample_variants
+            sample_status_variants
         FROM
         (
             SELECT
                 any(application_number) AS application_number,
                 any(class_no) AS class_no,
                 any(goods_sequence) AS goods_sequence,
+                any(similar_group) AS similar_group,
+                any(goods_name) AS goods_name,
                 item_key_internal,
                 count() AS source_rows_per_key,
                 uniqExact(tuple(
-                    similar_group,
-                    goods_name,
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason
                 )) AS variant_count,
                 groupUniqArray(5)(tuple(
-                    similar_group,
-                    goods_name,
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason
-                )) AS sample_variants
+                )) AS sample_status_variants
             FROM
             (
                 SELECT
@@ -122,16 +124,7 @@ def _conflict_samples_sql(package: str) -> str:
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason,
-                    if(
-                        goods_sequence != '',
-                        hex(SHA256(concat(
-                            application_number, '|', toString(class_no), '|SEQ|', goods_sequence
-                        ))),
-                        hex(SHA256(concat(
-                            application_number, '|', toString(class_no), '|NAME|',
-                            lowerUTF8(goods_name), '|GROUP|', similar_group
-                        )))
-                    ) AS item_key_internal
+                    {item_key} AS item_key_internal
                 FROM markorbit_facts.cn_stage_goods
                 WHERE package_id = toUUID('{package}')
             ) AS prepared_rows
@@ -177,6 +170,7 @@ def audit_goods_identity(file_name: str) -> dict[str, object]:
         result = {
             "status": "PASS" if int(row[5] or 0) == 0 else "CONFLICT",
             "contract": "M1.6_GOODS_ITEM_IDENTITY_AUDIT",
+            "identity_version": GOODS_ITEM_IDENTITY_VERSION,
             "file_name": file_name,
             "parsed_goods_rows": parsed_goods_rows,
             "staged_goods_rows": int(row[0] or 0),
@@ -191,9 +185,11 @@ def audit_goods_identity(file_name: str) -> dict[str, object]:
                     "application_number": str(item[0]),
                     "class_no": int(item[1]),
                     "goods_sequence": str(item[2]),
-                    "source_rows": int(item[3]),
-                    "variant_count": int(item[4]),
-                    "variants": item[5],
+                    "similar_group": str(item[3]),
+                    "goods_name": str(item[4]),
+                    "source_rows": int(item[5]),
+                    "variant_count": int(item[6]),
+                    "status_variants": item[7],
                 }
                 for item in samples
             ],
