@@ -11,6 +11,10 @@ def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
     rewritten as an aggregate-inside-aggregate expression (Code 184). The
     aggregate block therefore emits private ``agg_*`` names; a separate
     normalization block exposes the permanent names only after aggregation.
+
+    Goods identity V2 deliberately includes sequence + similar group + normalized
+    goods name. Sequence alone is not unique in real CN source data. Status is
+    excluded so later status observations update the same logical item.
     """
     package = str(package_uuid)
     return f"""
@@ -113,17 +117,12 @@ def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
                         goods_status_bucket,
                         goods_status_reason,
                         goods_status_mapping_version,
-                        if(
-                            goods_sequence != '',
-                            hex(SHA256(concat(
-                                application_number, '|', toString(class_no),
-                                '|SEQ|', goods_sequence
-                            ))),
-                            hex(SHA256(concat(
-                                application_number, '|', toString(class_no), '|NAME|',
-                                lowerUTF8(goods_name), '|GROUP|', similar_group
-                            )))
-                        ) AS goods_item_key,
+                        hex(SHA256(concat(
+                            application_number, '|', toString(class_no),
+                            '|SEQ|', goods_sequence,
+                            '|GROUP|', similar_group,
+                            '|NAME|', lowerUTF8(goods_name)
+                        ))) AS goods_item_key,
                         source_file,
                         source_start_line AS stage_source_start_line,
                         source_end_line AS stage_source_end_line,
