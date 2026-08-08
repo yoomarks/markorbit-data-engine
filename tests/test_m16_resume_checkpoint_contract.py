@@ -31,4 +31,5 @@ def test_resumed_metrics_are_rebuilt_before_full_stage_cleanup():
     checkpoint = Path("app/cn/checkpoint.py").read_text(encoding="utf-8")
     assert 'corrected["role_counts"]' in checkpoint
     assert 'corrected["stage_counts"]' in checkpoint
+    assert 'corrected["files"]' in checkpoint
     assert 'corrected["resume_checkpoint_members_reused"]' in checkpoint
