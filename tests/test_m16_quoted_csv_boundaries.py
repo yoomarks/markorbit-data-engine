@@ -1,5 +1,4 @@
 from app.cn import reader
-from app.cn import ingest_m16  # noqa: F401  # installs M1.6 CSV-aware boundary probe
 from app.cn.schema import SCHEMA_BY_ROLE
 
 
@@ -18,6 +17,12 @@ def test_applicant_boundary_accepts_fully_quoted_prefix() -> None:
 def test_goods_boundary_accepts_fully_quoted_prefix() -> None:
     schema = SCHEMA_BY_ROLE["goods"]
     line = '"12345678","35","3501","1","广告",""'
+    assert reader._record_start(schema, line)
+
+
+def test_boundary_still_accepts_unquoted_prefix() -> None:
+    schema = SCHEMA_BY_ROLE["goods"]
+    line = '12345678,35,3501,1,广告,'
     assert reader._record_start(schema, line)
 
 
