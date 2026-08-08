@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 import uuid
 
+from app.cn.goods_lifecycle_sql import incoming_goods_sql
 from app.db import clickhouse_client
 
 
@@ -72,100 +73,6 @@ def _nullable_date(value: date | None) -> str:
     if value is None:
         return "CAST(NULL, 'Nullable(Date32)')"
     return f"toDate32('{value.isoformat()}')"
-
-
-def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
-    package = str(package_uuid)
-    return f"""
-        SELECT
-            aggregated.*,
-            multiIf(
-                goods_status_raw = '0', 'REVERSIBLE_OR_UNRESOLVED_RISK',
-                goods_status_raw = '1', 'INACTIVE_HIGH_CONFIDENCE',
-                goods_status_raw = '2', 'FINAL_INACTIVE',
-                goods_status_reason = 'EXPLICIT_INACTIVE_TEXT', 'FINAL_INACTIVE_TEXT',
-                goods_status_bucket = 'ACTIVE', 'NO_NEGATIVE_SIGNAL',
-                'UNKNOWN'
-            ) AS goods_status_semantic,
-            multiIf(
-                goods_status_raw = '0', 'REVERSIBLE',
-                goods_status_raw = '1', 'SOURCE_NOT_FINALIZED',
-                goods_status_raw = '2', 'FINAL',
-                goods_status_reason = 'EXPLICIT_INACTIVE_TEXT', 'EXPLICIT_TEXT',
-                goods_status_bucket = 'ACTIVE', 'OPEN',
-                'UNKNOWN'
-            ) AS goods_status_source_finality,
-            multiIf(
-                goods_status_raw = '0', 'EFFECTIVE_AT_RISK',
-                goods_status_raw = '1', 'INACTIVE_HIGH_CONFIDENCE',
-                goods_status_raw = '2', 'INACTIVE_CONFIRMED',
-                goods_status_reason = 'EXPLICIT_INACTIVE_TEXT', 'INACTIVE_CONFIRMED',
-                goods_status_bucket = 'ACTIVE', 'EFFECTIVE_UNLESS_CONTRADICTED',
-                'UNKNOWN'
-            ) AS operational_effect,
-            multiIf(
-                goods_status_raw IN ('0', '1', '2'), 'EMPIRICAL_DOMAIN_MAPPING',
-                goods_status_reason IN ('EXPLICIT_INACTIVE_TEXT', 'EXPLICIT_ACTIVE_TEXT'),
-                    'SOURCE_TEXT_MAPPING',
-                'PIPELINE_MAPPING'
-            ) AS evidence_label,
-            hex(SHA256(concat(
-                application_number, '|', toString(class_no), '|', goods_item_key, '|',
-                goods_sequence, '|', similar_group, '|', goods_name, '|',
-                goods_status_raw, '|', goods_status_bucket, '|', goods_status_reason, '|',
-                goods_status_mapping_version
-            ))) AS record_hash
-        FROM
-        (
-            SELECT
-                case_id,
-                application_number,
-                class_no,
-                goods_item_key,
-                argMax(goods_sequence, toUInt64(stage_source_start_line)) AS goods_sequence,
-                argMax(goods_name, toUInt64(stage_source_start_line)) AS goods_name,
-                lowerUTF8(argMax(goods_name, toUInt64(stage_source_start_line))) AS goods_name_norm,
-                argMax(similar_group, toUInt64(stage_source_start_line)) AS similar_group,
-                argMax(goods_status_raw, toUInt64(stage_source_start_line)) AS goods_status_raw,
-                argMax(goods_status_bucket, toUInt64(stage_source_start_line)) AS goods_status_bucket,
-                argMax(goods_status_reason, toUInt64(stage_source_start_line)) AS goods_status_reason,
-                argMax(goods_status_mapping_version, toUInt64(stage_source_start_line))
-                    AS goods_status_mapping_version,
-                argMin(source_file, toUInt64(stage_source_start_line)) AS source_file,
-                min(toUInt64(stage_source_start_line)) AS source_first_line,
-                max(toUInt64(stage_source_end_line)) AS source_last_line,
-                hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|')))
-                    AS source_row_hash
-            FROM
-            (
-                SELECT
-                    package_id,
-                    case_id,
-                    application_number,
-                    class_no,
-                    similar_group,
-                    goods_sequence,
-                    goods_name,
-                    goods_status_raw,
-                    goods_status_bucket,
-                    goods_status_reason,
-                    goods_status_mapping_version,
-                    hex(SHA256(concat(
-                        application_number, '|', toString(class_no),
-                        '|SEQ|', goods_sequence,
-                        '|GROUP|', similar_group,
-                        '|NAME|', lowerUTF8(goods_name)
-                    ))) AS goods_item_key,
-                    source_file,
-                    source_start_line AS stage_source_start_line,
-                    source_end_line AS stage_source_end_line,
-                    row_hash
-                FROM markorbit_facts.cn_stage_goods
-                WHERE package_id = toUUID('{package}')
-            ) AS prepared
-            GROUP BY case_id, application_number, class_no, goods_item_key
-        ) AS aggregated
-    """
 
 
 def touched_scope_sql(package_uuid: uuid.UUID | str) -> str:
@@ -350,9 +257,6 @@ def publish_goods_lifecycle(
     effective_expr = _nullable_date(package_meta.get("source_period_end"))
     incoming = incoming_goods_sql(package_uuid)
 
-    # Record what the source package said about each touched item before replacing
-    # its current representation. The observation preserves raw source code and
-    # never assigns a trademark-level status or legal cause.
     client.command(f"""
         INSERT INTO markorbit_facts.cn_goods_item_observation
         SELECT
@@ -399,11 +303,10 @@ def publish_goods_lifecycle(
           ON cur.application_number = incoming.application_number
          AND cur.class_no = incoming.class_no
          AND cur.goods_item_key = incoming.goods_item_key
+         AND cur.is_deleted = 0
         WHERE cur.application_number = '' OR cur.source_rank <= {source_rank}
     """)
 
-    # Delta merge: only touched items are replaced. Missing monthly rows never
-    # close/delete items that were established by a base package.
     client.command(f"""
         INSERT INTO markorbit_facts.cn_goods_item_current
         SELECT
@@ -425,7 +328,7 @@ def publish_goods_lifecycle(
             incoming.evidence_label,
             if(cur.application_number = '', toUUID('{package}'), cur.first_source_package_id),
             if(cur.application_number = '', '{package_kind}', cur.first_source_package_kind),
-            if(cur.application_number = '', toUInt64({source_rank}), cur.first_source_rank),
+            if(cur.application_number = '', {source_rank}, cur.first_source_rank),
             '{package_kind}',
             {effective_expr},
             incoming.source_file,
@@ -436,12 +339,13 @@ def publish_goods_lifecycle(
             incoming.record_hash,
             {source_rank},
             now64(3),
-            0
+            toUInt8(0)
         FROM ({incoming}) AS incoming
         LEFT JOIN markorbit_facts.cn_goods_item_current AS cur FINAL
           ON cur.application_number = incoming.application_number
          AND cur.class_no = incoming.class_no
          AND cur.goods_item_key = incoming.goods_item_key
+         AND cur.is_deleted = 0
         WHERE cur.application_number = '' OR cur.source_rank <= {source_rank}
     """)
 
@@ -467,30 +371,35 @@ def publish_goods_lifecycle(
             scope.all_known_goods_final_inactive,
             scope.goods_risk_signal_present,
             scope.goods_status_mapping_version,
-            'EMPIRICAL_DOMAIN_MAPPING',
+            'DERIVED_FROM_DURABLE_GOODS_ITEM_STATE',
             '{package_kind}',
             {effective_expr},
             toUUID('{package}'),
             {source_rank},
             now64(3),
-            0
+            toUInt8(0)
         FROM ({lifecycle_scope}) AS scope
     """)
 
-    row = client.query(f"""
+    incoming_count = int(
+        client.query(f"SELECT count() FROM ({incoming})").result_rows[0][0] or 0
+    )
+    lifecycle_row = client.query(f"""
         SELECT
-            (SELECT count() FROM ({incoming})) AS touched_items,
-            (SELECT count() FROM ({touched_scope_sql(package_uuid)})) AS touched_scopes,
-            (SELECT sum(code_0_item_count) FROM ({lifecycle_scope})) AS code_0_items,
-            (SELECT sum(code_1_item_count) FROM ({lifecycle_scope})) AS code_1_items,
-            (SELECT sum(code_2_item_count) FROM ({lifecycle_scope})) AS code_2_items
+            count(),
+            sum(code_0_item_count),
+            sum(code_1_item_count),
+            sum(code_2_item_count),
+            sum(known_item_count)
+        FROM ({lifecycle_scope})
     """).result_rows[0]
+
     return {
-        "goods_lifecycle_touched_items": int(row[0] or 0),
-        "goods_lifecycle_touched_scopes": int(row[1] or 0),
-        "goods_lifecycle_code_0_items_in_touched_scopes": int(row[2] or 0),
-        "goods_lifecycle_code_1_items_in_touched_scopes": int(row[3] or 0),
-        "goods_lifecycle_code_2_items_in_touched_scopes": int(row[4] or 0),
+        "goods_lifecycle_touched_items": incoming_count,
+        "goods_lifecycle_touched_scopes": int(lifecycle_row[0] or 0),
+        "goods_lifecycle_code_0_items_in_touched_scopes": int(lifecycle_row[1] or 0),
+        "goods_lifecycle_code_1_items_in_touched_scopes": int(lifecycle_row[2] or 0),
+        "goods_lifecycle_code_2_items_in_touched_scopes": int(lifecycle_row[3] or 0),
     }
 
 
