@@ -8,7 +8,8 @@ from typing import Any
 from app.db import clickhouse_client, postgres_conn
 
 
-CHECKPOINT_VERSION = "CN_PACKAGE_MEMBER_CHECKPOINT_V1"
+CHECKPOINT_VERSION = "CN_PACKAGE_MEMBER_CHECKPOINT_V2_SAFE_STAGE"
+RESUMABLE_ROLES = {"goods", "priority", "madrid"}
 STAGE_TABLES = (
     "markorbit_facts.cn_stage_basic",
     "markorbit_facts.cn_stage_applicant",
@@ -30,7 +31,12 @@ ROLE_STAGE_TABLE = {
 
 
 def completed_member_names(package_id: str) -> set[str]:
-    """Return ZIP members that reached the durable per-member checkpoint."""
+    """Return metadata rows that currently exist for the package.
+
+    During one live attempt this can include non-resumable members as well. On a
+    subsequent retry validated_completed_member_names removes every row that is
+    not a valid V2 checkpoint before cleanup/reuse decisions are made.
+    """
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -44,19 +50,43 @@ def completed_member_names(package_id: str) -> set[str]:
             return {str(row["internal_name"]) for row in cur.fetchall()}
 
 
-def validated_completed_member_names(package_id: str) -> set[str]:
-    """Reuse a checkpoint only when its retained ClickHouse stage still exists.
+def _stage_rows_for_member(package_id: str, role: str, internal_name: str) -> int:
+    table = ROLE_STAGE_TABLE.get(role)
+    if table is None:
+        return 0
+    safe_package = str(uuid.UUID(package_id))
+    escaped = internal_name.replace("'", "''")
+    return int(
+        clickhouse_client().query(
+            f"""
+            SELECT count()
+            FROM {table}
+            WHERE package_id = toUUID('{safe_package}')
+              AND source_file = '{escaped}'
+            """
+        ).result_rows[0][0]
+        or 0
+    )
 
-    Old interrupted runs created source_package_file rows before member-level
-    resume existed. If some later cleanup removed their stage rows, treating those
-    metadata rows as resumable would silently omit data. Any non-empty classified
-    member whose retained stage is missing is therefore invalidated and reparsed.
+
+def validated_completed_member_names(package_id: str) -> set[str]:
+    """Return only checkpoints whose exact retained stage is durable.
+
+    V1 treated a source_package_file row as completion even though StageBatchWriter
+    could still hold the member's last partial batch in Python memory. That made
+    interrupted members look complete while ClickHouse contained only a prefix
+    (for example 860000 staged applicant rows for 864720 source rows).
+
+    V2 is deliberately conservative: only roles with no deferred entity/mention
+    side effects are resumable, and a checkpoint is valid only when its stored
+    exact stage-row count still matches ClickHouse. Old/unsafe/stale metadata is
+    deleted so the member is reparsed on retry.
     """
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT internal_name, file_role, logical_rows
+                SELECT internal_name, file_role, metrics
                 FROM control.source_package_file
                 WHERE package_id = %s
                 """,
@@ -67,30 +97,24 @@ def validated_completed_member_names(package_id: str) -> set[str]:
     if not rows:
         return set()
 
-    client = clickhouse_client()
-    safe_package = str(uuid.UUID(package_id))
     valid: set[str] = set()
     stale: list[str] = []
     for row in rows:
         name = str(row["internal_name"])
         role = str(row["file_role"] or "")
-        logical_rows = int(row["logical_rows"] or 0)
-        table = ROLE_STAGE_TABLE.get(role)
-        if table is None or logical_rows == 0:
-            valid.add(name)
+        metrics = dict(row["metrics"] or {})
+        if role not in RESUMABLE_ROLES:
+            stale.append(name)
             continue
-        escaped = name.replace("'", "''")
-        count = int(
-            client.query(
-                f"""
-                SELECT count()
-                FROM {table}
-                WHERE package_id = toUUID('{safe_package}')
-                  AND source_file = '{escaped}'
-                """
-            ).result_rows[0][0]
-        )
-        if count > 0:
+        if metrics.get("checkpoint_version") != CHECKPOINT_VERSION:
+            stale.append(name)
+            continue
+        expected = metrics.get("checkpoint_stage_rows")
+        if expected is None:
+            stale.append(name)
+            continue
+        actual = _stage_rows_for_member(package_id, role, name)
+        if actual == int(expected):
             valid.add(name)
         else:
             stale.append(name)
@@ -110,7 +134,7 @@ def validated_completed_member_names(package_id: str) -> set[str]:
 
 
 def checkpoint_role_counts(package_id: str) -> Counter[str]:
-    """Rebuild raw role counts from durable completed-member profiles."""
+    """Rebuild role counts from the validated checkpoint metadata that remains."""
     result: Counter[str] = Counter()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -128,10 +152,26 @@ def checkpoint_role_counts(package_id: str) -> Counter[str]:
     return result
 
 
-def record_member_checkpoint(package_id: str, item: dict[str, Any]) -> None:
-    """Augment source_package_file with resume-only profile details."""
+def record_member_checkpoint(package_id: str, item: dict[str, Any]) -> bool:
+    """Mark a safe member resumable after its ClickHouse stage was flushed.
+
+    Returns True when the member received a durable checkpoint. Party/basic/agent
+    members are intentionally not resumable yet because entity/mention buffers
+    have independent transactional side effects; they are reparsed after a crash
+    rather than risking silent incompleteness.
+    """
+    role = str(item.get("role") or "")
+    if role not in RESUMABLE_ROLES:
+        return False
+
+    stage_rows = _stage_rows_for_member(
+        package_id,
+        role,
+        str(item["internal_name"]),
+    )
     extra = {
         "checkpoint_version": CHECKPOINT_VERSION,
+        "checkpoint_stage_rows": stage_rows,
         "records_with_continuation": int(item.get("records_with_continuation", 0)),
     }
     with postgres_conn() as conn:
@@ -145,13 +185,14 @@ def record_member_checkpoint(package_id: str, item: dict[str, Any]) -> None:
                 (json.dumps(extra), package_id, str(item["internal_name"])),
             )
         conn.commit()
+    return True
 
 
 def cleanup_uncheckpointed_stage(
     package_uuid: uuid.UUID,
     completed_members: set[str],
 ) -> None:
-    """Delete only rows that cannot be trusted after an interrupted process."""
+    """Delete rows that are not protected by validated completion metadata."""
     client = clickhouse_client()
     package = str(package_uuid)
     if completed_members:
