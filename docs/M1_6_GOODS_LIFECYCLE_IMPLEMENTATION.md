@@ -21,6 +21,8 @@ M1.5 aggregated each package directly into `cn_case_scope_current`. That is safe
 9. Legal causes such as refusal, opposition, cancellation, non-use cancellation, invalidation, voluntary cancellation, or non-renewal require separate evidence or a separately versioned inference model.
 10. A goods sequence value is not globally unique within one case/class and MUST NOT be used alone as item identity.
 11. Production ingest SQL and validation/audit SQL MUST implement the same identity version; tests must exercise the runtime SQL builder used by `ingest_m16.py`.
+12. A killed process must never strand a package permanently in `PROCESSING`.
+13. Completed ZIP members may be reused only when both the PostgreSQL member checkpoint and retained ClickHouse stage rows are present.
 
 ## New durable tables
 
@@ -67,15 +69,13 @@ Any database populated with the retired sequence-only M1.6 identity must also be
 
 For development, use a clean replay from authoritative raw ZIP files. `scripts/reset-m16.ps1` preserves raw data, copies archived CN ZIPs back to the incoming replay queue, recreates the databases, and starts PostgreSQL/ClickHouse/API without the worker.
 
-## Crash-safe package recovery
+## Crash recovery and member checkpoints
 
-CN package ingestion is protected by a PostgreSQL **session advisory lock** covering candidate selection through publication. The lock is released automatically if the Python process, API container, Docker Desktop, or host machine stops.
+CN ingestion now uses a PostgreSQL session advisory lock for the whole candidate-selection through publish cycle. If Python, the API container, Docker Desktop, or the host dies, PostgreSQL releases the lock automatically. On the next run, any orphaned `PROCESSING` package is marked `INTERRUPTED` and re-enters the queue by `source_rank`, so an older interrupted partition cannot be silently skipped by newer `REGISTERED` work.
 
-When a later run acquires that lock, any CN package still marked `PROCESSING` is known to be orphaned rather than live. It is changed to `INTERRUPTED`, abandoned `CN_PACKAGE_INGESTION` job runs are closed as `INTERRUPTED`, and the package re-enters the normal queue. Queue ordering remains `source_rank, package_sequence`, so an older interrupted base partition is replayed before newer registered packages.
+M1.6 also adds `CN_PACKAGE_MEMBER_CHECKPOINT_V1`. `control.source_package_file` is the durable checkpoint marker because it is written only after one ZIP member has been fully parsed. ClickHouse stage rows for checkpointed members are preserved across interruption. Any rows belonging to an uncheckpointed member are treated as potentially partial and are deleted synchronously before retry. The retry skips only checkpointed members whose retained stage rows still exist; stale metadata without stage is invalidated and reparsed.
 
-Interrupted retries use the existing deterministic cleanup path: partial stage and package-owned published rows are removed, then the authoritative ZIP is replayed. This is **crash recovery, not byte/row checkpoint resume**: correctness is preserved and packages no longer become permanently stranded, but a hard interruption can still require replaying that package from the beginning. A finer-grained checkpoint layer can be added later if real package runtimes justify the added complexity.
-
-Concurrent manual/worker ingestion attempts cannot race: if another process owns the advisory lock, the second request returns `busy = true` without selecting or mutating a package.
+This is member-level resume rather than arbitrary row-level resume. A crash in the middle of one very large internal CSV still requires that one internal member to be reparsed from its beginning, but already completed members in the same ZIP are not repeated. If a crash happens during publication after every member was checkpointed, the next run can reuse the complete stage set, clean partial published outputs, and rerun publication without reparsing the ZIP.
 
 ## Validation order
 
@@ -85,9 +85,10 @@ Concurrent manual/worker ingestion attempts cannot race: if another process owns
 4. `scripts/validate-m16-goods.ps1`
 5. run `audit-m16-goods-identity.ps1` against the first real base package
 6. replay base packages in source order
-7. run integrity audit
-8. only then test monthly packages
-9. only after monthly delta validation start the worker
+7. validate an intentionally interrupted package resumes from member checkpoints
+8. run integrity audit
+9. only then test monthly packages
+10. only after monthly delta validation start the worker
 
 The M1.6 goods fixture explicitly creates three baseline goods, applies a monthly patch containing only one changed item, and requires all three items to remain present after the patch.
 
