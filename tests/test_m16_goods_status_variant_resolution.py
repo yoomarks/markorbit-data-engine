@@ -18,3 +18,9 @@ def test_identity_audit_treats_status_variants_as_observations_not_identity_coll
     assert "identity_tuple_count > 1" in source
     assert '"conflicting_identity_keys"' in source
     assert '"status_variant_samples"' in source
+
+
+def test_runtime_emits_status_resolution_contract_version():
+    source = Path("app/cn/ingest_m16.py").read_text(encoding="utf-8")
+    assert 'metrics["intra_package_status_resolution_version"]' in source
+    assert "INTRA_PACKAGE_STATUS_RESOLUTION_VERSION" in source
