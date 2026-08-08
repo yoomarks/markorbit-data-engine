@@ -6,6 +6,7 @@ from pathlib import Path
 import uuid
 
 from app.cn.goods_lifecycle import GOODS_ITEM_IDENTITY_VERSION
+from app.cn.goods_lifecycle_sql import INTRA_PACKAGE_STATUS_RESOLUTION_VERSION
 from app.cn.ingest import StageBatchWriter, _cleanup_stage, _other_stage_row
 from app.cn.reader import iter_member_rows
 from app.cn.zipio import iter_package_members
@@ -38,6 +39,21 @@ def _strict_item_key_sql() -> str:
     """.strip()
 
 
+def _status_precedence_sql() -> str:
+    return """
+        multiIf(
+            goods_status_raw = '2', toUInt8(70),
+            goods_status_raw = '1', toUInt8(60),
+            goods_status_raw = '0', toUInt8(50),
+            goods_status_reason = 'EXPLICIT_INACTIVE_TEXT', toUInt8(40),
+            goods_status_bucket = 'UNKNOWN', toUInt8(30),
+            goods_status_reason = 'EXPLICIT_ACTIVE_TEXT', toUInt8(20),
+            goods_status_bucket = 'ACTIVE', toUInt8(10),
+            toUInt8(0)
+        )
+    """.strip()
+
+
 def _identity_summary_sql(package: str) -> str:
     item_key = _strict_item_key_sql()
     return f"""
@@ -45,11 +61,14 @@ def _identity_summary_sql(package: str) -> str:
             sum(source_rows_per_key) AS source_rows,
             count() AS logical_item_keys,
             sum(source_rows_per_key - 1) AS collapsed_source_rows,
-            countIf(source_rows_per_key > 1 AND variant_count = 1) AS exact_duplicate_keys,
-            sumIf(source_rows_per_key - 1, source_rows_per_key > 1 AND variant_count = 1)
+            countIf(source_rows_per_key > status_variant_count)
+                AS exact_duplicate_keys,
+            sum(source_rows_per_key - status_variant_count)
                 AS exact_duplicate_excess_rows,
-            countIf(variant_count > 1) AS conflicting_identity_keys,
-            sumIf(source_rows_per_key - 1, variant_count > 1)
+            countIf(status_variant_count > 1) AS status_variant_keys,
+            sum(status_variant_count - 1) AS status_variant_excess_rows,
+            countIf(identity_tuple_count > 1) AS conflicting_identity_keys,
+            sumIf(identity_tuple_count - 1, identity_tuple_count > 1)
                 AS conflicting_excess_rows
         FROM
         (
@@ -60,7 +79,14 @@ def _identity_summary_sql(package: str) -> str:
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason
-                )) AS variant_count
+                )) AS status_variant_count,
+                uniqExact(tuple(
+                    application_number,
+                    class_no,
+                    goods_sequence,
+                    similar_group,
+                    lowerUTF8(goods_name)
+                )) AS identity_tuple_count
             FROM
             (
                 SELECT
@@ -81,8 +107,9 @@ def _identity_summary_sql(package: str) -> str:
     """
 
 
-def _conflict_samples_sql(package: str) -> str:
+def _status_variant_samples_sql(package: str) -> str:
     item_key = _strict_item_key_sql()
+    precedence = _status_precedence_sql()
     return f"""
         SELECT
             application_number,
@@ -91,8 +118,9 @@ def _conflict_samples_sql(package: str) -> str:
             similar_group,
             goods_name,
             source_rows_per_key,
-            variant_count,
-            sample_status_variants
+            status_variant_count,
+            sample_status_variants,
+            resolved_status_variant
         FROM
         (
             SELECT
@@ -107,12 +135,18 @@ def _conflict_samples_sql(package: str) -> str:
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason
-                )) AS variant_count,
+                )) AS status_variant_count,
                 groupUniqArray(5)(tuple(
                     goods_status_raw,
                     goods_status_bucket,
-                    goods_status_reason
-                )) AS sample_status_variants
+                    goods_status_reason,
+                    source_file,
+                    source_start_line
+                )) AS sample_status_variants,
+                argMax(
+                    tuple(goods_status_raw, goods_status_bucket, goods_status_reason),
+                    tuple(status_precedence, toUInt64(source_start_line))
+                ) AS resolved_status_variant
             FROM
             (
                 SELECT
@@ -124,14 +158,17 @@ def _conflict_samples_sql(package: str) -> str:
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason,
+                    source_file,
+                    source_start_line,
+                    {precedence} AS status_precedence,
                     {item_key} AS item_key_internal
                 FROM markorbit_facts.cn_stage_goods
                 WHERE package_id = toUUID('{package}')
             ) AS prepared_rows
             GROUP BY item_key_internal
-            HAVING variant_count > 1
-        ) AS conflicts
-        ORDER BY variant_count DESC, source_rows_per_key DESC
+            HAVING status_variant_count > 1
+        ) AS variants
+        ORDER BY status_variant_count DESC, source_rows_per_key DESC
         LIMIT 20
     """
 
@@ -166,21 +203,36 @@ def audit_goods_identity(file_name: str) -> dict[str, object]:
 
         client = clickhouse_client()
         row = client.query(_identity_summary_sql(package)).result_rows[0]
-        samples = client.query(_conflict_samples_sql(package)).result_rows
+        samples = client.query(_status_variant_samples_sql(package)).result_rows
+        staged_goods_rows = int(row[0] or 0)
+        conflicting_identity_keys = int(row[7] or 0)
         result = {
-            "status": "PASS" if int(row[5] or 0) == 0 else "CONFLICT",
-            "contract": "M1.6_GOODS_ITEM_IDENTITY_AUDIT",
+            "status": "PASS" if conflicting_identity_keys == 0 else "CONFLICT",
+            "contract": "M1.6_GOODS_ITEM_IDENTITY_AUDIT_V2",
             "identity_version": GOODS_ITEM_IDENTITY_VERSION,
+            "intra_package_status_resolution_version": (
+                INTRA_PACKAGE_STATUS_RESOLUTION_VERSION
+            ),
             "file_name": file_name,
             "parsed_goods_rows": parsed_goods_rows,
-            "staged_goods_rows": int(row[0] or 0),
+            "staged_goods_rows": staged_goods_rows,
+            "filtered_unstaged_rows": parsed_goods_rows - staged_goods_rows,
             "logical_item_keys": int(row[1] or 0),
             "collapsed_source_rows": int(row[2] or 0),
             "exact_duplicate_keys": int(row[3] or 0),
             "exact_duplicate_excess_rows": int(row[4] or 0),
-            "conflicting_identity_keys": int(row[5] or 0),
-            "conflicting_excess_rows": int(row[6] or 0),
-            "conflict_samples": [
+            "status_variant_keys": int(row[5] or 0),
+            "status_variant_excess_rows": int(row[6] or 0),
+            "conflicting_identity_keys": conflicting_identity_keys,
+            "conflicting_excess_rows": int(row[8] or 0),
+            "status_variant_policy": (
+                "Status is excluded from item identity. Multiple status observations "
+                "for one strict item inside the same package are source variants, not "
+                "identity collisions. Production resolves them deterministically by "
+                "strongest source signal: 2 > 1 > 0 > explicit inactive > unknown > "
+                "explicit active > ordinary active/blank; source line breaks ties."
+            ),
+            "status_variant_samples": [
                 {
                     "application_number": str(item[0]),
                     "class_no": int(item[1]),
@@ -190,9 +242,11 @@ def audit_goods_identity(file_name: str) -> dict[str, object]:
                     "source_rows": int(item[5]),
                     "variant_count": int(item[6]),
                     "status_variants": item[7],
+                    "resolved_status_variant": item[8],
                 }
                 for item in samples
             ],
+            "conflict_samples": [],
         }
         return result
     finally:
@@ -210,7 +264,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("file_name", nargs="?", default="1999.zip")
     args = parser.parse_args()
-    print(json.dumps(audit_goods_identity(args.file_name), ensure_ascii=False, indent=2, default=str))
+    print(
+        json.dumps(
+            audit_goods_identity(args.file_name),
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    )
 
 
 if __name__ == "__main__":
