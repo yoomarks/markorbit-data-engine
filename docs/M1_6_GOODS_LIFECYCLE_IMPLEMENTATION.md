@@ -50,6 +50,8 @@ The first V2 audit passed with zero conflicting keys, but a subsequent 1999 repl
 
 For the 1999 package specifically, the V2 audit reports 6,091,001 staged rows and 82 exact duplicate excess rows with zero conflicting excess rows. Therefore the expected logical item count after a correct V2 production replay is 6,090,919. A replay that still produces 6,081,430 is evidence that the retired runtime identity is still in use.
 
+Real V2 base-package audits are also clean so far: 2000 has 1,481,373 parsed goods rows, 1,481,307 strict logical items, 66 exact duplicate excess rows, and zero conflicting identity keys; 2001 has 2,072,575 parsed goods rows, 2,064,530 strict logical items, 8,045 exact duplicate excess rows across 321 duplicate keys, and zero conflicting identity keys/excess rows.
+
 ## Item status mapping
 
 | raw | item semantic | source finality | operational effect |
