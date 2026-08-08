@@ -32,4 +32,13 @@ def clickhouse_client():
         username=settings.clickhouse_user,
         password=settings.clickhouse_password,
         database=settings.clickhouse_db,
+        settings={
+            # These are execution-resource controls only. They do not change
+            # query semantics, identity, lifecycle, FINAL behavior, or lineage.
+            "max_threads": settings.clickhouse_max_threads,
+            "max_bytes_before_external_group_by": (
+                settings.clickhouse_external_group_by_bytes
+            ),
+            "max_bytes_before_external_sort": settings.clickhouse_external_sort_bytes,
+        },
     )
