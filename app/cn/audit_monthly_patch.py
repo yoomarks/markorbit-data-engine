@@ -8,7 +8,7 @@ from typing import Any
 from app.db import clickhouse_client, postgres_conn
 
 AUDIT_NAME = "CN_M16_MONTHLY_PATCH_ACCEPTANCE"
-POLICY_VERSION = "CN_M16_MONTHLY_PATCH_POLICY_V5_DURABLE_OBSERVATION_RECONCILIATION"
+POLICY_VERSION = "CN_M16_MONTHLY_PATCH_POLICY_V6_CHAINED_MONTHLY_LINEAGE"
 
 
 def _package(file_name: str) -> dict[str, Any]:
@@ -63,6 +63,11 @@ def build_audit(file_name: str) -> dict[str, Any]:
             countIf(cur.application_number = '') AS missing_current_keys,
             countIf(cur.application_number != '' AND cur.first_source_rank < {rank_sql})
                 AS cross_package_strict_key_matches,
+            countIf(
+                cur.application_number != ''
+                AND cur.first_source_package_kind = 'MONTHLY_PATCH'
+                AND cur.first_source_rank < {rank_sql}
+            ) AS prior_monthly_origin_matches,
             countIf(cur.application_number != '' AND cur.first_source_rank = {rank_sql})
                 AS first_observed_in_patch,
             countIf(cur.application_number != '' AND cur.first_source_rank > {rank_sql})
@@ -251,6 +256,8 @@ def build_audit(file_name: str) -> dict[str, Any]:
         hard.append("scope_incoming_count_does_not_match_patch_item_count")
     if previously_observed_count == 0:
         warnings.append("patch_contains_no_previously_observed_strict_items")
+    if coverage["prior_monthly_origin_matches"] == 0:
+        warnings.append("no_prior_monthly_origin_item_reobserved")
     if scope["omitted_items_preserved"] == 0:
         warnings.append("no_omitted_item_preservation_observed")
 
@@ -281,8 +288,9 @@ def build_audit(file_name: str) -> dict[str, Any]:
         "omission_preservation_samples": samples,
         "policy_note": (
             "Monthly acceptance is reconstructed from durable goods observations because staging "
-            "is transient. Existing strict items must retain first-source lineage, and touched "
-            "scopes must equal the complete durable item set so omission never implies deletion."
+            "is transient. Existing strict items must retain first-source lineage, touched scopes "
+            "must equal the complete durable item set so omission never implies deletion, and "
+            "prior_monthly_origin_matches exposes direct monthly-to-monthly lineage chaining."
         ),
     }
 
