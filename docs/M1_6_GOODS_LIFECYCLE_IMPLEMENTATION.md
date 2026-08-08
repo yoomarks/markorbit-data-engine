@@ -67,6 +67,16 @@ Any database populated with the retired sequence-only M1.6 identity must also be
 
 For development, use a clean replay from authoritative raw ZIP files. `scripts/reset-m16.ps1` preserves raw data, copies archived CN ZIPs back to the incoming replay queue, recreates the databases, and starts PostgreSQL/ClickHouse/API without the worker.
 
+## Crash-safe package recovery
+
+CN package ingestion is protected by a PostgreSQL **session advisory lock** covering candidate selection through publication. The lock is released automatically if the Python process, API container, Docker Desktop, or host machine stops.
+
+When a later run acquires that lock, any CN package still marked `PROCESSING` is known to be orphaned rather than live. It is changed to `INTERRUPTED`, abandoned `CN_PACKAGE_INGESTION` job runs are closed as `INTERRUPTED`, and the package re-enters the normal queue. Queue ordering remains `source_rank, package_sequence`, so an older interrupted base partition is replayed before newer registered packages.
+
+Interrupted retries use the existing deterministic cleanup path: partial stage and package-owned published rows are removed, then the authoritative ZIP is replayed. This is **crash recovery, not byte/row checkpoint resume**: correctness is preserved and packages no longer become permanently stranded, but a hard interruption can still require replaying that package from the beginning. A finer-grained checkpoint layer can be added later if real package runtimes justify the added complexity.
+
+Concurrent manual/worker ingestion attempts cannot race: if another process owns the advisory lock, the second request returns `busy = true` without selecting or mutating a package.
+
 ## Validation order
 
 1. `scripts/reset-m16.ps1`
