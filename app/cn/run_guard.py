@@ -19,10 +19,12 @@ def cn_ingestion_guard() -> Iterator[bool]:
     """Hold one PostgreSQL session advisory lock for a whole CN ingest cycle.
 
     The lock is session-scoped, so PostgreSQL releases it automatically if the
-    API container, Python process, Docker Desktop, or host machine stops. That
-    makes a leftover PROCESSING package distinguishable from a live ingestion
-    without relying on a time-based stale threshold (real packages may take
-    hours to finish).
+    API container, Python process, Docker Desktop, or host machine stops.
+
+    Important: commit immediately after acquiring the session lock. A session
+    advisory lock survives COMMIT, while leaving the acquisition SELECT inside
+    an open transaction for a multi-hour import can keep an unnecessary snapshot
+    and make lock diagnostics/recovery much harder.
     """
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -31,6 +33,7 @@ def cn_ingestion_guard() -> Iterator[bool]:
                 (CN_INGESTION_LOCK_NAME,),
             )
             acquired = bool(cur.fetchone()["acquired"])
+        conn.commit()
 
         if not acquired:
             yield False
@@ -45,6 +48,7 @@ def cn_ingestion_guard() -> Iterator[bool]:
                         "SELECT pg_advisory_unlock(hashtext(%s)::bigint)",
                         (CN_INGESTION_LOCK_NAME,),
                     )
+                conn.commit()
             except Exception:
                 # Closing the PostgreSQL session also releases a session advisory
                 # lock, so recovery remains safe even if explicit unlock fails.
