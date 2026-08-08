@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 import threading
 import uuid
@@ -8,7 +7,6 @@ from typing import Any
 
 from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
-from app.cn import reader as cn_reader
 from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
@@ -19,38 +17,6 @@ from app.cn.goods_lifecycle_sql import (
 # the lifecycle orchestration in goods_lifecycle.py, but install the M1.6 query
 # builder that enforces raw -> private aggregate aliases -> permanent aliases.
 goods.incoming_goods_sql = incoming_goods_sql
-
-
-# Newer CN exports may quote every CSV field. The legacy record-boundary probe
-# split raw physical lines on commas and therefore saw the first field as
-# '"12345678"', which does not match the application-number grammar. When that
-# happens, many physical rows can be concatenated into one enormous logical
-# record. Use csv.reader for the boundary prefix so quoted and unquoted exports
-# follow the same application/class/date contract without changing row parsing.
-def _record_start_csv_aware(schema: cn_reader.FileSchema, physical_line: str) -> bool:
-    line = physical_line.lstrip("\ufeff")
-    try:
-        values = next(csv.reader([line], strict=False))
-    except (csv.Error, StopIteration):
-        values = line.split(",", 3)
-
-    if schema.role == "agent":
-        return True
-    if not values or not cn_reader.APP_RE.fullmatch((values[0] or "").strip()):
-        return False
-    if schema.requires_class:
-        if len(values) < 2 or not cn_reader.CLASS_RE.fullmatch((values[1] or "").strip()):
-            return False
-    if schema.requires_date:
-        if len(values) < 3 or not cn_reader.DATE_RE.match((values[2] or "").strip()):
-            return False
-    return True
-
-
-# iter_member_rows resolves _record_start from app.cn.reader globals at runtime,
-# so replacing the probe here fixes both the reader reference and the copy
-# imported earlier by app.cn.ingest, while keeping the change scoped to M1.6.
-cn_reader._record_start = _record_start_csv_aware
 
 
 # M1.6 intentionally wraps the proven M1.5 parser/case/party publisher instead
