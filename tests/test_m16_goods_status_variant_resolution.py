@@ -24,3 +24,9 @@ def test_runtime_emits_status_resolution_contract_version():
     source = Path("app/cn/ingest_m16.py").read_text(encoding="utf-8")
     assert 'metrics["intra_package_status_resolution_version"]' in source
     assert "INTRA_PACKAGE_STATUS_RESOLUTION_VERSION" in source
+
+
+def test_lifecycle_module_uses_single_canonical_incoming_goods_builder():
+    source = Path("app/cn/goods_lifecycle.py").read_text(encoding="utf-8")
+    assert "from app.cn.goods_lifecycle_sql import incoming_goods_sql" in source
+    assert source.count("def incoming_goods_sql(") == 0
