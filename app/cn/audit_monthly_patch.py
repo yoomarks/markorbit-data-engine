@@ -137,23 +137,30 @@ def build_audit(file_name: str) -> dict[str, Any]:
     scope_result = client.query(f"""
         SELECT
             count() AS touched_scopes,
-            sum(toUInt64(ifNull(d._durable_count, 0))) AS durable_items_in_touched_scopes,
-            sum(toUInt64(ifNull(i._incoming_count, 0))) AS incoming_items_in_touched_scopes,
+            sum(toUInt64(ifNull(d._durable_count, toUInt64(0))))
+                AS durable_items_in_touched_scopes,
+            sum(toUInt64(ifNull(i._incoming_count, toUInt64(0))))
+                AS incoming_items_in_touched_scopes,
             sum(
                 if(
-                    toUInt64(ifNull(d._durable_count, 0)) > toUInt64(ifNull(i._incoming_count, 0)),
-                    toUInt64(ifNull(d._durable_count, 0)) - toUInt64(ifNull(i._incoming_count, 0)),
+                    toUInt64(ifNull(d._durable_count, toUInt64(0)))
+                        > toUInt64(ifNull(i._incoming_count, toUInt64(0))),
+                    toUInt64(ifNull(d._durable_count, toUInt64(0)))
+                        - toUInt64(ifNull(i._incoming_count, toUInt64(0))),
                     toUInt64(0)
                 )
             ) AS omitted_items_preserved,
             countIf(
-                toUInt64(ifNull(d._durable_count, 0)) > toUInt64(ifNull(i._incoming_count, 0))
+                toUInt64(ifNull(d._durable_count, toUInt64(0)))
+                    > toUInt64(ifNull(i._incoming_count, toUInt64(0)))
             ) AS scopes_with_omitted_items_preserved,
             countIf(
-                toUInt64(ifNull(l._known_item_count, 0)) != toUInt64(ifNull(d._durable_count, 0))
+                toUInt64(ifNull(l._known_item_count, toUInt32(0)))
+                    != toUInt64(ifNull(d._durable_count, toUInt64(0)))
             ) AS lifecycle_scope_count_mismatches,
             countIf(
-                toUInt64(ifNull(s._scope_item_count, 0)) != toUInt64(ifNull(d._durable_count, 0))
+                toUInt64(ifNull(s._scope_item_count, toUInt32(0)))
+                    != toUInt64(ifNull(d._durable_count, toUInt64(0)))
             ) AS case_scope_count_mismatches,
             countIf(
                 ifNull(l._life_package_id, toUUID('00000000-0000-0000-0000-000000000000'))
@@ -163,12 +170,14 @@ def build_audit(file_name: str) -> dict[str, Any]:
                 ifNull(s._scope_package_id, toUUID('00000000-0000-0000-0000-000000000000'))
                     != toUUID('{package_text}')
             ) AS case_scope_package_mismatches,
-            countIf(toUInt64(ifNull(l._life_source_rank, 0)) != {source_rank})
+            countIf(toUInt64(ifNull(l._life_source_rank, toUInt64(0))) != {source_rank})
                 AS lifecycle_scope_rank_mismatches,
-            countIf(toUInt64(ifNull(s._scope_source_rank, 0)) != {source_rank})
+            countIf(toUInt64(ifNull(s._scope_source_rank, toUInt64(0))) != {source_rank})
                 AS case_scope_rank_mismatches,
-            sum(toUInt64(ifNull(l._unknown_item_count, 0))) AS lifecycle_unknown_items,
-            sum(toUInt64(ifNull(s._scope_unmapped_count, 0))) AS case_scope_unmapped_items
+            sum(toUInt64(ifNull(l._unknown_item_count, toUInt32(0))))
+                AS lifecycle_unknown_items,
+            sum(toUInt64(ifNull(s._scope_unmapped_count, toUInt32(0))))
+                AS case_scope_unmapped_items
         FROM ({touched}) AS t
         LEFT JOIN ({incoming_by_scope}) AS i
           ON i.application_number = t.application_number AND i.class_no = t.class_no
