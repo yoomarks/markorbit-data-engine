@@ -6,9 +6,23 @@ if ($worker -match "worker") {
     throw "worker is running. Stop it first: docker compose stop worker"
 }
 
-# The API now protects CN ingestion with a PostgreSQL session advisory lock.
-# If Docker/the API/the host stops mid-package, the next invocation reclaims
-# orphaned PROCESSING work as INTERRUPTED and replays that older package before
-# advancing to newer source ranks.
-Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/jobs/cn/run" |
-    ConvertTo-Json -Depth 20
+# Manual multi-hour ingestion must not live inside a FastAPI HTTP request.
+# Stop the API first so an abandoned/stale request cannot overlap the one-shot
+# process. PostgreSQL/ClickHouse remain running and all persisted data is kept.
+$apiWasRunning = docker compose ps --status running --services api
+if ($apiWasRunning -match "api") {
+    Write-Host "Stopping API to guarantee a single CN ingestion process..."
+    docker compose stop api | Out-Host
+}
+
+try {
+    Write-Host "Starting dedicated one-shot CN ingestion..."
+    docker compose run --rm --no-deps api python -m app.cn.run_once
+    if ($LASTEXITCODE -ne 0) {
+        throw "Dedicated CN ingestion exited with code $LASTEXITCODE."
+    }
+}
+finally {
+    Write-Host "Starting API..."
+    docker compose up -d api | Out-Host
+}
