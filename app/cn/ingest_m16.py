@@ -7,7 +7,10 @@ from typing import Any
 
 from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
-from app.cn.goods_lifecycle_sql import incoming_goods_sql
+from app.cn.goods_lifecycle_sql import (
+    INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
+    incoming_goods_sql,
+)
 
 
 # ClickHouse 24.8 resolves aliases aggressively inside aggregate queries. Keep
@@ -45,6 +48,9 @@ def _publish_m16(
     metrics.update(lifecycle_metrics)
     metrics["goods_status_model_version"] = "M1.6"
     metrics["goods_item_identity_version"] = goods.GOODS_ITEM_IDENTITY_VERSION
+    metrics["intra_package_status_resolution_version"] = (
+        INTRA_PACKAGE_STATUS_RESOLUTION_VERSION
+    )
     metrics["recovery_mode"] = "PACKAGE_REPLAY"
     return metrics
 
