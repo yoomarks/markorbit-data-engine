@@ -10,7 +10,7 @@ def test_monthly_patch_audit_uses_durable_observations_not_transient_stage() -> 
 
     assert "cn_goods_item_observation" in source
     assert "cn_stage_goods" not in source
-    assert "CN_M16_MONTHLY_PATCH_POLICY_V5_DURABLE_OBSERVATION_RECONCILIATION" == (
+    assert "CN_M16_MONTHLY_PATCH_POLICY_V6_CHAINED_MONTHLY_LINEAGE" == (
         audit_monthly_patch.POLICY_VERSION
     )
 
@@ -20,5 +20,7 @@ def test_monthly_patch_audit_checks_first_source_lineage_and_omission() -> None:
 
     assert "first_source_lineage_disagrees_with_first_observed_transitions" in source
     assert "first_source_lineage_disagrees_with_existing_item_transitions" in source
+    assert "prior_monthly_origin_matches" in source
+    assert "no_prior_monthly_origin_item_reobserved" in source
     assert "omitted_items_preserved" in source
     assert "durable_scope_has_fewer_items_than_patch" in source
