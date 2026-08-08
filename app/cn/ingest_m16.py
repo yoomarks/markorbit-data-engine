@@ -9,6 +9,7 @@ from typing import Any
 from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
 from app.cn.checkpoint import (
+    RESUMABLE_ROLES,
     checkpoint_role_counts,
     cleanup_uncheckpointed_stage,
     completed_member_names,
@@ -38,6 +39,7 @@ _LEGACY_CLEANUP_STAGE = legacy._cleanup_stage
 _LEGACY_ITER_PACKAGE_MEMBERS = legacy.iter_package_members
 _LEGACY_UPSERT_PACKAGE_FILE = legacy.upsert_package_file
 _LEGACY_COUNTER = legacy.Counter
+_LEGACY_STAGE_BATCH_WRITER = legacy.StageBatchWriter
 
 
 def _publish_m16(
@@ -59,8 +61,6 @@ def _publish_m16(
 
     metrics.update(lifecycle_metrics)
     metrics["goods_status_model_version"] = "M1.6"
-    # Emit the active identity contract in every real-package publish result so
-    # stale local source / stale Docker images are visible immediately in logs.
     metrics["goods_item_identity_version"] = goods.GOODS_ITEM_IDENTITY_VERSION
     return metrics
 
@@ -71,13 +71,7 @@ def _cleanup_partial_outputs_m16(package_uuid: uuid.UUID) -> None:
 
 
 def _checkpoint_counter_factory(initial_roles: BuiltinCounter[str]):
-    """Seed only legacy.ingest_cn_package's role counter on a resumed run.
-
-    The first Counter() call occurs inside StageBatchWriter for stage row counts;
-    the second creates role_counts. Stage row counts must remain current-process
-    only, while role_counts must include already checkpointed members so the
-    legacy required-role guard remains valid when goods/basic files are skipped.
-    """
+    """Seed only legacy.ingest_cn_package's role counter on a resumed run."""
     calls = 0
 
     def factory(*args: Any, **kwargs: Any):
@@ -97,22 +91,21 @@ def ingest_cn_package(
     trigger_type: str = "SCHEDULED",
     retrying: bool = False,
 ) -> dict[str, Any]:
-    """M1.6 ingest with item lifecycle plus member-level crash resume.
+    """M1.6 ingest with conservative member-level crash resume.
 
-    source_package_file is the durable member checkpoint: it is written only
-    after one ZIP member has been fully parsed. If Python/Docker/the host dies,
-    retained stage rows for completed members are reused on the next run while
-    any partial uncheckpointed member is synchronously deleted and reparsed.
-    Publication remains package-atomic from the application's perspective:
-    partial published outputs are always cleaned before an interrupted retry.
+    Only goods/priority/madrid members are resumable in V2. Those roles have no
+    deferred entity/mention side effects. Before their source_package_file row is
+    promoted to a checkpoint, the active StageBatchWriter is synchronously
+    flushed and the exact retained ClickHouse row count is recorded.
+
+    Party/basic/agent members are deliberately reparsed after a crash until their
+    entity-side effects gain an equally strong checkpoint contract.
     """
     with _LOCK:
         goods.ensure_m16_goods_schema()
         goods.ensure_m16_goods_replay_boundary()
 
-        # Validate metadata checkpoints against retained ClickHouse stage before
-        # reusing them. This also makes old pre-checkpoint interrupted runs safe:
-        # stale metadata whose stage was previously cleaned is invalidated.
+        # V2 invalidates old V1/unsafe/incomplete metadata before retry cleanup.
         initial_completed = validated_completed_member_names(package_id)
         reused_members = len(initial_completed)
         initial_roles = checkpoint_role_counts(package_id)
@@ -124,6 +117,15 @@ def ingest_cn_package(
         original_iter_members = legacy.iter_package_members
         original_upsert_package_file = legacy.upsert_package_file
         original_counter = legacy.Counter
+        original_stage_writer = legacy.StageBatchWriter
+
+        active_writer: legacy.StageBatchWriter | None = None
+
+        class CheckpointStageBatchWriter(_LEGACY_STAGE_BATCH_WRITER):
+            def __init__(self, *args: Any, **kwargs: Any):
+                nonlocal active_writer
+                super().__init__(*args, **kwargs)
+                active_writer = self
 
         def iter_members_with_resume(member_path: Path):
             for member in _LEGACY_ITER_PACKAGE_MEMBERS(member_path):
@@ -132,19 +134,30 @@ def ingest_cn_package(
                 yield member
 
         def checkpoint_upsert(package: str, item: dict[str, Any]) -> None:
+            name = str(item["internal_name"])
+            role = str(item.get("role") or "")
+
+            # The legacy writer flushes by batch size, not by ZIP-member boundary.
+            # A source_package_file row must never claim completion while the
+            # member's tail is still only in Python memory. Flush before marking
+            # a safe member resumable.
+            if role in RESUMABLE_ROLES and active_writer is not None:
+                active_writer.close()
+
             _LEGACY_UPSERT_PACKAGE_FILE(package, item)
-            # source_package_file itself is the authoritative completion marker.
-            completed.add(str(item["internal_name"]))
-            try:
-                record_member_checkpoint(package, item)
-            except Exception:
-                # Extra resume profile metadata is non-critical; the durable row
-                # written above is enough to make the member resumable.
-                pass
+
+            if role in RESUMABLE_ROLES:
+                if record_member_checkpoint(package, item):
+                    completed.add(name)
+            else:
+                # Profiling metadata may exist for these roles, but it is not a
+                # crash-resume checkpoint and must never cause a future skip.
+                completed.discard(name)
 
         def checkpoint_cleanup_stage(package_uuid: uuid.UUID) -> None:
-            # Query PostgreSQL fresh because a process can fail between the
-            # source_package_file commit and updating the in-memory set.
+            # On a retry, validated_completed_member_names has already removed
+            # old/unsafe checkpoint metadata. Retain only the rows whose remaining
+            # metadata is safe for this attempt; delete every other partial row.
             durable = completed_member_names(str(package_uuid))
             cleanup_uncheckpointed_stage(package_uuid, durable)
 
@@ -154,6 +167,7 @@ def ingest_cn_package(
         legacy.iter_package_members = iter_members_with_resume
         legacy.upsert_package_file = checkpoint_upsert
         legacy.Counter = _checkpoint_counter_factory(initial_roles)
+        legacy.StageBatchWriter = CheckpointStageBatchWriter
 
         package_uuid = uuid.UUID(str(package_id))
         try:
@@ -165,9 +179,8 @@ def ingest_cn_package(
                 retrying=retrying,
             )
 
-            # legacy success cleanup is intentionally checkpoint-aware and leaves
-            # completed stage rows in place. Use them to rebuild whole-package
-            # metrics (old + current process), then perform the real full cleanup.
+            # Legacy success cleanup is checkpoint-aware and leaves completed
+            # stage rows in place long enough to rebuild whole-package metrics.
             try:
                 totals = finalize_checkpoint_metrics(
                     package_id,
@@ -175,9 +188,6 @@ def ingest_cn_package(
                     reused_members=reused_members,
                 )
             except Exception as exc:
-                # Publication succeeded but resume metadata finalization did not.
-                # Make the package retryable rather than leaving a misleading
-                # SUCCESS row; partial outputs are deterministically removable.
                 try:
                     _cleanup_partial_outputs_m16(package_uuid)
                 finally:
@@ -200,3 +210,4 @@ def ingest_cn_package(
             legacy.iter_package_members = original_iter_members
             legacy.upsert_package_file = original_upsert_package_file
             legacy.Counter = original_counter
+            legacy.StageBatchWriter = original_stage_writer
