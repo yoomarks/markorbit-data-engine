@@ -4,9 +4,10 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 import hashlib
-import json
 from pathlib import Path
 import shutil
+import resource
+import time
 import uuid
 from typing import Any
 
@@ -39,13 +40,13 @@ from app.repository import (
     get_package,
     record_quality_issues,
     update_package_status,
-    upsert_entities,
-    upsert_entity_mentions,
+    upsert_identity_batch,
     upsert_package_file,
 )
 
 
-BATCH_SIZE = 20_000
+BATCH_SIZE = 50_000
+IDENTITY_BATCH_SIZE = 20_000
 ZERO_UUID = uuid.UUID(int=0)
 
 
@@ -118,6 +119,8 @@ class StageBatchWriter:
             table: [] for table in STAGE_COLUMNS
         }
         self.row_counts: Counter[str] = Counter()
+        self.insert_round_trips = 0
+        self.insert_elapsed_seconds = 0.0
 
     def add(self, table: str, row: list[Any]) -> None:
         self.buffers[table].append(row)
@@ -129,7 +132,10 @@ class StageBatchWriter:
         rows = self.buffers[table]
         if not rows:
             return
+        started = time.perf_counter()
         self.client.insert(table, rows, column_names=STAGE_COLUMNS[table])
+        self.insert_elapsed_seconds += time.perf_counter() - started
+        self.insert_round_trips += 1
         self.buffers[table] = []
 
     def close(self) -> None:
@@ -947,8 +953,10 @@ def _insert_case_events(
 def _publish(
     package_uuid: uuid.UUID,
     package_meta: dict[str, Any],
+    *,
+    client: Any | None = None,
 ) -> dict[str, int]:
-    client = clickhouse_client()
+    client = client or clickhouse_client()
     package = str(package_uuid)
     package_kind = str(package_meta["package_kind"])
     source_rank = int(package_meta["source_rank"])
@@ -1592,21 +1600,26 @@ def ingest_cn_package(
         },
     )
     run_id = uuid.UUID(run_id_text)
+    ingest_started = time.perf_counter()
     writer = StageBatchWriter()
     mentions: list[dict[str, Any]] = []
     entities: dict[uuid.UUID, EntityCandidate] = {}
     quality_issues: list[dict[str, Any]] = []
     member_profiles: list[dict[str, Any]] = []
     role_counts: Counter[str] = Counter()
+    identity_elapsed = 0.0
+    identity_flushes = 0
 
     def flush_identity_buffers() -> None:
-        nonlocal mentions, entities
-        if entities:
-            upsert_entities(entities.values())
-            entities = {}
-        if mentions:
-            upsert_entity_mentions(mentions)
-            mentions = []
+        nonlocal mentions, entities, identity_elapsed, identity_flushes
+        if not entities and not mentions:
+            return
+        started = time.perf_counter()
+        upsert_identity_batch(entities.values(), mentions)
+        identity_elapsed += time.perf_counter() - started
+        identity_flushes += 1
+        entities = {}
+        mentions = []
 
     try:
         update_package_status(
@@ -1618,6 +1631,7 @@ def ingest_cn_package(
             _cleanup_stage(package_uuid)
             _cleanup_partial_outputs(package_uuid)
 
+        staging_started = time.perf_counter()
         for member in iter_package_members(path):
             if member.schema is None:
                 quality_issues.append(
@@ -1705,7 +1719,7 @@ def ingest_cn_package(
                         if mention:
                             mentions.append(mention)
 
-                if len(mentions) >= 5_000 or len(entities) >= 5_000:
+                if len(mentions) >= IDENTITY_BATCH_SIZE or len(entities) >= IDENTITY_BATCH_SIZE:
                     flush_identity_buffers()
 
             profile_item = profile.as_dict()
@@ -1771,6 +1785,7 @@ def ingest_cn_package(
 
         writer.close()
         flush_identity_buffers()
+        staging_elapsed = time.perf_counter() - staging_started
 
         if role_counts["basic"] == 0:
             raise RuntimeError("No valid registered-trademark basic rows were produced")
@@ -1781,7 +1796,14 @@ def ingest_cn_package(
         if quality_issues:
             record_quality_issues(quality_issues)
 
+        publish_started = time.perf_counter()
         publish_metrics = _publish(package_uuid, package_meta)
+        publish_elapsed = time.perf_counter() - publish_started
+        elapsed = time.perf_counter() - ingest_started
+        processed_rows = sum(role_counts.values())
+        peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux reports KiB; macOS reports bytes. Production containers are Linux.
+        peak_rss_mb = peak_rss / 1024
 
         totals = {
             "role_counts": dict(role_counts),
@@ -1799,6 +1821,24 @@ def ingest_cn_package(
             "partition_value": package_meta["partition_value"],
             "source_rank": package_meta["source_rank"],
             "publish": publish_metrics,
+            "performance": {
+                "total_elapsed_seconds": round(elapsed, 3),
+                "rows_processed": processed_rows,
+                "rows_per_second": round(processed_rows / elapsed, 1) if elapsed else 0.0,
+                "stage_insert_elapsed_seconds": round(writer.insert_elapsed_seconds, 3),
+                "stage_insert_round_trips": writer.insert_round_trips,
+                "identity_elapsed_seconds": round(identity_elapsed, 3),
+                "identity_transactions": identity_flushes,
+                "identity_sql_executions": identity_flushes * 3,
+                "parse_transform_buffer_elapsed_seconds": round(
+                    max(0.0, staging_elapsed - writer.insert_elapsed_seconds - identity_elapsed), 3
+                ),
+                "staging_total_elapsed_seconds": round(staging_elapsed, 3),
+                "publish_elapsed_seconds": round(publish_elapsed, 3),
+                "approx_process_peak_rss_mb": round(peak_rss_mb, 1),
+                "stage_batch_size": writer.batch_size,
+                "identity_batch_size": IDENTITY_BATCH_SIZE,
+            },
         }
         profile = {
             "schema_version": "M1.5",

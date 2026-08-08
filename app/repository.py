@@ -274,7 +274,7 @@ def upsert_package_file(package_id: str, item: dict[str, Any]) -> None:
         conn.commit()
 
 
-def upsert_entities(rows: Iterable[EntityCandidate]) -> None:
+def upsert_entities(rows: Iterable[EntityCandidate], *, conn: Any | None = None) -> None:
     candidates = list(rows)
     if not candidates:
         return
@@ -319,14 +319,19 @@ def upsert_entities(rows: Iterable[EntityCandidate]) -> None:
                   )
     """
     payload = [candidate.__dict__ for candidate in candidates]
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
+    def execute(target: Any) -> None:
+        with target.cursor() as cur:
             cur.executemany(entity_sql, payload)
             cur.executemany(alias_sql, payload)
-        conn.commit()
+    if conn is not None:
+        execute(conn)
+        return
+    with postgres_conn() as owned_conn:
+        execute(owned_conn)
+        owned_conn.commit()
 
 
-def upsert_entity_mentions(rows: list[dict[str, Any]]) -> None:
+def upsert_entity_mentions(rows: list[dict[str, Any]], *, conn: Any | None = None) -> None:
     if not rows:
         return
     sql = """
@@ -370,9 +375,32 @@ def upsert_entity_mentions(rows: list[dict[str, Any]]) -> None:
             ELSE entity.entity_mention.resolution_method END,
         last_seen_at = now()
     """
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
+    def execute(target: Any) -> None:
+        with target.cursor() as cur:
             cur.executemany(sql, rows)
+    if conn is not None:
+        execute(conn)
+        return
+    with postgres_conn() as owned_conn:
+        execute(owned_conn)
+        owned_conn.commit()
+
+
+def upsert_identity_batch(
+    entities: Iterable[EntityCandidate], mentions: list[dict[str, Any]]
+) -> None:
+    """Persist one identity batch atomically over a single PostgreSQL session.
+
+    Entity rows must precede mentions because the latter can reference the former.
+    Keeping both operations in one transaction preserves that ordering while avoiding
+    the two connection handshakes previously paid by every ingestion buffer flush.
+    """
+    candidates = list(entities)
+    if not candidates and not mentions:
+        return
+    with postgres_conn() as conn:
+        upsert_entities(candidates, conn=conn)
+        upsert_entity_mentions(mentions, conn=conn)
         conn.commit()
 
 

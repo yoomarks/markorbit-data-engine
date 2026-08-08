@@ -20,8 +20,8 @@ REQUIRED_M16_GOODS_COLUMNS = {
 }
 
 
-def ensure_m16_goods_schema() -> None:
-    client = clickhouse_client()
+def ensure_m16_goods_schema(client: Any | None = None) -> None:
+    client = client or clickhouse_client()
     rows = client.query(
         """
         SELECT table, name
@@ -40,7 +40,7 @@ def ensure_m16_goods_schema() -> None:
         )
 
 
-def ensure_m16_goods_replay_boundary() -> None:
+def ensure_m16_goods_replay_boundary(client: Any | None = None) -> None:
     """Refuse to mix old class-only scopes with a newly empty item store.
 
     Existing M1.5 installations already contain class aggregates but discarded
@@ -48,7 +48,7 @@ def ensure_m16_goods_replay_boundary() -> None:
     from those aggregates. A clean replay/backfill is required once before the
     first M1.6 package is accepted.
     """
-    client = clickhouse_client()
+    client = client or clickhouse_client()
     scope_count = int(
         client.query(
             "SELECT count() FROM markorbit_facts.cn_case_scope_current FINAL WHERE is_deleted = 0"
@@ -251,9 +251,11 @@ def _lifecycle_scope_sql(package_uuid: uuid.UUID | str) -> str:
 def publish_goods_lifecycle(
     package_uuid: uuid.UUID,
     package_meta: dict[str, Any],
+    *,
+    client: Any | None = None,
 ) -> dict[str, int]:
-    ensure_m16_goods_schema()
-    client = clickhouse_client()
+    client = client or clickhouse_client()
+    ensure_m16_goods_schema(client)
     package = str(package_uuid)
     package_kind = str(package_meta["package_kind"])
     source_rank = int(package_meta["source_rank"])
