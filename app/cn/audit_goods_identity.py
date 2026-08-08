@@ -108,66 +108,80 @@ def _identity_summary_sql(package: str) -> str:
 
 
 def _status_variant_samples_sql(package: str) -> str:
+    """Return a small variant sample without retaining sample arrays for every key.
+
+    The old query built ``groupUniqArray`` state across the entire package and could
+    exhaust ClickHouse memory on multi-million-row monthly patches. This query first
+    identifies at most 20 variant keys using the same bounded aggregate shape that
+    the summary audit already proves can run, then materializes detailed samples only
+    for those keys.
+    """
     item_key = _strict_item_key_sql()
     precedence = _status_precedence_sql()
-    return f"""
+    prepared = f"""
         SELECT
             application_number,
             class_no,
             goods_sequence,
             similar_group,
             goods_name,
-            source_rows_per_key,
-            status_variant_count,
-            sample_status_variants,
-            resolved_status_variant
+            goods_status_raw,
+            goods_status_bucket,
+            goods_status_reason,
+            source_file,
+            source_start_line,
+            {precedence} AS status_precedence,
+            {item_key} AS item_key_internal
+        FROM markorbit_facts.cn_stage_goods
+        WHERE package_id = toUUID('{package}')
+    """
+    variant_keys = f"""
+        SELECT item_key_internal
         FROM
         (
             SELECT
-                any(application_number) AS application_number,
-                any(class_no) AS class_no,
-                any(goods_sequence) AS goods_sequence,
-                any(similar_group) AS similar_group,
-                any(goods_name) AS goods_name,
                 item_key_internal,
                 count() AS source_rows_per_key,
                 uniqExact(tuple(
                     goods_status_raw,
                     goods_status_bucket,
                     goods_status_reason
-                )) AS status_variant_count,
-                groupUniqArray(5)(tuple(
-                    goods_status_raw,
-                    goods_status_bucket,
-                    goods_status_reason,
-                    source_file,
-                    source_start_line
-                )) AS sample_status_variants,
-                argMax(
-                    tuple(goods_status_raw, goods_status_bucket, goods_status_reason),
-                    tuple(status_precedence, toUInt64(source_start_line))
-                ) AS resolved_status_variant
-            FROM
-            (
-                SELECT
-                    application_number,
-                    class_no,
-                    goods_sequence,
-                    similar_group,
-                    goods_name,
-                    goods_status_raw,
-                    goods_status_bucket,
-                    goods_status_reason,
-                    source_file,
-                    source_start_line,
-                    {precedence} AS status_precedence,
-                    {item_key} AS item_key_internal
-                FROM markorbit_facts.cn_stage_goods
-                WHERE package_id = toUUID('{package}')
-            ) AS prepared_rows
+                )) AS status_variant_count
+            FROM ({prepared}) AS prepared_for_keys
             GROUP BY item_key_internal
             HAVING status_variant_count > 1
-        ) AS variants
+            ORDER BY status_variant_count DESC, source_rows_per_key DESC
+            LIMIT 20
+        )
+    """
+    return f"""
+        SELECT
+            any(p.application_number) AS application_number,
+            any(p.class_no) AS class_no,
+            any(p.goods_sequence) AS goods_sequence,
+            any(p.similar_group) AS similar_group,
+            any(p.goods_name) AS goods_name,
+            count() AS source_rows_per_key,
+            uniqExact(tuple(
+                p.goods_status_raw,
+                p.goods_status_bucket,
+                p.goods_status_reason
+            )) AS status_variant_count,
+            groupUniqArray(5)(tuple(
+                p.goods_status_raw,
+                p.goods_status_bucket,
+                p.goods_status_reason,
+                p.source_file,
+                p.source_start_line
+            )) AS sample_status_variants,
+            argMax(
+                tuple(p.goods_status_raw, p.goods_status_bucket, p.goods_status_reason),
+                tuple(p.status_precedence, toUInt64(p.source_start_line))
+            ) AS resolved_status_variant
+        FROM ({prepared}) AS p
+        INNER JOIN ({variant_keys}) AS v
+          ON v.item_key_internal = p.item_key_internal
+        GROUP BY p.item_key_internal
         ORDER BY status_variant_count DESC, source_rows_per_key DESC
         LIMIT 20
     """
@@ -203,7 +217,12 @@ def audit_goods_identity(file_name: str) -> dict[str, object]:
 
         client = clickhouse_client()
         row = client.query(_identity_summary_sql(package)).result_rows[0]
-        samples = client.query(_status_variant_samples_sql(package)).result_rows
+        status_variant_keys = int(row[5] or 0)
+        samples = (
+            client.query(_status_variant_samples_sql(package)).result_rows
+            if status_variant_keys > 0
+            else []
+        )
         staged_goods_rows = int(row[0] or 0)
         conflicting_identity_keys = int(row[7] or 0)
         result = {
@@ -221,7 +240,7 @@ def audit_goods_identity(file_name: str) -> dict[str, object]:
             "collapsed_source_rows": int(row[2] or 0),
             "exact_duplicate_keys": int(row[3] or 0),
             "exact_duplicate_excess_rows": int(row[4] or 0),
-            "status_variant_keys": int(row[5] or 0),
+            "status_variant_keys": status_variant_keys,
             "status_variant_excess_rows": int(row[6] or 0),
             "conflicting_identity_keys": conflicting_identity_keys,
             "conflicting_excess_rows": int(row[8] or 0),
