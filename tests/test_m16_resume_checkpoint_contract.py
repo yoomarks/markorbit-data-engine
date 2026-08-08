@@ -8,6 +8,7 @@ def test_member_checkpoint_is_durable_and_stage_validated():
     assert "validated_completed_member_names" in source
     assert "source_file NOT IN" in source
     assert "DELETE FROM control.source_package_file" in source
+    assert "ROLE_STAGE_TABLE" in source
 
 
 def test_m16_runtime_skips_only_completed_members_and_preserves_partial_recovery():
