@@ -10,7 +10,8 @@ from app.db import clickhouse_client, postgres_conn
 
 
 AUDIT_NAME = "CN_M16_MONTHLY_PATCH_ACCEPTANCE"
-POLICY_VERSION = "CN_M16_MONTHLY_PATCH_POLICY_V1_STRICT_KEY_AND_OMISSION"
+POLICY_VERSION = "CN_M16_MONTHLY_PATCH_POLICY_V2_CH24_TYPED_RECONCILIATION"
+ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 
 def _package(file_name: str) -> dict[str, Any]:
@@ -35,11 +36,16 @@ def _row_dict(result: Any, values: tuple[Any, ...]) -> dict[str, Any]:
     return dict(zip(result.column_names, values, strict=True))
 
 
+def _ints(row: dict[str, Any]) -> dict[str, int]:
+    return {key: int(value or 0) for key, value in row.items()}
+
+
 def build_audit(file_name: str) -> dict[str, Any]:
     package = _package(file_name)
     package_id = uuid.UUID(str(package["package_id"]))
     package_text = str(package_id)
     source_rank = int(package["source_rank"])
+    rank_sql = f"toUInt64({source_rank})"
     incoming = incoming_goods_sql(package_id)
     client = clickhouse_client()
 
@@ -48,17 +54,17 @@ def build_audit(file_name: str) -> dict[str, Any]:
             count() AS incoming_items,
             countIf(cur.application_number != '') AS current_key_hits,
             countIf(cur.application_number = '') AS missing_current_keys,
-            countIf(cur.application_number != '' AND cur.first_source_rank < {source_rank})
+            countIf(cur.application_number != '' AND cur.first_source_rank < {rank_sql})
                 AS cross_package_strict_key_matches,
-            countIf(cur.application_number != '' AND cur.first_source_rank = {source_rank})
+            countIf(cur.application_number != '' AND cur.first_source_rank = {rank_sql})
                 AS first_observed_in_patch,
-            countIf(cur.application_number != '' AND cur.first_source_rank > {source_rank})
+            countIf(cur.application_number != '' AND cur.first_source_rank > {rank_sql})
                 AS impossible_future_first_rank,
             countIf(
                 cur.application_number != ''
                 AND cur.last_source_package_id = toUUID('{package_text}')
             ) AS current_items_updated_by_patch,
-            countIf(cur.application_number != '' AND cur.source_rank = {source_rank})
+            countIf(cur.application_number != '' AND cur.source_rank = {rank_sql})
                 AS current_items_at_patch_rank
         FROM ({incoming}) AS inc
         LEFT JOIN markorbit_facts.cn_goods_item_current AS cur FINAL
@@ -67,8 +73,7 @@ def build_audit(file_name: str) -> dict[str, Any]:
          AND cur.goods_item_key = inc.goods_item_key
          AND cur.is_deleted = 0
     """)
-    coverage = _row_dict(coverage_result, coverage_result.result_rows[0])
-    coverage = {key: int(value or 0) for key, value in coverage.items()}
+    coverage = _ints(_row_dict(coverage_result, coverage_result.result_rows[0]))
 
     transition_result = client.query(f"""
         SELECT transition_type, count() AS item_count
@@ -77,10 +82,7 @@ def build_audit(file_name: str) -> dict[str, Any]:
         GROUP BY transition_type
         ORDER BY transition_type
     """)
-    transitions = {
-        str(row[0]): int(row[1] or 0)
-        for row in transition_result.result_rows
-    }
+    transitions = {str(row[0]): int(row[1] or 0) for row in transition_result.result_rows}
     observation_count = sum(transitions.values())
 
     touched = f"""
@@ -94,10 +96,7 @@ def build_audit(file_name: str) -> dict[str, Any]:
         GROUP BY application_number, class_no
     """
     durable_by_scope = f"""
-        SELECT
-            item.application_number,
-            item.class_no,
-            count() AS _durable_count
+        SELECT item.application_number, item.class_no, count() AS _durable_count
         FROM markorbit_facts.cn_goods_item_current AS item FINAL
         INNER JOIN ({touched}) AS touched_scope
           ON touched_scope.application_number = item.application_number
@@ -105,91 +104,70 @@ def build_audit(file_name: str) -> dict[str, Any]:
         WHERE item.is_deleted = 0
         GROUP BY item.application_number, item.class_no
     """
-    lifecycle_by_scope = f"""
-        SELECT
-            life.application_number,
-            life.class_no,
-            life.known_item_count AS _known_item_count,
-            life.unknown_item_count AS _unknown_item_count,
-            life.last_source_package_id AS _life_package_id,
-            life.source_rank AS _life_source_rank
-        FROM markorbit_facts.cn_goods_scope_lifecycle_current AS life FINAL
-        INNER JOIN ({touched}) AS touched_scope
-          ON touched_scope.application_number = life.application_number
-         AND touched_scope.class_no = life.class_no
-        WHERE life.is_deleted = 0
-    """
-    case_scope_by_scope = f"""
-        SELECT
-            scope.application_number,
-            scope.class_no,
-            scope.source_item_count AS _scope_item_count,
-            scope.unmapped_status_item_count AS _scope_unmapped_count,
-            scope.last_source_package_id AS _scope_package_id,
-            scope.source_rank AS _scope_source_rank
-        FROM markorbit_facts.cn_case_scope_current AS scope FINAL
-        INNER JOIN ({touched}) AS touched_scope
-          ON touched_scope.application_number = scope.application_number
-         AND touched_scope.class_no = scope.class_no
-        WHERE scope.is_deleted = 0
-    """
 
-    scope_result = client.query(f"""
+    # ClickHouse 24.8 has no exact common supertype for UInt64 count() and an
+    # untyped integer literal in ifNull(). With join_use_nulls=0 (the default),
+    # unmatched LEFT JOIN numeric fields already materialize as typed zero, so
+    # this reconciliation deliberately avoids ifNull(..., 0) altogether.
+    omission_result = client.query(f"""
         SELECT
             count() AS touched_scopes,
-            sum(toUInt64(ifNull(d._durable_count, toUInt64(0))))
-                AS durable_items_in_touched_scopes,
-            sum(toUInt64(ifNull(i._incoming_count, toUInt64(0))))
-                AS incoming_items_in_touched_scopes,
-            sum(
-                if(
-                    toUInt64(ifNull(d._durable_count, toUInt64(0)))
-                        > toUInt64(ifNull(i._incoming_count, toUInt64(0))),
-                    toUInt64(ifNull(d._durable_count, toUInt64(0)))
-                        - toUInt64(ifNull(i._incoming_count, toUInt64(0))),
-                    toUInt64(0)
-                )
-            ) AS omitted_items_preserved,
-            countIf(
-                toUInt64(ifNull(d._durable_count, toUInt64(0)))
-                    > toUInt64(ifNull(i._incoming_count, toUInt64(0)))
-            ) AS scopes_with_omitted_items_preserved,
-            countIf(
-                toUInt64(ifNull(l._known_item_count, toUInt32(0)))
-                    != toUInt64(ifNull(d._durable_count, toUInt64(0)))
-            ) AS lifecycle_scope_count_mismatches,
-            countIf(
-                toUInt64(ifNull(s._scope_item_count, toUInt32(0)))
-                    != toUInt64(ifNull(d._durable_count, toUInt64(0)))
-            ) AS case_scope_count_mismatches,
-            countIf(
-                ifNull(l._life_package_id, toUUID('00000000-0000-0000-0000-000000000000'))
-                    != toUUID('{package_text}')
-            ) AS lifecycle_scope_package_mismatches,
-            countIf(
-                ifNull(s._scope_package_id, toUUID('00000000-0000-0000-0000-000000000000'))
-                    != toUUID('{package_text}')
-            ) AS case_scope_package_mismatches,
-            countIf(toUInt64(ifNull(l._life_source_rank, toUInt64(0))) != {source_rank})
-                AS lifecycle_scope_rank_mismatches,
-            countIf(toUInt64(ifNull(s._scope_source_rank, toUInt64(0))) != {source_rank})
-                AS case_scope_rank_mismatches,
-            sum(toUInt64(ifNull(l._unknown_item_count, toUInt32(0))))
-                AS lifecycle_unknown_items,
-            sum(toUInt64(ifNull(s._scope_unmapped_count, toUInt32(0))))
-                AS case_scope_unmapped_items
+            sum(d._durable_count) AS durable_items_in_touched_scopes,
+            sum(i._incoming_count) AS incoming_items_in_touched_scopes,
+            sum(if(
+                d._durable_count > i._incoming_count,
+                d._durable_count - i._incoming_count,
+                toUInt64(0)
+            )) AS omitted_items_preserved,
+            countIf(d._durable_count > i._incoming_count)
+                AS scopes_with_omitted_items_preserved
         FROM ({touched}) AS t
         LEFT JOIN ({incoming_by_scope}) AS i
           ON i.application_number = t.application_number AND i.class_no = t.class_no
         LEFT JOIN ({durable_by_scope}) AS d
           ON d.application_number = t.application_number AND d.class_no = t.class_no
-        LEFT JOIN ({lifecycle_by_scope}) AS l
-          ON l.application_number = t.application_number AND l.class_no = t.class_no
-        LEFT JOIN ({case_scope_by_scope}) AS s
-          ON s.application_number = t.application_number AND s.class_no = t.class_no
     """)
-    scope = _row_dict(scope_result, scope_result.result_rows[0])
-    scope = {key: int(value or 0) for key, value in scope.items()}
+    omission = _ints(_row_dict(omission_result, omission_result.result_rows[0]))
+
+    lifecycle_result = client.query(f"""
+        SELECT
+            countIf(toUInt64(l.known_item_count) != d._durable_count)
+                AS lifecycle_scope_count_mismatches,
+            countIf(l.last_source_package_id != toUUID('{package_text}'))
+                AS lifecycle_scope_package_mismatches,
+            countIf(l.source_rank != {rank_sql})
+                AS lifecycle_scope_rank_mismatches,
+            sum(toUInt64(l.unknown_item_count)) AS lifecycle_unknown_items
+        FROM ({touched}) AS t
+        LEFT JOIN ({durable_by_scope}) AS d
+          ON d.application_number = t.application_number AND d.class_no = t.class_no
+        LEFT JOIN markorbit_facts.cn_goods_scope_lifecycle_current AS l FINAL
+          ON l.application_number = t.application_number
+         AND l.class_no = t.class_no
+         AND l.is_deleted = 0
+    """)
+    lifecycle = _ints(_row_dict(lifecycle_result, lifecycle_result.result_rows[0]))
+
+    scope_result = client.query(f"""
+        SELECT
+            countIf(toUInt64(s.source_item_count) != d._durable_count)
+                AS case_scope_count_mismatches,
+            countIf(s.last_source_package_id != toUUID('{package_text}'))
+                AS case_scope_package_mismatches,
+            countIf(s.source_rank != {rank_sql})
+                AS case_scope_rank_mismatches,
+            sum(toUInt64(s.unmapped_status_item_count)) AS case_scope_unmapped_items
+        FROM ({touched}) AS t
+        LEFT JOIN ({durable_by_scope}) AS d
+          ON d.application_number = t.application_number AND d.class_no = t.class_no
+        LEFT JOIN markorbit_facts.cn_case_scope_current AS s FINAL
+          ON s.application_number = t.application_number
+         AND s.class_no = t.class_no
+         AND s.is_deleted = 0
+    """)
+    scope_check = _ints(_row_dict(scope_result, scope_result.result_rows[0]))
+
+    scope = {**omission, **lifecycle, **scope_check}
 
     sample_result = client.query(f"""
         SELECT
@@ -214,14 +192,11 @@ def build_audit(file_name: str) -> dict[str, Any]:
          AND inc.goods_item_key = item.goods_item_key
         WHERE item.is_deleted = 0
           AND inc.application_number = ''
-          AND item.source_rank < {source_rank}
+          AND item.source_rank < {rank_sql}
         ORDER BY item.application_number, item.class_no, item.goods_item_key
         LIMIT 12
     """)
-    preserved_samples = [
-        _row_dict(sample_result, values)
-        for values in sample_result.result_rows
-    ]
+    preserved_samples = [_row_dict(sample_result, values) for values in sample_result.result_rows]
 
     hard_fail_reasons: list[str] = []
     warnings: list[str] = []
@@ -278,10 +253,7 @@ def build_audit(file_name: str) -> dict[str, Any]:
         "hard_fail_reasons": hard_fail_reasons,
         "warning_reasons": warnings,
         "strict_key_reconciliation": coverage,
-        "observations": {
-            "total": observation_count,
-            "transition_types": transitions,
-        },
+        "observations": {"total": observation_count, "transition_types": transitions},
         "scope_reconciliation": scope,
         "omission_preservation_samples": preserved_samples,
         "policy_note": (
