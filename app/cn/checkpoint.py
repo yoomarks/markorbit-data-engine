@@ -18,6 +18,15 @@ STAGE_TABLES = (
     "markorbit_facts.cn_stage_madrid",
     "markorbit_facts.cn_stage_coowner",
 )
+ROLE_STAGE_TABLE = {
+    "basic": "markorbit_facts.cn_stage_basic",
+    "applicant": "markorbit_facts.cn_stage_applicant",
+    "goods": "markorbit_facts.cn_stage_goods",
+    "agent": "markorbit_facts.cn_stage_agent",
+    "priority": "markorbit_facts.cn_stage_priority",
+    "madrid": "markorbit_facts.cn_stage_madrid",
+    "coowner": "markorbit_facts.cn_stage_coowner",
+}
 
 
 def completed_member_names(package_id: str) -> set[str]:
@@ -33,6 +42,71 @@ def completed_member_names(package_id: str) -> set[str]:
                 (package_id,),
             )
             return {str(row["internal_name"]) for row in cur.fetchall()}
+
+
+def validated_completed_member_names(package_id: str) -> set[str]:
+    """Reuse a checkpoint only when its retained ClickHouse stage still exists.
+
+    Old interrupted runs created source_package_file rows before member-level
+    resume existed. If some later cleanup removed their stage rows, treating those
+    metadata rows as resumable would silently omit data. Any non-empty classified
+    member whose retained stage is missing is therefore invalidated and reparsed.
+    """
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT internal_name, file_role, logical_rows
+                FROM control.source_package_file
+                WHERE package_id = %s
+                """,
+                (package_id,),
+            )
+            rows = list(cur.fetchall())
+
+    if not rows:
+        return set()
+
+    client = clickhouse_client()
+    safe_package = str(uuid.UUID(package_id))
+    valid: set[str] = set()
+    stale: list[str] = []
+    for row in rows:
+        name = str(row["internal_name"])
+        role = str(row["file_role"] or "")
+        logical_rows = int(row["logical_rows"] or 0)
+        table = ROLE_STAGE_TABLE.get(role)
+        if table is None or logical_rows == 0:
+            valid.add(name)
+            continue
+        escaped = name.replace("'", "''")
+        count = int(
+            client.query(
+                f"""
+                SELECT count()
+                FROM {table}
+                WHERE package_id = toUUID('{safe_package}')
+                  AND source_file = '{escaped}'
+                """
+            ).result_rows[0][0]
+        )
+        if count > 0:
+            valid.add(name)
+        else:
+            stale.append(name)
+
+    if stale:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM control.source_package_file
+                    WHERE package_id = %s AND internal_name = ANY(%s)
+                    """,
+                    (package_id, stale),
+                )
+            conn.commit()
+    return valid
 
 
 def checkpoint_role_counts(package_id: str) -> Counter[str]:
@@ -55,13 +129,7 @@ def checkpoint_role_counts(package_id: str) -> Counter[str]:
 
 
 def record_member_checkpoint(package_id: str, item: dict[str, Any]) -> None:
-    """Augment source_package_file with resume-only profile details.
-
-    upsert_package_file is already the durable commit marker and is called only
-    after the member iterator finishes. This update stores details that are not
-    first-class columns but are useful when reconstructing a final profile after
-    a resumed run.
-    """
+    """Augment source_package_file with resume-only profile details."""
     extra = {
         "checkpoint_version": CHECKPOINT_VERSION,
         "records_with_continuation": int(item.get("records_with_continuation", 0)),
@@ -83,13 +151,7 @@ def cleanup_uncheckpointed_stage(
     package_uuid: uuid.UUID,
     completed_members: set[str],
 ) -> None:
-    """Delete only rows that cannot be trusted after an interrupted process.
-
-    Rows belonging to a member with a source_package_file checkpoint are known
-    to have reached the end of that member and are retained. Rows from any other
-    member may be a partial batch left by a killed Python/Docker/host process and
-    are removed synchronously before retry.
-    """
+    """Delete only rows that cannot be trusted after an interrupted process."""
     client = clickhouse_client()
     package = str(package_uuid)
     if completed_members:
@@ -182,12 +244,7 @@ def finalize_checkpoint_metrics(
     *,
     reused_members: int,
 ) -> dict[str, Any]:
-    """Correct final metrics/profile after a member-level resumed run.
-
-    The legacy parser's in-memory counters only see members parsed in the current
-    process. Durable source_package_file rows and retained stage rows cover both
-    old and new members, so they are the authoritative source for final totals.
-    """
+    """Correct final metrics/profile after a member-level resumed run."""
     profiles = _member_profiles(package_id)
     role_counts: Counter[str] = Counter()
     for item in profiles:
