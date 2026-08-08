@@ -11,15 +11,20 @@ def main() -> int:
         json.dumps(
             {
                 "event": "CN_RUN_START",
-                "mode": "DEDICATED_ONE_SHOT",
-                "note": "PostgreSQL advisory lock prevents concurrent CN ingestion.",
+                "mode": "DEDICATED_WORKER_ONE_SHOT",
+                "recovery": "PACKAGE_REPLAY",
+                "note": (
+                    "API remains online; PostgreSQL advisory lock prevents "
+                    "concurrent CN ingestion. Interrupted packages are cleaned "
+                    "and replayed from the authoritative ZIP."
+                ),
             },
             ensure_ascii=False,
         ),
         flush=True,
     )
     try:
-        result = scan_and_ingest_cn(trigger_type="MANUAL_CLI")
+        result = scan_and_ingest_cn(trigger_type="MANUAL_WORKER")
     except Exception as exc:
         print(
             json.dumps(
