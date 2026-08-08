@@ -90,6 +90,9 @@ def scope_from_current_items_sql(package_uuid: uuid.UUID | str) -> str:
     This is the central M1.6 invariant: the monthly package identifies which
     classes are touched, but the scope is rebuilt from *all current items* for
     those classes. Omission from a monthly patch is therefore never deletion.
+    Intra-package duplicate status variants have already been resolved by the
+    single production ``incoming_goods_sql`` builder before durable state is
+    written, so this scope layer never invents a precedence of its own.
     """
     touched = touched_scope_sql(package_uuid)
     return f"""
