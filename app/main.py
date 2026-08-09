@@ -12,18 +12,24 @@ from app.jobs import (
     scan_cn_incoming,
 )
 from app.repository import list_recent_packages, list_recent_runs
+from app.version import engine_version
 
+
+ENGINE_VERSION = engine_version()
 
 app = FastAPI(
     title="MarkOrbit Data Engine",
-    version="0.3.0",
-    description="MarkOrbit CN trademark data engine M1.5",
+    version="0.4.0",
+    description=f"MarkOrbit CN trademark data engine {ENGINE_VERSION}",
 )
 
 
 @app.on_event("startup")
 def startup() -> None:
     ensure_raw_directories()
+    # M1.6 builds on the frozen M1.5 CN core schema. The M1.6 durable-goods
+    # schema is initialized by ClickHouse bootstrap and guarded again by the
+    # M1.6 ingestion wrapper before any CN package is accepted.
     ensure_m15_schema()
 
 
@@ -39,7 +45,7 @@ def dashboard():
 def health():
     result = {
         "api": "ok",
-        "version": "M1.5",
+        "version": ENGINE_VERSION,
         "postgres": "unknown",
         "clickhouse": "unknown",
     }
@@ -131,6 +137,15 @@ def cn_summary():
             UNION ALL
             SELECT 'cn_scope_carve_out_current', count()
             FROM markorbit_facts.cn_scope_carve_out_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'cn_goods_item_current', count()
+            FROM markorbit_facts.cn_goods_item_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'cn_goods_item_observation', count()
+            FROM markorbit_facts.cn_goods_item_observation FINAL
+            UNION ALL
+            SELECT 'cn_goods_scope_lifecycle_current', count()
+            FROM markorbit_facts.cn_goods_scope_lifecycle_current FINAL WHERE is_deleted = 0
         )
         ORDER BY table_name
         """
@@ -148,7 +163,27 @@ def cn_summary():
         WHERE is_deleted = 0
         """
     )
-    return {"tables": counts, "goods_status": scope[0] if scope else {}}
+    lifecycle = _query_dicts(
+        """
+        SELECT
+            sum(known_item_count) AS durable_known_items,
+            sum(operational_effective_item_count) AS operational_effective_items,
+            sum(risk_item_count) AS risk_items,
+            sum(inactive_high_confidence_item_count) AS inactive_high_confidence_items,
+            sum(final_inactive_item_count) AS final_inactive_items,
+            sum(unknown_item_count) AS unknown_items,
+            countIf(all_known_goods_inactive = 1) AS all_known_goods_inactive_scopes,
+            countIf(all_known_goods_final_inactive = 1) AS all_known_goods_final_inactive_scopes
+        FROM markorbit_facts.cn_goods_scope_lifecycle_current FINAL
+        WHERE is_deleted = 0
+        """
+    )
+    return {
+        "version": ENGINE_VERSION,
+        "tables": counts,
+        "goods_status": scope[0] if scope else {},
+        "goods_lifecycle": lifecycle[0] if lifecycle else {},
+    }
 
 
 @app.get("/api/cn/cases/{application_number}")
@@ -170,6 +205,22 @@ def cn_case(application_number: str):
             f"""
             SELECT *
             FROM markorbit_facts.cn_case_scope_current FINAL
+            WHERE application_number = '{safe}' AND is_deleted = 0
+            ORDER BY class_no
+            """
+        ),
+        "goods_items": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.cn_goods_item_current FINAL
+            WHERE application_number = '{safe}' AND is_deleted = 0
+            ORDER BY class_no, goods_sequence, goods_item_key
+            """
+        ),
+        "goods_lifecycle": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.cn_goods_scope_lifecycle_current FINAL
             WHERE application_number = '{safe}' AND is_deleted = 0
             ORDER BY class_no
             """
