@@ -85,6 +85,18 @@ def test_us_clean_rebuild_fixture_resets_and_replays_again() -> None:
     assert "_cleanup_fixture_state(raw_root)" in source
 
 
+def test_us_pipeline_readiness_fixture_routes_to_terminal_accepted_state() -> None:
+    source = Path("app/us/validate_pipeline_readiness_fixture.py").read_text(encoding="utf-8")
+    assert '"contract": "US_PIPELINE_READINESS_FIXTURE"' in source
+    assert "build_readiness" in source
+    assert 'initial["state"] != "REPLAY_READY"' in source
+    assert 'database_only["state"] != "SOURCE_VERIFICATION_REQUIRED"' in source
+    assert 'accepted["state"] != "ACCEPTED"' in source
+    assert 'accepted["ready"] is not True' in source
+    assert 'accepted["next_action"]["code"] != "NONE"' in source
+    assert "_cleanup_package_outputs" in source
+
+
 def test_us_runtime_fixture_script_applies_schema_and_runs_all_fixtures() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
@@ -103,4 +115,5 @@ def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
     assert "python -m app.us.validate_acceptance_fixture" in workflow
     assert "python -m app.us.validate_replay_executor_fixture" in workflow
     assert "python -m app.us.validate_reset_rebuild_fixture" in workflow
+    assert "python -m app.us.validate_pipeline_readiness_fixture" in workflow
     assert "docker compose down -v --remove-orphans" in workflow
