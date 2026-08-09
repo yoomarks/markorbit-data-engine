@@ -114,6 +114,7 @@ def test_registered_continuation_checks_m16_replay_boundary(tmp_path: Path, monk
         "_registered_partitions",
         lambda: [_registered("1999.zip", "FILING_YEAR", "1999")],
     )
+    monkeypatch.setattr(guard_module, "_retry_required_packages", lambda: [])
     monkeypatch.setattr(guard_module, "engine_version", lambda: "M1.6")
     monkeypatch.setattr(
         guard_module,
@@ -130,6 +131,39 @@ def test_registered_continuation_checks_m16_replay_boundary(tmp_path: Path, monk
     assert guard["allowed"] is True
     assert guard["mode"] == "REGISTERED_REPLAY_CONTINUATION"
     assert called == ["schema", "boundary"]
+
+
+def test_failed_package_blocks_normal_replay_until_retry(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "incoming" / "cn").mkdir(parents=True)
+    monkeypatch.setattr(guard_module, "get_settings", lambda: SimpleNamespace(raw_data_root=tmp_path))
+    monkeypatch.setattr(
+        guard_module,
+        "_registered_partitions",
+        lambda: [
+            _registered("1999.zip", "FILING_YEAR", "1999"),
+            _registered("2000.zip", "FILING_YEAR", "2000"),
+        ],
+    )
+    monkeypatch.setattr(
+        guard_module,
+        "_retry_required_packages",
+        lambda: [
+            {
+                "package_id": "pkg-1999",
+                "file_name": "1999.zip",
+                "status": "FAILED",
+                "source_rank": 1,
+                "error_message": "fixture failure",
+            }
+        ],
+    )
+    monkeypatch.setattr(guard_module, "engine_version", lambda: "M1.6")
+
+    guard = guard_module.build_execution_guard()
+    assert guard["allowed"] is False
+    assert guard["mode"] == "RETRY_REQUIRED"
+    assert guard["issues"][0]["type"] == "FAILED_PACKAGE_MUST_BE_RETRIED_BEFORE_ADVANCE"
+    assert "retry-cn.ps1" in guard["issues"][0]["instruction"]
 
 
 def test_run_cn_uses_guarded_one_shot_entrypoint() -> None:
