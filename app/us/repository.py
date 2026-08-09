@@ -86,6 +86,25 @@ def list_us_packages() -> list[dict[str, Any]]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def list_us_replay_registry() -> list[dict[str, Any]]:
+    """Return the authoritative US registry state needed by ordered replay planning."""
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT package_id, package_sequence, file_name, file_path, file_size,
+                       sha256, package_kind, partition_dimension, partition_value,
+                       source_period_start, source_period_end, source_sequence,
+                       source_rank, status, profile, schema_version, archived_path,
+                       processed_at, error_message
+                FROM control.source_package
+                WHERE jurisdiction = 'US'
+                ORDER BY source_rank, package_sequence
+                """
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
 def list_us_blocking_failures() -> list[dict[str, Any]]:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
