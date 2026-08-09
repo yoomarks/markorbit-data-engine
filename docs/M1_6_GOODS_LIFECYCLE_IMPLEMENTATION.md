@@ -1,56 +1,51 @@
 # M1.6 CN Goods Lifecycle & Delta Merge
 
-Status: IMPLEMENTED ON FEATURE BRANCH, RUNTIME VALIDATION REQUIRED
+Status: VALIDATED ON REAL BASE + MONTHLY DATA; RELEASE GATES COMPLETE
 
 ## Why M1.6 exists
 
-The CN goods status field is an item-level signal. Codes `0`, `1`, and `2` must not be collapsed into trademark status or legal cause. Monthly packages are deltas: omission from a monthly package is not deletion.
+The CN goods status field is an item-level signal. Codes `0`, `1`, and `2` must not be collapsed into trademark/case status or legal cause. Monthly packages are deltas: omission from a monthly package is not deletion.
 
-M1.5 aggregated each package directly into `cn_case_scope_current`. That is safe for full/base partitions but unsafe for monthly goods patches because a patch containing only two changed goods could replace a class that originally contained many more goods.
+M1.5 aggregated each package directly into `cn_case_scope_current`. That is safe for full/base partitions but unsafe for monthly goods patches because a patch containing only changed goods could otherwise replace a class that contains additional unchanged goods.
 
-## M1.6 invariants
+## Frozen M1.6 invariants
 
 1. Base data establishes the known goods item universe.
 2. Monthly data updates only items explicitly present in that package.
 3. Omitted goods remain current.
-4. Scope is rebuilt from the complete durable item store after every touched package.
+4. Touched class scopes are rebuilt from the complete durable item store.
 5. Goods state, goods-scope state, trademark/case state, and legal cause remain separate layers.
 6. `0/1/2` are preserved raw forever.
-7. Code `1` is an item-level high-confidence inactive signal, not a cause code.
-8. Code `2` is an item-level final inactive signal, not a cause code.
-9. Legal causes such as refusal, opposition, cancellation, non-use cancellation, invalidation, voluntary cancellation, or non-renewal require separate evidence or a separately versioned inference model.
-10. A goods sequence value is not globally unique within one case/class and MUST NOT be used alone as item identity.
-11. Production ingest SQL and validation/audit SQL MUST implement the same identity version; tests must exercise the runtime SQL builder used by `ingest_m16.py`.
-12. A killed process must never strand a package permanently in `PROCESSING`.
-13. Completed ZIP members may be reused only when both the PostgreSQL member checkpoint and retained ClickHouse stage rows are present.
+7. Code `0` means reversible/unresolved risk at the goods-item layer.
+8. Code `1` means inactive high confidence but source-not-finalized at the goods-item layer.
+9. Code `2` means final inactive at the goods-item layer.
+10. None of `0/1/2` identifies legal cause.
+11. Goods sequence alone is not unique and MUST NOT define identity.
+12. Production and audit paths MUST use the same strict identity and record-boundary semantics.
+13. A killed process must never strand a package permanently in `PROCESSING`.
+14. Interrupted packages are cleaned and replayed from the authoritative ZIP; checkpoint/resume is not part of the production M1.6 runtime.
 
-## New durable tables
+## Durable tables
 
 - `cn_goods_item_current`: current state of every known goods/service item.
-- `cn_goods_item_observation`: append-oriented item observations and transitions.
-- `cn_goods_scope_lifecycle_current`: class-level lifecycle counters derived from the complete item set.
+- `cn_goods_item_observation`: durable item observations and transitions.
+- `cn_goods_scope_lifecycle_current`: class-level lifecycle counters derived from the complete durable item set.
 
-The existing `cn_case_scope_current` remains the compatibility/current search scope, but M1.6 reconstructs touched scopes from `cn_goods_item_current` rather than from the current package alone.
+`cn_case_scope_current` remains the compatibility/current search scope, but M1.6 reconstructs touched scopes from `cn_goods_item_current`, not from the current package alone.
 
 ## Goods item identity
 
-The 1999 real-package audit proved that `(application_number, class_no, goods_sequence)` is not a valid unique item key. Sequence `0` is commonly reused for many different goods, and non-zero sequence values can also repeat across different similar groups.
-
-M1.6 therefore uses identity version `CN_GOODS_ITEM_ID_V2_STRICT_SOURCE_FIELDS` with a deterministic source-observation key built from:
+M1.6 uses `CN_GOODS_ITEM_ID_V2_STRICT_SOURCE_FIELDS`:
 
 `application_number + class_no + goods_sequence + similar_group + normalized goods_name`
 
-This deliberately favors preservation over aggressive merging. Exact repeated source rows may collapse to one logical item, but different goods names or similar groups must never be merged merely because their sequence values match.
+Status is deliberately excluded from identity so a later status observation updates the same strict item. Intra-package status variants are resolved by `CN_GOODS_STATUS_RESOLUTION_V1_STRONGEST_SIGNAL`:
 
-The identity key does **not** include goods status, because a status change must update the same goods item rather than create a new identity.
+`2 > 1 > 0 > explicit inactive > unknown > explicit active > ordinary active/blank`
 
-A later cross-package reconciliation layer may introduce stronger identity linking if real monthly data proves that wording or similar-group values can change for the same legal goods item. Such linking must be evidence-based and must never silently overwrite the strict source observation identity.
+Source line is only a deterministic tie-breaker within equal semantic strength.
 
-The first V2 audit passed with zero conflicting keys, but a subsequent 1999 replay still produced the retired item count. This exposed a second implementation defect: `ingest_m16.py` routes production through `app/cn/goods_lifecycle_sql.py`, while the audit/fixture path had already been updated in `goods_lifecycle.py`. Runtime SQL was therefore still using the retired sequence-oriented key. The runtime builder is now also V2 and the contract test targets that exact builder so this split cannot silently recur.
-
-For the 1999 package specifically, the V2 audit reports 6,091,001 staged rows and 82 exact duplicate excess rows with zero conflicting excess rows. Therefore the expected logical item count after a correct V2 production replay is 6,090,919. A replay that still produces 6,081,430 is evidence that the retired runtime identity is still in use.
-
-Real V2 base-package audits are also clean so far: 2000 has 1,481,373 parsed goods rows, 1,481,307 strict logical items, 66 exact duplicate excess rows, and zero conflicting identity keys; 2001 has 2,072,575 parsed goods rows, 2,064,530 strict logical items, 8,045 exact duplicate excess rows across 321 duplicate keys, and zero conflicting identity keys/excess rows.
+Real base data proved why the strict V2 key is required. Accepted 1999 evidence is `6,091,001` parsed/staged goods rows -> `6,090,916` logical items, with `85` exact-duplicate excess rows across `63` keys and `0` identity conflicts. The accepted 1999-2006 V2 audits all have `0` conflicting identity keys.
 
 ## Item status mapping
 
@@ -61,38 +56,79 @@ Real V2 base-package audits are also clean so far: 2000 has 1,481,373 parsed goo
 | 1 | `INACTIVE_HIGH_CONFIDENCE` | `SOURCE_NOT_FINALIZED` | `INACTIVE_HIGH_CONFIDENCE` |
 | 2 | `FINAL_INACTIVE` | `FINAL` | `INACTIVE_CONFIRMED` |
 
-Mapping evidence is labelled `EMPIRICAL_DOMAIN_MAPPING` and is intentionally not presented as an official CNIPA code dictionary.
+Mapping evidence is labelled `EMPIRICAL_DOMAIN_MAPPING`; it is intentionally not presented as an official CNIPA legal-cause dictionary.
 
-## Replay boundary
+## Replay and crash recovery
 
-An existing M1.5 database has class-level scopes but no durable item history because successful package staging rows were cleaned. M1.6 refuses to ingest new packages when `cn_case_scope_current` is populated but `cn_goods_item_current` is empty.
+An M1.5 database can contain class-level scopes without durable goods-item history, so M1.6 requires a clean replay before accepting new data into such a database. Raw ZIPs remain authoritative.
 
-Any database populated with the retired sequence-only M1.6 identity must also be replayed after the V2 strict identity change. Those item keys are not compatible and must not be mixed.
+CN ingestion holds a PostgreSQL session advisory lock across candidate selection -> ingest -> publish. If the process/container/host dies, PostgreSQL releases the lock automatically. On the next run, orphaned `PROCESSING` packages become `INTERRUPTED`, partial stage/published outputs are cleaned, and the package is replayed from the authoritative ZIP in `source_rank` order.
 
-For development, use a clean replay from authoritative raw ZIP files. `scripts/reset-m16.ps1` preserves raw data, copies archived CN ZIPs back to the incoming replay queue, recreates the databases, and starts PostgreSQL/ClickHouse/API without the worker.
+Manual ingestion uses a dedicated one-shot worker so the API remains online. Persistent worker execution is intentionally kept separate from controlled replay/audit workflows.
 
-## Crash recovery and member checkpoints
+## CSV record-boundary compatibility
 
-CN ingestion now uses a PostgreSQL session advisory lock for the whole candidate-selection through publish cycle. If Python, the API container, Docker Desktop, or the host dies, PostgreSQL releases the lock automatically. On the next run, any orphaned `PROCESSING` package is marked `INTERRUPTED` and re-enters the queue by `source_rank`, so an older interrupted partition cannot be silently skipped by newer `REGISTERED` work.
+Real `2025_11.zip` exposed fully quoted CSV rows. Record-start detection therefore uses shared `csv.reader` semantics for quoted and unquoted prefixes. Production ingestion, identity audit, and raw-reader consumers now share the same boundary implementation; the earlier temporary M1.6 monkey patch was removed.
 
-M1.6 also adds `CN_PACKAGE_MEMBER_CHECKPOINT_V1`. `control.source_package_file` is the durable checkpoint marker because it is written only after one ZIP member has been fully parsed. ClickHouse stage rows for checkpointed members are preserved across interruption. Any rows belonging to an uncheckpointed member are treated as potentially partial and are deleted synchronously before retry. The retry skips only checkpointed members whose retained stage rows still exist; stale metadata without stage is invalidated and reparsed.
+## Real-data acceptance evidence
 
-This is member-level resume rather than arbitrary row-level resume. A crash in the middle of one very large internal CSV still requires that one internal member to be reparsed from its beginning, but already completed members in the same ZIP are not repeated. If a crash happens during publication after every member was checkpointed, the next run can reuse the complete stage set, clean partial published outputs, and rerun publication without reparsing the ZIP.
+### Base partitions 1999-2006
 
-## Validation order
+- all real packages replayed successfully under M1.6/V2
+- all V2 identity audits completed with `0` conflicting identity keys
+- `2004.zip` confirmed the ClickHouse spill/memory-safety settings resolve the prior aggregation OOM
+- M1.6 full integrity audit: `PASS_WITH_WARNINGS`, with `0` unexplained row loss, `0` parser failed rows, `0` final replacement-character rows, `0` final duplicates, `0` scope-without-case, `0` untraceable party orphans, and `0` unmapped goods status codes
+- remaining warnings are documented source-quality/source-incompleteness warnings
+
+### `2023_1.zip`
+
+Identity audit PASS:
+- parsed/staged: `4,063,348 / 4,063,348`
+- logical strict items: `4,063,325`
+- collapsed/exact duplicate excess rows: `23`
+- status variants: `0`
+- identity conflicts: `0`
+
+Monthly acceptance PASS:
+- incoming/current strict keys: `4,063,325 / 4,063,325`
+- cross-package matches: `13,988`
+- transitions: `4,049,337 FIRST_OBSERVED + 276 REOBSERVED + 13,712 STATUS_CHANGED`
+- touched scopes: `360,958`, all lifecycle/case-scope mismatches `0`
+- omitted durable items preserved: `3,097` across `447` scopes
+- impossible item loss: `0`
+
+### `2025_11.zip`
+
+Identity audit PASS:
+- parsed/staged: `5,788,907 / 5,788,907`
+- logical strict items: `5,772,737`
+- collapsed rows: `16,170`
+- exact duplicate keys/excess rows: `16,166 / 16,170`
+- status variants: `0`
+- identity conflicts: `0`
+
+Monthly->monthly acceptance PASS under `CN_M16_MONTHLY_PATCH_POLICY_V6_CHAINED_MONTHLY_LINEAGE`:
+- incoming/current strict keys: `5,772,737 / 5,772,737`
+- cross-package strict-key matches: `204`
+- prior monthly origin matches: `204`
+- transitions: `5,772,533 FIRST_OBSERVED + 204 STATUS_CHANGED`
+- touched scopes: `545,833`, all lifecycle/case-scope mismatches `0`
+- omitted durable items preserved: `97` across `14` scopes
+- impossible item loss: `0`
+
+This directly validates monthly omission != deletion and monthly->monthly first-source lineage preservation on real data.
+
+## Validation workflow
 
 1. `scripts/reset-m16.ps1`
 2. `scripts/validate-cn-contract.ps1`
 3. `scripts/validate-cn-fixture.ps1`
 4. `scripts/validate-m16-goods.ps1`
-5. run `audit-m16-goods-identity.ps1` against the first real base package
-6. replay base packages in source order
-7. validate an intentionally interrupted package resumes from member checkpoints
-8. run integrity audit
-9. only then test monthly packages
-10. only after monthly delta validation start the worker
-
-The M1.6 goods fixture explicitly creates three baseline goods, applies a monthly patch containing only one changed item, and requires all three items to remain present after the patch.
+5. replay base packages in source-rank order
+6. run `scripts/audit-m16-goods-identity.ps1 <file>` for real packages
+7. run `scripts/audit-m16-acceptance.ps1` for full integrity
+8. ingest real monthly patches
+9. run `scripts/audit-m16-monthly-patch.ps1 <file>` for durable lineage/omission reconciliation
 
 ## Case inference remains separate
 
