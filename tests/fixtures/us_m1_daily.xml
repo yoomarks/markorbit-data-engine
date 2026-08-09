@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<trademark-applications-daily>
+  <application-information>
+    <file-segments>
+      <action-keys>
+        <case-file>
+          <serial-number>97123456</serial-number>
+          <case-file-header>
+            <filing-date>20220115</filing-date>
+            <publication-date>20220901</publication-date>
+            <registration-date>20221115</registration-date>
+            <registration-number>7123456</registration-number>
+            <status-code>700</status-code>
+            <status-date>20221115</status-date>
+            <mark-identification>ORBIT ALPHA</mark-identification>
+            <mark-drawing-code>4000</mark-drawing-code>
+            <current-location>PUBLICATION AND ISSUE SECTION</current-location>
+            <location-date>20221115</location-date>
+            <examiner-name>FIXTURE EXAMINER</examiner-name>
+            <law-office-code>109</law-office-code>
+            <standard-character-claim>Y</standard-character-claim>
+            <use-in-commerce-1a>Y</use-in-commerce-1a>
+            <intent-to-use-1b>N</intent-to-use-1b>
+          </case-file-header>
+          <case-file-owners>
+            <case-file-owner>
+              <entry-number>1</entry-number>
+              <party-type>10</party-type>
+              <legal-entity-type-code>16</legal-entity-type-code>
+              <party-name>Orbit Alpha LLC</party-name>
+              <nationality-country>US</nationality-country>
+              <nationality-state>DE</nationality-state>
+              <address-1>1 Orbit Way</address-1>
+              <city>Wilmington</city>
+              <state>DE</state>
+              <country>US</country>
+              <postcode>19801</postcode>
+            </case-file-owner>
+          </case-file-owners>
+          <classifications>
+            <classification>
+              <primary-code>009</primary-code>
+              <international-code>009</international-code>
+              <us-code>021</us-code>
+              <us-code>023</us-code>
+              <status-code>6</status-code>
+              <status-date>20221115</status-date>
+              <first-use-anywhere-date>20210101</first-use-anywhere-date>
+              <first-use-in-commerce-date>20210315</first-use-in-commerce-date>
+            </classification>
+          </classifications>
+          <case-file-events>
+            <case-file-event>
+              <code>NWAP</code>
+              <date>20220115</date>
+              <number>1</number>
+              <type>A</type>
+            </case-file-event>
+            <case-file-event>
+              <code>PUBO</code>
+              <date>20220901</date>
+              <number>2</number>
+              <type>P</type>
+            </case-file-event>
+          </case-file-events>
+          <case-file-statements>
+            <case-file-statement>
+              <type-code>GS0091</type-code>
+              <text>Downloadable computer software for trademark management.</text>
+            </case-file-statement>
+            <case-file-statement>
+              <type-code>D10000</type-code>
+              <text>No claim is made to the exclusive right to use ALPHA.</text>
+            </case-file-statement>
+          </case-file-statements>
+        </case-file>
+        <case-file>
+          <serial-number>79345678</serial-number>
+          <case-file-header>
+            <filing-date>20230610</filing-date>
+            <status-code>630</status-code>
+            <status-date>20240109</status-date>
+            <mark-identification>MADRID ORBIT</mark-identification>
+            <mark-drawing-code>4000</mark-drawing-code>
+            <international-registration-filed-in>Y</international-registration-filed-in>
+            <international-registration-number>1734567</international-registration-number>
+            <international-registration-status-code>APPROVED</international-registration-status-code>
+            <international-registration-status-date>20240109</international-registration-status-date>
+          </case-file-header>
+          <case-file-owners>
+            <case-file-owner>
+              <entry-number>1</entry-number>
+              <party-type>10</party-type>
+              <legal-entity-type-code>99</legal-entity-type-code>
+              <party-name>Madrid Orbit AG</party-name>
+              <nationality-country>CH</nationality-country>
+              <address-1>2 Orbit Strasse</address-1>
+              <city>Zurich</city>
+              <country>CH</country>
+              <postcode>8001</postcode>
+            </case-file-owner>
+          </case-file-owners>
+          <classifications>
+            <classification>
+              <primary-code>025</primary-code>
+              <international-code>025</international-code>
+              <status-code>6</status-code>
+              <first-use-anywhere-date>20190600</first-use-anywhere-date>
+              <first-use-in-commerce-date>00000000</first-use-in-commerce-date>
+            </classification>
+          </classifications>
+        </case-file>
+      </action-keys>
+    </file-segments>
+  </application-information>
+</trademark-applications-daily>
