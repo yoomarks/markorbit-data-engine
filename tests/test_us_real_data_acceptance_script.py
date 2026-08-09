@@ -5,7 +5,7 @@ def test_us_real_data_acceptance_script_is_read_only_and_worker_guarded() -> Non
     source = Path("scripts/audit-us-real-data.ps1").read_text(encoding="utf-8")
     assert "docker compose ps --status running -q worker" in source
     assert "Persistent worker is running" in source
-    assert "python -m app.us.audit_real_data" in source
+    assert '"python", "-m", "app.us.audit_real_data"' in source
     assert "--verify-source-files" in source
     assert "ConvertFrom-Json" in source
     assert "reports" in source
