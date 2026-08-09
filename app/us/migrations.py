@@ -3,13 +3,23 @@ from __future__ import annotations
 from app.db import clickhouse_client, postgres_conn
 
 
-US_SCHEMA_VERSION = "US_M1.0"
+US_SCHEMA_VERSION = "US_M1.1"
 REQUIRED_TABLES = {
     "us_case_current",
     "us_owner_current",
     "us_classification_current",
     "us_event_history",
     "us_statement_current",
+}
+REQUIRED_COLUMNS = {
+    ("us_case_current", "transaction_date"),
+    ("us_case_current", "use_1a_filed"),
+    ("us_case_current", "use_1a_current"),
+    ("us_case_current", "madrid_66a_current"),
+    ("us_case_current", "section_8_accepted"),
+    ("us_case_current", "international_registration_date"),
+    ("us_owner_current", "entity_statement"),
+    ("us_event_history", "description_text"),
 }
 
 
@@ -26,8 +36,24 @@ def ensure_us_m1_schema() -> None:
     missing = sorted(REQUIRED_TABLES - available)
     if missing:
         raise RuntimeError(
-            "US M1 ClickHouse schema is not initialized. Missing: "
+            "US M1.1 ClickHouse schema is not initialized. Missing tables: "
             f"{', '.join(missing)}. Run scripts/apply-us-m1-schema.ps1."
+        )
+
+    column_rows = client.query(
+        """
+        SELECT table, name
+        FROM system.columns
+        WHERE database = 'markorbit_facts' AND table LIKE 'us_%'
+        """
+    ).result_rows
+    available_columns = {(str(table), str(name)) for table, name in column_rows}
+    missing_columns = sorted(REQUIRED_COLUMNS - available_columns)
+    if missing_columns:
+        formatted = ", ".join(f"{table}.{name}" for table, name in missing_columns)
+        raise RuntimeError(
+            "US M1.1 ClickHouse schema is not initialized. Missing columns: "
+            f"{formatted}. Run scripts/apply-us-m1-schema.ps1."
         )
 
     with postgres_conn() as conn:
