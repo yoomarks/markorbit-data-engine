@@ -6,7 +6,7 @@ import app.main as main
 from app.us_ttab import TTAB_JURISDICTION, TTAB_SCHEMA_VERSION, TTAB_SEMANTICS
 from app.us_ttab.model import TTABProceedingBundle, TTABProceedingRecord
 from app.us_ttab.publisher import TABLE_COLUMNS, TTABBatchPublisher
-from app.us_ttab.repository import normalize_snapshot_at, ttab_source_rank
+from app.us_ttab.repository import VALID_SOURCE_KINDS, normalize_snapshot_at, ttab_source_rank
 
 
 def test_ttab_component_is_isolated() -> None:
@@ -22,6 +22,20 @@ def test_ttab_component_is_isolated() -> None:
         encoding="utf-8"
     )
     assert "retry-us-ttab.ps1" in jobs
+
+
+def test_ttab_source_kinds_cover_rawxml_and_official_bulk() -> None:
+    assert VALID_SOURCE_KINDS == {
+        "TTABVUE_PROCEEDING_RAWXML_SNAPSHOT",
+        "TTAB_BULK_DAILY_XML",
+        "TTAB_BULK_HISTORICAL_XML",
+    }
+    register_script = Path("scripts/register-us-ttab.ps1").read_text(encoding="utf-8")
+    run_script = Path("scripts/run-us-ttab.ps1").read_text(encoding="utf-8")
+    for source_kind in VALID_SOURCE_KINDS:
+        assert source_kind in register_script
+    assert "apply-us-ttab-schema.ps1" in register_script
+    assert "apply-us-ttab-schema.ps1" in run_script
 
 
 def test_ttab_source_rank_orders_milliseconds_then_package_sequence() -> None:
