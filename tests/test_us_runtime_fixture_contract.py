@@ -71,6 +71,20 @@ def test_us_deterministic_replay_fixture_runs_history_then_daily_and_cleans_up()
     assert "_cleanup_fixture_state(raw_root)" in source
 
 
+def test_us_clean_rebuild_fixture_resets_and_replays_again() -> None:
+    source = Path("app/us/validate_reset_rebuild_fixture.py").read_text(encoding="utf-8")
+    assert '"contract": "US_CLEAN_REBUILD_RESET_FIXTURE"' in source
+    assert "apply_staging" in source
+    assert "build_reset_plan" in source
+    assert "apply_reset" in source
+    assert "RESET_CONFIRMATION" in source
+    assert '"all_11_tables_zero_after_reset": "PASS"' in source
+    assert '"package_identity_preserved": "PASS"' in source
+    assert '"post_reset_replay": "PASS"' in source
+    assert "manifest_sha256" in source
+    assert "_cleanup_fixture_state(raw_root)" in source
+
+
 def test_us_runtime_fixture_script_applies_schema_and_runs_all_fixtures() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
@@ -88,4 +102,5 @@ def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
     assert "python -m app.us.validate_official_fact_fixture" in workflow
     assert "python -m app.us.validate_acceptance_fixture" in workflow
     assert "python -m app.us.validate_replay_executor_fixture" in workflow
+    assert "python -m app.us.validate_reset_rebuild_fixture" in workflow
     assert "docker compose down -v --remove-orphans" in workflow
