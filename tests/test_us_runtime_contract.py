@@ -26,6 +26,13 @@ def test_us_registration_uses_us_package_descriptor() -> None:
     assert "app.cn.package_meta" not in source
 
 
+def test_us_ingest_uses_snapshot_aware_publisher_and_reports_tombstones() -> None:
+    source = Path("app/us/ingest.py").read_text(encoding="utf-8")
+    assert "SnapshotAwareUSBatchPublisher" in source
+    assert "snapshot_tombstone_counts" in source
+    assert "publisher.tombstone_counts" in source
+
+
 def test_us_retry_cleanup_covers_every_published_table() -> None:
     source = Path("app/us/ingest.py").read_text(encoding="utf-8")
     for table in (
