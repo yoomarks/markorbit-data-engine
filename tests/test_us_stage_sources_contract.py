@@ -10,7 +10,8 @@ def test_us_source_staging_is_file_only_and_explicit_apply() -> None:
     assert "Archive source changed after preflight" in source
     assert "Refusing to overwrite existing staging destination" in source
     assert "postflight" in source
-    assert "archive_staging_required_count" in source
+    assert "needs_staging_from_archive" in source
+    assert "_preverify_mutation_inputs" in source
 
     forbidden = (
         "postgres_conn",
