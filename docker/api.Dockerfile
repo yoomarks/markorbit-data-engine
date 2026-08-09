@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml /app/
 RUN pip install --no-cache-dir .
+COPY VERSION /app/VERSION
 COPY app /app/app
 COPY web /app/web
 
