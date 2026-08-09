@@ -7,9 +7,15 @@ import uuid
 
 from app.config import get_settings
 from app.db import clickhouse_client, postgres_conn
+from app.us.ingest import _cleanup_package_outputs
+from app.us.model import USCaseBundle, USCaseRecord, USOwnerRecord
+from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
 from app.us_assignment.api import _assignments_for_serial, _bundle_for_record, _latest_record
+from app.us_assignment.audit_real_data import build_audit
 from app.us_assignment.ingest import cleanup_assignment_package_outputs, ingest_assignment_package
 from app.us_assignment.migrations import ensure_assignment_schema
+from app.us_assignment.readiness import build_readiness
+from app.us_assignment.reconciliation import scan_reconciliation_page
 from app.us_assignment.repository import register_assignment_source
 
 
@@ -17,6 +23,7 @@ SERIAL = "88991234"
 REEL = "1234"
 FRAME = "0056"
 FILES = ("ci_us_assignment_1.xml", "ci_us_assignment_2.xml")
+CASE_SOURCE_RANK = 17_900_000_000_000_000_077
 
 
 def _xml(*, assignee: str, update_date: str, correspondent: str) -> str:
@@ -64,12 +71,48 @@ def _remove_files(raw_root: Path) -> None:
                 candidate.unlink()
 
 
+def _publish_case_owner(package_id: uuid.UUID) -> None:
+    publisher = SnapshotAwareUSBatchPublisher(
+        clickhouse_client(),
+        package_id=package_id,
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 8, 4),
+        source_rank=CASE_SOURCE_RANK,
+        batch_size=100,
+    )
+    publisher.add(
+        USCaseBundle(
+            case=USCaseRecord(
+                serial_number=SERIAL,
+                registration_number="7654321",
+                filing_date=date(2025, 1, 2),
+                status_code="700",
+                status_date=date(2026, 8, 4),
+                mark_identification="ASSIGNMENT CROSS LAYER FIXTURE",
+            ),
+            owners=(
+                USOwnerRecord(
+                    serial_number=SERIAL,
+                    entry_number=1,
+                    party_type="10",
+                    legal_entity_type_code="03",
+                    party_name="Gamma Brand Corp.",
+                    country="US",
+                ),
+            ),
+        ),
+        "assignment-cross-layer-case.xml",
+    )
+    publisher.close()
+
+
 def main() -> None:
     ensure_assignment_schema()
     raw_root = get_settings().raw_data_root
     incoming = raw_root / "incoming" / "us_assignment"
     incoming.mkdir(parents=True, exist_ok=True)
     package_ids: list[str] = []
+    case_package_id = uuid.uuid4()
 
     try:
         _remove_files(raw_root)
@@ -107,6 +150,8 @@ def main() -> None:
         package_ids.append(second_id)
         second_totals = ingest_assignment_package(second_id, second, raw_root)
 
+        _publish_case_owner(case_package_id)
+
         counts = {}
         for table in (
             "us_assignment_record_history",
@@ -140,6 +185,26 @@ def main() -> None:
         if len(serial_records) != 1 or str(serial_records[0]["source_package_id"]) != second_id:
             raise RuntimeError(f"Serial current-assignment projection mismatch: {serial_records}")
 
+        acceptance = build_audit(raw_root=raw_root, verify_sources=True)
+        if acceptance["status"] != "PASS":
+            raise RuntimeError(f"Source-backed Assignment acceptance failed: {acceptance}")
+        if acceptance["projection"]["property_serial_joined_to_case_count"] != 1:
+            raise RuntimeError(f"Assignment-to-case join coverage mismatch: {acceptance}")
+        readiness = build_readiness(raw_root=raw_root, verify_sources=True)
+        if readiness["state"] != "ACCEPTED" or readiness["ready"] is not True:
+            raise RuntimeError(f"Assignment readiness not accepted: {readiness}")
+
+        reconciliation = scan_reconciliation_page(after_serial="88991233", limit=10)
+        matching = [
+            item
+            for item in reconciliation["items"]
+            if item["serial_number"] == SERIAL
+        ]
+        if len(matching) != 1 or matching[0]["classification"] != "NAME_SET_MATCH":
+            raise RuntimeError(f"Assignment/case owner reconciliation mismatch: {reconciliation}")
+        if matching[0]["legal_ownership_conclusion"] is not False:
+            raise RuntimeError("Reconciliation must not claim legal ownership")
+
         print(
             json.dumps(
                 {
@@ -150,6 +215,9 @@ def main() -> None:
                     "append_only_counts": counts,
                     "latest_assignee": assignees[0],
                     "serial_current_record_count": len(serial_records),
+                    "source_backed_acceptance": acceptance["status"],
+                    "readiness": readiness["state"],
+                    "reconciliation": matching[0]["classification"],
                     "legal_ownership_conclusion": False,
                 },
                 ensure_ascii=False,
@@ -158,6 +226,7 @@ def main() -> None:
             )
         )
     finally:
+        _cleanup_package_outputs(case_package_id)
         for package_id in reversed(package_ids):
             cleanup_assignment_package_outputs(uuid.UUID(package_id))
         _delete_registry(package_ids)
