@@ -11,7 +11,8 @@ This audit connects the M1.6 durable goods lifecycle to the case-status inferenc
 3. `FIRST_OBSERVED` goods observations are not treated as legal-event dates. Only a real `STATUS_CHANGED` transition into an inactive operational effect can supply temporal loss evidence.
 4. A total-loss date is available only when every currently final-inactive item has a dated status-change lineage.
 5. Monthly omission is never deletion. All counts come from the durable M1.6 current goods universe.
-6. Rule hits remain empirical candidates. They do not become official facts and are not production-validated legal conclusions.
+6. R2 is restricted to cases without a registration publication; registered partial outcomes remain available to the more specific R4/R5/R6 validation paths instead of double-counting the broad pre-registration rule.
+7. Rule hits remain empirical candidates. They do not become official facts and are not production-validated legal conclusions.
 
 ## Population
 
