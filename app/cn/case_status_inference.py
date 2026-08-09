@@ -68,6 +68,13 @@ class CaseEvidence:
             raise ValueError("high-confidence inactive goods cannot exceed known goods")
         if self.unknown_item_count > self.known_item_count:
             raise ValueError("unknown goods cannot exceed known goods")
+        categorized_inactive_or_unknown = (
+            self.final_inactive_item_count
+            + self.inactive_high_confidence_item_count
+            + self.unknown_item_count
+        )
+        if categorized_inactive_or_unknown > self.known_item_count:
+            raise ValueError("categorized goods counts cannot exceed known goods")
         if self.total_final_inactive_date and not self.all_known_goods_final_inactive:
             raise ValueError(
                 "total_final_inactive_date requires all known goods to be final inactive"
