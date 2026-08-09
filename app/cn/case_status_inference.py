@@ -186,7 +186,7 @@ def _rule_r1(evidence: CaseEvidence) -> InferenceCandidate | None:
 
 
 def _rule_r2(evidence: CaseEvidence) -> InferenceCandidate | None:
-    if evidence.prelim_pub_date is None:
+    if evidence.prelim_pub_date is None or evidence.registration_pub_date is not None:
         return None
     if evidence.inferred_scope is not InferredScope.PARTIAL:
         return None
@@ -199,8 +199,8 @@ def _rule_r2(evidence: CaseEvidence) -> InferenceCandidate | None:
         confidence=0.65,
         band=ConfidenceBand.MEDIUM,
         summary=(
-            "Preliminary publication exists and only part of the reconstructed durable "
-            "goods universe is final inactive."
+            "Preliminary publication exists, registration publication is not observed, and "
+            "only part of the reconstructed durable goods universe is final inactive."
         ),
     )
 
