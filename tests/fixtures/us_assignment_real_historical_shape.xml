@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal regression fixture preserving the tag shape of an early record from
+  USPTO historical Trademark Assignment XML package asb19550103-20211231-01.zip.
+  This is a minimized excerpt/reconstruction for parser validation, not a copy
+  of the source ZIP and it makes no source-package SHA claim.
+-->
+<trademark-assignments>
+  <assignment-information>
+    <assignment-entry>
+      <assignment>
+        <reel-no>1</reel-no>
+        <frame-no>0001</frame-no>
+        <last-update-date>19910716</last-update-date>
+        <purge-indicator>N</purge-indicator>
+        <date-recorded>19550103</date-recorded>
+        <page-count>0</page-count>
+        <correspondent>
+          <person-or-organization-name />
+        </correspondent>
+        <conveyance-text>CHANGE OF NAME 19530513</conveyance-text>
+      </assignment>
+      <assignors>
+        <assignor>
+          <person-or-organization-name>HAWK AND BUCK COMPANY, INC., THE</person-or-organization-name>
+          <city>DALLAS</city>
+          <state>TEXAS</state>
+          <execution-date>19530513</execution-date>
+          <legal-entity-text>UNKNOWN</legal-entity-text>
+        </assignor>
+      </assignors>
+      <assignees>
+        <assignee>
+          <person-or-organization-name>GRIFFIN, C. C., MANUFACTURING COMPANY</person-or-organization-name>
+          <city>FORT WORTH</city>
+          <state>TEXAS</state>
+          <legal-entity-text>UNKNOWN</legal-entity-text>
+        </assignee>
+      </assignees>
+      <properties>
+        <property>
+          <serial-no>71231446</serial-no>
+          <registration-no>218184</registration-no>
+        </property>
+      </properties>
+    </assignment-entry>
+  </assignment-information>
+</trademark-assignments>
