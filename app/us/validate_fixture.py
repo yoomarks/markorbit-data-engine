@@ -29,6 +29,7 @@ def _bundles() -> tuple[USCaseBundle, USCaseBundle]:
         case=USCaseRecord(
             serial_number=DIRECT_SERIAL,
             registration_number="7990001",
+            transaction_date=date(2026, 1, 6),
             filing_date=date(2025, 1, 2),
             registration_date=date(2026, 1, 6),
             status_code="700",
@@ -37,6 +38,9 @@ def _bundles() -> tuple[USCaseBundle, USCaseBundle]:
             mark_drawing_code="4000",
             standard_character_claimed=True,
             use_1a=True,
+            use_1a_filed=True,
+            use_1a_current=True,
+            section_8_accepted=True,
         ),
         owners=(
             USOwnerRecord(
@@ -72,6 +76,7 @@ def _bundles() -> tuple[USCaseBundle, USCaseBundle]:
                 event_date=date(2025, 1, 2),
                 event_sequence=1,
                 event_type_code="A",
+                description_text="NEW APPLICATION ENTERED",
             ),
         ),
         statements=(
@@ -85,14 +90,18 @@ def _bundles() -> tuple[USCaseBundle, USCaseBundle]:
     madrid = USCaseBundle(
         case=USCaseRecord(
             serial_number=MADRID_SERIAL,
+            transaction_date=date(2026, 2, 3),
             filing_date=date(2025, 3, 4),
             status_code="630",
             status_date=date(2026, 2, 3),
             mark_identification="MARKORBIT MADRID RUNTIME FIXTURE",
             mark_drawing_code="4000",
             madrid_66a=True,
+            madrid_66a_filed=True,
+            madrid_66a_current=True,
             international_registration_number="1990001",
-            international_registration_status_code="APPROVED",
+            international_registration_date=date(2025, 3, 4),
+            international_registration_status_code="001",
             international_registration_status_date=date(2026, 2, 3),
         ),
         owners=(
@@ -120,10 +129,11 @@ def _bundles() -> tuple[USCaseBundle, USCaseBundle]:
         events=(
             USEventRecord(
                 serial_number=MADRID_SERIAL,
-                event_code="MADR",
+                event_code="REPR",
                 event_date=date(2025, 3, 4),
                 event_sequence=1,
-                event_type_code="I",
+                event_type_code="M",
+                description_text="SN ASSIGNED FOR SECT 66A APPL FROM IB",
             ),
         ),
         statements=(
@@ -174,20 +184,29 @@ def _assert_fixture(package_id: uuid.UUID) -> dict[str, object]:
         ),
     }
     if actual != expected:
-        raise RuntimeError(f"US M1 runtime table-count contract failed: {actual}")
+        raise RuntimeError(f"US M1.1 runtime table-count contract failed: {actual}")
 
     direct_ok = _scalar(
         "SELECT count() FROM markorbit_facts.us_case_current FINAL "
         f"WHERE serial_number = '{DIRECT_SERIAL}' "
         f"AND last_source_package_id = toUUID('{package}') "
-        "AND status_code = '700' AND use_1a = 1 AND is_deleted = 0"
+        "AND status_code = '700' AND use_1a = 1 "
+        "AND use_1a_filed = 1 AND use_1a_current = 1 "
+        "AND section_8_accepted = 1 AND is_deleted = 0"
     )
     madrid_ok = _scalar(
         "SELECT count() FROM markorbit_facts.us_case_current FINAL "
         f"WHERE serial_number = '{MADRID_SERIAL}' "
         f"AND last_source_package_id = toUUID('{package}') "
-        "AND madrid_66a = 1 AND international_registration_number = '1990001' "
-        "AND is_deleted = 0"
+        "AND madrid_66a = 1 AND madrid_66a_filed = 1 AND madrid_66a_current = 1 "
+        "AND international_registration_number = '1990001' "
+        "AND international_registration_status_code = '001' AND is_deleted = 0"
+    )
+    event_description_ok = _scalar(
+        "SELECT count() FROM markorbit_facts.us_event_history FINAL "
+        f"WHERE serial_number = '{MADRID_SERIAL}' "
+        f"AND source_package_id = toUUID('{package}') "
+        "AND event_code = 'REPR' AND description_text != ''"
     )
     partial_date_ok = _scalar(
         "SELECT count() FROM markorbit_facts.us_classification_current FINAL "
@@ -197,15 +216,17 @@ def _assert_fixture(package_id: uuid.UUID) -> dict[str, object]:
         "AND first_use_commerce IS NULL AND first_use_commerce_raw = '00000000' "
         "AND is_deleted = 0"
     )
-    if (direct_ok, madrid_ok, partial_date_ok) != (1, 1, 1):
+    if (direct_ok, madrid_ok, event_description_ok, partial_date_ok) != (1, 1, 1, 1):
         raise RuntimeError(
-            "US M1 runtime semantic contract failed: "
-            f"direct={direct_ok} madrid={madrid_ok} partial_date={partial_date_ok}"
+            "US M1.1 runtime semantic contract failed: "
+            f"direct={direct_ok} madrid={madrid_ok} event={event_description_ok} "
+            f"partial_date={partial_date_ok}"
         )
     return {
         "table_counts": actual,
         "direct_case": "PASS",
         "madrid_66a": "PASS",
+        "event_description": "PASS",
         "partial_first_use_date": "PASS",
     }
 
@@ -224,14 +245,14 @@ def main() -> None:
     )
     try:
         for bundle in _bundles():
-            publisher.add(bundle, "runtime/us_m1_fixture.xml")
+            publisher.add(bundle, "runtime/us_m11_fixture.xml")
         publish_counts = publisher.close()
         checks = _assert_fixture(package_id)
         print(
             json.dumps(
                 {
                     "status": "PASS",
-                    "contract": "US_M1.0_RUNTIME_FIXTURE",
+                    "contract": "US_M1.1_RUNTIME_FIXTURE",
                     "package_id": str(package_id),
                     "publish_counts": publish_counts,
                     "checks": checks,
@@ -257,7 +278,9 @@ def main() -> None:
             }.items()
         )
         if residual:
-            raise RuntimeError(f"US M1 runtime fixture cleanup failed: residual_rows={residual}")
+            raise RuntimeError(
+                f"US M1.1 runtime fixture cleanup failed: residual_rows={residual}"
+            )
 
 
 if __name__ == "__main__":
