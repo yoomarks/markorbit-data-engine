@@ -86,6 +86,9 @@ jobs:
       - name: Run guarded US clean-rebuild reset and replay fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_reset_rebuild_fixture
 
+      - name: Run read-only US pipeline readiness state fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_pipeline_readiness_fixture
+
       - name: Tear down fixture databases
         if: always()
         run: docker compose down -v --remove-orphans
