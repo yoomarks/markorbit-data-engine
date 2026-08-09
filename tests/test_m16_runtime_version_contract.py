@@ -29,8 +29,12 @@ def test_api_metadata_and_surfaces_use_current_engine_version() -> None:
 def test_current_docs_identify_m16() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
     architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
+    build_validation = Path("docs/BUILD_VALIDATION.md").read_text(encoding="utf-8")
+    changelog = Path("docs/CHANGELOG.md").read_text(encoding="utf-8")
     assert readme.startswith("# MarkOrbit Data Engine — M1.6")
     assert architecture.startswith("# MarkOrbit Data Engine M1.6 Architecture")
+    assert build_validation.startswith("# M1.6 Build Validation")
+    assert "## M1.6 / 0.4.0" in changelog
     assert "monthly omission is never deletion" in architecture.lower()
 
 
@@ -54,3 +58,12 @@ def test_m16_reset_keeps_persistent_worker_stopped() -> None:
     assert "docker compose up -d --build postgres clickhouse api" in script
     assert "docker compose up -d --build postgres clickhouse api worker" not in script
     assert "validate-m16.ps1" in script
+
+
+def test_m15_named_scripts_are_explicit_legacy_delegates() -> None:
+    reset = Path("scripts/reset-m15.ps1").read_text(encoding="utf-8")
+    validate = Path("scripts/validate-m15.ps1").read_text(encoding="utf-8")
+    assert "legacy entry point" in reset
+    assert "reset-m16.ps1" in reset
+    assert "legacy entry point" in validate
+    assert "validate-m16.ps1" in validate
