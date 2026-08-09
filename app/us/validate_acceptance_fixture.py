@@ -5,7 +5,8 @@ import json
 import uuid
 
 from app.db import clickhouse_client, postgres_conn
-from app.us.audit_real_data_v2 import build_audit
+from app.us.audit_real_data import _package_rows, build_audit
+from app.us.audit_real_data_v2 import augment_report
 from app.us.ingest import _cleanup_package_outputs
 from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import (
@@ -252,8 +253,10 @@ def main() -> None:
             bundle=_bundle(status_code="700", status_date=date(2026, 1, 8)),
         )
 
-        report = build_audit(
-            verify_source_files=False,
+        report = build_audit(verify_source_files=False)
+        report = augment_report(
+            report,
+            _package_rows(),
             expected_history_parts=1,
         )
         if report["status"] != "PASS_WITH_WARNINGS":
