@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<daily-trademark-data>
+  <case-file>
+    <serial-number>88990004</serial-number>
+    <transaction-date>20260108</transaction-date>
+    <case-file-header>
+      <filing-date>20200206</filing-date>
+      <status-code>630</status-code>
+      <status-date>20260108</status-date>
+      <mark-identification>MARKORBIT OFFICIAL FACT FIXTURE</mark-identification>
+      <attorney-name>Jane Q. Attorney</attorney-name>
+      <attorney-docket-number>MO-88990004</attorney-docket-number>
+      <domestic-representative-name>Domestic Representative LLC</domestic-representative-name>
+    </case-file-header>
+    <correspondent>
+      <address-1>Peter S. Sloane Leason Ellis LLP</address-1>
+      <address-2>One North Lexington Ave., Suite 1200</address-2>
+      <address-3>White Plains, NY 10601</address-3>
+      <address-4>United States</address-4>
+    </correspondent>
+    <design-searches>
+      <design-search><code>010725</code></design-search>
+    </design-searches>
+    <prior-registration-applications>
+      <prior-registration-application>
+        <relationship-type>0</relationship-type>
+        <number>520350</number>
+      </prior-registration-application>
+    </prior-registration-applications>
+    <foreign-applications>
+      <foreign-application>
+        <filing-date>20200206</filing-date>
+        <entry-number>1</entry-number>
+        <application-number>UK0000346470</application-number>
+        <country>GB</country>
+        <foreign-priority-claim-in>T</foreign-priority-claim-in>
+      </foreign-application>
+    </foreign-applications>
+    <madrid-international-filing-requests>
+      <madrid-international-filing-record>
+        <entry-number>53</entry-number>
+        <reference-number>A0048809</reference-number>
+        <original-filing-date-uspto>20150304</original-filing-date-uspto>
+        <international-registration-number>1271416</international-registration-number>
+        <international-registration-date>20150507</international-registration-date>
+        <international-status-code>408</international-status-code>
+        <international-status-date>20260107</international-status-date>
+        <international-renewal-date>20350507</international-renewal-date>
+        <madrid-history-events>
+          <madrid-history-event>
+            <code>NEWAP</code>
+            <date>20150304</date>
+            <description-text>NEW APPLICATION FOR IR RECEIVED</description-text>
+            <entry-number>1</entry-number>
+          </madrid-history-event>
+        </madrid-history-events>
+      </madrid-international-filing-record>
+    </madrid-international-filing-requests>
+  </case-file>
+</daily-trademark-data>
