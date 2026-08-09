@@ -1,10 +1,12 @@
 from pathlib import Path
 
 
-def test_reset_does_not_start_worker():
-    script = Path("scripts/reset-m15.ps1").read_text(encoding="utf-8")
+def test_current_reset_does_not_start_worker_and_legacy_delegates():
+    script = Path("scripts/reset-m16.ps1").read_text(encoding="utf-8")
+    legacy = Path("scripts/reset-m15.ps1").read_text(encoding="utf-8")
     assert "docker compose up -d --build postgres clickhouse api" in script
-    assert "docker compose up -d --build\n" not in script
+    assert "docker compose up -d --build postgres clickhouse api worker" not in script
+    assert "reset-m16.ps1" in legacy
 
 
 def test_nonempty_fixture_exists_and_uses_two_publishes():
