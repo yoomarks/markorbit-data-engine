@@ -15,6 +15,7 @@ from app.us.alert_engine import (
     scan_reviewed_event_alerts,
     scan_ttab_alerts,
 )
+from app.us.monitoring_readiness import build_monitoring_readiness
 
 
 router = APIRouter(prefix="/api/us/alerts", tags=["US Alert Engine"])
@@ -42,6 +43,23 @@ def _unavailable(feed: str, exc: Exception) -> HTTPException:
 @router.get("/schema")
 def us_alert_schema():
     return alert_engine_schema()
+
+
+@router.get("/readiness")
+def us_alert_readiness(
+    expected_history_parts: Annotated[int | None, Query(ge=1)] = None,
+    verify_sources: bool = False,
+):
+    try:
+        return build_monitoring_readiness(
+            raw_root=Path(get_settings().raw_data_root),
+            expected_history_parts=expected_history_parts,
+            verify_sources=verify_sources,
+        )
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+    except Exception as exc:
+        raise _unavailable("readiness", exc) from exc
 
 
 @router.get("/case-changes")

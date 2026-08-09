@@ -13,6 +13,7 @@ from app.us.alert_engine import (
     scan_reviewed_event_alerts,
     scan_ttab_alerts,
 )
+from app.us.monitoring_readiness import build_monitoring_readiness
 
 
 def _assert_event_contract(feed: dict) -> None:
@@ -65,13 +66,36 @@ def main() -> None:
     ):
         _assert_event_contract(feed)
 
+    readiness = build_monitoring_readiness(
+        raw_root=raw_root,
+        expected_history_parts=1,
+        verify_sources=False,
+    )
+    assert readiness["readiness_version"] == "US_MONITORING_READINESS_M1.0"
+    assert readiness["state"] in {"READY", "PARTIAL", "UNVERIFIED", "NOT_READY", "FAILED"}
+    assert set(readiness["feeds"]) == {
+        "case_changes",
+        "assignments",
+        "ttab",
+        "reviewed_events",
+        "deadlines",
+    }
+    assert readiness["legal_status_inference"] is False
+    assert readiness["legal_ownership_conclusion"] is False
+    assert readiness["ttab_outcome_conclusion"] is False
+    assert readiness["substantive_rights_conclusion"] is False
+    for feed in readiness["feeds"].values():
+        if not feed["trusted_for_silence"]:
+            assert feed["silence_semantics"] == "SILENCE_IS_NOT_EVIDENCE_OF_NO_EVENT"
+
     print(
         "US_ALERT_ENGINE_M1.0_RUNTIME_FIXTURE=PASS "
         f"changes={change_feed['event_count']} "
         f"assignments={assignment_feed['event_count']} "
         f"ttab={ttab_feed['event_count']} "
         f"reviewed={reviewed_feed['event_count']} "
-        f"deadlines={deadline_feed['event_count']}"
+        f"deadlines={deadline_feed['event_count']} "
+        f"monitoring_readiness={readiness['state']}"
     )
 
 
