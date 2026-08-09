@@ -1,8 +1,8 @@
-# MarkOrbit US M1.1 Core Model
+# MarkOrbit US M1.2 Core Model
 
-Status: REAL USPTO TDXF OFFICIAL FACT LAYER + PACKAGE INGESTION + READ API
+Status: REAL USPTO TDXF OFFICIAL FACT LAYER + HISTORICAL/DAILY RECONCILIATION + READ API
 
-US M1.1 is grounded in real USPTO Trademark Applications TDXF rather than a synthetic XML layout. It supports both the historical coverage snapshot parts and continuing daily application updates while keeping official facts separate from later legal-status and maintenance interpretation.
+US M1.2 is grounded in real USPTO Trademark Applications TDXF. It supports historical coverage snapshot parts and continuing daily application updates while keeping official facts separate from later legal-status and maintenance interpretation.
 
 ## Source boundary
 
@@ -27,57 +27,61 @@ This prevents a late-loaded historical snapshot from overwriting a newer daily o
 
 ## Real TDXF field layout
 
-US M1.1 freezes the actual USPTO structure observed in historical and daily packages:
+The real-source contract preserves:
 
-- `registration-number` and `transaction-date` are direct children of `case-file`;
-- `published-for-opposition-date` is the publication field;
-- events are `case-file-event-statement` records and retain `description-text`;
-- most boolean indicators use USPTO `T/F` encoding;
-- owner nationality is a nested `nationality` block and is not confused with mailing-address country/state;
-- Madrid data is carried in the sibling `international-registration` block.
+- direct `registration-number` and `transaction-date` case fields;
+- `published-for-opposition-date`;
+- `case-file-event-statement` records including `description-text`;
+- USPTO `T/F` indicators;
+- nested owner nationality distinct from mailing address;
+- sibling `international-registration` Madrid facts;
+- filed and current Section 1(a), 1(b), 44(d), 44(e), and 66(a) basis flags as separate official facts.
 
-Known historical/transform aliases remain accepted only for compatibility; real TDXF names are the canonical contract.
-
-## Filing basis
-
-Filed basis and current basis are different official facts and are persisted separately:
-
-- Section 1(a): filed/current
-- Section 1(b): filed/current
-- Section 44(d): filed/current
-- Section 44(e): filed/current
-- Section 66(a): filed/current
-- no-basis current indicator
-
-Real daily data contains cases where filed and current values differ. The engine therefore never derives current basis from filed basis when an explicit current field is present. Fallback to filed basis occurs only when the current field is absent in legacy/synthetic input.
-
-The original `use_1a`, `intent_to_use_1b`, `foreign_application_44d`, `foreign_registration_44e`, `madrid_66a`, and `no_basis` fields remain compatibility aliases for the current observation.
+Partial first-use dates such as `YYYYMM00` stay in raw fields while typed dates remain NULL.
 
 ## Core tables
 
 ### `us_case_current`
 
-Current official case observation, including filing/publication/registration dates, transaction date, raw USPTO status, mark metadata, filed/current basis flags, selected post-registration indicators, and Madrid international-registration facts.
+Latest source-ranked official case snapshot: case dates, raw USPTO status, mark metadata, filed/current basis flags, selected post-registration indicators, and Madrid international-registration facts.
 
 ### `us_owner_current`
 
-Durable owner observations including party/entry type, legal-entity code/statement, nested nationality, mailing address, DBA/AKA text, and composed-of statement.
+Current owner rows observed in the latest authoritative case snapshot.
 
 ### `us_classification_current`
 
-Primary/International/US classes, class status, and first-use evidence. Partial dates such as `YYYYMM00` remain in raw columns while typed `Date32` stays NULL; missing day/month values are never invented.
-
-### `us_event_history`
-
-USPTO event code/date/sequence/type plus official event description text. Events are evidence, not MarkOrbit legal conclusions.
+Current class rows and first-use evidence observed in the latest authoritative case snapshot.
 
 ### `us_statement_current`
 
-USPTO typed statements such as goods/services, disclaimers, mark descriptions, translations, and other statement families.
+Current typed USPTO statements observed in the latest authoritative case snapshot.
+
+### `us_event_history`
+
+Cumulative official event evidence. Events are not treated as a replace-all child collection because an event can remain historically relevant even if a later snapshot no longer repeats it.
+
+## M1.2 child snapshot reconciliation
+
+TDXF application case files are treated as complete observations for the replaceable child families `owner`, `classification`, and `statement`.
+
+When a newer source-ranked snapshot touches a serial number:
+
+1. the engine computes the child identities present in the new snapshot;
+2. it reads the currently active child identities for that serial from ClickHouse;
+3. any older active child identity omitted from the new snapshot receives a deterministic tombstone at the newer source rank;
+4. child identities still present are published normally and are not tombstoned;
+5. events are excluded from this process and remain cumulative historical evidence.
+
+This fixes the stale-child failure mode where an owner, class row, or statement from the historical baseline could otherwise remain falsely current forever after disappearing from a daily case snapshot.
+
+The replacement logic is source-rank guarded: a lower-ranked historical package cannot tombstone a child already established by a newer daily source.
+
+Tombstones carry the new source package UUID. Full-package retry/cleanup therefore removes both newly published rows and omission tombstones. If a package fails, removing its outputs reveals the prior valid state again before deterministic replay.
 
 ## Status boundary
 
-US M1.1 preserves official `status_code`, `status_date`, event evidence, and official filing/maintenance indicators. It does **not** turn them into MarkOrbit `ACTIVE/DEAD`, `REGISTERED/ABANDONED`, Section 8 compliance, renewal eligibility, or other legal conclusions in the fact layer.
+US M1.2 preserves official `status_code`, `status_date`, event evidence, and official filing/maintenance indicators. It does **not** turn them into MarkOrbit `ACTIVE/DEAD`, `REGISTERED/ABANDONED`, Section 8 compliance, renewal eligibility, or other legal conclusions in the fact layer.
 
 US API responses continue to expose:
 
@@ -87,17 +91,18 @@ Any later legal interpretation must be versioned and evidence-linked.
 
 ## Legacy refinery skill
 
-The prior `us_base_refinery` / `us_daily_refinery` skill is treated as a field-coverage and business-rule reference, not as the ingestion implementation. Useful families identified there include correspondent/attorney, design search codes, prior registrations, foreign applications, Madrid request/events, owner mentions, and basis flags.
-
-US M1.1 deliberately keeps the engine's streaming ZIP/XML reader because the legacy skill loaded whole XML members into memory. Additional skill-derived fact families will be added only after their real TDXF identities and daily reconciliation semantics are frozen.
+The prior `us_base_refinery` / `us_daily_refinery` skill remains a field-coverage and business-rule reference rather than the ingestion implementation. Useful families identified there include correspondent/attorney, design search codes, prior registrations, foreign applications, Madrid request/events, owner mentions, and basis flags.
 
 The skill's status-code enrichment is not copied into official fact tables without an independently validated status dictionary and interpretation layer.
 
-## Runtime acceptance gate
+## Runtime acceptance gates
 
-`app.us.validate_fixture` now validates the US M1.1 schema against live ClickHouse/PostgreSQL, including explicit filed/current basis fields, Section 8 official indicators, Madrid fields, event descriptions, and partial-date preservation. Fixture rows are package-isolated and synchronously cleaned after validation.
+Two live PostgreSQL/ClickHouse fixtures run in CI:
 
-GitHub Actions runs the live PostgreSQL 16 + ClickHouse 24.8 fixture on every PR.
+- `app.us.validate_fixture`: US M1.1 real-TDXF field regression, including direct/Madrid, filed/current basis, event description, and partial-date preservation;
+- `app.us.validate_snapshot_fixture`: US M1.2 historical→daily child replacement, verifying owner/classification/statement disappearance plus cumulative event history.
+
+Both fixtures clean all package-isolated rows after validation.
 
 ## Read API
 
@@ -105,12 +110,11 @@ GitHub Actions runs the live PostgreSQL 16 + ClickHouse 24.8 fixture on every PR
 - `GET /api/us/summary`
 - `GET /api/us/cases/{serial_number}`
 
-Serial lookup remains exactly eight digits and returns the official-fact families currently modeled.
+Serial lookup remains exactly eight digits and returns official facts only.
 
 ## Next implementation layers
 
-1. run real historical-part and real daily-package acceptance profiles;
-2. define child-row reconciliation/tombstones so a newer full case observation can retire stale owner/class/statement identities safely;
-3. port correspondent/attorney, design, prior-registration, foreign-application, and Madrid-request fact families from the old refinery skill using real TDXF identities;
-4. establish real-source coverage and performance baselines;
-5. only then build versioned US legal-status and maintenance-deadline interpretation.
+1. run larger real historical→daily acceptance profiles and measure tombstone rates;
+2. port correspondent/attorney, design, prior-registration, foreign-application, and Madrid-request fact families from the old refinery skill using real TDXF identities;
+3. establish full historical replay performance and coverage baselines;
+4. only then build versioned US legal-status and maintenance-deadline interpretation.
