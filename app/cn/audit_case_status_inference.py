@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter, defaultdict
 from datetime import date
@@ -15,7 +16,8 @@ from app.cn.case_status_inference import (
 
 
 AUDIT_NAME = "CN_CASE_STATUS_INFERENCE_HISTORICAL_VALIDATION"
-AUDIT_VERSION = "CN_CASE_STATUS_INFERENCE_AUDIT_V1_DATA_COVERAGE_CLOCK"
+AUDIT_VERSION = "CN_CASE_STATUS_INFERENCE_AUDIT_V2_DETERMINISTIC_HASH_SAMPLE"
+SAMPLE_STRATEGY = "DETERMINISTIC_SHA256_BOTTOM_K_PER_RULE"
 DEFAULT_BATCH_SIZE = 5000
 DEFAULT_SAMPLE_PER_RULE = 12
 
@@ -38,6 +40,27 @@ def validate_as_of_date(requested: date | None, coverage_date: date) -> date:
             f"{coverage_date.isoformat()}"
         )
     return requested
+
+
+def _sample_key(rule_id: str, application_number: str) -> str:
+    payload = f"{MODEL_VERSION}|{rule_id}|{application_number}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _keep_hashed_sample(
+    bucket: list[tuple[str, dict[str, Any]]],
+    *,
+    key: str,
+    sample: dict[str, Any],
+    limit: int,
+) -> None:
+    """Keep deterministic bottom-k SHA256 samples independent of scan order."""
+    if limit <= 0:
+        return
+    bucket.append((key, sample))
+    bucket.sort(key=lambda item: item[0])
+    if len(bucket) > limit:
+        bucket.pop()
 
 
 def row_to_evidence(row: dict[str, Any], *, as_of_date: date) -> CaseEvidence:
@@ -91,7 +114,7 @@ def summarize_rows(
     scope_hits: Counter[str] = Counter()
     confidence_hits: Counter[str] = Counter()
     overlap_distribution: Counter[str] = Counter()
-    samples: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    hashed_samples: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
 
     scanned = 0
     candidate_cases = 0
@@ -155,23 +178,31 @@ def summarize_rows(
             cause_hits[candidate.inferred_cause] += 1
             scope_hits[str(candidate.inferred_scope)] += 1
             confidence_hits[str(candidate.confidence_band)] += 1
-            if len(samples[candidate.rule_id]) < sample_per_rule:
-                samples[candidate.rule_id].append(
-                    {
-                        "application_number": evidence.application_number,
-                        "inferred_status": candidate.inferred_status,
-                        "inferred_cause": candidate.inferred_cause,
-                        "inferred_scope": str(candidate.inferred_scope),
-                        "confidence_score": candidate.confidence_score,
-                        "filing_date": evidence.filing_date,
-                        "prelim_pub_date": evidence.prelim_pub_date,
-                        "registration_pub_date": evidence.registration_pub_date,
-                        "first_final_inactive_date": evidence.first_final_inactive_date,
-                        "total_final_inactive_date": evidence.total_final_inactive_date,
-                        "known_item_count": evidence.known_item_count,
-                        "final_inactive_item_count": evidence.final_inactive_item_count,
-                    }
-                )
+            sample = {
+                "application_number": evidence.application_number,
+                "inferred_status": candidate.inferred_status,
+                "inferred_cause": candidate.inferred_cause,
+                "inferred_scope": str(candidate.inferred_scope),
+                "confidence_score": candidate.confidence_score,
+                "filing_date": evidence.filing_date,
+                "prelim_pub_date": evidence.prelim_pub_date,
+                "registration_pub_date": evidence.registration_pub_date,
+                "first_final_inactive_date": evidence.first_final_inactive_date,
+                "total_final_inactive_date": evidence.total_final_inactive_date,
+                "known_item_count": evidence.known_item_count,
+                "final_inactive_item_count": evidence.final_inactive_item_count,
+            }
+            _keep_hashed_sample(
+                hashed_samples[candidate.rule_id],
+                key=_sample_key(candidate.rule_id, evidence.application_number),
+                sample=sample,
+                limit=sample_per_rule,
+            )
+
+    samples = {
+        rule_id: [sample for _, sample in entries]
+        for rule_id, entries in sorted(hashed_samples.items())
+    }
 
     warnings: list[str] = []
     if final_loss_without_dated_observation:
@@ -192,6 +223,11 @@ def summarize_rows(
             "coverage_date": coverage_date,
             "as_of_date": as_of_date,
             "wall_clock_time_used": False,
+        },
+        "sampling": {
+            "strategy": SAMPLE_STRATEGY,
+            "sample_per_rule": sample_per_rule,
+            "scan_order_independent": True,
         },
         "population": {
             "scanned_cases_with_goods_inactivity_signal": scanned,
@@ -217,7 +253,7 @@ def summarize_rows(
             ),
             "invalid_samples": invalid_samples,
         },
-        "samples_by_rule": dict(sorted(samples.items())),
+        "samples_by_rule": samples,
         "limitations": [
             "FIRST_OBSERVED is never treated as a loss date; only STATUS_CHANGED transitions provide temporal goods-loss evidence.",
             "R7 is not evaluated because renewal/grace deadlines and renewal/restoration events are not yet reconstructed as durable official evidence.",
