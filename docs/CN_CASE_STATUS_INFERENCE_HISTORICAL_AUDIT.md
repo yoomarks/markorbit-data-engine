@@ -56,6 +56,10 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-cn-case-status-infe
 
 The script writes the JSON report under `reports\cn_case_status_inference_<timestamp>.json` and leaves the persistent worker stopped.
 
+## Repository validation
+
+The repository CI gate runs on Python 3.12 and requires both Ruff and the complete pytest suite to pass. The historical ClickHouse audit itself remains a local stable-snapshot validation because CI does not contain the user's loaded CN source database.
+
 ## Current known limitation
 
 R7 is intentionally not operational in this audit because renewal/grace deadlines plus renewal/restoration observations have not yet been reconstructed as durable official evidence. `valid_until` alone is not silently converted into a legal renewal deadline.
