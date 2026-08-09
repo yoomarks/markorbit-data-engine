@@ -30,3 +30,25 @@ jobs:
 
       - name: Pytest
         run: python -m pytest -q
+
+  runtime-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare CI Compose environment
+        run: |
+          cp .env.example .env
+          sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
+          mkdir -p raw_data
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build API/worker runtime image
+        run: docker build --file docker/api.Dockerfile --tag markorbit-data-engine:ci .
+
+      - name: Verify M1.6 runtime marker and API import
+        run: |
+          docker run --rm --entrypoint python markorbit-data-engine:ci -c "from app.main import ENGINE_VERSION; assert ENGINE_VERSION == 'M1.6', ENGINE_VERSION; print(ENGINE_VERSION)"
