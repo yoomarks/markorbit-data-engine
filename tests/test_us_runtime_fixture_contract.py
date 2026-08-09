@@ -22,15 +22,29 @@ def test_us_runtime_fixture_writes_checks_and_cleans_all_tables() -> None:
         assert table in source
 
 
+def test_us_m12_snapshot_fixture_checks_current_replacement_and_event_history() -> None:
+    source = Path("app/us/validate_snapshot_fixture.py").read_text(encoding="utf-8")
+    assert '"contract": "US_M1.2_CHILD_SNAPSHOT_FIXTURE"' in source
+    assert "SnapshotAwareUSBatchPublisher" in source
+    assert '"owner_current": 0' in source
+    assert '"classification_current": 0' in source
+    assert '"statement_current": 0' in source
+    assert '"event_history": 2' in source
+    assert "tombstone_counts" in source
+    assert "_cleanup_package_outputs(new_package_id)" in source
+    assert "_cleanup_package_outputs(old_package_id)" in source
+
+
 def test_us_runtime_fixture_script_applies_schema_and_runs_worker() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
     assert "python -m app.us.validate_fixture" in source
 
 
-def test_ci_runs_us_fixture_against_live_postgres_and_clickhouse() -> None:
+def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
     workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "us-runtime-fixture:" in workflow
     assert "docker compose up -d --wait postgres clickhouse" in workflow
     assert "python -m app.us.validate_fixture" in workflow
+    assert "python -m app.us.validate_snapshot_fixture" in workflow
     assert "docker compose down -v --remove-orphans" in workflow
