@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.db import clickhouse_client, postgres_conn
 
 
-US_SCHEMA_VERSION = "US_M1.1"
+US_SCHEMA_VERSION = "US_M1.2"
 REQUIRED_TABLES = {
     "us_case_current",
     "us_owner_current",
@@ -36,7 +36,7 @@ def ensure_us_m1_schema() -> None:
     missing = sorted(REQUIRED_TABLES - available)
     if missing:
         raise RuntimeError(
-            "US M1.1 ClickHouse schema is not initialized. Missing tables: "
+            "US M1.2 ClickHouse schema is not initialized. Missing tables: "
             f"{', '.join(missing)}. Run scripts/apply-us-m1-schema.ps1."
         )
 
@@ -52,7 +52,7 @@ def ensure_us_m1_schema() -> None:
     if missing_columns:
         formatted = ", ".join(f"{table}.{name}" for table, name in missing_columns)
         raise RuntimeError(
-            "US M1.1 ClickHouse schema is not initialized. Missing columns: "
+            "US M1.2 ClickHouse schema is not initialized. Missing columns: "
             f"{formatted}. Run scripts/apply-us-m1-schema.ps1."
         )
 

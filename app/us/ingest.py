@@ -12,7 +12,7 @@ from app.scanner import sha256_file
 from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import USCaseBundle
 from app.us.parser import iter_case_bundles
-from app.us.publisher import USBatchPublisher
+from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
 
 
 OUTPUT_PACKAGE_COLUMNS = {
@@ -97,7 +97,7 @@ def ingest_us_package(
             "source_rank": package_meta["source_rank"],
         },
     )
-    publisher = USBatchPublisher(
+    publisher = SnapshotAwareUSBatchPublisher(
         clickhouse_client(),
         package_id=package_uuid,
         package_kind=str(package_meta["package_kind"]),
@@ -143,6 +143,7 @@ def ingest_us_package(
             "case_count": len(seen_serials),
             "xml_members": len(source_files),
             "row_counts": row_counts,
+            "snapshot_tombstone_counts": dict(publisher.tombstone_counts),
         }
         profile = {
             "schema_version": US_SCHEMA_VERSION,

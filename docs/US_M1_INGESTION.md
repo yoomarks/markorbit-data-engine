@@ -1,8 +1,8 @@
-# MarkOrbit US M1.1 Ingestion
+# MarkOrbit US M1.2 Ingestion
 
 Status: LOCAL OFFICIAL-SOURCE INGESTION / HISTORICAL + DAILY PACKAGE REPLAY
 
-US M1.1 ingests locally materialized USPTO Trademark Applications TDXF packages. Source acquisition and USPTO Open Data Portal credentials remain outside the ingestion boundary.
+US M1.2 ingests locally materialized USPTO Trademark Applications TDXF packages. Source acquisition and USPTO Open Data Portal credentials remain outside the ingestion boundary.
 
 ## Accepted package families
 
@@ -12,7 +12,7 @@ Historical coverage snapshot parts:
 apcYYYYMMDD-YYYYMMDD-NN.zip
 ```
 
-Example validated against the real uploaded source:
+Validated real example:
 
 ```text
 apc18840407-20251231-05.zip
@@ -25,7 +25,7 @@ apcYYMMDD.zip
 apcYYMMDD.xml   # controlled validation/development only
 ```
 
-Example validated against the real uploaded source:
+Validated real example:
 
 ```text
 apc260108.zip
@@ -37,7 +37,7 @@ Historical parts use `HISTORICAL_APPLICATIONS / COVERAGE_RANGE_PART`; daily sour
 
 `run-us.ps1`:
 
-1. applies `004_us_m1_core.sql` and the idempotent `005_us_m11_real_tdxf.sql` upgrade;
+1. applies `004_us_m1_core.sql`, `005_us_m11_real_tdxf.sql`, and `006_us_m12_snapshot_semantics.sql`;
 2. starts `python -m app.us.run_once` in a dedicated one-shot worker;
 3. scans/registers eligible US source packages by SHA-256;
 4. ingests at most one registered package in source-rank order.
@@ -54,37 +54,37 @@ Successful packages move to `raw_data/archive/us`. Failed or missing registered 
 
 ZIP XML members are streamed with `zipfile.ZipFile.open` directly into `xml.etree.ElementTree.iterparse`. They are not expanded into a permanent temporary corpus and are never loaded as one giant byte string.
 
-This is important for the real sources already inspected: a historical ZIP around 61 MB expands to roughly 1.47 GB XML, while the examined daily ZIP around 30 MB expands to roughly 563 MB XML.
+The inspected historical ZIP is about 61 MB compressed and roughly 1.47 GB expanded XML; the inspected daily ZIP is about 30 MB compressed and roughly 563 MB expanded XML. Completed `case-file` elements are cleared after emission, so memory scales with parser state and publisher buffers rather than the full XML member.
 
-Completed `case-file` elements are cleared after emission. Memory therefore scales with parser state and publisher buffers rather than the full XML member.
+## Real-source field semantics
 
-## Real-source semantics
+The parser recognizes the real TDXF layout:
 
-US M1.1 recognizes the official TDXF layout and does not depend on the earlier synthetic fixture layout. In particular:
+- registration number and transaction date from direct case children;
+- publication from `published-for-opposition-date`;
+- events from `case-file-event-statement`, retaining descriptions;
+- nested owner nationality;
+- `T/F` boolean indicators;
+- filed/current filing-basis flags as separate facts;
+- Madrid facts from sibling `international-registration`.
 
-- registration number and transaction date come from direct case children;
-- publication uses `published-for-opposition-date`;
-- events use `case-file-event-statement` and retain descriptions;
-- owner nationality is read from the nested nationality block;
-- `T/F` boolean indicators are supported;
-- filed and current filing-basis flags are separate;
-- Madrid facts come from the sibling `international-registration` block.
+Very old historical cases may legitimately omit fields introduced later in USPTO processing. Sparse historical records are preserved rather than rejected or filled with invented values.
 
-Very old historical cases can legitimately omit fields introduced later in USPTO processing. Sparse historical records are preserved rather than rejected or filled with invented values.
+## M1.2 child snapshot replacement
 
-## Publication
+For every touched serial number, the new TDXF case observation is authoritative for these replaceable child families:
 
-Current US M1.1 core publication families remain:
-
-- `us_case_current`
 - `us_owner_current`
 - `us_classification_current`
-- `us_event_history`
 - `us_statement_current`
 
-Every row carries source lineage and precedence. `*_current` means latest observation for that durable record identity under source precedence; it is not a MarkOrbit legal conclusion.
+Before a buffered batch is written, the publisher reads older active child identities for the touched serials. Any older identity that is absent from the new snapshot receives a tombstone at the new source rank. This means a prior owner, class row, or statement cannot remain falsely current merely because the later snapshot omitted it.
 
-The prior refinery skill exposes additional useful TDXF families (correspondent/attorney, design search, prior registrations, foreign applications, Madrid request/events, etc.). These will be introduced as additional fact tables only after their real-source identity and daily reconciliation rules are frozen.
+The query only considers rows with `source_rank < new_source_rank`, so a late historical replay cannot retire a newer daily fact.
+
+`us_event_history` is deliberately different: events remain cumulative evidence. A later snapshot does not tombstone an older event simply because the event is no longer repeated.
+
+Each omission tombstone carries the current package UUID and source lineage. Package metrics expose `snapshot_tombstone_counts` for owner/classification/statement.
 
 ## Failure and retry
 
@@ -94,11 +94,26 @@ Retry remains deterministic full-package replay:
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\retry-us.ps1
 ```
 
-Before replay, all rows carrying the failed/interrupted package UUID are synchronously removed, then the authoritative package is parsed again from the beginning. No XML-internal checkpoint is maintained.
+Before replay, all rows carrying the failed/interrupted package UUID are synchronously removed, including M1.2 omission tombstones. Removing a failed package therefore reveals the prior valid snapshot again before replay starts. No XML-internal checkpoint is maintained.
 
-## Local sequence
+## Local validation
 
-For an initial historical build, place all historical coverage parts under:
+Run both live database gates before a larger replay:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
+```
+
+That command runs:
+
+1. the US M1.1 real-TDXF regression fixture;
+2. the US M1.2 historical→daily child snapshot fixture.
+
+The M1.2 fixture verifies that an owner, classification, and statement present in an older snapshot disappear from current state when omitted by a newer snapshot, while both old and new events remain in event history.
+
+## Local replay sequence
+
+Place historical coverage parts and subsequent daily packages under:
 
 ```text
 raw_data\incoming\us\
@@ -110,10 +125,4 @@ Then repeatedly execute:
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run-us.ps1
 ```
 
-The source-rank contract processes historical parts before daily updates even if files were copied in a different filesystem order. After the historical baseline is complete, continue placing daily `apcYYMMDD.zip` sources in the same incoming directory and use the same one-shot command.
-
-Before large real replay, run the live fixture gate:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
-```
+The source-rank contract processes historical parts before daily updates even if filesystem order differs. After the historical baseline is complete, continue adding daily `apcYYMMDD.zip` packages and use the same one-shot command.
