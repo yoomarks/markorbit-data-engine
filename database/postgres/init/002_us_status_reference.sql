@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS reference.us_trademark_status_reference_version (
     record_count integer NOT NULL CHECK (record_count > 0),
     is_active boolean NOT NULL DEFAULT false,
     imported_at timestamptz NOT NULL DEFAULT now(),
-    evidence_note text NOT NULL DEFAULT ''
+    evidence_note text NOT NULL DEFAULT '',
+    CHECK (source_document_sha256 ~ '^[0-9a-fA-F]{64}$'),
+    CHECK (normalized_payload_sha256 ~ '^[0-9a-fA-F]{64}$')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_us_trademark_status_reference_active
@@ -29,7 +31,7 @@ CREATE TABLE IF NOT EXISTS reference.us_trademark_status_code (
     official_category text NOT NULL DEFAULT '',
     source_locator text NOT NULL DEFAULT '',
     PRIMARY KEY (reference_version, raw_code),
-    CHECK (raw_code <> ''),
+    CHECK (raw_code ~ '^[0-9]{1,10}$'),
     CHECK (official_description <> '')
 );
 

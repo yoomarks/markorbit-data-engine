@@ -1,25 +1,43 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$schemaPaths = @(
+$clickhouseSchemaPaths = @(
     (Join-Path $repoRoot "database/clickhouse/init/004_us_m1_core.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/005_us_m11_real_tdxf.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/006_us_m12_snapshot_semantics.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/007_us_m13_official_fact_families.sql")
 )
+$postgresSchemaPaths = @(
+    (Join-Path $repoRoot "database/postgres/init/002_us_status_reference.sql"),
+    (Join-Path $repoRoot "database/postgres/init/003_us_semantic_reference.sql")
+)
 
-foreach ($schemaPath in $schemaPaths) {
+foreach ($schemaPath in @($clickhouseSchemaPaths + $postgresSchemaPaths)) {
     if (-not (Test-Path $schemaPath)) {
         throw "Missing US schema file: $schemaPath"
     }
 }
 
 Write-Host "Applying US M1.3 ClickHouse schema..."
-foreach ($schemaPath in $schemaPaths) {
+foreach ($schemaPath in $clickhouseSchemaPaths) {
     Get-Content -Raw $schemaPath | docker compose exec -T clickhouse clickhouse-client --multiquery
     if ($LASTEXITCODE -ne 0) {
         throw "ClickHouse US schema apply failed: $schemaPath"
     }
 }
 
-Write-Host "US M1.3 ClickHouse schema applied."
+Write-Host "Applying US semantic/reference PostgreSQL schema..."
+foreach ($schemaPath in $postgresSchemaPaths) {
+    Get-Content -Raw $schemaPath | docker compose exec -T postgres sh -lc 'psql -v ON_ERROR_STOP=1 -U $POSTGRES_USER -d $POSTGRES_DB'
+    if ($LASTEXITCODE -ne 0) {
+        throw "PostgreSQL US reference schema apply failed: $schemaPath"
+    }
+}
+
+Write-Host "Running US schema runtime guard..."
+docker compose run --rm --no-deps worker python -c "from app.us.migrations import ensure_us_m1_schema; ensure_us_m1_schema(); print('US schema runtime guard PASS')"
+if ($LASTEXITCODE -ne 0) {
+    throw "US schema runtime guard failed."
+}
+
+Write-Host "US M1.3 + semantic/reference schema applied."

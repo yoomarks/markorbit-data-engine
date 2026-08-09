@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.db import clickhouse_client
-from app.us.status_reference import enrich_status_counts, list_active_status_codes
+from app.us.status_reference import active_reference_metadata, enrich_status_counts
 
 
 def current_status_counts() -> list[dict[str, object]]:
@@ -25,11 +25,11 @@ def current_status_counts() -> list[dict[str, object]]:
 def build_inventory() -> dict[str, object]:
     counts = current_status_counts()
     enrichment = enrich_status_counts(counts)
-    active = list_active_status_codes()
+    metadata = active_reference_metadata()
     return {
         "semantics": "USPTO_OFFICIAL_REFERENCE_NOT_MARKORBIT_LEGAL_CONCLUSION",
-        "reference": active["reference"],
-        "reference_record_count": len(active["status_codes"]),
+        "reference": metadata,
+        "reference_record_count": int(metadata["record_count"]) if metadata else 0,
         "observed_status_code_count": len(counts),
         "observed_case_count": sum(int(row["case_count"]) for row in counts),
         "mapped_code_count": enrichment["mapped_code_count"],

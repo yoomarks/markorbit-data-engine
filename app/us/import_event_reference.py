@@ -4,25 +4,16 @@ import argparse
 import json
 from pathlib import Path
 
+from app.us.event_reference import import_reference_payload, load_reference_payload
 from app.us.reference_evidence import verify_payload_source_file
-from app.us.status_reference import import_reference_payload, load_reference_payload
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Import a normalized official USPTO trademark status-code reference payload"
+        description="Import a normalized official USPTO trademark event-code reference payload"
     )
-    parser.add_argument(
-        "--reference-file",
-        type=Path,
-        required=True,
-        help="Path to MARKORBIT_USPTO_STATUS_REFERENCE_V1 JSON payload.",
-    )
-    parser.add_argument(
-        "--no-activate",
-        action="store_true",
-        help="Import the version without making it the active read-time reference.",
-    )
+    parser.add_argument("--reference-file", type=Path, required=True)
+    parser.add_argument("--no-activate", action="store_true")
     parser.add_argument(
         "--skip-source-file-verification",
         action="store_true",
