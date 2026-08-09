@@ -17,7 +17,7 @@ from app.scanner import SUPPORTED_SUFFIXES
 from app.version import engine_version
 
 
-GUARD_VERSION = "CN_M16_GUARDED_ONE_SHOT_V1"
+GUARD_VERSION = "CN_M16_GUARDED_ONE_SHOT_V2_RETRY_BARRIER"
 
 
 def _registered_partitions() -> list[dict[str, str]]:
@@ -34,6 +34,29 @@ def _registered_partitions() -> list[dict[str, str]]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def _retry_required_packages() -> list[dict[str, Any]]:
+    """Return packages that must be repaired before normal replay may advance.
+
+    Normal one-shot ingestion intentionally does not select FAILED/MISSING_FILE.
+    Without this barrier, rerunning `run-cn.ps1` after a failure could skip the
+    failed lower-ranked package and process a later REGISTERED package. That is
+    unsafe for deterministic clean replay, so normal execution stops until the
+    explicit retry path repairs the failed package.
+    """
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT package_id, file_name, status, source_rank, error_message
+                FROM control.source_package
+                WHERE jurisdiction = 'CN'
+                  AND status IN ('FAILED', 'MISSING_FILE')
+                ORDER BY source_rank, package_sequence
+                """
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
 def incoming_policy_issues(
     incoming_dir: Path,
     *,
@@ -41,11 +64,15 @@ def incoming_policy_issues(
 ) -> list[dict[str, Any]]:
     """Reject inputs whose precedence cannot be determined safely before scanning."""
     issues: list[dict[str, Any]] = []
-    files = sorted(
-        path
-        for path in incoming_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
-    ) if incoming_dir.exists() else []
+    files = (
+        sorted(
+            path
+            for path in incoming_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+        )
+        if incoming_dir.exists()
+        else []
+    )
 
     incoming_by_partition: dict[str, list[str]] = defaultdict(list)
     for path in files:
@@ -85,7 +112,9 @@ def incoming_policy_issues(
         dimension = str(row.get("partition_dimension") or "")
         value = str(row.get("partition_value") or "")
         if dimension and value:
-            registered_by_partition[f"{dimension}:{value}"].add(str(row.get("file_name") or ""))
+            registered_by_partition[f"{dimension}:{value}"].add(
+                str(row.get("file_name") or "")
+            )
 
     for key, names in sorted(incoming_by_partition.items()):
         registered_names = registered_by_partition.get(key, set())
@@ -141,13 +170,18 @@ def build_execution_guard() -> dict[str, Any]:
             "allowed": allowed,
             "guard_version": GUARD_VERSION,
             "mode": "CLEAN_RESET_FIRST_RUN",
-            "issues": [] if allowed else [
-                {
-                    "type": "CLEAN_REPLAY_GATE_FAILED",
-                    "preflight_hard_fail_reasons": preflight.get("hard_fail_reasons") or [],
-                    "plan_hard_fail_reasons": plan.get("hard_fail_reasons") or [],
-                }
-            ],
+            "issues": (
+                []
+                if allowed
+                else [
+                    {
+                        "type": "CLEAN_REPLAY_GATE_FAILED",
+                        "preflight_hard_fail_reasons": preflight.get("hard_fail_reasons")
+                        or [],
+                        "plan_hard_fail_reasons": plan.get("hard_fail_reasons") or [],
+                    }
+                ]
+            ),
             "preflight": {
                 "status": preflight.get("status"),
                 "mode": preflight.get("mode"),
@@ -159,6 +193,22 @@ def build_execution_guard() -> dict[str, Any]:
                 "warning_reasons": plan.get("warning_reasons") or [],
                 "expected_processing_order": plan.get("expected_processing_order") or [],
             },
+        }
+
+    retry_required = _retry_required_packages()
+    if retry_required:
+        return {
+            "allowed": False,
+            "guard_version": GUARD_VERSION,
+            "mode": "RETRY_REQUIRED",
+            "issues": [
+                {
+                    "type": "FAILED_PACKAGE_MUST_BE_RETRIED_BEFORE_ADVANCE",
+                    "packages": retry_required,
+                    "instruction": "Run scripts/retry-cn.ps1 before normal CN replay continues.",
+                }
+            ],
+            "registered_package_count": len(registered),
         }
 
     # Once the first clean scan has registered all incoming packages, registry
