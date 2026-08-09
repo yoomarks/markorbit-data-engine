@@ -161,12 +161,124 @@ STATEMENT_COLUMNS = [
     "is_deleted",
 ]
 
+CORRESPONDENT_COLUMNS = [
+    "correspondent_key",
+    "serial_number",
+    "address_1",
+    "address_2",
+    "address_3",
+    "address_4",
+    "address_5",
+    "attorney_name",
+    "attorney_docket_number",
+    "domestic_representative_name",
+    "source_package_kind",
+    "source_effective_date",
+    "source_file",
+    "source_row_hash",
+    "last_source_package_id",
+    "record_hash",
+    "source_rank",
+    "is_deleted",
+]
+
+DESIGN_SEARCH_COLUMNS = [
+    "design_search_key",
+    "serial_number",
+    "code",
+    "source_package_kind",
+    "source_effective_date",
+    "source_file",
+    "source_row_hash",
+    "last_source_package_id",
+    "record_hash",
+    "source_rank",
+    "is_deleted",
+]
+
+PRIOR_REGISTRATION_COLUMNS = [
+    "prior_registration_key",
+    "serial_number",
+    "relationship_type",
+    "number",
+    "source_package_kind",
+    "source_effective_date",
+    "source_file",
+    "source_row_hash",
+    "last_source_package_id",
+    "record_hash",
+    "source_rank",
+    "is_deleted",
+]
+
+FOREIGN_APPLICATION_COLUMNS = [
+    "foreign_application_key",
+    "serial_number",
+    "entry_number",
+    "application_number",
+    "country",
+    "filing_date",
+    "foreign_priority_claimed",
+    "source_package_kind",
+    "source_effective_date",
+    "source_file",
+    "source_row_hash",
+    "last_source_package_id",
+    "record_hash",
+    "source_rank",
+    "is_deleted",
+]
+
+MADRID_FILING_COLUMNS = [
+    "madrid_filing_key",
+    "serial_number",
+    "entry_number",
+    "reference_number",
+    "original_filing_date_uspto",
+    "international_registration_number",
+    "international_registration_date",
+    "international_status_code",
+    "international_status_date",
+    "international_renewal_date",
+    "source_package_kind",
+    "source_effective_date",
+    "source_file",
+    "source_row_hash",
+    "last_source_package_id",
+    "record_hash",
+    "source_rank",
+    "is_deleted",
+]
+
+MADRID_EVENT_COLUMNS = [
+    "madrid_event_key",
+    "serial_number",
+    "filing_entry_number",
+    "filing_reference_number",
+    "event_entry_number",
+    "code",
+    "event_date",
+    "description_text",
+    "source_package_kind",
+    "source_effective_date",
+    "source_file",
+    "source_row_hash",
+    "source_package_id",
+    "source_rank",
+]
+
 TABLE_COLUMNS = {
     "markorbit_facts.us_case_current": CASE_COLUMNS,
     "markorbit_facts.us_owner_current": OWNER_COLUMNS,
     "markorbit_facts.us_classification_current": CLASS_COLUMNS,
     "markorbit_facts.us_event_history": EVENT_COLUMNS,
     "markorbit_facts.us_statement_current": STATEMENT_COLUMNS,
+    "markorbit_facts.us_correspondent_current": CORRESPONDENT_COLUMNS,
+    "markorbit_facts.us_design_search_current": DESIGN_SEARCH_COLUMNS,
+    "markorbit_facts.us_prior_registration_current": PRIOR_REGISTRATION_COLUMNS,
+    "markorbit_facts.us_foreign_application_current": FOREIGN_APPLICATION_COLUMNS,
+    "markorbit_facts.us_madrid_filing_current": MADRID_FILING_COLUMNS,
+    "markorbit_facts.us_madrid_event_history": MADRID_EVENT_COLUMNS,
 }
 
 
@@ -195,6 +307,31 @@ def _key(*parts: object) -> str:
 
 def _name_norm(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).casefold()
+
+
+def _foreign_application_key(record: Any) -> str:
+    if record.entry_number > 0:
+        return _key(record.serial_number, "ENTRY", record.entry_number)
+    return _key(
+        record.serial_number,
+        "FACT",
+        record.application_number,
+        record.country,
+        record.filing_date or "",
+    )
+
+
+def _madrid_filing_identity(record: Any) -> tuple[object, ...]:
+    if record.entry_number > 0:
+        return (record.serial_number, "ENTRY", record.entry_number)
+    if record.reference_number:
+        return (record.serial_number, "REF", record.reference_number)
+    return (
+        record.serial_number,
+        "FACT",
+        record.international_registration_number,
+        record.international_registration_date or "",
+    )
 
 
 def case_id(serial_number: str) -> uuid.UUID:
@@ -283,8 +420,7 @@ def bundle_rows(
     )
 
     for owner in bundle.owners:
-        record = asdict(owner)
-        record_hash = stable_hash(record)
+        record_hash = stable_hash(asdict(owner))
         owner_key = _key(
             owner.serial_number,
             owner.entry_number,
@@ -322,8 +458,7 @@ def bundle_rows(
         )
 
     for classification in bundle.classifications:
-        record = asdict(classification)
-        record_hash = stable_hash(record)
+        record_hash = stable_hash(asdict(classification))
         classification_key = _key(
             classification.serial_number,
             classification.primary_code,
@@ -398,6 +533,139 @@ def bundle_rows(
                 0,
             ]
         )
+
+    if bundle.correspondent is not None:
+        correspondent = bundle.correspondent
+        record_hash = stable_hash(asdict(correspondent))
+        rows["markorbit_facts.us_correspondent_current"].append(
+            [
+                _key(correspondent.serial_number),
+                correspondent.serial_number,
+                correspondent.address_1,
+                correspondent.address_2,
+                correspondent.address_3,
+                correspondent.address_4,
+                correspondent.address_5,
+                correspondent.attorney_name,
+                correspondent.attorney_docket_number,
+                correspondent.domestic_representative_name,
+                *common,
+                record_hash,
+                package_id,
+                record_hash,
+                source_rank,
+                0,
+            ]
+        )
+
+    for design in bundle.design_searches:
+        record_hash = stable_hash(asdict(design))
+        rows["markorbit_facts.us_design_search_current"].append(
+            [
+                _key(design.serial_number, design.code),
+                design.serial_number,
+                design.code,
+                *common,
+                record_hash,
+                package_id,
+                record_hash,
+                source_rank,
+                0,
+            ]
+        )
+
+    for prior in bundle.prior_registrations:
+        record_hash = stable_hash(asdict(prior))
+        rows["markorbit_facts.us_prior_registration_current"].append(
+            [
+                _key(prior.serial_number, prior.relationship_type, prior.number),
+                prior.serial_number,
+                prior.relationship_type,
+                prior.number,
+                *common,
+                record_hash,
+                package_id,
+                record_hash,
+                source_rank,
+                0,
+            ]
+        )
+
+    for foreign in bundle.foreign_applications:
+        record_hash = stable_hash(asdict(foreign))
+        rows["markorbit_facts.us_foreign_application_current"].append(
+            [
+                _foreign_application_key(foreign),
+                foreign.serial_number,
+                foreign.entry_number,
+                foreign.application_number,
+                foreign.country,
+                foreign.filing_date,
+                int(foreign.foreign_priority_claimed),
+                *common,
+                record_hash,
+                package_id,
+                record_hash,
+                source_rank,
+                0,
+            ]
+        )
+
+    for filing in bundle.madrid_filings:
+        record_hash = stable_hash(asdict(filing))
+        rows["markorbit_facts.us_madrid_filing_current"].append(
+            [
+                _key(*_madrid_filing_identity(filing)),
+                filing.serial_number,
+                filing.entry_number,
+                filing.reference_number,
+                filing.original_filing_date_uspto,
+                filing.international_registration_number,
+                filing.international_registration_date,
+                filing.international_status_code,
+                filing.international_status_date,
+                filing.international_renewal_date,
+                *common,
+                record_hash,
+                package_id,
+                record_hash,
+                source_rank,
+                0,
+            ]
+        )
+
+    for event in bundle.madrid_events:
+        record_hash = stable_hash(asdict(event))
+        filing_identity = (
+            "ENTRY",
+            event.filing_entry_number,
+        ) if event.filing_entry_number > 0 else (
+            "REF",
+            event.filing_reference_number,
+        )
+        rows["markorbit_facts.us_madrid_event_history"].append(
+            [
+                _key(
+                    event.serial_number,
+                    *filing_identity,
+                    event.event_entry_number,
+                    event.code,
+                    event.event_date or "",
+                ),
+                event.serial_number,
+                event.filing_entry_number,
+                event.filing_reference_number,
+                event.event_entry_number,
+                event.code,
+                event.event_date,
+                event.description_text,
+                *common,
+                record_hash,
+                package_id,
+                source_rank,
+            ]
+        )
+
     return rows
 
 
