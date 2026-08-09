@@ -52,3 +52,25 @@ jobs:
       - name: Verify M1.6 runtime marker and API import
         run: |
           docker run --rm --entrypoint python markorbit-data-engine:ci -c "from app.main import ENGINE_VERSION; assert ENGINE_VERSION == 'M1.6', ENGINE_VERSION; print(ENGINE_VERSION)"
+
+  us-runtime-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare CI Compose environment
+        run: |
+          cp .env.example .env
+          sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
+          mkdir -p raw_data
+
+      - name: Start PostgreSQL and ClickHouse
+        run: docker compose up -d --wait postgres clickhouse
+
+      - name: Run US M1 live runtime fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_fixture
+
+      - name: Tear down fixture databases
+        if: always()
+        run: docker compose down -v --remove-orphans

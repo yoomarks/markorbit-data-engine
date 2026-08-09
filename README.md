@@ -26,6 +26,7 @@ MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1�
 - **确定性日包优先级**：当前支持 `apcYYMMDD.zip` / `.xml`；未知文件名、同日多份不同源、同日未建模 revision 均阻断。
 - **整包重放恢复**：registered SHA-256 在发布前重新校验；中断/失败时按 source package UUID 清理 US 输出并从权威源整包重放。
 - **一次只处理一个 US 包**：在真实 USPTO 包验收建立性能与质量基线前，不启用批量自动追赶。
+- **真实数据库 fixture 门禁**：CI 会启动 PostgreSQL + ClickHouse，写入 direct + Madrid 66(a) 两件样本，核对 US 五表与部分日期语义，随后强制清理。
 
 US M1 当前核心表：
 
@@ -116,6 +117,14 @@ US M1 不在 parser/publisher 中保存 USPTO Open Data Portal 登录凭据。�
 raw_data\incoming\us\apcYYMMDD.zip
 ```
 
+首次使用或代码升级后可先运行真实数据库 fixture：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
+```
+
+该 fixture 会写入两件隔离样本、核对五张 US 表和 direct/Madrid/partial-date 语义，并在结束时同步删除所有 fixture 行。
+
 然后执行：
 
 ```powershell
@@ -172,8 +181,11 @@ powershell.exe -ExecutionPolicy Bypass -File `
 - CN 字段结构：`GET /api/cn/schema`
 - CN 数据汇总：`GET /api/cn/summary`
 - CN 案件详情：`GET /api/cn/cases/{application_number}`
+- US 字段结构：`GET /api/us/schema`
+- US 数据汇总：`GET /api/us/summary`
+- US 案件详情：`GET /api/us/cases/{serial_number}`
 
-US API 查询端点将在 US publisher/真实包验收后加入；US M1 当前先冻结官方事实 ingestion contract。
+US summary/case 响应会明确标记 `OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`，提醒调用方当前 `status_code`、events、statements 仍是 USPTO 官方事实证据，不是 MarkOrbit 的法律状态结论。
 
 ## 数据边界
 
