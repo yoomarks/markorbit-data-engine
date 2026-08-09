@@ -16,8 +16,9 @@ def test_failed_package_retry_cleanup_is_present():
     assert "_cleanup_partial_outputs(package_uuid)" in source
 
 
-def test_retry_cleanup_only_runs_for_failed_packages():
+def test_retry_cleanup_only_runs_for_replayable_retry_statuses():
     ingest = Path("app/cn/ingest.py").read_text(encoding="utf-8")
     jobs = Path("app/jobs.py").read_text(encoding="utf-8")
     assert "if retrying:" in ingest
-    assert 'retrying=package["status"] == "FAILED"' in jobs
+    assert 'retrying=package["status"]' in jobs
+    assert 'in {"INTERRUPTED", "FAILED", "MISSING_FILE"}' in jobs
