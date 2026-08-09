@@ -109,6 +109,7 @@ def test_score_precision_excludes_insufficient_and_unreviewed():
     unreviewed = dict(rows[1])
     unreviewed["review_id"] = "e" * 24
     unreviewed["rule_id"] = "R8"
+    unreviewed["review_label"] = LABEL_NOT_REVIEWED
     rows.append(unreviewed)
 
     score = score_review_rows(rows)
