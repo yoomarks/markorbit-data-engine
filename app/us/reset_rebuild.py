@@ -19,6 +19,7 @@ from app.us.source_preflight import build_preflight
 
 
 RESET_VERSION = "US_CLEAN_REBUILD_RESET_V1"
+RESET_CONFIRMATION = "RESET-US-M1.3"
 MANIFEST_DIRECTORY = Path("rebuild_manifests") / "us"
 
 
@@ -45,7 +46,9 @@ def _table_counts() -> dict[str, int]:
     return counts
 
 
-def _registry_index(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+def _registry_index(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         digest = str(row.get("sha256") or "").lower()
@@ -143,6 +146,11 @@ def build_reset_plan(
             details.setdefault("unknown_descriptors", []).append(str(path))
             continue
         package_sequence = int(registry_row.get("package_sequence") or 0)
+        file_size = (
+            int(path.stat().st_size)
+            if path.is_file()
+            else int(registry_row.get("file_size") or 0)
+        )
         reset_rows.append(
             {
                 "sequence": int(source["sequence"]),
@@ -151,7 +159,7 @@ def build_reset_plan(
                 "sha256": digest,
                 "file_name": path.name,
                 "file_path": str(path),
-                "file_size": int(path.stat().st_size) if path.is_file() else int(registry_row.get("file_size") or 0),
+                "file_size": file_size,
                 "package_kind": descriptor.package_kind,
                 "partition_dimension": descriptor.partition_dimension,
                 "partition_value": descriptor.partition_value,
@@ -322,8 +330,14 @@ def apply_reset(
     raw_root: Path,
     *,
     expected_history_parts: int,
+    confirmation: str,
     deep_source_test: bool = False,
 ) -> dict[str, Any]:
+    if confirmation != RESET_CONFIRMATION:
+        raise ValueError(
+            f"Destructive US reset requires exact confirmation {RESET_CONFIRMATION!r}"
+        )
+
     result: dict[str, Any] = {
         "status": "UNKNOWN",
         "reset_version": RESET_VERSION,
@@ -344,7 +358,11 @@ def apply_reset(
         if plan["status"] == "BLOCKED":
             return {**result, "status": "BLOCKED"}
         if plan["status"] == "NOOP":
-            return {**result, "status": "NOOP", "post_table_counts": plan["table_counts"]}
+            return {
+                **result,
+                "status": "NOOP",
+                "post_table_counts": plan["table_counts"],
+            }
 
         # Rebuild evidence is persisted before the first destructive ClickHouse operation.
         manifest_path, manifest_sha = _write_manifest(raw_root, plan)
@@ -380,9 +398,7 @@ def apply_reset(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Guarded US-only clean rebuild reset"
-    )
+    parser = argparse.ArgumentParser(description="Guarded US-only clean rebuild reset")
     parser.add_argument("--expected-history-parts", type=int, required=True)
     parser.add_argument("--deep-source-test", action="store_true")
     parser.add_argument(
@@ -390,14 +406,23 @@ def main() -> None:
         action="store_true",
         help="Perform the destructive US-only reset. Without this flag the command is dry-run.",
     )
+    parser.add_argument(
+        "--confirm",
+        default="",
+        help=f"Exact destructive confirmation token; required with --apply: {RESET_CONFIRMATION}",
+    )
     args = parser.parse_args()
     if args.expected_history_parts < 1:
         parser.error("--expected-history-parts must be at least 1")
+    if args.apply and args.confirm != RESET_CONFIRMATION:
+        parser.error(f"--apply requires --confirm {RESET_CONFIRMATION}")
+
     raw_root = get_settings().raw_data_root
     report = (
         apply_reset(
             raw_root,
             expected_history_parts=args.expected_history_parts,
+            confirmation=args.confirm,
             deep_source_test=args.deep_source_test,
         )
         if args.apply
