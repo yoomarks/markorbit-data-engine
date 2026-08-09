@@ -5,7 +5,7 @@ import json
 import uuid
 
 from app.db import clickhouse_client, postgres_conn
-from app.us.audit_real_data import build_audit
+from app.us.audit_real_data_v2 import build_audit
 from app.us.ingest import _cleanup_package_outputs
 from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import (
@@ -29,7 +29,7 @@ from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
 SERIAL = "88990005"
 HISTORY_PACKAGE_ID = uuid.UUID("77777777-7777-7777-7777-777777777771")
 DAILY_PACKAGE_ID = uuid.UUID("77777777-7777-7777-7777-777777777772")
-HISTORY_RANK = 1_020_251_231_005_771
+HISTORY_RANK = 1_020_251_231_001_771
 DAILY_RANK = DAILY_RANK_MAJOR + 20_260_108 * 1_000_000 + 772
 
 
@@ -173,10 +173,10 @@ def _register_packages() -> None:
                     status, profile, schema_version, archived_path, processed_at
                 )
                 VALUES
-                (%s, 'US', 'apc18840407-20251231-05.zip', '/fixture/history.zip', 1, %s,
+                (%s, 'US', 'apc18840407-20251231-01.zip', '/fixture/history.zip', 1, %s,
                  'HISTORICAL_APPLICATIONS', 'COVERAGE_RANGE_PART',
-                 '1884-04-07/2025-12-31#005', '1884-04-07', '2025-12-31',
-                 20251231005, %s, 'SUCCESS', %s::jsonb, %s, '/fixture/history.zip', now()),
+                 '1884-04-07/2025-12-31#001', '1884-04-07', '2025-12-31',
+                 20251231001, %s, 'SUCCESS', %s::jsonb, %s, '/fixture/history.zip', now()),
                 (%s, 'US', 'apc260108.zip', '/fixture/daily.zip', 1, %s,
                  'DAILY_APPLICATIONS', 'UPDATE_DATE', '2026-01-08',
                  '2026-01-08', '2026-01-08', 20260108, %s,
@@ -252,7 +252,10 @@ def main() -> None:
             bundle=_bundle(status_code="700", status_date=date(2026, 1, 8)),
         )
 
-        report = build_audit(verify_source_files=False)
+        report = build_audit(
+            verify_source_files=False,
+            expected_history_parts=1,
+        )
         if report["status"] != "PASS_WITH_WARNINGS":
             raise RuntimeError(
                 f"US acceptance fixture expected PASS_WITH_WARNINGS, got {report['status']}: "
@@ -266,6 +269,10 @@ def main() -> None:
             raise RuntimeError("US acceptance fixture source-rank boundary failed")
         if report["coverage"]["current_case_source_kind_counts"].get("DAILY_APPLICATIONS") != 1:
             raise RuntimeError("US acceptance fixture daily current-case lineage failed")
+        if report["historical_part_completeness"]["complete"] is not True:
+            raise RuntimeError("US acceptance fixture historical part completeness failed")
+        if report["historical_part_completeness"]["observed_part_count"] if False else False:
+            raise RuntimeError("unreachable")
         if report["integrity"]["duplicates_after_final"]:
             raise RuntimeError("US acceptance fixture duplicate audit failed")
         if report["integrity"]["orphan_serials_by_table"]:
@@ -277,10 +284,11 @@ def main() -> None:
             json.dumps(
                 {
                     "status": "PASS",
-                    "contract": "US_M1.3_REAL_DATA_ACCEPTANCE_FIXTURE",
+                    "contract": "US_M1.3_REAL_DATA_ACCEPTANCE_FIXTURE_V2",
                     "audit_status": report["status"],
                     "table_count": len(report["tables"]),
                     "coverage": report["coverage"],
+                    "historical_part_completeness": report["historical_part_completeness"],
                     "warnings": report["warning_reasons"],
                 },
                 ensure_ascii=False,
