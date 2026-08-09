@@ -120,6 +120,12 @@ def test_score_precision_excludes_insufficient_and_unreviewed():
     assert score["overall"]["precision"] == 0.5
     assert score["overall"]["insufficient_evidence"] == 1
     assert score["overall"]["unreviewed"] == 1
+    assert score["provenance"] == {
+        "model_version": "MODEL_V1",
+        "audit_version": "AUDIT_V1",
+        "coverage_date": "2023-01-31",
+        "as_of_date": "2023-01-31",
+    }
     assert score["ground_truth_readiness"]["decision"] == "MANUAL_MODEL_REVIEW_REQUIRED"
 
 
@@ -140,8 +146,28 @@ def test_duplicate_review_id_is_rejected():
 def test_mixed_model_versions_are_rejected():
     rows = build_review_rows(_audit())
     rows[1]["model_version"] = "MODEL_V2"
-    with pytest.raises(ValueError, match="mixes multiple model versions"):
+    with pytest.raises(ValueError, match="mixes multiple model_version"):
         score_review_rows(rows)
+
+
+@pytest.mark.parametrize(
+    ("column", "replacement"),
+    [
+        ("audit_version", "AUDIT_V2"),
+        ("coverage_date", "2023-02-28"),
+        ("as_of_date", "2022-12-31"),
+    ],
+)
+def test_mixed_provenance_is_rejected(column: str, replacement: str):
+    rows = build_review_rows(_audit())
+    rows[1][column] = replacement
+    with pytest.raises(ValueError, match=f"mixes multiple {column}"):
+        score_review_rows(rows)
+
+
+def test_empty_review_packet_is_rejected():
+    with pytest.raises(ValueError, match="contains no review rows"):
+        score_review_rows([])
 
 
 def test_review_csv_requires_full_schema(tmp_path: Path):
