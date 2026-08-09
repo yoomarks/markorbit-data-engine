@@ -5,7 +5,11 @@ import uuid
 
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, bundle_rows
-from app.us.publisher_m12 import SNAPSHOT_CHILD_TABLES, SnapshotAwareUSBatchPublisher
+from app.us.publisher_m12 import (
+    SNAPSHOT_CHILD_TABLES,
+    SnapshotAwareUSBatchPublisher,
+    _text,
+)
 
 
 FIXTURE = Path("tests/fixtures/us_m1_daily.xml")
@@ -156,3 +160,44 @@ def test_event_histories_are_not_snapshot_tombstoned() -> None:
     ][0]
     assert "is_deleted" not in event_columns
     assert len(event_rows) == len(old_bundle.events)
+
+
+def test_fixedstring_bytes_are_normalized_before_tombstone_reinsert() -> None:
+    old_bundle, existing = _old_child_rows()
+    owner_table = "markorbit_facts.us_owner_current"
+    owner_columns = TABLE_COLUMNS[owner_table]
+    original_owner = list(existing[owner_table][0])
+    byte_owner = list(original_owner)
+    fixed_string_columns = ("owner_key", "source_row_hash", "record_hash")
+    for column in fixed_string_columns:
+        index = owner_columns.index(column)
+        byte_owner[index] = str(byte_owner[index]).encode("utf-8")
+    existing[owner_table] = [byte_owner]
+
+    client = FakeClickHouse(existing)
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("66666666-6666-6666-6666-666666666666"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=200,
+        batch_size=100,
+    )
+    publisher.add(replace(old_bundle, owners=()), "apc260108.xml")
+    publisher.close()
+
+    inserted = [rows for name, rows, _columns in client.inserts if name == owner_table]
+    assert len(inserted) == 1
+    tombstones = [row for row in inserted[0] if row[owner_columns.index("is_deleted")] == 1]
+    assert len(tombstones) == 1
+    tombstone = tombstones[0]
+    assert tombstone[owner_columns.index("owner_key")] == original_owner[
+        owner_columns.index("owner_key")
+    ]
+    assert all(not isinstance(value, bytes) for value in tombstone)
+
+
+def test_fixedstring_text_normalization_strips_nul_padding() -> None:
+    assert _text(b"abc\x00\x00") == "abc"
+    assert _text(bytearray(b"abc\x00")) == "abc"
+    assert _text(memoryview(b"abc\x00")) == "abc"
