@@ -6,18 +6,38 @@ This audit is the gate between successful US M1.3 implementation tests and a loc
 
 Run it only after the intended historical coverage parts and subsequent daily packages have been replayed with the persistent worker stopped.
 
-## Command
+## Historical part completeness
 
-Fast database-only audit:
+Historical application snapshots are modeled as coverage-part files such as:
 
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-us-real-data.ps1
+```text
+apc18840407-20251231-01.zip
+apc18840407-20251231-02.zip
+...
 ```
 
-Full acceptance including authoritative ZIP SHA-256 verification:
+Strict acceptance requires the latest historical coverage range to:
+
+- start at part `01`;
+- contain every part continuously through the observed maximum;
+- have an explicitly pinned total part count;
+- contain exactly `01..N` when `N` is supplied via `-ExpectedHistoryParts`;
+- contain no part `00`, no interior gap, no missing tail part, and no part beyond the pinned total.
+
+The filename suffix only identifies a part; it does not prove how many trailing parts exist. Therefore the audit does **not** guess the total part count. Without `-ExpectedHistoryParts`, the result is `NOT_READY` even when all observed parts are continuous.
+
+## Command
+
+Database integrity audit with a pinned historical tail count:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-us-real-data.ps1 -VerifySourceFiles
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-us-real-data.ps1 -ExpectedHistoryParts <N>
+```
+
+Full source-backed acceptance including authoritative ZIP SHA-256 verification:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-us-real-data.ps1 -ExpectedHistoryParts <N> -VerifySourceFiles
 ```
 
 The script writes a timestamped JSON report under `reports/` unless `-OutputPath` is supplied.
@@ -30,7 +50,7 @@ The wrapper refuses to run while the persistent `worker` service is running. Pos
 
 The registered real corpus has:
 
-- at least one successful historical baseline package;
+- a successful historical baseline with exactly the pinned `01..N` part sequence;
 - at least one successful daily package;
 - no pending, failed, or missing registered US package;
 - successful package profiles produced under `US_M1.3`;
@@ -43,11 +63,11 @@ The registered real corpus has:
 - no source-rank mismatch between durable rows and their registered package;
 - populated M1.3 official fact tables after a historical + daily replay;
 - at least one current case whose latest source is a daily package;
-- and, when `-VerifySourceFiles` is used, every successful authoritative source file exists and matches its registered SHA-256.
+- and every successful authoritative source file exists and matches its registered SHA-256.
 
 ### `PASS_WITH_WARNINGS`
 
-The database integrity checks pass, but `-VerifySourceFiles` was not requested. This is useful for fast iteration, but the full source-backed acceptance should use SHA verification.
+Database and historical-part integrity pass, including the pinned total part count, but `-VerifySourceFiles` was not requested. This is suitable for a fast database-only validation; full source-backed acceptance should include SHA verification.
 
 ### `NOT_READY`
 
@@ -57,7 +77,12 @@ The replay/evidence is incomplete rather than corrupt. Examples:
 - no successful daily update yet;
 - packages remain `REGISTERED`, `PROCESSING`, or `INTERRUPTED`;
 - a previously successful package profile was produced under an older US schema version and therefore requires M1.3 replay;
-- the runtime schema version has not reached M1.3.
+- the runtime schema version has not reached M1.3;
+- the historical total part count has not been pinned;
+- historical part `01` is missing;
+- a historical part sequence has an interior gap;
+- the pinned total says a tail part is missing or an observed part exceeds the pinned total;
+- a historical partition identity cannot be recognized safely.
 
 ### `FAIL`
 
@@ -78,6 +103,8 @@ A durable integrity or source-evidence invariant is broken. Examples:
 `packages` inventories replay completion, status counts, old-profile replay requirements, and ambiguous partitions.
 
 `coverage` reports historical start/end, daily start/end, history/daily rank boundary, and how many current cases are presently sourced from historical versus daily observations.
+
+`historical_part_completeness` reports the latest historical coverage range, observed part suffixes, missing parts through the observed maximum, the pinned expected suffixes, missing expected parts, unexpected parts, and whether strict completeness is satisfied.
 
 `tables` reports active/current row count, unique durable identity count, distinct serial count, and duplicate identities after `FINAL` for all eleven M1.3 tables.
 
