@@ -44,6 +44,20 @@ def test_us_m13_official_fact_fixture_checks_all_new_fact_families() -> None:
     assert "_cleanup_package_outputs(package_id)" in source
 
 
+def test_us_m13_acceptance_fixture_exercises_real_audit_queries_and_cleanup() -> None:
+    source = Path("app/us/validate_acceptance_fixture.py").read_text(encoding="utf-8")
+    assert '"contract": "US_M1.3_REAL_DATA_ACCEPTANCE_FIXTURE"' in source
+    assert "build_audit(verify_source_files=False)" in source
+    assert 'report["status"] != "PASS_WITH_WARNINGS"' in source
+    assert "history_success_count" in source
+    assert "daily_success_count" in source
+    assert "rank_boundary_ok" in source
+    assert "source_lineage_rank_mismatches" in source
+    assert "_cleanup_package_outputs(DAILY_PACKAGE_ID)" in source
+    assert "_cleanup_package_outputs(HISTORY_PACKAGE_ID)" in source
+    assert "_delete_packages()" in source
+
+
 def test_us_runtime_fixture_script_applies_schema_and_runs_all_fixtures() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
@@ -59,4 +73,5 @@ def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
     assert "python -m app.us.validate_fixture" in workflow
     assert "python -m app.us.validate_snapshot_fixture" in workflow
     assert "python -m app.us.validate_official_fact_fixture" in workflow
+    assert "python -m app.us.validate_acceptance_fixture" in workflow
     assert "docker compose down -v --remove-orphans" in workflow
