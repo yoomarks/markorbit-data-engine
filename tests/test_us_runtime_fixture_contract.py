@@ -58,6 +58,19 @@ def test_us_m13_acceptance_fixture_exercises_real_audit_queries_and_cleanup() ->
     assert "_delete_packages()" in source
 
 
+def test_us_deterministic_replay_fixture_runs_history_then_daily_and_cleans_up() -> None:
+    source = Path("app/us/validate_replay_executor_fixture.py").read_text(encoding="utf-8")
+    assert '"contract": "US_DETERMINISTIC_REPLAY_EXECUTOR_FIXTURE"' in source
+    assert "execute_replay" in source
+    assert 'max_packages=1' in source
+    assert 'max_packages=None' in source
+    assert 'first["status"] != "PAUSED"' in source
+    assert 'second["status"] != "COMPLETE"' in source
+    assert "daily_current_case" in source
+    assert "source_rank_order" in source
+    assert "_cleanup_fixture_state(raw_root)" in source
+
+
 def test_us_runtime_fixture_script_applies_schema_and_runs_all_fixtures() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
@@ -74,4 +87,5 @@ def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
     assert "python -m app.us.validate_snapshot_fixture" in workflow
     assert "python -m app.us.validate_official_fact_fixture" in workflow
     assert "python -m app.us.validate_acceptance_fixture" in workflow
+    assert "python -m app.us.validate_replay_executor_fixture" in workflow
     assert "docker compose down -v --remove-orphans" in workflow
