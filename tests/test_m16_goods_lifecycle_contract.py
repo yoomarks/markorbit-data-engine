@@ -26,7 +26,8 @@ def test_ingest_entrypoint_routes_through_m16_wrapper_and_runtime_builder():
     jobs = Path("app/jobs.py").read_text(encoding="utf-8")
     wrapper = Path("app/cn/ingest_m16.py").read_text(encoding="utf-8")
     assert "from app.cn.ingest_m16 import ingest_cn_package" in jobs
-    assert "from app.cn.goods_lifecycle_sql import incoming_goods_sql" in wrapper
+    assert "from app.cn.goods_lifecycle_sql import (" in wrapper
+    assert "incoming_goods_sql," in wrapper
     assert "goods.incoming_goods_sql = incoming_goods_sql" in wrapper
 
 
