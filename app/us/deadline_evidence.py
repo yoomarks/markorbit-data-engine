@@ -233,7 +233,8 @@ def case_events(serial_number: str) -> list[dict[str, Any]]:
         raise ValueError("serial_number must contain exactly 8 digits")
     result = clickhouse_client().query(
         f"""
-        SELECT event_code, event_date, event_sequence, event_type, description_text
+        SELECT event_code, event_date, event_sequence,
+               event_type_code AS event_type, description_text
         FROM markorbit_facts.us_event_history FINAL
         WHERE serial_number = '{serial_number}'
         ORDER BY event_date, event_sequence, event_code

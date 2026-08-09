@@ -15,16 +15,18 @@ def test_runtime_image_copies_version_marker() -> None:
 
 
 def test_api_metadata_and_surfaces_use_current_engine_version() -> None:
-    source = Path("app/main.py").read_text(encoding="utf-8")
-    assert "ENGINE_VERSION = engine_version()" in source
-    assert '"version": ENGINE_VERSION' in source
-    assert '"version": "M1.5"' not in source
-    assert 'description="MarkOrbit CN trademark data engine M1.5"' not in source
-    assert "cn_goods_item_current" in source
-    assert "cn_goods_item_observation" in source
-    assert "cn_goods_scope_lifecycle_current" in source
-    assert '"goods_items"' in source
-    assert '"goods_lifecycle"' in source
+    wrapper = Path("app/main.py").read_text(encoding="utf-8")
+    core = Path("app/main_core.py").read_text(encoding="utf-8")
+    assert "ENGINE_VERSION = engine_version()" in core
+    assert '"version": ENGINE_VERSION' in core
+    assert '"version": "M1.5"' not in core
+    assert 'description="MarkOrbit CN trademark data engine M1.5"' not in core
+    assert "cn_goods_item_current" in core
+    assert "cn_goods_item_observation" in core
+    assert "cn_goods_scope_lifecycle_current" in core
+    assert '"goods_items"' in core
+    assert '"goods_lifecycle"' in core
+    assert "sys.modules[__name__] = _core" in wrapper
 
 
 def test_current_docs_identify_m16() -> None:

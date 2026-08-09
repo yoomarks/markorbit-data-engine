@@ -35,6 +35,7 @@ def test_us_ingest_uses_snapshot_aware_publisher_and_reports_tombstones() -> Non
 
 def test_us_retry_cleanup_covers_every_published_table() -> None:
     source = Path("app/us/ingest.py").read_text(encoding="utf-8")
+    history_source = Path("app/us/change_history.py").read_text(encoding="utf-8")
     for table in (
         "us_case_current",
         "us_owner_current",
@@ -49,6 +50,8 @@ def test_us_retry_cleanup_covers_every_published_table() -> None:
         "us_madrid_event_history",
     ):
         assert table in source
+    assert 'CASE_OBSERVATION_TABLE: "source_package_id"' in source
+    assert 'CASE_OBSERVATION_TABLE = "markorbit_facts.us_case_observation_history"' in history_source
     assert "_cleanup_package_outputs(package_uuid)" in source
     assert "mutations_sync = 1" in source
 

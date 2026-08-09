@@ -9,6 +9,7 @@ import zipfile
 from app.db import clickhouse_client
 from app.repository import create_job_run, finish_job_run, get_package, update_package_status
 from app.scanner import sha256_file
+from app.us.change_history import CASE_OBSERVATION_TABLE
 from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import USCaseBundle
 from app.us.parser import iter_case_bundles
@@ -27,6 +28,7 @@ OUTPUT_PACKAGE_COLUMNS = {
     "markorbit_facts.us_foreign_application_current": "last_source_package_id",
     "markorbit_facts.us_madrid_filing_current": "last_source_package_id",
     "markorbit_facts.us_madrid_event_history": "source_package_id",
+    CASE_OBSERVATION_TABLE: "source_package_id",
 }
 
 

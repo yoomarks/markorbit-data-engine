@@ -269,7 +269,7 @@ def main() -> None:
                     "archive_staging": "PASS",
                     "reset_dry_run": "PASS",
                     "manifest_sha256": "PASS",
-                    "all_11_tables_zero_after_reset": "PASS",
+                    "all_12_tables_zero_after_reset": "PASS",
                     "package_identity_preserved": "PASS",
                     "registry_reset_to_registered": "PASS",
                     "post_reset_replay": "PASS",

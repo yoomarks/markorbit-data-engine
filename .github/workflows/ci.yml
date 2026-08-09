@@ -98,6 +98,12 @@ jobs:
       - name: Run US application deadline fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_application_deadlines_fixture
 
+      - name: Run reviewed US event-role deadline evidence fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_deadline_evidence_fixture
+
+      - name: Run US M1.4 durable change history fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_change_history_fixture
+
       - name: Tear down fixture databases
         if: always()
         run: docker compose down -v --remove-orphans

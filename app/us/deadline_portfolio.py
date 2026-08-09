@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -103,7 +103,9 @@ def build_case_deadline_candidates(
         )
         for obligation in maintenance["obligations"]:
             state = str(obligation["state_as_of"])
-            if state == "OPEN_GRACE":
+            # Once the regular period has passed, the grace deadline is the useful
+            # operational boundary, including a recently elapsed grace period.
+            if state in {"OPEN_GRACE", "PAST_DEADLINE"}:
                 due = obligation["nominal_grace_deadline"]
             else:
                 due = obligation["nominal_regular_deadline"]
@@ -142,12 +144,24 @@ def build_case_deadline_candidates(
 
     publication_date = _as_date(case.get("publication_date"))
     if publication_date is not None and publication_date <= as_of:
+        # Opposition-extension events belong to a publication cycle. Do not reuse a
+        # reviewed extension event that predates the current official publication.
+        publication_events = [
+            event
+            for event in events
+            if (_as_date(event.get("event_date")) or date.min) >= publication_date
+        ]
+        publication_evidence = resolve_deadline_evidence(
+            events=publication_events,
+            role_state=role_state,
+        )
+        opposition_extension_days = publication_evidence["automatic_inputs"][
+            "opposition_extension_days_granted"
+        ]
         opposition = calculate_publication_opposition_schedule(
             publication_date=publication_date,
             as_of=as_of,
-            extension_days_granted=automatic[
-                "opposition_extension_days_granted"
-            ],
+            extension_days_granted=opposition_extension_days,
         )
         assessment = opposition["current_deadline_assessment"]
         if assessment["assessment"] == "DEADLINE_FROM_EXPLICIT_EXTENSION_GRANT_FACT":
@@ -178,13 +192,8 @@ def build_case_deadline_candidates(
                     state=state,
                     details={
                         "publication_date": publication_date,
-                        "extension_days_granted": automatic[
-                            "opposition_extension_days_granted"
-                        ],
-                        "extension_facts_known": automatic[
-                            "opposition_extension_days_granted"
-                        ]
-                        is not None,
+                        "extension_days_granted": opposition_extension_days,
+                        "extension_facts_known": opposition_extension_days is not None,
                         "business_day_adjustment": "NOT_CALCULATED_CHECK_TTAB",
                     },
                 )
@@ -319,7 +328,7 @@ def _query_events_for_serials(serials: list[str]) -> dict[str, list[dict[str, An
     result = clickhouse_client().query(
         f"""
         SELECT serial_number, event_code, event_date, event_sequence,
-               event_type, description_text
+               event_type_code AS event_type, description_text
         FROM markorbit_facts.us_event_history FINAL
         WHERE serial_number IN ({literals})
         ORDER BY serial_number, event_date, event_sequence, event_code
@@ -370,8 +379,6 @@ def scan_deadline_candidate_page(
                 recent_past_days=recent_past_days,
             )
         )
-        if len(candidates) >= result_limit:
-            break
 
     candidates.sort(
         key=lambda item: (item["due_date"], item["serial_number"], item["family"], item["code"])

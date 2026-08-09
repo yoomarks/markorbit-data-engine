@@ -4,6 +4,11 @@ from datetime import date
 from typing import Any
 import uuid
 
+from app.us.change_history import (
+    CASE_OBSERVATION_COLUMNS,
+    CASE_OBSERVATION_TABLE,
+    build_case_observation_row,
+)
 from app.us.model import USCaseBundle
 from app.us.publisher import TABLE_COLUMNS, USBatchPublisher, stable_hash
 
@@ -21,12 +26,7 @@ SNAPSHOT_CHILD_TABLES = {
 
 
 def _text(value: object) -> str:
-    """Normalize ClickHouse string-like values at the read boundary.
-
-    clickhouse-connect can return FixedString columns as bytes. FixedString may also
-    carry trailing NUL padding. Publisher buffers use Python str values, so normalize
-    both for identity comparison and before a queried row is reused as a tombstone.
-    """
+    """Normalize ClickHouse string-like values at the read boundary."""
     if isinstance(value, bytes):
         return value.decode("utf-8").rstrip("\x00")
     if isinstance(value, bytearray):
@@ -43,16 +43,7 @@ def _normalize_queried_value(value: object) -> object:
 
 
 class SnapshotAwareUSBatchPublisher(USBatchPublisher):
-    """Publish complete USPTO case snapshots without leaving stale child rows current.
-
-    TDXF case files are complete observations for the current child families declared in
-    ``SNAPSHOT_CHILD_TABLES``. A later source-ranked observation tombstones an older active child
-    identity when that identity disappears from the new case snapshot.
-
-    General case events and Madrid history events are intentionally excluded. Both event families
-    are cumulative official evidence and remain source-ranked histories rather than replace-all
-    collections.
-    """
+    """Publish current snapshots plus durable per-package case observations."""
 
     def __init__(
         self,
@@ -76,9 +67,21 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
         self.tombstone_counts: dict[str, int] = {
             table: 0 for table in SNAPSHOT_CHILD_TABLES
         }
+        self.observation_buffer: list[list[Any]] = []
+        self.observation_count = 0
 
     def add(self, bundle: USCaseBundle, source_file: str) -> None:
         self._touched_serial_sources[bundle.case.serial_number] = source_file
+        self.observation_buffer.append(
+            build_case_observation_row(
+                bundle,
+                package_id=self.package_id,
+                package_kind=self.package_kind,
+                source_effective_date=self.source_effective_date,
+                source_file=source_file,
+                source_rank=self.source_rank,
+            )
+        )
         super().add(bundle, source_file)
 
     def _append_snapshot_tombstones(self) -> None:
@@ -116,10 +119,6 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                     continue
 
                 source_file = self._touched_serial_sources[serial]
-                # Rows returned from ClickHouse can contain bytes for every FixedString
-                # column (identity key and lineage hashes). Normalize all such values
-                # before reusing the row in the insert buffer; otherwise clickhouse-connect
-                # attempts to encode bytes as str and fails during tombstone serialization.
                 tombstone = [_normalize_queried_value(value) for value in existing]
                 tombstone_hash = stable_hash(
                     {
@@ -143,7 +142,24 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                 self.buffers[table].append(tombstone)
                 self.tombstone_counts[table] += 1
 
+    def _flush_observations(self) -> None:
+        if not self.observation_buffer:
+            return
+        self.client.insert(
+            CASE_OBSERVATION_TABLE,
+            self.observation_buffer,
+            column_names=CASE_OBSERVATION_COLUMNS,
+        )
+        self.observation_count += len(self.observation_buffer)
+        self.observation_buffer.clear()
+
     def flush(self) -> None:
         self._append_snapshot_tombstones()
         super().flush()
+        self._flush_observations()
         self._touched_serial_sources.clear()
+
+    def close(self) -> dict[str, int]:
+        counts = super().close()
+        counts[CASE_OBSERVATION_TABLE] = self.observation_count
+        return counts
