@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
-from pathlib import Path
 from typing import Any
 
 from app.db import clickhouse_client
@@ -93,18 +91,21 @@ def _assignee_names(assignments: dict[str, dict[str, Any]]) -> dict[str, list[st
     rows = _rows(
         f"""
         SELECT reel_frame_id, toString(source_package_id) AS package_id,
-               groupArray(party_name ORDER BY ordinal) AS names
+               groupArray((ordinal, party_name)) AS party_pairs
         FROM markorbit_facts.us_assignment_assignee_history
         WHERE {conditions}
         GROUP BY reel_frame_id, source_package_id
         """
     )
-    by_key = {
-        (str(row["reel_frame_id"]), str(row["package_id"])): [
-            str(name) for name in row["names"] if str(name).strip()
+    by_key: dict[tuple[str, str], list[str]] = {}
+    for row in rows:
+        pairs = sorted(
+            ((int(pair[0]), str(pair[1])) for pair in row["party_pairs"]),
+            key=lambda pair: (pair[0], pair[1].casefold()),
+        )
+        by_key[(str(row["reel_frame_id"]), str(row["package_id"]))] = [
+            name for _ordinal, name in pairs if name.strip()
         ]
-        for row in rows
-    }
     return {
         serial: by_key.get((str(item["reel_frame_id"]), str(item["package_id"])), [])
         for serial, item in assignments.items()
@@ -117,16 +118,20 @@ def _current_owner_names(serials: list[str]) -> dict[str, list[str]]:
     literals = ",".join(f"'{serial}'" for serial in serials)
     rows = _rows(
         f"""
-        SELECT serial_number, groupArray(party_name ORDER BY entry_number) AS names
+        SELECT serial_number, groupArray((entry_number, party_name)) AS party_pairs
         FROM markorbit_facts.us_owner_current FINAL
         WHERE is_deleted = 0 AND serial_number IN ({literals}) AND party_name != ''
         GROUP BY serial_number
         """
     )
-    return {
-        str(row["serial_number"]): [str(name) for name in row["names"]]
-        for row in rows
-    }
+    result: dict[str, list[str]] = {}
+    for row in rows:
+        pairs = sorted(
+            ((int(pair[0]), str(pair[1])) for pair in row["party_pairs"]),
+            key=lambda pair: (pair[0], pair[1].casefold()),
+        )
+        result[str(row["serial_number"])] = [name for _ordinal, name in pairs]
+    return result
 
 
 def _case_presence(serials: list[str]) -> set[str]:
