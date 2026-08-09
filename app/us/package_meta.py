@@ -23,7 +23,11 @@ class USPackageDescriptor:
     def source_rank(self, package_sequence: int) -> int:
         revision = int(package_sequence) % 1_000_000
         if self.package_kind == "HISTORICAL_APPLICATIONS":
-            return HISTORY_RANK_MAJOR + self.source_sequence * 1_000_000 + revision
+            # Historical source_sequence contains YYYYMMDD + part and is three
+            # digits wider than a daily sequence. Use a smaller multiplier so
+            # every historical rank remains below DAILY_RANK_MAJOR regardless
+            # of ingestion order.
+            return HISTORY_RANK_MAJOR + self.source_sequence * 1_000 + revision
         if self.package_kind == "DAILY_APPLICATIONS":
             return DAILY_RANK_MAJOR + self.source_sequence * 1_000_000 + revision
         return UNKNOWN_RANK_MAJOR + revision
