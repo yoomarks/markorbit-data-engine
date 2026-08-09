@@ -156,8 +156,7 @@ def current_projection_metrics() -> dict[str, int]:
         WITH latest AS
         (
             SELECT reel_frame_id,
-                   argMax(toString(source_package_id), tuple(source_rank, toString(source_package_id))) AS package_id,
-                   max(source_rank) AS source_rank
+                   argMax(toString(source_package_id), tuple(source_rank, toString(source_package_id))) AS package_id
             FROM markorbit_facts.us_assignment_record_history
             GROUP BY reel_frame_id
         )
@@ -182,8 +181,13 @@ def current_projection_metrics() -> dict[str, int]:
         INNER JOIN latest AS l
           ON p.reel_frame_id = l.reel_frame_id
          AND toString(p.source_package_id) = l.package_id
-        LEFT JOIN markorbit_facts.us_case_current FINAL AS c
-          ON p.serial_number = c.serial_number AND c.is_deleted = 0
+        LEFT JOIN
+        (
+            SELECT serial_number
+            FROM markorbit_facts.us_case_current FINAL
+            WHERE is_deleted = 0
+        ) AS c
+          ON p.serial_number = c.serial_number
         """
     ).result_rows[0]
     return {

@@ -30,7 +30,7 @@ def _serial_page(after_serial: str, limit: int) -> list[str]:
             FROM markorbit_facts.us_assignment_record_history
             GROUP BY reel_frame_id
         )
-        SELECT DISTINCT p.serial_number
+        SELECT DISTINCT p.serial_number AS serial_number
         FROM markorbit_facts.us_assignment_property_history AS p
         INNER JOIN latest_record AS lr
           ON p.reel_frame_id = lr.reel_frame_id
@@ -58,8 +58,13 @@ def _latest_assignment_rows(serials: list[str]) -> dict[str, dict[str, Any]]:
             FROM markorbit_facts.us_assignment_record_history
             GROUP BY reel_frame_id
         )
-        SELECT p.serial_number, r.reel_frame_id, toString(r.source_package_id) AS package_id,
-               r.recorded_date, r.source_effective_date, r.source_rank, r.conveyance_text
+        SELECT p.serial_number AS serial_number,
+               r.reel_frame_id AS reel_frame_id,
+               toString(r.source_package_id) AS package_id,
+               r.recorded_date AS recorded_date,
+               r.source_effective_date AS source_effective_date,
+               r.source_rank AS source_rank,
+               r.conveyance_text AS conveyance_text
         FROM markorbit_facts.us_assignment_property_history AS p
         INNER JOIN latest_record AS lr
           ON p.reel_frame_id = lr.reel_frame_id
@@ -90,7 +95,8 @@ def _assignee_names(assignments: dict[str, dict[str, Any]]) -> dict[str, list[st
     )
     rows = _rows(
         f"""
-        SELECT reel_frame_id, toString(source_package_id) AS package_id,
+        SELECT reel_frame_id AS reel_frame_id,
+               toString(source_package_id) AS package_id,
                groupArray((ordinal, party_name)) AS party_pairs
         FROM markorbit_facts.us_assignment_assignee_history
         WHERE {conditions}
@@ -158,13 +164,18 @@ def _owner_observation(serials: list[str]) -> dict[str, dict[str, Any]]:
         SELECT serial_number,
                argMax(owner_names, tuple(source_rank, toString(source_package_id))) AS owner_names,
                argMax(source_effective_date, tuple(source_rank, toString(source_package_id))) AS source_effective_date,
-               max(source_rank) AS source_rank
+               argMax(source_rank, tuple(source_rank, toString(source_package_id))) AS latest_source_rank
         FROM markorbit_facts.us_case_observation_history
         WHERE serial_number IN ({literals})
         GROUP BY serial_number
         """
     )
-    return {str(row["serial_number"]): row for row in rows}
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = dict(row)
+        item["source_rank"] = item.pop("latest_source_rank")
+        result[str(item["serial_number"])] = item
+    return result
 
 
 def classify_name_evidence(
