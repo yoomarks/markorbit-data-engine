@@ -11,14 +11,17 @@ def test_m16_retry_uses_full_package_replay_without_checkpoint_hooks():
     assert "StageBatchWriter" not in source
 
 
-def test_manual_runner_keeps_api_online_and_uses_one_shot_worker():
+def test_manual_runner_keeps_api_online_and_uses_guarded_one_shot_worker():
     source = Path("scripts/run-cn.ps1").read_text(encoding="utf-8")
-    assert "docker compose run --rm --no-deps worker python -m app.cn.run_once" in source
+    assert "docker compose run --rm --no-deps worker python -m app.cn.guarded_run_once" in source
     assert "docker compose stop api" not in source
     assert "docker compose up -d api" not in source
 
 
-def test_one_shot_runner_declares_package_replay_mode():
-    source = Path("app/cn/run_once.py").read_text(encoding="utf-8")
-    assert '"mode": "DEDICATED_WORKER_ONE_SHOT"' in source
-    assert '"recovery": "PACKAGE_REPLAY"' in source
+def test_guarded_one_shot_preserves_package_replay_execution():
+    source = Path("app/cn/guarded_run_once.py").read_text(encoding="utf-8")
+    ingest = Path("app/cn/ingest_m16.py").read_text(encoding="utf-8")
+    assert "build_execution_guard()" in source
+    assert "scan_and_ingest_cn" in source
+    assert "PACKAGE_REPLAY" in ingest
+    assert "checkpoint" not in source.lower()
