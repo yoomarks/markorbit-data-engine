@@ -1,4 +1,4 @@
-# CN Case Status Inference — Historical Audit V1
+# CN Case Status Inference — Historical Audit V2
 
 Status: EMPIRICAL VALIDATION TOOLING
 
@@ -20,16 +20,33 @@ The audit scans cases whose current durable goods lifecycle contains at least on
 
 The query is keyset-paginated by application number and limits observation joins to the current batch so the validation can run over large historical data without loading the full candidate population into Python memory.
 
+## Deterministic review sampling
+
+`AUDIT_V2` no longer keeps the first N cases encountered for each rule. That approach was deterministic only because the query happened to scan by application number and could bias manual review toward one part of the population.
+
+For each rule, every candidate receives a SHA-256 sampling key derived from the frozen model version, rule ID and application number. The audit retains the lowest N keys. This gives a bounded, reproducible sample that is independent of database batch size and scan order while requiring no random seed or full-population materialization in Python memory.
+
+The JSON report records:
+
+```text
+sampling.strategy = DETERMINISTIC_SHA256_BOTTOM_K_PER_RULE
+sampling.sample_per_rule = <requested N>
+sampling.scan_order_independent = true
+```
+
+Changing `SamplePerRule` changes the size of the deterministic bottom-k set but does not turn the audit into a first-N scan.
+
 ## Output
 
 The JSON report includes:
 
 - loaded-data coverage date and effective `as_of_date`;
+- deterministic sampling strategy and per-rule sample limit;
 - number of cases with inactivity signals;
 - rule hit counts for R1-R7;
 - inferred cause, scope and confidence distributions;
 - number of cases that trigger multiple distinct heuristic causes;
-- samples for each rule and for overlapping causes;
+- deterministic review samples for each rule and diagnostic samples for overlapping causes;
 - unknown-goods and missing-temporal-lineage counts;
 - invalid evidence rows;
 - explicit model limitations and promotion decision.
@@ -45,13 +62,13 @@ docker compose stop worker
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-cn-case-status-inference.ps1
 ```
 
-Optional historical cutoff:
+Optional historical cutoff and larger manual-review sample:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-cn-case-status-inference.ps1 `
   -AsOf 2022-12-31 `
   -BatchSize 5000 `
-  -SamplePerRule 20
+  -SamplePerRule 50
 ```
 
 The script writes the JSON report under `reports\cn_case_status_inference_<timestamp>.json` and leaves the persistent worker stopped.
@@ -68,7 +85,7 @@ R7 is intentionally not operational in this audit because renewal/grace deadline
 
 `CN_CASE_STATUS_INFERENCE_V1_EMPIRICAL` must remain `EMPIRICAL` until rule samples are manually checked against official CNIPA notices/events. Required next validation work:
 
-- manually label a stratified sample per rule;
+- manually label the deterministic sample per rule;
 - measure precision by rule and confidence band;
 - inspect R4 versus R5/R6 overlap cases;
 - identify later official facts that contradict an earlier heuristic candidate;

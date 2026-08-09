@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from app.cn.audit_case_status_inference import (
+    SAMPLE_STRATEGY,
     _case_batch_sql,
     row_to_evidence,
     summarize_rows,
@@ -57,7 +58,43 @@ def test_summary_records_r1_hit_and_empirical_promotion_gate() -> None:
     assert result["status"] == "PASS"
     assert result["rule_hits"] == {"R1": 1}
     assert result["data_clock"]["wall_clock_time_used"] is False
+    assert result["sampling"] == {
+        "strategy": SAMPLE_STRATEGY,
+        "sample_per_rule": 2,
+        "scan_order_independent": True,
+    }
     assert result["promotion_decision"] == "NOT_ELIGIBLE_WITHOUT_MANUAL_GROUND_TRUTH"
+
+
+def test_rule_samples_are_scan_order_independent() -> None:
+    rows = [_row(application_number=f"APP-{index:03d}") for index in range(30)]
+    forward = summarize_rows(
+        rows,
+        as_of_date=date(2023, 1, 31),
+        coverage_date=date(2023, 1, 31),
+        sample_per_rule=5,
+    )
+    reverse = summarize_rows(
+        list(reversed(rows)),
+        as_of_date=date(2023, 1, 31),
+        coverage_date=date(2023, 1, 31),
+        sample_per_rule=5,
+    )
+    assert forward["samples_by_rule"] == reverse["samples_by_rule"]
+    assert len(forward["samples_by_rule"]["R1"]) == 5
+    sampled = {row["application_number"] for row in forward["samples_by_rule"]["R1"]}
+    assert sampled != {f"APP-{index:03d}" for index in range(5)}
+
+
+def test_zero_sample_limit_keeps_counts_and_empty_rule_sample_bucket() -> None:
+    result = summarize_rows(
+        [_row(application_number="A"), _row(application_number="B")],
+        as_of_date=date(2023, 1, 31),
+        coverage_date=date(2023, 1, 31),
+        sample_per_rule=0,
+    )
+    assert result["rule_hits"] == {"R1": 2}
+    assert result["samples_by_rule"] == {"R1": []}
 
 
 def test_summary_warns_when_final_loss_has_no_dated_status_change() -> None:
