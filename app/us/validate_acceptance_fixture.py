@@ -285,7 +285,9 @@ def main() -> None:
             json.dumps(
                 {
                     "status": "PASS",
-                    "contract": "US_M1.3_REAL_DATA_ACCEPTANCE_FIXTURE_V2",
+                    "contract": "US_M1.3_REAL_DATA_ACCEPTANCE_FIXTURE",
+                    "audit_version": report["audit_version"],
+                    "history_part_policy": "V2_01_TO_PINNED_N",
                     "audit_status": report["status"],
                     "table_count": len(report["tables"]),
                     "coverage": report["coverage"],
