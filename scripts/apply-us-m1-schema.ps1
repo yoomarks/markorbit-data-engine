@@ -3,7 +3,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $schemaPaths = @(
     (Join-Path $repoRoot "database/clickhouse/init/004_us_m1_core.sql"),
-    (Join-Path $repoRoot "database/clickhouse/init/005_us_m11_real_tdxf.sql")
+    (Join-Path $repoRoot "database/clickhouse/init/005_us_m11_real_tdxf.sql"),
+    (Join-Path $repoRoot "database/clickhouse/init/006_us_m12_snapshot_semantics.sql")
 )
 
 foreach ($schemaPath in $schemaPaths) {
@@ -12,7 +13,7 @@ foreach ($schemaPath in $schemaPaths) {
     }
 }
 
-Write-Host "Applying US M1.1 ClickHouse schema..."
+Write-Host "Applying US M1.2 ClickHouse schema..."
 foreach ($schemaPath in $schemaPaths) {
     Get-Content -Raw $schemaPath | docker compose exec -T clickhouse clickhouse-client --multiquery
     if ($LASTEXITCODE -ne 0) {
@@ -20,4 +21,4 @@ foreach ($schemaPath in $schemaPaths) {
     }
 }
 
-Write-Host "US M1.1 ClickHouse schema applied."
+Write-Host "US M1.2 ClickHouse schema applied."
