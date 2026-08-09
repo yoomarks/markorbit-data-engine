@@ -16,6 +16,7 @@ from app.jobs import (
 from app.repository import list_recent_packages, list_recent_runs
 from app.us.migrations import REQUIRED_TABLES as REQUIRED_US_TABLES
 from app.us.migrations import US_SCHEMA_VERSION
+from app.us.semantic_api import router as us_semantic_router
 from app.version import engine_version
 
 
@@ -26,6 +27,7 @@ app = FastAPI(
     version="0.4.0",
     description=f"MarkOrbit trademark data engine {ENGINE_VERSION} with US M1.3",
 )
+app.include_router(us_semantic_router)
 
 
 @app.on_event("startup")
