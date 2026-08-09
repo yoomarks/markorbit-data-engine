@@ -11,7 +11,16 @@ REQUIRED_TABLES = {
     "us_ttab_docket_history",
 }
 REQUIRED_COLUMNS = {
-    "us_ttab_proceeding_history": {"proceeding_type_code", "status_code"},
+    "us_ttab_proceeding_history": {
+        "proceeding_type_code",
+        "status_code",
+        "employee_number",
+        "location_code",
+        "day_in_location",
+        "day_in_location_raw",
+        "charge_to_location_code",
+        "charge_to_employee_name",
+    },
     "us_ttab_party_history": {
         "party_id",
         "role",
@@ -19,6 +28,8 @@ REQUIRED_COLUMNS = {
         "organization",
         "granted_to_date_raw",
         "correspondent_organization",
+        "correspondent_address_id",
+        "correspondent_address_type_code",
     },
     "us_ttab_property_history": {
         "mark_explanation",
@@ -27,11 +38,15 @@ REQUIRED_COLUMNS = {
         "common_law_indicator",
         "application_status_code",
         "trademark_gid",
+        "source_property_id",
+        "tma_proceeding_number",
+        "tma_proceeding_type_code",
     },
     "us_ttab_docket_history": {
         "identifier",
         "object_id",
         "entry_code",
+        "entry_type_code",
         "confidential",
     },
 }
@@ -67,7 +82,7 @@ def ensure_ttab_schema() -> None:
         absent = sorted(required - columns)
         if absent:
             raise RuntimeError(
-                f"US TTAB M1.1 schema is missing columns in {table}: {', '.join(absent)}. "
+                f"US TTAB M1.2 schema is missing columns in {table}: {', '.join(absent)}. "
                 "Run scripts/apply-us-ttab-schema.ps1."
             )
     with postgres_conn() as conn:

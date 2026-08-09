@@ -11,7 +11,7 @@ from app.us_ttab.repository import normalize_snapshot_at, ttab_source_rank
 
 def test_ttab_component_is_isolated() -> None:
     assert TTAB_JURISDICTION == "US_TTAB"
-    assert TTAB_SCHEMA_VERSION == "US_TTAB_M1.1"
+    assert TTAB_SCHEMA_VERSION == "US_TTAB_M1.2"
     assert "NOT_OUTCOME" in TTAB_SEMANTICS
     repository = Path("app/us_ttab/repository.py").read_text(encoding="utf-8")
     jobs = Path("app/us_ttab/jobs.py").read_text(encoding="utf-8")
@@ -90,7 +90,8 @@ def test_ttab_routes_are_read_only_and_mounted() -> None:
 
 def test_ttab_schema_is_not_part_of_us_application_or_assignment_reset() -> None:
     base_schema = Path("database/clickhouse/init/010_us_ttab_m10.sql").read_text(encoding="utf-8")
-    upgrade = Path("database/clickhouse/init/011_us_ttab_m11_real_rawxml.sql").read_text(encoding="utf-8")
+    rawxml_upgrade = Path("database/clickhouse/init/011_us_ttab_m11_real_rawxml.sql").read_text(encoding="utf-8")
+    bulk_upgrade = Path("database/clickhouse/init/012_us_ttab_m12_official_bulk.sql").read_text(encoding="utf-8")
     apply_script = Path("scripts/apply-us-ttab-schema.ps1").read_text(encoding="utf-8")
     us_apply = Path("scripts/apply-us-m1-schema.ps1").read_text(encoding="utf-8")
     us_reset = Path("app/us/reset_rebuild.py").read_text(encoding="utf-8")
@@ -105,8 +106,10 @@ def test_ttab_schema_is_not_part_of_us_application_or_assignment_reset() -> None
         assert table not in us_apply
         assert table not in us_reset
         assert table not in assignment_schema
-    assert "US_TTAB_M1.1" in upgrade
+    assert "US_TTAB_M1.1" in rawxml_upgrade
+    assert "US_TTAB_M1.2" in bulk_upgrade
     assert "011_us_ttab_m11_real_rawxml.sql" in apply_script
+    assert "012_us_ttab_m12_official_bulk.sql" in apply_script
 
 
 def test_ttab_operational_scripts_and_ci_gate_exist() -> None:

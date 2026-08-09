@@ -24,6 +24,20 @@ def test_assignment_parser_reads_reel_frame_parties_and_properties() -> None:
     assert [item.serial_number for item in bundle.properties] == ["88991234", "88995678"]
 
 
+def test_assignment_parser_preserves_current_official_bulk_party_tags() -> None:
+    bundles = list(
+        iter_assignment_bundles(Path("tests/fixtures/us_assignment_real_historical_shape.xml"))
+    )
+    assert len(bundles) == 2
+    first, second = bundles
+    assert first.assignment.reel_frame_id == "1/0058"
+    assert first.assignors[0].country == "DENMARK"
+    assert first.assignors[0].acknowledgement_date == date(1954, 6, 16)
+    assert second.assignors[0].dba_statement == "DBA HANDY ROLL CO."
+    assert second.assignors[0].acknowledgement_date == date(1955, 1, 17)
+    assert second.assignees[0].composed_of_statement == "H.I. SALSBURY & EARL SHULTZ"
+
+
 def test_assignment_parser_preserves_partial_or_invalid_dates_raw(tmp_path: Path) -> None:
     source = tmp_path / "partial.xml"
     source.write_text(

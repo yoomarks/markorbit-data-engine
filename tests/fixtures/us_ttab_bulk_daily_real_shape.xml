@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimized from user-supplied USPTO TTAB daily bulk sample tt260808.zip. -->
+<ttab-proceedings>
+  <proceeding-information>
+    <proceeding-entry>
+      <number>79412016</number>
+      <type-code>EXA</type-code>
+      <filing-date>20260414</filing-date>
+      <location-code>845</location-code>
+      <day-in-location>20260414</day-in-location>
+      <status-update-date>20260610</status-update-date>
+      <status-code>2</status-code>
+      <party-information>
+        <party>
+          <identifier>1248285</identifier>
+          <role-code>P</role-code>
+          <name>Octopus Energy Group Limited</name>
+          <property-information>
+            <property>
+              <identifier>1691989</identifier>
+              <serial-number>79412016</serial-number>
+              <mark-text>OEGEN</mark-text>
+            </property>
+          </property-information>
+          <address-information>
+            <proceeding-address>
+              <identifier>2284247</identifier>
+              <type-code>C</type-code>
+              <name>DAVID A.W. WONG</name>
+              <orgname>BARNES &amp; THORNBURG LLP</orgname>
+              <address-1>11 S. MERIDIAN ST</address-1>
+              <city>INDIANAPOLIS</city><state>IN</state><country>US</country><postcode>46204-3535</postcode>
+            </proceeding-address>
+          </address-information>
+        </party>
+      </party-information>
+      <prosecution-history>
+        <prosecution-entry>
+          <identifier>1</identifier><code>158</code><type-code>X</type-code>
+          <date>20260414</date><history-text>APPEAL TO BOARD</history-text>
+        </prosecution-entry>
+      </prosecution-history>
+    </proceeding-entry>
+  </proceeding-information>
+</ttab-proceedings>

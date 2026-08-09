@@ -18,6 +18,12 @@ class TTABProceedingRecord:
     general_contact_number: str = ""
     interlocutory_attorney: str = ""
     paralegal_name: str = ""
+    employee_number: str = ""
+    location_code: str = ""
+    day_in_location: date | None = None
+    day_in_location_raw: str = ""
+    charge_to_location_code: str = ""
+    charge_to_employee_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,8 @@ class TTABPartyRecord:
     correspondent_address: str = ""
     correspondent_email_text: str = ""
     correspondent_phone: str = ""
+    correspondent_address_id: str = ""
+    correspondent_address_type_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,9 @@ class TTABPropertyRecord:
     application_status: str = ""
     application_status_code: str = ""
     trademark_gid: str = ""
+    source_property_id: str = ""
+    tma_proceeding_number: str = ""
+    tma_proceeding_type_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +75,7 @@ class TTABDocketRecord:
     identifier: str = ""
     object_id: str = ""
     entry_code: str = ""
+    entry_type_code: str = ""
     confidential: str = ""
     filing_date: date | None = None
     filing_date_raw: str = ""

@@ -14,28 +14,32 @@ TABLE_COLUMNS: dict[str, list[str]] = {
         "observation_key", "proceeding_number", "proceeding_type", "proceeding_type_code",
         "filing_date", "filing_date_raw", "status_text", "status_code", "status_date",
         "status_date_raw", "general_contact_number", "interlocutory_attorney", "paralegal_name",
-        "record_hash", "source_kind", "source_snapshot_at", "source_file", "source_package_id",
-        "source_rank",
+        "employee_number", "location_code", "day_in_location", "day_in_location_raw",
+        "charge_to_location_code", "charge_to_employee_name", "record_hash", "source_kind",
+        "source_snapshot_at", "source_file", "source_package_id", "source_rank",
     ],
     "markorbit_facts.us_ttab_party_history": [
         "observation_key", "party_key", "proceeding_number", "side", "ordinal", "party_name",
         "party_id", "role", "company", "organization", "granted_to_date_raw",
         "correspondent_name", "correspondent_organization", "correspondent_address",
-        "correspondent_email_text", "correspondent_phone", "record_hash", "source_kind",
-        "source_snapshot_at", "source_file", "source_package_id", "source_rank",
+        "correspondent_email_text", "correspondent_phone", "correspondent_address_id",
+        "correspondent_address_type_code", "record_hash", "source_kind", "source_snapshot_at",
+        "source_file", "source_package_id", "source_rank",
     ],
     "markorbit_facts.us_ttab_property_history": [
         "observation_key", "property_key", "proceeding_number", "party_side", "party_ordinal",
         "ordinal", "serial_number", "registration_number", "mark_text", "mark_explanation",
         "property_filing", "property_filing_code", "common_law_indicator", "application_status",
-        "application_status_code", "trademark_gid", "record_hash", "source_kind",
-        "source_snapshot_at", "source_file", "source_package_id", "source_rank",
+        "application_status_code", "trademark_gid", "source_property_id", "tma_proceeding_number",
+        "tma_proceeding_type_code", "record_hash", "source_kind", "source_snapshot_at",
+        "source_file", "source_package_id", "source_rank",
     ],
     "markorbit_facts.us_ttab_docket_history": [
         "observation_key", "docket_key", "proceeding_number", "ordinal", "entry_number",
-        "identifier", "object_id", "entry_code", "confidential", "filing_date", "filing_date_raw",
-        "history_text", "due_date", "due_date_raw", "document_url", "record_hash", "source_kind",
-        "source_snapshot_at", "source_file", "source_package_id", "source_rank",
+        "identifier", "object_id", "entry_code", "entry_type_code", "confidential", "filing_date",
+        "filing_date_raw", "history_text", "due_date", "due_date_raw", "document_url",
+        "record_hash", "source_kind", "source_snapshot_at", "source_file", "source_package_id",
+        "source_rank",
     ],
 }
 
@@ -60,8 +64,9 @@ def bundle_rows(
         _key(package_id, p.proceeding_number), p.proceeding_number, p.proceeding_type,
         p.proceeding_type_code, p.filing_date, p.filing_date_raw, p.status_text, p.status_code,
         p.status_date, p.status_date_raw, p.general_contact_number, p.interlocutory_attorney,
-        p.paralegal_name, record_hash, source_kind, source_snapshot_at, source_file, package_id,
-        source_rank,
+        p.paralegal_name, p.employee_number, p.location_code, p.day_in_location,
+        p.day_in_location_raw, p.charge_to_location_code, p.charge_to_employee_name, record_hash,
+        source_kind, source_snapshot_at, source_file, package_id, source_rank,
     ])
 
     for party in bundle.parties:
@@ -72,14 +77,16 @@ def bundle_rows(
             party.side, party.ordinal, party.party_name, party.party_id, party.role, party.company,
             party.organization, party.granted_to_date_raw, party.correspondent_name,
             party.correspondent_organization, party.correspondent_address,
-            party.correspondent_email_text, party.correspondent_phone, record_hash, source_kind,
-            source_snapshot_at, source_file, package_id, source_rank,
+            party.correspondent_email_text, party.correspondent_phone, party.correspondent_address_id,
+            party.correspondent_address_type_code, record_hash, source_kind, source_snapshot_at,
+            source_file, package_id, source_rank,
         ])
 
     for item in bundle.properties:
         property_key = _key(
-            item.party_side, item.party_ordinal, item.ordinal, item.serial_number,
-            item.registration_number, item.trademark_gid, item.mark_text, item.mark_explanation,
+            item.party_side, item.party_ordinal, item.ordinal, item.source_property_id,
+            item.serial_number, item.registration_number, item.trademark_gid, item.mark_text,
+            item.mark_explanation,
         )
         record_hash = stable_hash(asdict(item))
         rows["markorbit_facts.us_ttab_property_history"].append([
@@ -87,22 +94,23 @@ def bundle_rows(
             item.proceeding_number, item.party_side, item.party_ordinal, item.ordinal,
             item.serial_number, item.registration_number, item.mark_text, item.mark_explanation,
             item.property_filing, item.property_filing_code, item.common_law_indicator,
-            item.application_status, item.application_status_code, item.trademark_gid, record_hash,
-            source_kind, source_snapshot_at, source_file, package_id, source_rank,
+            item.application_status, item.application_status_code, item.trademark_gid,
+            item.source_property_id, item.tma_proceeding_number, item.tma_proceeding_type_code,
+            record_hash, source_kind, source_snapshot_at, source_file, package_id, source_rank,
         ])
 
     for item in bundle.docket_entries:
         stable_identity = item.object_id or item.identifier or item.entry_number or _key(
-            item.entry_code, item.filing_date_raw, item.history_text, item.ordinal
+            item.entry_code, item.entry_type_code, item.filing_date_raw, item.history_text, item.ordinal
         )
         docket_key = _key(stable_identity)
         record_hash = stable_hash(asdict(item))
         rows["markorbit_facts.us_ttab_docket_history"].append([
             _key(package_id, p.proceeding_number, docket_key), docket_key, item.proceeding_number,
             item.ordinal, item.entry_number, item.identifier, item.object_id, item.entry_code,
-            item.confidential, item.filing_date, item.filing_date_raw, item.history_text,
-            item.due_date, item.due_date_raw, item.document_url, record_hash, source_kind,
-            source_snapshot_at, source_file, package_id, source_rank,
+            item.entry_type_code, item.confidential, item.filing_date, item.filing_date_raw,
+            item.history_text, item.due_date, item.due_date_raw, item.document_url, record_hash,
+            source_kind, source_snapshot_at, source_file, package_id, source_rank,
         ])
     return rows
 

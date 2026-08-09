@@ -159,7 +159,13 @@ def ingest_ttab_package(
             _assert_snapshot_slot_available(number, snapshot_at, package_uuid)
             seen.add(number)
             source_files.add(source_file)
-            kind = bundle.proceeding.proceeding_type or "UNSPECIFIED"
+            # Prefer human-readable TTABVUE display text; official bulk provides only the
+            # raw type code, which is retained as a code rather than interpreted.
+            kind = (
+                bundle.proceeding.proceeding_type
+                or bundle.proceeding.proceeding_type_code
+                or "UNSPECIFIED"
+            )
             proceeding_types[kind] = proceeding_types.get(kind, 0) + 1
             if not bundle.docket_entries:
                 empty_docket_count += 1
