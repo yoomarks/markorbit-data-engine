@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<uspto-ttabvue-document>
+  <proceeding>
+    <proceeding-attributes>
+      <proceeding-number>76123682</proceeding-number>
+      <proceeding-type name="Extension of Time">EXT</proceeding-type>
+      <general-contact-number>571-272-8500</general-contact-number>
+    </proceeding-attributes>
+    <proceeding-parties>
+      <plaintiffs>
+        <party party-id="E1" role="Potential Opposer" name="Example Requester LLC" company="Example Co" organization="Example Org" granted-to-date="12/01/2026">
+          <party-info-from-db name="Example Requester LLC" orgname="Example Org"/>
+          <correspondence-info-from-db name="Requester Counsel" email="extension@example.test"/>
+        </party>
+      </plaintiffs>
+      <defendants/>
+    </proceeding-parties>
+  </proceeding>
+</uspto-ttabvue-document>

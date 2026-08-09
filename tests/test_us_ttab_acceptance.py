@@ -8,7 +8,7 @@ def _package(status: str = "SUCCESS") -> dict[str, object]:
     return {
         "package_id": "00000000-0000-0000-0000-000000000001",
         "status": status,
-        "schema_version": "US_TTAB_M1.0",
+        "schema_version": "US_TTAB_M1.1",
     }
 
 
@@ -68,18 +68,10 @@ def _acceptance(**overrides: object) -> dict[str, object]:
 
 def test_ttab_acceptance_passes_source_backed_integrity() -> None:
     result = evaluate_acceptance(
-        packages=[_package()],
-        schema={"ready": True},
-        tables=_tables(),
-        orphans={
-            "us_ttab_party_history": 0,
-            "us_ttab_property_history": 0,
-            "us_ttab_docket_history": 0,
-        },
-        lineage=_lineage(),
-        projection=_projection(),
-        source_verification={"missing_count": 0, "mismatch_count": 0},
-        verify_sources=True,
+        packages=[_package()], schema={"ready": True}, tables=_tables(),
+        orphans={"us_ttab_party_history": 0, "us_ttab_property_history": 0, "us_ttab_docket_history": 0},
+        lineage=_lineage(), projection=_projection(),
+        source_verification={"missing_count": 0, "mismatch_count": 0}, verify_sources=True,
     )
     assert result["status"] == "PASS"
     assert result["hard_fail_reasons"] == []
@@ -91,18 +83,10 @@ def test_ttab_acceptance_keeps_coverage_gaps_as_warnings() -> None:
     projection["malformed_property_serial_count"] = 1
     projection["property_serial_joined_to_us_case_count"] = 0
     result = evaluate_acceptance(
-        packages=[_package()],
-        schema={"ready": True},
-        tables=_tables(),
-        orphans={
-            "us_ttab_party_history": 0,
-            "us_ttab_property_history": 0,
-            "us_ttab_docket_history": 0,
-        },
-        lineage=_lineage(),
-        projection=projection,
-        source_verification={"missing_count": 0, "mismatch_count": 0},
-        verify_sources=True,
+        packages=[_package()], schema={"ready": True}, tables=_tables(),
+        orphans={"us_ttab_party_history": 0, "us_ttab_property_history": 0, "us_ttab_docket_history": 0},
+        lineage=_lineage(), projection=projection,
+        source_verification={"missing_count": 0, "mismatch_count": 0}, verify_sources=True,
     )
     assert result["status"] == "PASS_WITH_WARNINGS"
     assert "malformed_ttab_property_serials_present" in result["warning_reasons"]
@@ -113,18 +97,10 @@ def test_ttab_acceptance_fails_duplicate_or_orphan_history() -> None:
     tables = _tables()
     tables["us_ttab_docket_history"]["duplicate_observation_keys"] = 1
     result = evaluate_acceptance(
-        packages=[_package()],
-        schema={"ready": True},
-        tables=tables,
-        orphans={
-            "us_ttab_party_history": 0,
-            "us_ttab_property_history": 1,
-            "us_ttab_docket_history": 0,
-        },
-        lineage=_lineage(),
-        projection=_projection(),
-        source_verification={"missing_count": 0, "mismatch_count": 0},
-        verify_sources=True,
+        packages=[_package()], schema={"ready": True}, tables=tables,
+        orphans={"us_ttab_party_history": 0, "us_ttab_property_history": 1, "us_ttab_docket_history": 0},
+        lineage=_lineage(), projection=_projection(),
+        source_verification={"missing_count": 0, "mismatch_count": 0}, verify_sources=True,
     )
     assert result["status"] == "FAIL"
     assert "duplicate_observation_keys:us_ttab_docket_history" in result["hard_fail_reasons"]
@@ -134,10 +110,7 @@ def test_ttab_acceptance_fails_duplicate_or_orphan_history() -> None:
 def test_ttab_readiness_requires_source_verification_when_only_warning() -> None:
     result = evaluate_readiness(
         packages=[_package()],
-        acceptance=_acceptance(
-            status="PASS_WITH_WARNINGS",
-            warning_reasons=["ttab_source_sha_verification_not_requested"],
-        ),
+        acceptance=_acceptance(status="PASS_WITH_WARNINGS", warning_reasons=["ttab_source_sha_verification_not_requested"]),
         verify_sources=False,
     )
     assert result["state"] == "SOURCE_VERIFICATION_REQUIRED"
@@ -147,11 +120,7 @@ def test_ttab_readiness_requires_source_verification_when_only_warning() -> None
 
 
 def test_ttab_readiness_accepts_verified_corpus() -> None:
-    result = evaluate_readiness(
-        packages=[_package()],
-        acceptance=_acceptance(),
-        verify_sources=True,
-    )
+    result = evaluate_readiness(packages=[_package()], acceptance=_acceptance(), verify_sources=True)
     assert result["state"] == "ACCEPTED"
     assert result["ready"] is True
     assert result["substantive_rights_conclusion"] is False

@@ -13,7 +13,7 @@ from app.us_ttab.audit_api import router as us_ttab_audit_router
 
 _core.app.description = (
     f"MarkOrbit trademark data engine {_core.ENGINE_VERSION} with US M1.4 + "
-    "US Assignment M1.0 + US TTAB M1.0"
+    "US Assignment M1.0 + US TTAB M1.1"
 )
 _core.app.include_router(us_deadline_docket_router)
 _core.app.include_router(us_change_history_router)

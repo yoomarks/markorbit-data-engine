@@ -8,9 +8,11 @@ from datetime import date
 class TTABProceedingRecord:
     proceeding_number: str
     proceeding_type: str = ""
+    proceeding_type_code: str = ""
     filing_date: date | None = None
     filing_date_raw: str = ""
     status_text: str = ""
+    status_code: str = ""
     status_date: date | None = None
     status_date_raw: str = ""
     general_contact_number: str = ""
@@ -24,7 +26,13 @@ class TTABPartyRecord:
     side: str
     ordinal: int
     party_name: str
+    party_id: str = ""
+    role: str = ""
+    company: str = ""
+    organization: str = ""
+    granted_to_date_raw: str = ""
     correspondent_name: str = ""
+    correspondent_organization: str = ""
     correspondent_address: str = ""
     correspondent_email_text: str = ""
     correspondent_phone: str = ""
@@ -39,7 +47,13 @@ class TTABPropertyRecord:
     serial_number: str = ""
     registration_number: str = ""
     mark_text: str = ""
+    mark_explanation: str = ""
+    property_filing: str = ""
+    property_filing_code: str = ""
+    common_law_indicator: str = ""
     application_status: str = ""
+    application_status_code: str = ""
+    trademark_gid: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +61,10 @@ class TTABDocketRecord:
     proceeding_number: str
     ordinal: int
     entry_number: str = ""
+    identifier: str = ""
+    object_id: str = ""
+    entry_code: str = ""
+    confidential: str = ""
     filing_date: date | None = None
     filing_date_raw: str = ""
     history_text: str = ""

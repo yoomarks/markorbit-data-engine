@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<uspto-ttabvue-document>
+  <proceeding>
+    <proceeding-attributes>
+      <proceeding-number>91301803</proceeding-number>
+      <proceeding-type name="Opposition">OPP</proceeding-type>
+      <filing-date>09/18/2025</filing-date>
+      <proceeding-status name="Pending">9</proceeding-status>
+      <proceeding-status-date>02/03/2026</proceeding-status-date>
+      <general-contact-number>571-272-8500</general-contact-number>
+      <interlocutory-attorney number="1"><attorney-number>1</attorney-number><first-name>Test</first-name><last-name>Attorney</last-name></interlocutory-attorney>
+      <paralegal-name number="2"><attorney-number>2</attorney-number><first-name>Test</first-name><last-name>Paralegal</last-name></paralegal-name>
+    </proceeding-attributes>
+    <proceeding-parties>
+      <plaintiffs>
+        <party party-id="P1" role="Plaintiff" name="Example Plaintiff LLC">
+          <party-info-from-db name="Example Plaintiff LLC" orgname="Example Plaintiff LLC">
+            <contact-address address-1="1 Plaintiff Way" city="Alexandria" state="VA" postcode="22314"><country country-name="UNITED STATES"/></contact-address>
+          </party-info-from-db>
+          <correspondence-info-from-db name="Plaintiff Counsel" orgname="Example Law LLP" email="counsel@example.test" phone="555-0100">
+            <contact-address address-1="2 Counsel Road" city="Alexandria" state="VA" postcode="22314"><country country-name="UNITED STATES"/></contact-address>
+          </correspondence-info-from-db>
+          <ttab-properties>
+            <ttab-property>
+              <serial-number>99000001</serial-number><property-filing>Application</property-filing><property-filing-cd>A</property-filing-cd>
+              <mark-explanation>EXAMPLE PLAINTIFF MARK</mark-explanation><common-law-ind>N</common-law-ind>
+              <tm-com-status><serial-number>99000001</serial-number><trademark-gid>GID-P1</trademark-gid><application-status name="Application pending">604</application-status></tm-com-status>
+            </ttab-property>
+          </ttab-properties>
+        </party>
+      </plaintiffs>
+      <defendants>
+        <party party-id="D1" role="Defendant" name="Example Defendant Inc.">
+          <party-info-from-db name="Example Defendant Inc."/>
+          <correspondence-info-from-db name="Defense Counsel" email="defense@example.test"/>
+          <ttab-properties>
+            <ttab-property>
+              <serial-number>99026361</serial-number><registration-number>7000001</registration-number>
+              <property-filing>Registration</property-filing><property-filing-cd>R</property-filing-cd>
+              <mark-explanation>EXAMPLE DEFENDANT MARK</mark-explanation><common-law-ind>N</common-law-ind>
+              <tm-com-status><serial-number>99026361</serial-number><registration-number>7000001</registration-number><trademark-gid>GID-D1</trademark-gid><application-status name="Registered">604</application-status></tm-com-status>
+            </ttab-property>
+          </ttab-properties>
+        </party>
+      </defendants>
+    </proceeding-parties>
+    <prosecution-history>
+      <prosecution-history-event identifier="6" object-id="OBJ6" entry-code="TRIAL" entry-date="02/03/2026" event-text="TRIAL DATES RESET" due-date="03/16/2026"/>
+      <prosecution-history-event identifier="5" object-id="OBJ5" entry-code="ANSWER" entry-date="10/01/2025" event-text="ANSWER FILED"/>
+    </prosecution-history>
+  </proceeding>
+</uspto-ttabvue-document>

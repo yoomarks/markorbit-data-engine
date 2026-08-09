@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<uspto-ttabvue-document>
+  <proceeding>
+    <proceeding-attributes>
+      <proceeding-number>87739436</proceeding-number>
+      <proceeding-type name="Ex Parte Appeal">EXA</proceeding-type>
+      <filing-date>03/19/2021</filing-date>
+      <proceeding-status name="Terminated">9</proceeding-status>
+      <proceeding-status-date>04/07/2022</proceeding-status-date>
+      <general-contact-number>571-272-8500</general-contact-number>
+    </proceeding-attributes>
+    <proceeding-parties>
+      <plaintiffs>
+        <party party-id="A1" role="Applicant" name="Example Applicant LLC">
+          <party-info-from-db name="Example Applicant LLC"><contact-address address-1="1 Applicant Way" city="Austin" state="TX" postcode="78701"><country country-name="UNITED STATES"/></contact-address></party-info-from-db>
+          <correspondence-info-from-db name="Applicant Counsel" orgname="Example IP LLC" email="appeal@example.test" phone="555-0200"/>
+          <ttab-properties>
+            <ttab-property>
+              <serial-number>87739436</serial-number><property-filing>Application</property-filing><property-filing-cd>A</property-filing-cd>
+              <mark-explanation>EXAMPLE APPEAL MARK</mark-explanation><common-law-ind>N</common-law-ind>
+              <tm-com-status><serial-number>87739436</serial-number><trademark-gid>GID-EXA</trademark-gid><application-status name="Abandoned">603</application-status></tm-com-status>
+            </ttab-property>
+          </ttab-properties>
+        </party>
+      </plaintiffs>
+      <defendants/>
+    </proceeding-parties>
+    <prosecution-history>
+      <prosecution-history-event identifier="8" object-id="EXA8" entry-code="DECISION" entry-date="04/07/2022" event-text="FINAL DECISION" confidential="false"/>
+      <prosecution-history-event identifier="7" object-id="EXA7" entry-code="BRIEF" entry-date="02/01/2022" event-text="APPEAL BRIEF" confidential="false"/>
+    </prosecution-history>
+  </proceeding>
+</uspto-ttabvue-document>
