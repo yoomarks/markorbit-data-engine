@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ttabvue-results>
+  <proceeding>
+    <proceeding-type>Cancellation</proceeding-type>
+    <proceeding-number>92081234</proceeding-number>
+    <filing-date>07/25/2024</filing-date>
+    <proceeding-status>Pending</proceeding-status>
+    <status-date>07/30/2024</status-date>
+    <general-contact-number>571-272-8500</general-contact-number>
+    <interlocutory-attorney>TEST ATTORNEY</interlocutory-attorney>
+    <paralegal-name>TEST PARALEGAL</paralegal-name>
+    <defendant>
+      <name>Alpha Brand LLC</name>
+      <correspondent>
+        <name>Defense Counsel</name>
+        <address-1>1 Defense Street</address-1>
+        <city>New York</city><state>NY</state><postal-code>10001</postal-code><country>US</country>
+        <email>defense@example.test</email><phone>212-555-0100</phone>
+      </correspondent>
+      <property>
+        <serial-number>88123456</serial-number>
+        <registration-number>6123456</registration-number>
+        <mark-text>ORBIT TEST</mark-text>
+        <application-status>CANCELLATION PENDING</application-status>
+      </property>
+    </defendant>
+    <plaintiff>
+      <name>Beta Holdings Inc.</name>
+      <correspondent>
+        <name>Plaintiff Counsel</name>
+        <address-1>2 Plaintiff Avenue</address-1>
+        <city>Chicago</city><state>IL</state><postal-code>60601</postal-code><country>US</country>
+        <email>plaintiff@example.test</email><phone>312-555-0101</phone>
+      </correspondent>
+    </plaintiff>
+    <prosecution-history-entry>
+      <entry-number>2</entry-number>
+      <filing-date>07/30/2024</filing-date>
+      <history-text>NOTICE AND TRIAL DATES SENT; ANSWER DUE:</history-text>
+      <due-date>09/08/2024</due-date>
+      <document-url>https://ttabvue.uspto.gov/example/2.pdf</document-url>
+    </prosecution-history-entry>
+    <prosecution-history-entry>
+      <entry-number>1</entry-number>
+      <filing-date>07/25/2024</filing-date>
+      <history-text>FILED AND FEE</history-text>
+    </prosecution-history-entry>
+  </proceeding>
+</ttabvue-results>
