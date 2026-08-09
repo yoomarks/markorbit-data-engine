@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimized from the user-supplied official historical Assignment bulk XML sample. -->
+<trademark-assignments>
+  <assignment-information>
+    <assignment-entry>
+      <assignment>
+        <reel-no>1</reel-no><frame-no>0058</frame-no><last-update-date>20260409</last-update-date>
+        <purge-indicator>N</purge-indicator><date-recorded>19550105</date-recorded><page-count>0</page-count>
+        <conveyance-text>ASSIGNS THE ENTIRE INTEREST AND THE GOODWILL</conveyance-text>
+      </assignment>
+      <assignors><assignor>
+        <person-or-organization-name>JENSEN, PETER A/S</person-or-organization-name>
+        <country-name>DENMARK</country-name><date-acknowledged>19540616</date-acknowledged>
+        <legal-entity-text>CORPORATION</legal-entity-text><nationality>DENMARK</nationality>
+      </assignor></assignors>
+      <assignees><assignee>
+        <person-or-organization-name>MERCHANTS TRADING CO.INC.</person-or-organization-name>
+        <legal-entity-text>CORPORATION</legal-entity-text><nationality>NEW YORK</nationality>
+      </assignee></assignees>
+      <properties><property><serial-no>71614627</serial-no><registration-no>563392</registration-no></property></properties>
+    </assignment-entry>
+    <assignment-entry>
+      <assignment>
+        <reel-no>1</reel-no><frame-no>0438</frame-no><last-update-date>20260409</last-update-date>
+        <purge-indicator>N</purge-indicator><date-recorded>19550120</date-recorded>
+        <conveyance-text>ASSIGNS THE ENTIRE INTEREST</conveyance-text>
+      </assignment>
+      <assignors><assignor>
+        <person-or-organization-name>SALSBURY, H.I.</person-or-organization-name>
+        <dba-aka-ta-statement>DBA HANDY ROLL CO.</dba-aka-ta-statement>
+        <date-acknowledged>19550117</date-acknowledged>
+      </assignor></assignors>
+      <assignees><assignee>
+        <person-or-organization-name>HANDY ROLL CO.</person-or-organization-name>
+        <composed-of-statement>H.I. SALSBURY &amp; EARL SHULTZ</composed-of-statement>
+      </assignee></assignees>
+      <properties><property><serial-no>71600001</serial-no></property></properties>
+    </assignment-entry>
+  </assignment-information>
+</trademark-assignments>

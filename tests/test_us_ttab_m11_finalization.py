@@ -3,8 +3,8 @@ from pathlib import Path
 from app.us_ttab import TTAB_SCHEMA_VERSION
 
 
-def test_ttab_m11_is_live_verified_and_ci_is_network_independent() -> None:
-    assert TTAB_SCHEMA_VERSION == "US_TTAB_M1.1"
+def test_ttab_m11_rawxml_contract_remains_regressed_under_m12() -> None:
+    assert TTAB_SCHEMA_VERSION == "US_TTAB_M1.2"
     ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "Probe real TTABVUE raw XML contract" not in ci
     assert "probe_real_rawxml" not in ci

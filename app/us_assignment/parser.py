@@ -36,6 +36,19 @@ def _first_text(node: ET.Element, *names: str) -> str:
     return ""
 
 
+def _first_all_text(node: ET.Element, *names: str) -> str:
+    """Return flattened text for mixed-content official fields without interpreting it."""
+    wanted = {name.lower().replace("_", "-") for name in names}
+    for child in node.iter():
+        if child is node:
+            continue
+        if _local(child.tag) in wanted:
+            value = _clean(" ".join(child.itertext()))
+            if value:
+                return value
+    return ""
+
+
 def _direct_children(node: ET.Element, names: set[str]) -> list[ET.Element]:
     wanted = {name.lower().replace("_", "-") for name in names}
     return [child for child in list(node) if _local(child.tag) in wanted]
@@ -92,6 +105,7 @@ def _party(node: ET.Element, reel_frame_id: str, ordinal: int) -> AssignmentPart
     execution_raw = _first_text(node, "execution-date", "date-executed")
     acknowledgement_raw = _first_text(
         node,
+        "date-acknowledged",
         "acknowledgement-date",
         "acknowledgment-date",
     )
@@ -104,7 +118,7 @@ def _party(node: ET.Element, reel_frame_id: str, ordinal: int) -> AssignmentPart
         city=_first_text(node, "city"),
         state=_first_text(node, "state", "state-code"),
         postcode=_first_text(node, "postcode", "postal-code", "zip-code"),
-        country=_first_text(node, "country", "country-code"),
+        country=_first_text(node, "country", "country-name", "country-code"),
         nationality=_first_text(node, "nationality", "citizenship"),
         legal_entity_text=_first_text(
             node,
@@ -113,12 +127,17 @@ def _party(node: ET.Element, reel_frame_id: str, ordinal: int) -> AssignmentPart
             "entity-type",
         ),
         formerly_statement=_first_text(node, "formerly-statement", "formerly"),
-        composed_of_statement=_first_text(
+        composed_of_statement=_first_all_text(
             node,
             "composed-of-statement",
             "composed-of",
         ),
-        dba_statement=_first_text(node, "dba-statement", "dba"),
+        dba_statement=_first_text(
+            node,
+            "dba-aka-ta-statement",
+            "dba-statement",
+            "dba",
+        ),
         execution_date=_parse_date_raw(execution_raw),
         execution_date_raw=execution_raw,
         acknowledgement_date=_parse_date_raw(acknowledgement_raw),

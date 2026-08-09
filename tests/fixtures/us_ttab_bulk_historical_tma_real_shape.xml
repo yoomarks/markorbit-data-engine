@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minimized from user-supplied USPTO TTAB historical bulk sample. -->
+<ttab-proceedings>
+  <proceeding-information>
+    <proceeding-entry>
+      <number>97658985</number><type-code>EXA</type-code><filing-date>20250620</filing-date>
+      <location-code>845</location-code><day-in-location>20250621</day-in-location>
+      <status-update-date>20251222</status-update-date><status-code>3</status-code>
+      <party-information>
+        <party>
+          <identifier>1206405</identifier><role-code>P</role-code><name>Hanako design SA</name>
+          <property-information>
+            <property>
+              <identifier>1613341</identifier><serial-number>97658985</serial-number>
+              <registration-number>7220244</registration-number><mark-text>BAIA</mark-text>
+              <tma-proceeding><proceeding-number>2024-101552</proceeding-number><proceeding-type-code>R</proceeding-type-code></tma-proceeding>
+            </property>
+          </property-information>
+        </party>
+      </party-information>
+      <prosecution-history>
+        <prosecution-entry><identifier>10</identifier><code>793</code><type-code>E</type-code><date>20251222</date><history-text>SUBMITTED FOR FINAL DECISION</history-text></prosecution-entry>
+      </prosecution-history>
+    </proceeding-entry>
+  </proceeding-information>
+</ttab-proceedings>

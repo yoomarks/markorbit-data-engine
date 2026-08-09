@@ -8,7 +8,7 @@ def _package(status: str = "SUCCESS") -> dict[str, object]:
     return {
         "package_id": "00000000-0000-0000-0000-000000000001",
         "status": status,
-        "schema_version": "US_TTAB_M1.1",
+        "schema_version": "US_TTAB_M1.2",
     }
 
 
