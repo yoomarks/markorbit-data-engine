@@ -21,6 +21,12 @@ OUTPUT_PACKAGE_COLUMNS = {
     "markorbit_facts.us_classification_current": "last_source_package_id",
     "markorbit_facts.us_event_history": "source_package_id",
     "markorbit_facts.us_statement_current": "last_source_package_id",
+    "markorbit_facts.us_correspondent_current": "last_source_package_id",
+    "markorbit_facts.us_design_search_current": "last_source_package_id",
+    "markorbit_facts.us_prior_registration_current": "last_source_package_id",
+    "markorbit_facts.us_foreign_application_current": "last_source_package_id",
+    "markorbit_facts.us_madrid_filing_current": "last_source_package_id",
+    "markorbit_facts.us_madrid_event_history": "source_package_id",
 }
 
 
