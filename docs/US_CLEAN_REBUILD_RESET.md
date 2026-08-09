@@ -36,16 +36,16 @@ The plan is blocked unless:
 The exact confirmation token is:
 
 ```text
-RESET-US-M1.3
+RESET-US-M1.4
 ```
 
 Apply requires both the explicit switch and the exact token:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\reset-us-clean-rebuild.ps1 -ExpectedHistoryParts <N> -DeepSourceTest -Apply -ConfirmReset RESET-US-M1.3
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\reset-us-clean-rebuild.ps1 -ExpectedHistoryParts <N> -DeepSourceTest -Apply -ConfirmReset RESET-US-M1.4
 ```
 
-The Python module independently enforces the same exact token through `--confirm RESET-US-M1.3`; bypassing the PowerShell wrapper does not bypass destructive confirmation.
+The Python module independently enforces the same exact token through `--confirm RESET-US-M1.4`; bypassing the PowerShell wrapper does not bypass destructive confirmation.
 
 ## Pre-reset evidence manifest
 
@@ -61,7 +61,7 @@ The manifest records:
 - deterministic manifest fingerprint;
 - source-preflight replay plan;
 - registered US package inventory relevant to reset;
-- all eleven US fact-table physical row counts;
+- all modeled US current/event/durable-observation table physical row counts;
 - existing package IDs, package sequences, source ranks, statuses, and source SHA identities;
 - the exact registry rows that will be returned to `REGISTERED`.
 
@@ -73,12 +73,12 @@ The operation acquires the existing US ingestion advisory lock, then:
 
 1. re-runs the reset plan under the lock;
 2. persists the pre-reset evidence manifest;
-3. truncates only the eleven `markorbit_facts.us_*` fact tables;
+3. truncates the modeled US current/event tables and `us_case_observation_history`;
 4. preserves existing `control.source_package.package_id` and `package_sequence` identities;
 5. resets registered source-plan US packages to `REGISTERED`;
 6. clears their package profiles, archived path, processed timestamp, and error message;
 7. recomputes modeled file path, package metadata, source sequence, and source rank using the preserved package sequence;
-8. verifies every US fact table is empty;
+8. verifies every modeled US table is empty;
 9. verifies remaining US registry rows are `REGISTERED`.
 
 Unregistered authoritative source-plan packages remain unregistered. The deterministic replay executor will register them when their turn arrives.
@@ -93,15 +93,15 @@ It does not:
 - stage files from archive;
 - start the persistent worker;
 - run replay automatically;
-- infer trademark legal status, attorney role, or maintenance conclusions.
+- infer trademark legal status, legal ownership, attorney role, or maintenance conclusions.
 
 ## Failure ordering
 
-ClickHouse fact tables are truncated before PostgreSQL package statuses are reset. This ordering is deliberate. If the later PostgreSQL reset fails, old `SUCCESS` statuses remain while US fact tables are empty. That state is fail-closed: the deterministic replay executor will not silently proceed as though the old successes were valid. Re-run the guarded reset after investigating the failure.
+ClickHouse US tables are truncated before PostgreSQL package statuses are reset. This ordering is deliberate. If the later PostgreSQL reset fails, old `SUCCESS` statuses remain while US tables are empty. That state is fail-closed: the deterministic replay executor will not silently proceed as though the old successes were valid. Re-run the guarded reset after investigating the failure.
 
 ## Completion is not acceptance
 
-`RESET_COMPLETE` means the US fact layer is empty and existing source-plan package identities are ready for deterministic replay. It does not validate the rebuilt corpus.
+`RESET_COMPLETE` means the US current/event/durable-observation layer is empty and existing source-plan package identities are ready for deterministic replay. It does not validate the rebuilt corpus.
 
 After replay reaches `COMPLETE`, run:
 

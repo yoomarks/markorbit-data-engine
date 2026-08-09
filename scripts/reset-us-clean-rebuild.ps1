@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RequiredConfirmation = "RESET-US-M1.3"
+$RequiredConfirmation = "RESET-US-M1.4"
 
 $worker = docker compose ps --status running -q worker
 if ($LASTEXITCODE -ne 0) {
@@ -82,7 +82,7 @@ if (-not $Apply -and $report.status -eq "READY") {
     Write-Host "Dry run only. To reset, re-run with -Apply -ConfirmReset $RequiredConfirmation."
 }
 if ($report.status -eq "RESET_COMPLETE") {
-    Write-Host "US facts are cleared and existing US source packages are REGISTERED for deterministic replay."
+    Write-Host "US facts and durable case observations are cleared; existing US source packages are REGISTERED for deterministic replay."
     Write-Host "Next: run replay-us-deterministic.ps1 in dry-run mode before applying replay."
 }
 if ($report.status -in @("BLOCKED", "BUSY")) {

@@ -42,4 +42,16 @@ if ($LASTEXITCODE -ne 0) {
     throw "US application-stage deadline runtime fixture failed."
 }
 
-Write-Host "US M1.3 + semantic + maintenance + application-deadline fixtures passed and cleaned up."
+Write-Host "Running reviewed US event-role deadline evidence fixture..."
+docker compose run --rm --no-deps worker python -m app.us.validate_deadline_evidence_fixture
+if ($LASTEXITCODE -ne 0) {
+    throw "US reviewed-event deadline evidence runtime fixture failed."
+}
+
+Write-Host "Running US M1.4 durable change history fixture..."
+docker compose run --rm --no-deps worker python -m app.us.validate_change_history_fixture
+if ($LASTEXITCODE -ne 0) {
+    throw "US M1.4 durable change history runtime fixture failed."
+}
+
+Write-Host "US M1.4 + semantic + maintenance + application/deadline evidence + durable history fixtures passed and cleaned up."

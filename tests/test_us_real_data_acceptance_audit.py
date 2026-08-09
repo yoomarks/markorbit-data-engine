@@ -15,7 +15,10 @@ def _profile(*, tombstones: int = 0, version: str = US_SCHEMA_VERSION) -> dict:
     return {
         "totals": {
             "schema_version": version,
-            "row_counts": {"markorbit_facts.us_case_current": 10},
+            "row_counts": {
+                "markorbit_facts.us_case_current": 10,
+                "markorbit_facts.us_case_observation_history": 10,
+            },
             "snapshot_tombstone_counts": {
                 "markorbit_facts.us_owner_current": tombstones,
             },
@@ -95,11 +98,19 @@ def _evaluate(
     return evaluate_acceptance(
         packages=packages,
         postgres_schema_version=postgres_version,
-        clickhouse_schema_versions=clickhouse_versions or ["US_M1.0", "US_M1.1", "US_M1.2", US_SCHEMA_VERSION],
-        table_metrics=deepcopy(table_metrics if table_metrics is not None else _table_metrics()),
+        clickhouse_schema_versions=clickhouse_versions
+        or ["US_M1.0", "US_M1.1", "US_M1.2", "US_M1.3", US_SCHEMA_VERSION],
+        table_metrics=deepcopy(
+            table_metrics if table_metrics is not None else _table_metrics()
+        ),
         orphan_counts=deepcopy(orphan_counts if orphan_counts is not None else {}),
-        lineage_metrics=deepcopy(lineage_metrics if lineage_metrics is not None else _lineage(packages)),
-        source_kind_case_counts={"HISTORICAL_APPLICATIONS": 100, "DAILY_APPLICATIONS": 8},
+        lineage_metrics=deepcopy(
+            lineage_metrics if lineage_metrics is not None else _lineage(packages)
+        ),
+        source_kind_case_counts={
+            "HISTORICAL_APPLICATIONS": 100,
+            "DAILY_APPLICATIONS": 8,
+        },
         source_file_verification=deepcopy(verification),
     )
 
@@ -108,6 +119,7 @@ def test_complete_replay_without_sha_verification_passes_with_warning() -> None:
     result = _evaluate()
     assert result["status"] == "PASS_WITH_WARNINGS"
     assert result["audit_version"] == AUDIT_VERSION
+    assert result["audit"] == "US_M14_REAL_DATA_ACCEPTANCE"
     assert result["hard_fail_reasons"] == []
     assert result["not_ready_reasons"] == []
     assert result["warning_reasons"] == ["source_sha_verification_not_requested"]
@@ -115,6 +127,8 @@ def test_complete_replay_without_sha_verification_passes_with_warning() -> None:
     assert result["coverage"]["historical_end"] == "2025-12-31"
     assert result["coverage"]["daily_end"] == "2026-01-08"
     assert result["snapshot_reconciliation"]["total_tombstones"] == 2
+    assert result["durable_history"]["row_count"] == 10
+    assert result["durable_history"]["legal_ownership_conclusion"] is False
 
 
 def test_complete_replay_with_verified_sources_passes() -> None:
@@ -134,7 +148,7 @@ def test_complete_replay_with_verified_sources_passes() -> None:
 
 def test_pending_or_old_profile_is_not_ready_not_corruption() -> None:
     packages = _packages()
-    packages[0]["profile"] = _profile(version="US_M1.2")
+    packages[0]["profile"] = _profile(version="US_M1.3")
     packages.append(
         {
             "package_id": "33333333-3333-3333-3333-333333333333",
@@ -153,7 +167,7 @@ def test_pending_or_old_profile_is_not_ready_not_corruption() -> None:
     result = _evaluate(packages=packages, lineage_metrics=_lineage(packages))
     assert result["status"] == "NOT_READY"
     assert "registered_replay_not_complete" in result["not_ready_reasons"]
-    assert "successful_packages_require_m13_replay" in result["not_ready_reasons"]
+    assert "successful_packages_require_m14_replay" in result["not_ready_reasons"]
     assert result["hard_fail_reasons"] == []
 
 
@@ -198,6 +212,20 @@ def test_history_daily_replay_requires_populated_m13_fact_tables() -> None:
     assert result["status"] == "FAIL"
     assert "m13_fact_tables_empty_after_history_daily_replay" in result["hard_fail_reasons"]
     assert "us_madrid_filing_current" in result["integrity"]["empty_tables"]
+
+
+def test_history_daily_replay_requires_durable_observation_history() -> None:
+    metrics = _table_metrics()
+    metrics["us_case_observation_history"]["row_count"] = 0
+    metrics["us_case_observation_history"]["unique_keys"] = 0
+    metrics["us_case_observation_history"]["serial_count"] = 0
+    result = _evaluate(table_metrics=metrics)
+    assert result["status"] == "FAIL"
+    assert (
+        "m14_durable_history_empty_after_history_daily_replay"
+        in result["hard_fail_reasons"]
+    )
+    assert result["durable_history"]["row_count"] == 0
 
 
 def test_precedence_violation_fails_even_if_ingestion_status_is_success() -> None:

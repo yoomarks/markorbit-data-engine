@@ -20,10 +20,14 @@ SEMANTIC_PATHS = {
 
 
 def test_main_registers_us_semantic_router_without_replacing_case_api() -> None:
-    source = Path("app/main.py").read_text(encoding="utf-8")
-    assert "from app.us.semantic_api import router as us_semantic_router" in source
-    assert "app.include_router(us_semantic_router)" in source
-    assert '@app.get("/api/us/cases/{serial_number}")' in source
+    wrapper = Path("app/main.py").read_text(encoding="utf-8")
+    core = Path("app/main_core.py").read_text(encoding="utf-8")
+    assert "from app.us.semantic_api import router as us_semantic_router" in core
+    assert "app.include_router(us_semantic_router)" in core
+    assert '@app.get("/api/us/cases/{serial_number}")' in core
+    assert "sys.modules[__name__] = _core" in wrapper
+    assert "app.us.deadline_docket_api" in wrapper
+    assert "app.us.change_history_api" in wrapper
 
 
 def test_main_exposes_semantic_maintenance_and_application_deadline_routes() -> None:

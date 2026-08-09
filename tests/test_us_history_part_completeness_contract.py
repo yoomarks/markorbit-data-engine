@@ -2,13 +2,15 @@ from pathlib import Path
 
 
 def test_strict_history_audit_requires_part_01_and_pinned_tail() -> None:
-    source = Path("app/us/audit_real_data_v2.py").read_text(encoding="utf-8")
-    assert 'range(1, observed_max + 1)' in source
-    assert 'historical_tail_part_count_not_pinned' in source
-    assert 'historical_part_sequence_incomplete' in source
-    assert 'expected_historical_parts_missing' in source
-    assert 'historical_parts_exceed_expected_count' in source
-    assert '--expected-history-parts' in source
+    wrapper = Path("app/us/audit_real_data_v2.py").read_text(encoding="utf-8")
+    core = Path("app/us/audit_real_data_v2_core.py").read_text(encoding="utf-8")
+    assert "US_M14_REAL_DATA_ACCEPTANCE_V2_HISTORY_PARTS" in wrapper
+    assert 'range(1, observed_max + 1)' in core
+    assert 'historical_tail_part_count_not_pinned' in core
+    assert 'historical_part_sequence_incomplete' in core
+    assert 'expected_historical_parts_missing' in core
+    assert 'historical_parts_exceed_expected_count' in core
+    assert '--expected-history-parts' in core
 
 
 def test_acceptance_fixture_pins_history_tail_without_renaming_contract() -> None:
