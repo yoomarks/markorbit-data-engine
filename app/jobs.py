@@ -39,19 +39,21 @@ def _file_sha256(path: Path) -> str:
 
 
 def _resolve_package_path(package: dict[str, Any], raw_root: Path) -> Path | None:
-    """Resolve a registered raw package without trusting a stale location.
+    """Resolve the authoritative registered ZIP by SHA-256.
 
-    Successful ingestion archives the authoritative ZIP. A process can fail after
-    that move but before PostgreSQL is updated, leaving file_path pointing at the
-    old incoming location. Recovery must use the registered SHA-256 rather than a
-    filename-only guess.
+    A successful run may archive the ZIP while ``file_path`` still names the old
+    incoming location. A later file can also reuse the same basename. Never trust
+    a path or filename alone: when a registered SHA is available, every candidate
+    (including the declared path) must match it before use.
     """
     declared = Path(str(package["file_path"]))
-    if declared.exists():
-        return declared
-
     file_name = str(package["file_name"])
     expected_sha = str(package.get("sha256") or "").lower()
+
+    if declared.is_file():
+        if not expected_sha or _file_sha256(declared).lower() == expected_sha:
+            return declared
+
     incoming = raw_root / "incoming" / "cn"
     archive = raw_root / "archive" / "cn"
 
