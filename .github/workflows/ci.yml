@@ -77,6 +77,9 @@ jobs:
       - name: Run US M1.3 official fact families fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_official_fact_fixture
 
+      - name: Run US M1.3 real-data acceptance audit fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_acceptance_fixture
+
       - name: Tear down fixture databases
         if: always()
         run: docker compose down -v --remove-orphans
