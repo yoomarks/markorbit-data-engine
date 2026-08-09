@@ -11,7 +11,7 @@ from app.us_ttab.repository import normalize_snapshot_at, ttab_source_rank
 
 def test_ttab_component_is_isolated() -> None:
     assert TTAB_JURISDICTION == "US_TTAB"
-    assert TTAB_SCHEMA_VERSION == "US_TTAB_M1.0"
+    assert TTAB_SCHEMA_VERSION == "US_TTAB_M1.1"
     assert "NOT_OUTCOME" in TTAB_SEMANTICS
     repository = Path("app/us_ttab/repository.py").read_text(encoding="utf-8")
     jobs = Path("app/us_ttab/jobs.py").read_text(encoding="utf-8")
@@ -59,7 +59,9 @@ def test_ttab_publisher_writes_four_append_only_fact_families() -> None:
             proceeding=TTABProceedingRecord(
                 proceeding_number="91234567",
                 proceeding_type="Opposition",
+                proceeding_type_code="OPP",
                 status_text="Pending",
+                status_code="9",
             )
         ),
         "fixture.xml",
@@ -87,22 +89,24 @@ def test_ttab_routes_are_read_only_and_mounted() -> None:
 
 
 def test_ttab_schema_is_not_part_of_us_application_or_assignment_reset() -> None:
-    schema = Path("database/clickhouse/init/010_us_ttab_m10.sql").read_text(encoding="utf-8")
+    base_schema = Path("database/clickhouse/init/010_us_ttab_m10.sql").read_text(encoding="utf-8")
+    upgrade = Path("database/clickhouse/init/011_us_ttab_m11_real_rawxml.sql").read_text(encoding="utf-8")
+    apply_script = Path("scripts/apply-us-ttab-schema.ps1").read_text(encoding="utf-8")
     us_apply = Path("scripts/apply-us-m1-schema.ps1").read_text(encoding="utf-8")
     us_reset = Path("app/us/reset_rebuild.py").read_text(encoding="utf-8")
-    assignment_schema = Path("database/clickhouse/init/009_us_assignment_m10.sql").read_text(
-        encoding="utf-8"
-    )
+    assignment_schema = Path("database/clickhouse/init/009_us_assignment_m10.sql").read_text(encoding="utf-8")
     for table in (
         "us_ttab_proceeding_history",
         "us_ttab_party_history",
         "us_ttab_property_history",
         "us_ttab_docket_history",
     ):
-        assert table in schema
+        assert table in base_schema
         assert table not in us_apply
         assert table not in us_reset
         assert table not in assignment_schema
+    assert "US_TTAB_M1.1" in upgrade
+    assert "011_us_ttab_m11_real_rawxml.sql" in apply_script
 
 
 def test_ttab_operational_scripts_and_ci_gate_exist() -> None:
@@ -118,4 +122,4 @@ def test_ttab_operational_scripts_and_ci_gate_exist() -> None:
         assert Path("scripts", name).is_file()
     ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "app.us_ttab.validate_fixture" in ci
-    assert "US TTAB M1.0 procedural-fact fixture" in ci
+    assert "US TTAB M1.1 real-rawxml contract fixture" in ci

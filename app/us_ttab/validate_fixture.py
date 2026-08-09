@@ -25,21 +25,32 @@ SERIAL = "88997766"
 FILES = ("ci_ttab_1.xml", "ci_ttab_2.xml")
 
 
-def _xml(*, status: str, status_date: str, due_date: str, include_final_entry: bool) -> str:
-    final = """
+def _xml(
+    *,
+    status_code: str,
+    status: str,
+    status_date: str,
+    due_date: str,
+    include_final_entry: bool,
+) -> str:
+    final = (
+        """
     <prosecution-history-entry><entry-number>3</entry-number><filing-date>02/11/2026</filing-date>
     <history-text>SUBMITTED FOR FINAL DECISION</history-text></prosecution-history-entry>
-    """ if include_final_entry else ""
+    """
+        if include_final_entry
+        else ""
+    )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <ttabvue-results><proceeding>
-<proceeding-type>Cancellation</proceeding-type><proceeding-number>{PROCEEDING}</proceeding-number>
-<filing-date>07/25/2024</filing-date><proceeding-status>{status}</proceeding-status>
+<proceeding-type name="Cancellation">CAN</proceeding-type><proceeding-number>{PROCEEDING}</proceeding-number>
+<filing-date>07/25/2024</filing-date><proceeding-status name="{status}">{status_code}</proceeding-status>
 <status-date>{status_date}</status-date><general-contact-number>571-272-8500</general-contact-number>
 <interlocutory-attorney>TEST ATTORNEY</interlocutory-attorney><paralegal-name>TEST PARALEGAL</paralegal-name>
 <defendant><name>Gamma Brand Corp.</name><correspondent><name>Defense Counsel</name>
 <address-1>1 Counsel Plaza</address-1><email>defense@example.test</email></correspondent>
 <property><serial-number>{SERIAL}</serial-number><registration-number>7654321</registration-number>
-<mark-text>ORBIT TEST</mark-text><application-status>CANCELLATION PENDING</application-status></property></defendant>
+<mark-text>ORBIT TEST</mark-text><application-status name="Cancellation Pending">604</application-status></property></defendant>
 <plaintiff><name>Beta Holdings Inc.</name><correspondent><name>Plaintiff Counsel</name></correspondent></plaintiff>
 {final}
 <prosecution-history-entry><entry-number>2</entry-number><filing-date>07/30/2024</filing-date>
@@ -60,7 +71,10 @@ def _delete_registry(package_ids: list[str]) -> None:
 
 
 def _remove_files(raw_root: Path) -> None:
-    for directory in (raw_root / "incoming" / "us_ttab", raw_root / "archive" / "us_ttab"):
+    for directory in (
+        raw_root / "incoming" / "us_ttab",
+        raw_root / "archive" / "us_ttab",
+    ):
         if not directory.exists():
             continue
         for name in FILES:
@@ -113,6 +127,7 @@ def main() -> None:
         first = incoming / FILES[0]
         first.write_text(
             _xml(
+                status_code="9",
                 status="Pending",
                 status_date="07/30/2024",
                 due_date="09/08/2024",
@@ -130,6 +145,7 @@ def main() -> None:
         second = incoming / FILES[1]
         second.write_text(
             _xml(
+                status_code="10",
                 status="Ready for Final Decision",
                 status_date="02/11/2026",
                 due_date="09/09/2024",
@@ -166,8 +182,16 @@ def main() -> None:
             raise RuntimeError(f"TTAB append-only counts mismatch: {counts}")
 
         snapshot = proceeding_snapshot(PROCEEDING)
-        if snapshot is None or snapshot["proceeding"]["status_text"] != "Ready for Final Decision":
-            raise RuntimeError(f"Latest TTAB snapshot mismatch: {snapshot}")
+        if snapshot is None:
+            raise RuntimeError("Latest TTAB snapshot is missing")
+        latest = snapshot["proceeding"]
+        if (
+            latest["proceeding_type_code"] != "CAN"
+            or latest["proceeding_type"] != "Cancellation"
+            or latest["status_code"] != "10"
+            or latest["status_text"] != "Ready for Final Decision"
+        ):
+            raise RuntimeError(f"Latest TTAB M1.1 code/display snapshot mismatch: {latest}")
         if len(snapshot["due_date_observations"]) != 1:
             raise RuntimeError(f"TTAB due-date observation mismatch: {snapshot}")
         linked = proceedings_for_serial(SERIAL)
@@ -181,6 +205,7 @@ def main() -> None:
             item["change_type"] for item in timeline["changes"][0]["changes"]
         }
         required = {
+            "STATUS_CODE_CHANGED",
             "STATUS_TEXT_CHANGED",
             "STATUS_DATE_CHANGED",
             "DOCKET_ENTRY_ADDED",
@@ -202,11 +227,14 @@ def main() -> None:
             json.dumps(
                 {
                     "status": "PASS",
-                    "contract": "US_TTAB_M1.0_RUNTIME_FIXTURE",
+                    "contract": "US_TTAB_M1.1_RUNTIME_FIXTURE",
                     "first_totals": first_totals,
                     "second_totals": second_totals,
                     "append_only_counts": counts,
-                    "latest_status": snapshot["proceeding"]["status_text"],
+                    "proceeding_type_code": latest["proceeding_type_code"],
+                    "proceeding_type": latest["proceeding_type"],
+                    "latest_status_code": latest["status_code"],
+                    "latest_status": latest["status_text"],
                     "timeline_change_types": sorted(change_types),
                     "source_backed_acceptance": audit["status"],
                     "readiness": readiness["state"],

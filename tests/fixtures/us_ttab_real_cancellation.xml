@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<uspto-ttabvue-document>
+  <proceeding>
+    <proceeding-attributes>
+      <proceeding-number>92090576</proceeding-number>
+      <proceeding-type name="Cancellation">CAN</proceeding-type>
+      <filing-date>01/08/2026</filing-date>
+      <proceeding-status name="Pending">9</proceeding-status>
+      <proceeding-status-date>02/11/2026</proceeding-status-date>
+      <general-contact-number>571-272-8500</general-contact-number>
+      <interlocutory-attorney number="3"><attorney-number>3</attorney-number><first-name>Test</first-name><last-name>Attorney</last-name></interlocutory-attorney>
+      <paralegal-name number="4"><attorney-number>4</attorney-number><first-name>Test</first-name><last-name>Paralegal</last-name></paralegal-name>
+    </proceeding-attributes>
+    <proceeding-parties>
+      <plaintiffs>
+        <party party-id="CP1" role="Plaintiff" name="Example Petitioner LLC">
+          <party-info-from-db name="Example Petitioner LLC" orgname="Example Petitioner LLC"/>
+          <correspondence-info-from-db name="Petitioner Counsel" orgname="Example Law LLP" email="petitioner@example.test" phone="555-0300"/>
+          <ttab-properties>
+            <ttab-property>
+              <serial-number>99110001</serial-number><property-filing>Application</property-filing><property-filing-cd>A</property-filing-cd>
+              <mark-explanation>EXAMPLE PETITIONER MARK</mark-explanation><common-law-ind>N</common-law-ind>
+              <tm-com-status><serial-number>99110001</serial-number><trademark-gid>GID-CP1</trademark-gid><application-status name="Application pending">604</application-status></tm-com-status>
+            </ttab-property>
+          </ttab-properties>
+        </party>
+      </plaintiffs>
+      <defendants>
+        <party party-id="CD1" role="Defendant" name="Example Registrant Inc.">
+          <party-info-from-db name="Example Registrant Inc."/>
+          <correspondence-info-from-db name="Registrant Counsel" email="registrant@example.test"/>
+          <ttab-properties>
+            <ttab-property>
+              <serial-number>99110002</serial-number><registration-number>7100002</registration-number>
+              <property-filing>Registration</property-filing><property-filing-cd>R</property-filing-cd>
+              <mark-explanation>EXAMPLE REGISTERED MARK</mark-explanation><common-law-ind>N</common-law-ind>
+              <tm-com-status><serial-number>99110002</serial-number><registration-number>7100002</registration-number><trademark-gid>GID-CD1</trademark-gid><application-status name="Registered">800</application-status></tm-com-status>
+            </ttab-property>
+          </ttab-properties>
+        </party>
+      </defendants>
+    </proceeding-parties>
+    <prosecution-history>
+      <prosecution-history-event identifier="7" object-id="CAN7" entry-code="SUBMITTED" entry-date="02/11/2026" event-text="SUBMITTED FOR FINAL DECISION" confidential="false"/>
+      <prosecution-history-event identifier="6" object-id="CAN6" entry-code="BRIEF" entry-date="02/01/2026" event-text="TRIAL BRIEF" confidential="false"/>
+    </prosecution-history>
+  </proceeding>
+</uspto-ttabvue-document>

@@ -107,7 +107,7 @@ jobs:
       - name: Run US Assignment M1.0 recorded-interest fixture
         run: docker compose run --rm --no-deps worker python -m app.us_assignment.validate_fixture
 
-      - name: Run US TTAB M1.0 procedural-fact fixture
+      - name: Run US TTAB M1.1 real-rawxml contract fixture
         run: docker compose run --rm --no-deps worker python -m app.us_ttab.validate_fixture
 
       - name: Tear down fixture databases

@@ -23,10 +23,7 @@ def _normalize_value(value: object) -> object:
 def _rows(sql: str) -> list[dict[str, Any]]:
     result = clickhouse_client().query(sql)
     return [
-        {
-            name: _normalize_value(value)
-            for name, value in zip(result.column_names, row, strict=True)
-        }
+        {name: _normalize_value(value) for name, value in zip(result.column_names, row, strict=True)}
         for row in result.result_rows
     ]
 
@@ -49,11 +46,11 @@ def latest_proceeding_record(proceeding_number: str) -> dict[str, Any] | None:
     number = validate_proceeding_number(proceeding_number)
     rows = _rows(
         f"""
-        SELECT proceeding_number, proceeding_type, filing_date, filing_date_raw,
-               status_text, status_date, status_date_raw, general_contact_number,
-               interlocutory_attorney, paralegal_name, record_hash, source_kind,
-               source_snapshot_at, source_file, toString(source_package_id) AS source_package_id,
-               source_rank
+        SELECT proceeding_number, proceeding_type, proceeding_type_code,
+               filing_date, filing_date_raw, status_text, status_code, status_date,
+               status_date_raw, general_contact_number, interlocutory_attorney,
+               paralegal_name, record_hash, source_kind, source_snapshot_at, source_file,
+               toString(source_package_id) AS source_package_id, source_rank
         FROM markorbit_facts.us_ttab_proceeding_history
         WHERE proceeding_number = '{number}'
         ORDER BY source_rank DESC, source_package_id DESC
@@ -68,31 +65,33 @@ def snapshot_children(record: dict[str, Any]) -> dict[str, list[dict[str, Any]]]
     package_id = str(record["source_package_id"])
     parties = _rows(
         f"""
-        SELECT side, ordinal, party_name, correspondent_name, correspondent_address,
-               correspondent_email_text, correspondent_phone, party_key, record_hash
+        SELECT side, ordinal, party_name, party_id, role, company, organization,
+               granted_to_date_raw, correspondent_name, correspondent_organization,
+               correspondent_address, correspondent_email_text, correspondent_phone,
+               party_key, record_hash
         FROM markorbit_facts.us_ttab_party_history
-        WHERE proceeding_number = '{number}'
-          AND source_package_id = toUUID('{package_id}')
+        WHERE proceeding_number = '{number}' AND source_package_id = toUUID('{package_id}')
         ORDER BY side, ordinal, party_name
         """
     )
     properties = _rows(
         f"""
         SELECT party_side, party_ordinal, ordinal, serial_number, registration_number,
-               mark_text, application_status, property_key, record_hash
+               mark_text, mark_explanation, property_filing, property_filing_code,
+               common_law_indicator, application_status, application_status_code,
+               trademark_gid, property_key, record_hash
         FROM markorbit_facts.us_ttab_property_history
-        WHERE proceeding_number = '{number}'
-          AND source_package_id = toUUID('{package_id}')
+        WHERE proceeding_number = '{number}' AND source_package_id = toUUID('{package_id}')
         ORDER BY party_side, party_ordinal, ordinal
         """
     )
     docket = _rows(
         f"""
-        SELECT ordinal, entry_number, filing_date, filing_date_raw, history_text,
-               due_date, due_date_raw, document_url, docket_key, record_hash
+        SELECT ordinal, entry_number, identifier, object_id, entry_code, confidential,
+               filing_date, filing_date_raw, history_text, due_date, due_date_raw,
+               document_url, docket_key, record_hash
         FROM markorbit_facts.us_ttab_docket_history
-        WHERE proceeding_number = '{number}'
-          AND source_package_id = toUUID('{package_id}')
+        WHERE proceeding_number = '{number}' AND source_package_id = toUUID('{package_id}')
         ORDER BY ordinal, entry_number
         """
     )
@@ -107,6 +106,7 @@ def proceeding_snapshot(proceeding_number: str) -> dict[str, Any] | None:
     due_date_observations = [
         {
             "entry_number": item["entry_number"],
+            "entry_code": item["entry_code"],
             "history_text": item["history_text"],
             "due_date": item["due_date"],
             "due_date_raw": item["due_date_raw"],
@@ -139,17 +139,16 @@ def proceedings_for_serial(serial_number: str, limit: int = 100) -> list[dict[st
             FROM markorbit_facts.us_ttab_proceeding_history
             GROUP BY proceeding_number
         )
-        SELECT p.proceeding_number AS proceeding_number,
-               p.party_side AS party_side,
-               p.mark_text AS mark_text,
+        SELECT p.proceeding_number AS proceeding_number, p.party_side AS party_side,
                p.registration_number AS registration_number,
                p.application_status AS application_status,
+               p.application_status_code AS application_status_code,
+               p.mark_explanation AS mark_explanation,
                r.proceeding_type AS proceeding_type,
-               r.filing_date AS filing_date,
-               r.status_text AS status_text,
-               r.status_date AS status_date,
-               r.source_snapshot_at AS source_snapshot_at,
-               r.source_rank AS source_rank,
+               r.proceeding_type_code AS proceeding_type_code,
+               r.filing_date AS filing_date, r.status_text AS status_text,
+               r.status_code AS status_code, r.status_date AS status_date,
+               r.source_snapshot_at AS source_snapshot_at, r.source_rank AS source_rank,
                toString(r.source_package_id) AS source_package_id
         FROM markorbit_facts.us_ttab_property_history AS p
         INNER JOIN latest AS l
@@ -167,8 +166,7 @@ def proceedings_for_serial(serial_number: str, limit: int = 100) -> list[dict[st
     seen: set[str] = set()
     for row in rows:
         number = str(row["proceeding_number"])
-        if number in seen:
-            continue
-        seen.add(number)
-        result.append(row)
+        if number not in seen:
+            seen.add(number)
+            result.append(row)
     return result

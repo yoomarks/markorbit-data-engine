@@ -6,20 +6,30 @@ from app.us_ttab import TTAB_SEMANTICS
 from app.us_ttab.read_model import _rows, snapshot_children, validate_proceeding_number
 
 
-def _party_set(children: dict[str, list[dict[str, Any]]]) -> set[tuple[str, str]]:
+def _party_set(children: dict[str, list[dict[str, Any]]]) -> set[tuple[str, str, str]]:
     return {
-        (str(item.get("side") or ""), " ".join(str(item.get("party_name") or "").split()))
+        (
+            str(item.get("side") or ""),
+            str(item.get("party_id") or ""),
+            " ".join(str(item.get("party_name") or "").split()),
+        )
         for item in children["parties"]
     }
 
 
-def _property_set(children: dict[str, list[dict[str, Any]]]) -> set[tuple[str, str, str, str]]:
+def _property_set(
+    children: dict[str, list[dict[str, Any]]],
+) -> set[tuple[str, str, str, str, str, str]]:
     return {
         (
             str(item.get("party_side") or ""),
             str(item.get("serial_number") or ""),
             str(item.get("registration_number") or ""),
-            " ".join(str(item.get("mark_text") or "").split()),
+            " ".join(
+                str(item.get("mark_text") or item.get("mark_explanation") or "").split()
+            ),
+            str(item.get("application_status_code") or ""),
+            str(item.get("trademark_gid") or ""),
         )
         for item in children["properties"]
     }
@@ -29,7 +39,12 @@ def _docket_map(children: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str
     return {str(item["docket_key"]): item for item in children["docket"]}
 
 
-def _change(change_type: str, before: object, after: object, **extra: object) -> dict[str, Any]:
+def _change(
+    change_type: str,
+    before: object,
+    after: object,
+    **extra: object,
+) -> dict[str, Any]:
     return {"change_type": change_type, "before": before, "after": after, **extra}
 
 
@@ -37,11 +52,11 @@ def build_ttab_timeline(proceeding_number: str) -> dict[str, Any]:
     number = validate_proceeding_number(proceeding_number)
     observations = _rows(
         f"""
-        SELECT proceeding_number, proceeding_type, filing_date, filing_date_raw,
-               status_text, status_date, status_date_raw, general_contact_number,
-               interlocutory_attorney, paralegal_name, record_hash, source_kind,
-               source_snapshot_at, source_file, toString(source_package_id) AS source_package_id,
-               source_rank
+        SELECT proceeding_number, proceeding_type, proceeding_type_code,
+               filing_date, filing_date_raw, status_text, status_code, status_date,
+               status_date_raw, general_contact_number, interlocutory_attorney,
+               paralegal_name, record_hash, source_kind, source_snapshot_at, source_file,
+               toString(source_package_id) AS source_package_id, source_rank
         FROM markorbit_facts.us_ttab_proceeding_history
         WHERE proceeding_number = '{number}'
         ORDER BY source_rank, source_package_id
@@ -56,9 +71,29 @@ def build_ttab_timeline(proceeding_number: str) -> dict[str, Any]:
         before = previous["record"]
         after = current["record"]
         snapshot_changes: list[dict[str, Any]] = []
+        if before.get("proceeding_type_code") != after.get("proceeding_type_code"):
+            snapshot_changes.append(
+                _change(
+                    "PROCEEDING_TYPE_CODE_CHANGED",
+                    before.get("proceeding_type_code"),
+                    after.get("proceeding_type_code"),
+                )
+            )
+        if before.get("status_code") != after.get("status_code"):
+            snapshot_changes.append(
+                _change(
+                    "STATUS_CODE_CHANGED",
+                    before.get("status_code"),
+                    after.get("status_code"),
+                )
+            )
         if before.get("status_text") != after.get("status_text"):
             snapshot_changes.append(
-                _change("STATUS_TEXT_CHANGED", before.get("status_text"), after.get("status_text"))
+                _change(
+                    "STATUS_TEXT_CHANGED",
+                    before.get("status_text"),
+                    after.get("status_text"),
+                )
             )
         if before.get("status_date_raw") != after.get("status_date_raw"):
             snapshot_changes.append(
@@ -106,6 +141,7 @@ def build_ttab_timeline(proceeding_number: str) -> dict[str, Any]:
                     None,
                     {
                         "entry_number": item.get("entry_number"),
+                        "entry_code": item.get("entry_code"),
                         "filing_date_raw": item.get("filing_date_raw"),
                         "history_text": item.get("history_text"),
                         "due_date_raw": item.get("due_date_raw"),
@@ -120,6 +156,7 @@ def build_ttab_timeline(proceeding_number: str) -> dict[str, Any]:
                     "DOCKET_ENTRY_REMOVED_FROM_SNAPSHOT",
                     {
                         "entry_number": item.get("entry_number"),
+                        "entry_code": item.get("entry_code"),
                         "filing_date_raw": item.get("filing_date_raw"),
                         "history_text": item.get("history_text"),
                         "due_date_raw": item.get("due_date_raw"),
@@ -141,7 +178,10 @@ def build_ttab_timeline(proceeding_number: str) -> dict[str, Any]:
                         entry_number=new.get("entry_number"),
                     )
                 )
-            if old.get("record_hash") != new.get("record_hash") and old.get("due_date_raw") == new.get("due_date_raw"):
+            if (
+                old.get("record_hash") != new.get("record_hash")
+                and old.get("due_date_raw") == new.get("due_date_raw")
+            ):
                 snapshot_changes.append(
                     _change(
                         "DOCKET_ENTRY_CONTENT_CHANGED",
