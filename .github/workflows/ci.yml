@@ -68,8 +68,11 @@ jobs:
       - name: Start PostgreSQL and ClickHouse
         run: docker compose up -d --wait postgres clickhouse
 
-      - name: Run US M1 live runtime fixture
+      - name: Run US M1.1 real-TDXF regression fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_fixture
+
+      - name: Run US M1.2 child snapshot fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_snapshot_fixture
 
       - name: Tear down fixture databases
         if: always()
