@@ -9,7 +9,8 @@ def test_reset_module_is_us_only_manifest_first_and_confirmation_guarded() -> No
     assert '"--confirm"' in source
     assert "_write_manifest(raw_root, plan)" in source
     assert "_truncate_us_fact_tables()" in source
-    assert source.index("_write_manifest(raw_root, plan)") < source.index(
+    apply_body = source[source.index("def apply_reset(") : source.index("def main()")]
+    assert apply_body.index("_write_manifest(raw_root, plan)") < apply_body.index(
         "_truncate_us_fact_tables()"
     )
     assert "TRUNCATE TABLE markorbit_facts.{table} SYNC" in source
