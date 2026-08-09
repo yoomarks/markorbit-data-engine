@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<trademark-assignments>
+  <assignment-information>
+    <assignment-entry>
+      <assignment>
+        <reel-no>1234</reel-no>
+        <frame-no>0056</frame-no>
+        <date-recorded>20260801</date-recorded>
+        <last-update-date>20260802</last-update-date>
+        <page-count>7</page-count>
+        <conveyance-text>ASSIGNS THE ENTIRE INTEREST</conveyance-text>
+        <purge-indicator>N</purge-indicator>
+        <correspondent>
+          <person-or-organization-name>Fixture Counsel LLP</person-or-organization-name>
+          <address-1>1 Counsel Plaza</address-1>
+          <address-2>Suite 200</address-2>
+        </correspondent>
+      </assignment>
+      <assignors>
+        <assignor>
+          <name>Alpha Brand LLC</name>
+          <legal-entity-text>LIMITED LIABILITY COMPANY</legal-entity-text>
+          <country>US</country>
+          <execution-date>20260729</execution-date>
+          <address-1>10 Alpha Road</address-1>
+        </assignor>
+        <assignor>
+          <name>Alpha Holdings Inc.</name>
+          <country>US</country>
+          <execution-date>20260729</execution-date>
+        </assignor>
+      </assignors>
+      <assignees>
+        <assignee>
+          <name>Beta Brand Inc.</name>
+          <legal-entity-text>CORPORATION</legal-entity-text>
+          <country>US</country>
+          <address-1>20 Beta Avenue</address-1>
+        </assignee>
+      </assignees>
+      <properties>
+        <property>
+          <serial-number>88991234</serial-number>
+          <registration-number>7654321</registration-number>
+        </property>
+        <property>
+          <serial-number>88995678</serial-number>
+          <international-registration-number>1799999</international-registration-number>
+        </property>
+      </properties>
+    </assignment-entry>
+  </assignment-information>
+</trademark-assignments>
