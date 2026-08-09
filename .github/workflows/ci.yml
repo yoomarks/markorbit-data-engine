@@ -83,6 +83,9 @@ jobs:
       - name: Run deterministic US history-to-daily replay executor fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_replay_executor_fixture
 
+      - name: Run guarded US clean-rebuild reset and replay fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_reset_rebuild_fixture
+
       - name: Tear down fixture databases
         if: always()
         run: docker compose down -v --remove-orphans
