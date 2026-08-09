@@ -17,7 +17,7 @@ $outputDir = Split-Path -Parent $outputFull
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
 $inputMount = "$($auditFile.DirectoryName):/review/in:ro"
-$outputMount = "$outputDir:/review/out"
+$outputMount = "${outputDir}:/review/out"
 $containerInput = "/review/in/$($auditFile.Name)"
 $containerOutput = "/review/out/$([System.IO.Path]::GetFileName($outputFull))"
 
