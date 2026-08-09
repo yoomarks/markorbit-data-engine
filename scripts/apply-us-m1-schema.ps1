@@ -1,16 +1,23 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$schemaPath = Join-Path $repoRoot "database/clickhouse/init/004_us_m1_core.sql"
+$schemaPaths = @(
+    (Join-Path $repoRoot "database/clickhouse/init/004_us_m1_core.sql"),
+    (Join-Path $repoRoot "database/clickhouse/init/005_us_m11_real_tdxf.sql")
+)
 
-if (-not (Test-Path $schemaPath)) {
-    throw "Missing US M1 schema file: $schemaPath"
+foreach ($schemaPath in $schemaPaths) {
+    if (-not (Test-Path $schemaPath)) {
+        throw "Missing US schema file: $schemaPath"
+    }
 }
 
-Write-Host "Applying US M1 ClickHouse schema..."
-Get-Content -Raw $schemaPath | docker compose exec -T clickhouse clickhouse-client --multiquery
-if ($LASTEXITCODE -ne 0) {
-    throw "ClickHouse US M1 schema apply failed."
+Write-Host "Applying US M1.1 ClickHouse schema..."
+foreach ($schemaPath in $schemaPaths) {
+    Get-Content -Raw $schemaPath | docker compose exec -T clickhouse clickhouse-client --multiquery
+    if ($LASTEXITCODE -ne 0) {
+        throw "ClickHouse US schema apply failed: $schemaPath"
+    }
 }
 
-Write-Host "US M1 ClickHouse schema applied."
+Write-Host "US M1.1 ClickHouse schema applied."
