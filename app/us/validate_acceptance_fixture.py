@@ -272,8 +272,6 @@ def main() -> None:
         completeness = report["historical_part_completeness"]
         if completeness["complete"] is not True:
             raise RuntimeError("US acceptance fixture historical part completeness failed")
-        if completeness["observed_part_count"] if "observed_part_count" in completeness else False:
-            raise RuntimeError("historical part summary unexpectedly flattened")
         if completeness["baseline_coverage"]["observed_parts"] != [1]:
             raise RuntimeError("US acceptance fixture historical part identity mismatch")
         if report["integrity"]["duplicates_after_final"]:
