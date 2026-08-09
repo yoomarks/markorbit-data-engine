@@ -4,6 +4,17 @@ import app.us.jobs as us_jobs
 from app.scanner import sha256_file
 
 
+def test_us_input_policy_accepts_one_known_historical_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    incoming = tmp_path / "incoming" / "us"
+    incoming.mkdir(parents=True)
+    (incoming / "apc18840407-20251231-05.zip").write_bytes(b"history-part")
+    monkeypatch.setattr(us_jobs, "list_us_packages", lambda: [])
+    assert us_jobs.us_input_policy_issues(incoming) == []
+
+
 def test_us_input_policy_accepts_one_known_daily_source(tmp_path: Path, monkeypatch) -> None:
     incoming = tmp_path / "incoming" / "us"
     incoming.mkdir(parents=True)
