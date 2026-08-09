@@ -39,7 +39,7 @@ if ($DeepSourceTest) {
     $args += "--deep-source-test"
 }
 if ($Apply) {
-    $args += "--apply"
+    $args += @("--apply", "--confirm", $RequiredConfirmation)
 }
 
 $jsonLines = & docker compose @args
@@ -62,8 +62,16 @@ $json | Set-Content -Encoding UTF8 $OutputPath
 
 Write-Host "US clean rebuild reset mode: $($report.mode)"
 Write-Host "Status: $($report.status)"
-Write-Host "Current US fact rows: $($report.total_fact_rows)"
-Write-Host "Registered US packages: $($report.registered_package_count)"
+if ($report.total_fact_rows -ne $null) {
+    Write-Host "Current US fact rows: $($report.total_fact_rows)"
+} elseif ($report.plan.total_fact_rows -ne $null) {
+    Write-Host "Current US fact rows: $($report.plan.total_fact_rows)"
+}
+if ($report.registered_package_count -ne $null) {
+    Write-Host "Registered US packages: $($report.registered_package_count)"
+} elseif ($report.plan.registered_package_count -ne $null) {
+    Write-Host "Registered US packages: $($report.plan.registered_package_count)"
+}
 Write-Host "Report: $OutputPath"
 if ($report.manifest_path) {
     Write-Host "Pre-reset evidence manifest: $($report.manifest_path)"
