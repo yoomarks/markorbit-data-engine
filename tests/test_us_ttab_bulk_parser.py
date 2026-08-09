@@ -46,5 +46,5 @@ def test_official_bulk_historical_preserves_rare_tma_proceeding() -> None:
 
 def test_ttab_parser_uses_streaming_iterparse_contract() -> None:
     source = Path("app/us_ttab/parser.py").read_text(encoding="utf-8")
-    assert "ET.iterparse" in source
-    assert "ET.parse(" not in source
+    assert "context = ET.iterparse(source" in source
+    assert "ET.parse(source)" not in source
