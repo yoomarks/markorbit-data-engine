@@ -1,8 +1,10 @@
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
+from app.cn.guarded_run_once import build_execution_guard
 from app.cn.migrations import ensure_m15_schema
 from app.db import clickhouse_client, postgres_conn
 from app.jobs import (
@@ -65,20 +67,80 @@ def health():
     return result
 
 
+def _cn_api_execution_guard(action: str) -> dict[str, Any]:
+    """Require guarded registered-continuation mode for mutating CN API actions.
+
+    The API is intentionally not allowed to bootstrap a clean replay. The first
+    clean run must use `scripts/run-cn.ps1`, whose wrapper also verifies that the
+    persistent worker is stopped before preflight/plan/registration begin.
+    """
+    try:
+        guard = build_execution_guard()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "CN_EXECUTION_GUARD_UNAVAILABLE",
+                "action": action,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        ) from exc
+
+    if not guard.get("allowed"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CN_EXECUTION_GUARD_BLOCKED",
+                "action": action,
+                "guard": guard,
+            },
+        )
+
+    if guard.get("mode") == "CLEAN_RESET_FIRST_RUN":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CN_CLEAN_REPLAY_MANUAL_BOOTSTRAP_REQUIRED",
+                "action": action,
+                "instruction": (
+                    "Stop the persistent worker and run scripts/run-cn.ps1 for the "
+                    "first clean M1.6 replay cycle."
+                ),
+                "guard": guard,
+            },
+        )
+
+    if guard.get("mode") != "REGISTERED_REPLAY_CONTINUATION":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "CN_EXECUTION_MODE_NOT_API_SAFE",
+                "action": action,
+                "guard": guard,
+            },
+        )
+    return guard
+
+
 @app.post("/api/jobs/cn/scan")
 def trigger_cn_scan():
-    return scan_cn_incoming(trigger_type="MANUAL")
+    _cn_api_execution_guard("scan")
+    return scan_cn_incoming(trigger_type="MANUAL_API_GUARDED_SCAN")
 
 
 @app.post("/api/jobs/cn/run")
 def trigger_cn_cycle():
-    return scan_and_ingest_cn(trigger_type="MANUAL")
+    _cn_api_execution_guard("run")
+    return scan_and_ingest_cn(trigger_type="MANUAL_API_GUARDED")
 
 
 @app.post("/api/jobs/cn/retry")
 def retry_cn_failed():
+    # Retry is the explicit repair path for registered FAILED/MISSING_FILE
+    # packages. M1.6 schema/replay guards are enforced again inside ingest_m16.
     return ingest_pending_cn(
-        trigger_type="MANUAL_RETRY",
+        trigger_type="MANUAL_API_RETRY",
         include_failed=True,
         limit=1,
     )
