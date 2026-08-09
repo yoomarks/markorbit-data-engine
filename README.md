@@ -46,7 +46,10 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-m16.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-cn-contract.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-cn-fixture.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-m16-goods.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.ps1
 ```
+
+最后一条 preflight 是**非破坏性真实数据安全门禁**：它检查当前 M1.6 运行时、数据库、CN ingestion 锁、原始 ZIP/SHA、durable goods replay boundary，并明确输出是否允许开始真实重放。
 
 只有这些 gate 通过后才开始真实 ZIP 重放。
 
@@ -76,6 +79,7 @@ M1.6 验收可使用：
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-m16-acceptance.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-m16-goods-identity.ps1 -FileName 1999.zip
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-m16-monthly-patch.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.ps1
 ```
 
 完成真实数据验收前，不要启动 persistent worker。生产式自动扫描需要恢复时再执行：
@@ -88,10 +92,11 @@ docker compose start worker
 
 推理层不改变官方事实。历史审计的时间基准来自**已加载数据覆盖截止日**，不是电脑当前日期；只有真实 `STATUS_CHANGED` transition 可提供商品失效时间证据。
 
-在稳定数据库快照上运行：
+先运行 preflight。只有报告中的 `safe_to_run_inference_audit = true` 时，才进入案件状态历史推理验证：
 
 ```powershell
 docker compose stop worker
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-cn-case-status-inference.ps1 -SamplePerRule 50
 ```
 
@@ -141,6 +146,7 @@ M1.6 的 summary 包含 durable goods item / observation / lifecycle 表数量�
 
 - `docs/ARCHITECTURE.md`
 - `docs/CN_GOODS_LIFECYCLE_MODEL_V2.md`
+- `docs/M1_6_REAL_DATA_PREFLIGHT.md`
 - `docs/CN_CASE_STATUS_INFERENCE_MODEL_V1.md`
 - `docs/CN_CASE_STATUS_INFERENCE_HISTORICAL_AUDIT.md`
 - `docs/CN_CASE_STATUS_GROUND_TRUTH_REVIEW.md`
