@@ -84,7 +84,8 @@ def parse_uspto_date(value: str) -> date | None:
 
 
 def _header(case_element: ET.Element) -> ET.Element:
-    return _first_element(case_element, "case-file-header") or case_element
+    header = _first_element(case_element, "case-file-header")
+    return header if header is not None else case_element
 
 
 def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
@@ -287,7 +288,10 @@ def iter_case_bundles(
     *,
     source_name: str = "",
 ) -> Iterator[USCaseBundle]:
-    display_name = source_name or str(source) if isinstance(source, (str, Path)) else source_name
+    if isinstance(source, (str, Path)):
+        display_name = source_name or str(source)
+    else:
+        display_name = source_name
     for _event, element in ET.iterparse(source, events=("end",)):
         if _local_name(element.tag) not in {"case-file", "trademark-case-file"}:
             continue
