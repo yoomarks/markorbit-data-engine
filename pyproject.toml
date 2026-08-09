@@ -25,5 +25,9 @@ include = ["app*"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint.per-file-ignores]
+"app/cn/ingest.py" = ["F401"]
+"tests/test_m15_insert_contract.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
