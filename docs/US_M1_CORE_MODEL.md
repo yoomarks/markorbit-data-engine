@@ -1,111 +1,103 @@
-# MarkOrbit US M1 Core Model
+# MarkOrbit US M1.1 Core Model
 
-Status: OFFICIAL FACT LAYER + PACKAGE INGESTION + READ API
+Status: REAL USPTO TDXF OFFICIAL FACT LAYER + PACKAGE INGESTION + READ API
 
-US M1 starts from USPTO Trademark Daily Applications XML (TDXF) materialized under
-`raw_data/incoming/us`. It deliberately separates official USPTO facts from later legal-status
-interpretation, maintenance calculations, and product recommendations.
+US M1.1 is grounded in real USPTO Trademark Applications TDXF rather than a synthetic XML layout. It supports both the historical coverage snapshot parts and continuing daily application updates while keeping official facts separate from later legal-status and maintenance interpretation.
 
 ## Source boundary
 
-The primary continuous source is the USPTO Trademark Daily Applications XML feed. USPTO's
-Office of the Chief Economist Trademark Case Files Dataset and its official variable tables are
-used as a field-model cross-check because that dataset is derived from the raw trademark XML.
+Two official-source package families are modeled:
 
-The legacy Bulk Data Storage System has moved to the USPTO Open Data Portal. Authentication and
-download orchestration are not part of US M1 core: official files are first materialized locally,
-then the data engine performs deterministic hashing, parsing, and publication. This keeps source
-acquisition credentials outside the parser/publisher contract.
+- historical coverage parts such as `apc18840407-20251231-05.zip`;
+- daily updates such as `apc260108.zip` / controlled extracted `apc260108.xml`.
 
-## Durable identity
+Both package families carry the same TDXF case structure. Historical records can legitimately be sparse, especially very old registrations; absence of modern fields in an early historical case is not itself a quality failure.
 
-- `serial_number` is the primary US case identity.
-- `registration_number` is an attribute and secondary lookup key; it is not a replacement for
-  serial identity.
-- Owner, classification, event, and statement identities are subordinate to the serial number.
-- Daily source precedence is derived from the source update date, not ingestion wall-clock time.
+Source acquisition credentials remain outside the parser/publisher contract. Official packages are first materialized locally, then registered by SHA-256 and processed by the engine.
 
-## US M1 tables
+## Durable identity and precedence
+
+- `serial_number` is the canonical US case identity.
+- `registration_number` is a case attribute and secondary lookup key.
+- historical snapshot parts always have lower source precedence than daily updates, regardless of ingestion wall-clock order;
+- historical parts use explicit coverage-range + part identity;
+- daily precedence is derived from the package update date.
+
+This prevents a late-loaded historical snapshot from overwriting a newer daily observation.
+
+## Real TDXF field layout
+
+US M1.1 freezes the actual USPTO structure observed in historical and daily packages:
+
+- `registration-number` and `transaction-date` are direct children of `case-file`;
+- `published-for-opposition-date` is the publication field;
+- events are `case-file-event-statement` records and retain `description-text`;
+- most boolean indicators use USPTO `T/F` encoding;
+- owner nationality is a nested `nationality` block and is not confused with mailing-address country/state;
+- Madrid data is carried in the sibling `international-registration` block.
+
+Known historical/transform aliases remain accepted only for compatibility; real TDXF names are the canonical contract.
+
+## Filing basis
+
+Filed basis and current basis are different official facts and are persisted separately:
+
+- Section 1(a): filed/current
+- Section 1(b): filed/current
+- Section 44(d): filed/current
+- Section 44(e): filed/current
+- Section 66(a): filed/current
+- no-basis current indicator
+
+Real daily data contains cases where filed and current values differ. The engine therefore never derives current basis from filed basis when an explicit current field is present. Fallback to filed basis occurs only when the current field is absent in legacy/synthetic input.
+
+The original `use_1a`, `intent_to_use_1b`, `foreign_application_44d`, `foreign_registration_44e`, `madrid_66a`, and `no_basis` fields remain compatibility aliases for the current observation.
+
+## Core tables
 
 ### `us_case_current`
 
-Stores the current official case observation: filing/publication/registration dates, raw USPTO
-status code/date, mark identification/drawing code, filing-basis flags, and Madrid fields.
+Current official case observation, including filing/publication/registration dates, transaction date, raw USPTO status, mark metadata, filed/current basis flags, selected post-registration indicators, and Madrid international-registration facts.
 
 ### `us_owner_current`
 
-Stores durable owner observations including entry number, party type, legal-entity code,
-nationality, and postal address. US M1 does not yet decide which historical party-type row should
-be presented as the sole legal owner; that selection requires an independently tested lifecycle
-contract.
+Durable owner observations including party/entry type, legal-entity code/statement, nested nationality, mailing address, DBA/AKA text, and composed-of statement.
 
 ### `us_classification_current`
 
-Stores the primary class, International/US class arrays, class status, and first-use evidence.
-USPTO historical XML may contain partial dates such as `YYYYMM00`. Those values remain in the raw
-columns while the typed Date32 value stays NULL. The engine must never invent the missing day.
+Primary/International/US classes, class status, and first-use evidence. Partial dates such as `YYYYMM00` remain in raw columns while typed `Date32` stays NULL; missing day/month values are never invented.
 
 ### `us_event_history`
 
-Stores observed USPTO event code/date/sequence/type. Events are evidence, not pre-labeled legal
-conclusions.
+USPTO event code/date/sequence/type plus official event description text. Events are evidence, not MarkOrbit legal conclusions.
 
 ### `us_statement_current`
 
-Stores USPTO statement type and text. This includes goods/services statements, disclaimers, mark
-descriptions, translations, and other statement families without flattening their type codes.
+USPTO typed statements such as goods/services, disclaimers, mark descriptions, translations, and other statement families.
 
 ## Status boundary
 
-US M1 preserves official `status_code` and `status_date`. It does **not** create an `ACTIVE`,
-`DEAD`, `REGISTERED`, `ABANDONED`, Section 8, Section 15, or renewal conclusion from the code alone.
-Those product/legal semantics will live in a versioned interpretation layer with explicit rule
-IDs and official-event evidence.
+US M1.1 preserves official `status_code`, `status_date`, event evidence, and official filing/maintenance indicators. It does **not** turn them into MarkOrbit `ACTIVE/DEAD`, `REGISTERED/ABANDONED`, Section 8 compliance, renewal eligibility, or other legal conclusions in the fact layer.
 
-US API responses therefore expose `status_semantics = OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`.
+US API responses continue to expose:
 
-## Package contract
+`status_semantics = OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`
 
-The first accepted daily package convention is `apcYYMMDD.zip` / extracted XML using the same
-stem. A deterministic two-digit-year pivot is frozen in code (`70-99 -> 19xx`, `00-69 -> 20xx`).
-Unknown filenames have no source precedence and must not be silently ordered.
+Any later legal interpretation must be versioned and evidence-linked.
 
-US annual/backfile packages, assignment XML, and TTAB datasets will receive separate package
-contracts rather than being guessed from filename order.
+## Legacy refinery skill
 
-## Parser and publisher contract
+The prior `us_base_refinery` / `us_daily_refinery` skill is treated as a field-coverage and business-rule reference, not as the ingestion implementation. Useful families identified there include correspondent/attorney, design search codes, prior registrations, foreign applications, Madrid request/events, owner mentions, and basis flags.
 
-`app.us.parser.iter_case_bundles` uses standard-library XML `iterparse` and clears each completed
-case element after it is emitted. ZIP XML members are opened as streams and are not extracted into
-a persistent temporary corpus. The parser therefore scales with a case record plus publisher
-batches rather than the whole daily XML document.
+US M1.1 deliberately keeps the engine's streaming ZIP/XML reader because the legacy skill loaded whole XML members into memory. Additional skill-derived fact families will be added only after their real TDXF identities and daily reconciliation semantics are frozen.
 
-The parser accepts known aliases for fields that changed names across USPTO XML generations, but
-US M1 fixture tests freeze the canonical durable output rather than an individual XML spelling.
-
-The publisher assigns deterministic record identities, canonical SHA-256 record hashes, source
-rank, source package UUID, source effective date, and source XML member lineage. Package
-registration and job/status tracking reuse the generic PostgreSQL control plane, while US has its
-own advisory ingestion lock.
-
-Retry is full-package replay. A failed/interrupted package has all rows carrying its package UUID
-removed synchronously before the authoritative registered source is parsed again. Normal
-continuation is blocked while a `FAILED` or `MISSING_FILE` US package remains unresolved.
-
-See `docs/US_M1_INGESTION.md` for operational details.
+The skill's status-code enrichment is not copied into official fact tables without an independently validated status dictionary and interpretation layer.
 
 ## Runtime acceptance gate
 
-`app.us.validate_fixture` publishes two isolated records against a live ClickHouse instance:
+`app.us.validate_fixture` now validates the US M1.1 schema against live ClickHouse/PostgreSQL, including explicit filed/current basis fields, Section 8 official indicators, Madrid fields, event descriptions, and partial-date preservation. Fixture rows are package-isolated and synchronously cleaned after validation.
 
-- a direct US application with Section 1(a) filing-basis evidence;
-- a Madrid 66(a) designation with an intentionally partial `20190600` first-use raw date.
-
-It verifies all five US durable table families, direct/Madrid semantics, and the requirement that
-partial dates stay typed NULL. A `finally` cleanup removes every row with the fixture package UUID
-and then checks that no fixture row remains.
-
-GitHub Actions runs this fixture with real PostgreSQL 16 and ClickHouse 24.8 containers on every PR.
+GitHub Actions runs the live PostgreSQL 16 + ClickHouse 24.8 fixture on every PR.
 
 ## Read API
 
@@ -113,14 +105,12 @@ GitHub Actions runs this fixture with real PostgreSQL 16 and ClickHouse 24.8 con
 - `GET /api/us/summary`
 - `GET /api/us/cases/{serial_number}`
 
-The API verifies that all US M1 tables exist without mutating schema state. Serial-number case
-lookup only accepts exactly eight digits and returns case, owner, classification, event, and
-statement facts.
+Serial lookup remains exactly eight digits and returns the official-fact families currently modeled.
 
-## Next implementation layer
+## Next implementation layers
 
-1. validate parser/publication against real USPTO daily packages;
-2. add real-source data-quality profiles and acceptance reports;
-3. expand backfile/annual package contracts only after real-source inspection;
-4. add registration-number lookup after serial identity remains the canonical case key;
-5. only then add official status-code/event interpretation and maintenance-deadline models.
+1. run real historical-part and real daily-package acceptance profiles;
+2. define child-row reconciliation/tombstones so a newer full case observation can retire stale owner/class/statement identities safely;
+3. port correspondent/attorney, design, prior-registration, foreign-application, and Madrid-request fact families from the old refinery skill using real TDXF identities;
+4. establish real-source coverage and performance baselines;
+5. only then build versioned US legal-status and maintenance-deadline interpretation.

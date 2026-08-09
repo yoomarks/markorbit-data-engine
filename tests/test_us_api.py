@@ -22,7 +22,7 @@ def test_us_summary_labels_status_as_raw_official(monkeypatch) -> None:
     monkeypatch.setattr(main, "_query_dicts", lambda _sql: next(responses))
 
     result = main.us_summary()
-    assert result["us_model_version"] == "US_M1.0"
+    assert result["us_model_version"] == "US_M1.1"
     assert result["status_semantics"] == "OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION"
     assert result["tables"][0]["row_count"] == 2
     assert result["status_codes"][0]["status_code"] == "700"
@@ -42,7 +42,7 @@ def test_us_case_returns_all_official_fact_families(monkeypatch) -> None:
     monkeypatch.setattr(main, "_query_dicts", lambda _sql: next(responses))
 
     result = main.us_case("97123456")
-    assert result["model_version"] == "US_M1.0"
+    assert result["model_version"] == "US_M1.1"
     assert result["case"]["serial_number"] == "97123456"
     assert result["owners"][0]["party_name"] == "Owner LLC"
     assert result["classifications"][0]["primary_code"] == "009"

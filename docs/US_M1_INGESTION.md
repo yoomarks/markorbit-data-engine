@@ -1,58 +1,80 @@
-# MarkOrbit US M1 Ingestion
+# MarkOrbit US M1.1 Ingestion
 
-Status: LOCAL OFFICIAL-SOURCE INGESTION / PACKAGE REPLAY
+Status: LOCAL OFFICIAL-SOURCE INGESTION / HISTORICAL + DAILY PACKAGE REPLAY
 
-US M1 ingests USPTO Trademark Daily Applications XML that has already been materialized under
-`raw_data/incoming/us`. Source acquisition and USPTO Open Data Portal credentials remain outside
-the ingestion boundary.
+US M1.1 ingests locally materialized USPTO Trademark Applications TDXF packages. Source acquisition and USPTO Open Data Portal credentials remain outside the ingestion boundary.
+
+## Accepted package families
+
+Historical coverage snapshot parts:
+
+```text
+apcYYYYMMDD-YYYYMMDD-NN.zip
+```
+
+Example validated against the real uploaded source:
+
+```text
+apc18840407-20251231-05.zip
+```
+
+Daily updates:
+
+```text
+apcYYMMDD.zip
+apcYYMMDD.xml   # controlled validation/development only
+```
+
+Example validated against the real uploaded source:
+
+```text
+apc260108.zip
+```
+
+Historical parts use `HISTORICAL_APPLICATIONS / COVERAGE_RANGE_PART`; daily sources use `DAILY_APPLICATIONS / UPDATE_DATE`. Every historical rank is below every daily rank, so ingestion order cannot cause a historical snapshot to overwrite a later daily observation.
 
 ## Runtime flow
 
-`run-us.ps1` performs two steps:
+`run-us.ps1`:
 
-1. idempotently applies `database/clickhouse/init/004_us_m1_core.sql`;
-2. runs `python -m app.us.run_once` in a dedicated one-shot worker container.
+1. applies `004_us_m1_core.sql` and the idempotent `005_us_m11_real_tdxf.sql` upgrade;
+2. starts `python -m app.us.run_once` in a dedicated one-shot worker;
+3. scans/registers eligible US source packages by SHA-256;
+4. ingests at most one registered package in source-rank order.
 
-Each cycle scans/registers eligible incoming US packages and ingests at most one registered
-package in source-rank order. CN and US use separate PostgreSQL advisory locks, so the US one-shot
-path does not reuse or weaken the guarded CN ingestion lock.
-
-## Accepted source package
-
-US M1 currently accepts:
-
-- `apcYYMMDD.zip` containing one or more XML members;
-- extracted `apcYYMMDD.xml` for controlled validation/development.
-
-Unknown filename precedence is rejected. Multiple different sources for the same update date are
-also rejected. If an update date already exists in the registry, a different SHA-256 is treated as
-an unmodeled revision and blocked rather than silently outranking the registered source.
+CN and US use separate PostgreSQL advisory locks.
 
 ## Source integrity
 
-Package registration records the authoritative SHA-256 in PostgreSQL. Before publication the
-worker hashes the resolved incoming/archive file again and requires an exact match. A basename or
-filesystem path alone is never sufficient to select a source package.
+The package registry records SHA-256. Before publication the resolved incoming/archive file is hashed again and must match exactly. Filename/path alone never identifies an authoritative package.
 
-Successfully ingested packages move to `raw_data/archive/us`. If an identical authoritative copy
-already exists there, the incoming duplicate is removed. A same-name different-content file is
-kept under a hash-suffixed archive filename; however, same-update-date revision semantics still
-require an explicit future policy before that new source may be registered.
+Successful packages move to `raw_data/archive/us`. Failed or missing registered sources block normal continuation until repaired by the explicit retry path.
 
-## XML processing
+## Streaming XML
 
-ZIP members are streamed directly through `zipfile.ZipFile.open` into the standard-library XML
-`iterparse` parser. XML is not extracted to a temporary corpus on disk. Completed case elements
-are cleared as they are emitted, so memory use is bounded by parser state and publisher batches
-rather than the full daily XML document.
+ZIP XML members are streamed with `zipfile.ZipFile.open` directly into `xml.etree.ElementTree.iterparse`. They are not expanded into a permanent temporary corpus and are never loaded as one giant byte string.
 
-A source package must produce at least one valid eight-digit serial number. Duplicate serial
-numbers within a single source package fail closed because US M1 has not defined an intra-package
-revision rule for two complete observations of the same case.
+This is important for the real sources already inspected: a historical ZIP around 61 MB expands to roughly 1.47 GB XML, while the examined daily ZIP around 30 MB expands to roughly 563 MB XML.
+
+Completed `case-file` elements are cleared after emission. Memory therefore scales with parser state and publisher buffers rather than the full XML member.
+
+## Real-source semantics
+
+US M1.1 recognizes the official TDXF layout and does not depend on the earlier synthetic fixture layout. In particular:
+
+- registration number and transaction date come from direct case children;
+- publication uses `published-for-opposition-date`;
+- events use `case-file-event-statement` and retain descriptions;
+- owner nationality is read from the nested nationality block;
+- `T/F` boolean indicators are supported;
+- filed and current filing-basis flags are separate;
+- Madrid facts come from the sibling `international-registration` block.
+
+Very old historical cases can legitimately omit fields introduced later in USPTO processing. Sparse historical records are preserved rather than rejected or filled with invented values.
 
 ## Publication
 
-The publisher writes deterministic identities and source lineage to:
+Current US M1.1 core publication families remain:
 
 - `us_case_current`
 - `us_owner_current`
@@ -60,46 +82,38 @@ The publisher writes deterministic identities and source lineage to:
 - `us_event_history`
 - `us_statement_current`
 
-Every row carries the source rank and source package UUID. Record hashes are canonical SHA-256
-hashes of the parsed official fact record. The case UUID is a deterministic UUID5 derived from the
-USPTO serial number.
+Every row carries source lineage and precedence. `*_current` means latest observation for that durable record identity under source precedence; it is not a MarkOrbit legal conclusion.
 
-`*_current` means latest durable observation for that record identity under source precedence. It
-does **not** mean that MarkOrbit has already determined the legal current owner, live/dead legal
-status, or current enforceable goods scope. Those legal/product interpretations are separate,
-versioned models.
+The prior refinery skill exposes additional useful TDXF families (correspondent/attorney, design search, prior registrations, foreign applications, Madrid request/events, etc.). These will be introduced as additional fact tables only after their real-source identity and daily reconciliation rules are frozen.
 
 ## Failure and retry
 
-An interrupted US ingestion is converted from `PROCESSING` to `INTERRUPTED` after the US advisory
-lock is reclaimed. Retry is deterministic full-package replay:
+Retry remains deterministic full-package replay:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\retry-us.ps1
 ```
 
-Before a retry, all ClickHouse rows whose source package UUID equals the failed/interrupted package
-are synchronously deleted, then the authoritative source file is parsed again from the beginning.
-There is no XML-internal checkpoint state to validate or resume.
+Before replay, all rows carrying the failed/interrupted package UUID are synchronously removed, then the authoritative package is parsed again from the beginning. No XML-internal checkpoint is maintained.
 
-If any US package is `FAILED` or `MISSING_FILE`, normal `run-us.ps1` continuation is blocked until
-the explicit retry path repairs the failed source. This prevents advancing to later daily updates
-while an earlier registered update is unresolved.
+## Local sequence
 
-## First local run
-
-Place one official daily package under:
+For an initial historical build, place all historical coverage parts under:
 
 ```text
-raw_data/incoming/us/apcYYMMDD.zip
+raw_data\incoming\us\
 ```
 
-Then run:
+Then repeatedly execute:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run-us.ps1
 ```
 
-Run the command again to process the next registered package. US M1 intentionally remains
-one-package-at-a-time until real USPTO package acceptance has established runtime and data-quality
-baselines.
+The source-rank contract processes historical parts before daily updates even if files were copied in a different filesystem order. After the historical baseline is complete, continue placing daily `apcYYMMDD.zip` sources in the same incoming directory and use the same one-shot command.
+
+Before large real replay, run the live fixture gate:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
+```
