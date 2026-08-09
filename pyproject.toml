@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "markorbit-data-engine"
 version = "0.4.0"
-description = "MarkOrbit CN trademark data engine M1.6"
+description = "MarkOrbit trademark data engine for CN M1.6 and US M1"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.116.1",
