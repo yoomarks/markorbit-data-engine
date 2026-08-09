@@ -21,9 +21,25 @@ SNAPSHOT_CHILD_TABLES = {
 
 
 def _text(value: object) -> str:
+    """Normalize ClickHouse string-like values at the read boundary.
+
+    clickhouse-connect can return FixedString columns as bytes. FixedString may also
+    carry trailing NUL padding. Publisher buffers use Python str values, so normalize
+    both for identity comparison and before a queried row is reused as a tombstone.
+    """
     if isinstance(value, bytes):
-        return value.decode("utf-8")
+        return value.decode("utf-8").rstrip("\x00")
+    if isinstance(value, bytearray):
+        return bytes(value).decode("utf-8").rstrip("\x00")
+    if isinstance(value, memoryview):
+        return value.tobytes().decode("utf-8").rstrip("\x00")
     return str(value)
+
+
+def _normalize_queried_value(value: object) -> object:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return _text(value)
+    return value
 
 
 class SnapshotAwareUSBatchPublisher(USBatchPublisher):
@@ -100,7 +116,11 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                     continue
 
                 source_file = self._touched_serial_sources[serial]
-                tombstone = list(existing)
+                # Rows returned from ClickHouse can contain bytes for every FixedString
+                # column (identity key and lineage hashes). Normalize all such values
+                # before reusing the row in the insert buffer; otherwise clickhouse-connect
+                # attempts to encode bytes as str and fails during tombstone serialization.
+                tombstone = [_normalize_queried_value(value) for value in existing]
                 tombstone_hash = stable_hash(
                     {
                         "kind": "US_CHILD_SNAPSHOT_OMISSION_V1",
