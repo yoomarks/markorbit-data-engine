@@ -24,4 +24,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "US M1.3 official fact families runtime fixture failed."
 }
 
-Write-Host "US M1.3 live runtime fixtures passed and cleaned up."
+Write-Host "Running US semantic reference + UNKNOWN-first interpretation fixture..."
+docker compose run --rm --no-deps worker python -m app.us.validate_status_reference_fixture
+if ($LASTEXITCODE -ne 0) {
+    throw "US semantic reference/interpretation runtime fixture failed."
+}
+
+Write-Host "US M1.3 + semantic live runtime fixtures passed and cleaned up."
