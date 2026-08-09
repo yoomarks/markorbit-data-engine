@@ -1,6 +1,6 @@
-# MarkOrbit Data Engine — M1.6 + US M1
+# MarkOrbit Data Engine — M1.6 + US M1.1
 
-MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1。PostgreSQL 管理跨法域的数据包、任务、质量与实体控制面；ClickHouse 保存各法域的 durable official facts。根目录 `VERSION` 仍是当前引擎发布标记 `M1.6`；美国数据模型独立使用组件版本 `US_M1.0`。
+MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1.1。PostgreSQL 管理跨法域的数据包、任务、质量与实体控制面；ClickHouse 保存各法域的 durable official facts。根目录 `VERSION` 仍是当前引擎发布标记 `M1.6`；美国数据模型独立使用组件版本 `US_M1.1`。
 
 ## CN M1.6 核心能力
 
@@ -17,24 +17,30 @@ MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1�
 
 当前发布标记以仓库根目录 `VERSION` 为唯一来源；API `/api/health`、`/api/cn/summary` 与运行镜像均读取同一标记。
 
-## US M1 核心能力
+## US M1.1 核心能力
 
+- **真实 USPTO TDXF 契约**：parser 已按真实历史包与真实日更包的字段层级冻结，不再依赖早期合成 fixture 的字段位置。
+- **历史 + 日更双源模型**：支持 `apcYYYYMMDD-YYYYMMDD-NN.zip` 历史覆盖分片和 `apcYYMMDD.zip` 日更包；所有历史 source rank 永远低于日更 source rank。
 - **USPTO serial number 为案件身份**：registration number 仅作为属性和辅助查询键。
-- **官方事实与法律解释分层**：保存 USPTO raw `status_code/status_date`、事件、statement、filing-basis flags，不在事实层直接生成 `ACTIVE/DEAD`、Section 8/15 或 renewal 结论。
-- **流式 XML 解析**：Trademark Daily Applications XML 使用 `iterparse`，ZIP 内 XML 直接流式读取，不展开整包到临时目录。
+- **filed/current basis 分离**：1(a)、1(b)、44(d)、44(e)、66(a) 的 filed basis 与 current basis 分别保留，不把最初申请基础误当作当前基础。
+- **真实事件与 Madrid 结构**：读取 `case-file-event-statement` 及 description，并从独立 `international-registration` block 保存 Madrid 官方事实。
+- **owner nationality 不混淆地址**：按真实 nested `nationality` block 读取国籍，邮寄地址 country/state 独立保存。
+- **官方事实与法律解释分层**：保存 USPTO raw `status_code/status_date`、事件、statement、filing/maintenance flags，不在事实层直接生成 `ACTIVE/DEAD`、Section 8/15 或 renewal 法律结论。
+- **流式 XML 解析**：历史约 GB 级 XML 与日更大 XML 均通过 `iterparse` 流式读取，ZIP 内 XML 不整体解压进内存。
 - **部分日期不伪造**：类似 `YYYYMM00` 的 first-use 日期保留 raw 值，typed date 为 `NULL`。
-- **确定性日包优先级**：当前支持 `apcYYMMDD.zip` / `.xml`；未知文件名、同日多份不同源、同日未建模 revision 均阻断。
 - **整包重放恢复**：registered SHA-256 在发布前重新校验；中断/失败时按 source package UUID 清理 US 输出并从权威源整包重放。
-- **一次只处理一个 US 包**：在真实 USPTO 包验收建立性能与质量基线前，不启用批量自动追赶。
-- **真实数据库 fixture 门禁**：CI 会启动 PostgreSQL + ClickHouse，写入 direct + Madrid 66(a) 两件样本，核对 US 五表与部分日期语义，随后强制清理。
+- **一次只处理一个 US 包**：在真实 USPTO 历史/日更验收建立性能与质量基线前，不启用批量自动追赶。
+- **真实数据库 fixture 门禁**：CI 会启动 PostgreSQL + ClickHouse，核对 direct + Madrid、filed/current basis、event description、partial date 等语义，随后强制清理。
 
-US M1 当前核心表：
+US M1.1 当前核心表：
 
 - `us_case_current`
 - `us_owner_current`
 - `us_classification_current`
 - `us_event_history`
 - `us_statement_current`
+
+旧 `us_base_refinery` / `us_daily_refinery` Skill 作为字段覆盖与业务经验参考；其中 correspondent/attorney、design search、prior registrations、foreign applications、Madrid request/events 等将按真实 TDXF identity 逐步进入独立事实表。旧 Skill 的 whole-member 内存读取和未经独立验证的状态解释不会直接搬入引擎。
 
 ## 本地目录
 
@@ -43,7 +49,7 @@ D:\yoomarks\markorbit-data-engine\
 ├── raw_data\
 │   ├── incoming\cn\       # 待导入/待重放 CN ZIP
 │   ├── archive\cn\        # 已成功导入的 CN 权威原 ZIP
-│   ├── incoming\us\       # 待导入 USPTO daily XML/ZIP
+│   ├── incoming\us\       # US 历史覆盖分片 + 日更 XML/ZIP
 │   ├── archive\us\        # 已成功导入的 US 权威源包
 │   ├── quarantine\
 │   └── temp\
@@ -109,29 +115,30 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.p
 docker compose start worker
 ```
 
-## US M1 本地导入
+## US M1.1 本地导入
 
-US M1 不在 parser/publisher 中保存 USPTO Open Data Portal 登录凭据。先把官方 Trademark Daily Applications XML 包放到：
+US parser/publisher 不保存 USPTO Open Data Portal 登录凭据。把官方历史覆盖分片和日更包放到同一 incoming 目录：
 
 ```text
-raw_data\incoming\us\apcYYMMDD.zip
+raw_data\incoming\us\apc18840407-20251231-05.zip
+raw_data\incoming\us\apc260108.zip
 ```
 
-首次使用或代码升级后可先运行真实数据库 fixture：
+实际完整历史数据通常包含多个历史 part，应全部放入 incoming。source rank 会确保所有历史分片排在日更之前，不依赖复制文件的先后顺序。
+
+首次使用或代码升级后先运行真实数据库 fixture：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
 ```
 
-该 fixture 会写入两件隔离样本、核对五张 US 表和 direct/Madrid/partial-date 语义，并在结束时同步删除所有 fixture 行。
-
-然后执行：
+然后反复执行 one-shot ingestion：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run-us.ps1
 ```
 
-脚本会先幂等应用 US M1 ClickHouse schema，再启动独立 one-shot worker。成功后权威源包移动到 `raw_data\archive\us`。再次运行同一命令会按 source rank 处理下一个 registered package。
+每次最多处理一个 registered package。成功后权威源包移动到 `raw_data\archive\us`。
 
 如果某包失败或源文件缺失，普通 US continuation 会阻断，先执行：
 
@@ -185,16 +192,16 @@ powershell.exe -ExecutionPolicy Bypass -File `
 - US 数据汇总：`GET /api/us/summary`
 - US 案件详情：`GET /api/us/cases/{serial_number}`
 
-US summary/case 响应会明确标记 `OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`，提醒调用方当前 `status_code`、events、statements 仍是 USPTO 官方事实证据，不是 MarkOrbit 的法律状态结论。
+US summary/case 响应会明确标记 `OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`，提醒调用方当前 status、events、statements 和官方 maintenance/basis indicators 都是 USPTO 官方事实证据，不是 MarkOrbit 的法律状态结论。
 
 ## 数据边界
 
 - 原始官方 source package 是权威来源；注册后以 SHA-256 识别，不只依赖文件名。
-- staging 最长保留 7 天，成功发布后清理。
+- US 历史覆盖分片永远低于 US 日更 source rank；导入时间不参与法律事实 precedence。
 - 不保存每次运行的全量 Parquet/DuckDB 快照。
 - CN 月更包未出现的案件或商品，不解释为删除。
 - CN `FIRST_OBSERVED` 不等于状态变化发生日。
-- US raw status/event/statement 不直接冒充 MarkOrbit 法律状态结论。
+- US raw status/event/statement/maintenance flag 不直接冒充 MarkOrbit 法律状态结论。
 - 推理状态、推理原因、人工复核标签均不得覆盖官方事实层。
 - 实证规则必须保留 model version、rule ID、confidence 与证据来源，并可重算、可撤销。
 
