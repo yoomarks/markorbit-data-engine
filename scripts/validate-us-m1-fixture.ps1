@@ -30,4 +30,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "US semantic reference/interpretation runtime fixture failed."
 }
 
-Write-Host "US M1.3 + semantic live runtime fixtures passed and cleaned up."
+Write-Host "Running US maintenance + official reference-pack fixture..."
+docker compose run --rm --no-deps worker python -m app.us.validate_maintenance_fixture
+if ($LASTEXITCODE -ne 0) {
+    throw "US maintenance/reference-pack runtime fixture failed."
+}
+
+Write-Host "US M1.3 + semantic + maintenance live runtime fixtures passed and cleaned up."
