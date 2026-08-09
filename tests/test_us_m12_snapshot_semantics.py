@@ -67,6 +67,10 @@ def test_newer_snapshot_tombstones_children_omitted_from_case_snapshot() -> None
     for table, key_column in SNAPSHOT_CHILD_TABLES.items():
         columns = TABLE_COLUMNS[table]
         inserted = [rows for name, rows, _columns in client.inserts if name == table]
+        if not existing[table]:
+            assert inserted == []
+            assert publisher.tombstone_counts[table] == 0
+            continue
         assert len(inserted) == 1
         tombstones = [row for row in inserted[0] if row[columns.index("is_deleted")] == 1]
         assert len(tombstones) == len(existing[table])
@@ -96,9 +100,14 @@ def test_child_still_present_in_new_snapshot_is_not_tombstoned() -> None:
     publisher.close()
 
     for table in SNAPSHOT_CHILD_TABLES:
+        inserted = [rows for name, rows, _columns in client.inserts if name == table]
+        if not existing[table]:
+            assert inserted == []
+            assert publisher.tombstone_counts[table] == 0
+            continue
         columns = TABLE_COLUMNS[table]
-        rows = [rows for name, rows, _columns in client.inserts if name == table][0]
-        assert all(row[columns.index("is_deleted")] == 0 for row in rows)
+        assert len(inserted) == 1
+        assert all(row[columns.index("is_deleted")] == 0 for row in inserted[0])
         assert publisher.tombstone_counts[table] == 0
 
 
@@ -117,12 +126,12 @@ def test_snapshot_lookup_only_considers_older_current_children() -> None:
     publisher.add(replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml")
     publisher.close()
 
-    assert len(client.queries) == 3
+    assert len(client.queries) == len(SNAPSHOT_CHILD_TABLES)
     assert all("source_rank < 200" in sql for sql in client.queries)
     assert all("is_deleted = 0" in sql for sql in client.queries)
 
 
-def test_event_history_is_not_snapshot_tombstoned() -> None:
+def test_event_histories_are_not_snapshot_tombstoned() -> None:
     old_bundle, existing = _old_child_rows()
     client = FakeClickHouse(existing)
     publisher = SnapshotAwareUSBatchPublisher(
@@ -138,6 +147,7 @@ def test_event_history_is_not_snapshot_tombstoned() -> None:
     publisher.close()
 
     assert "markorbit_facts.us_event_history" not in SNAPSHOT_CHILD_TABLES
+    assert "markorbit_facts.us_madrid_event_history" not in SNAPSHOT_CHILD_TABLES
     event_columns = TABLE_COLUMNS["markorbit_facts.us_event_history"]
     event_rows = [
         rows
