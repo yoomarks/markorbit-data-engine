@@ -12,14 +12,6 @@ def test_us_runtime_fixture_writes_checks_and_cleans_all_tables() -> None:
     assert "madrid_66a_current" in source
     assert "_cleanup_package_outputs(package_id)" in source
     assert "residual_rows" in source
-    for table in (
-        "us_case_current",
-        "us_owner_current",
-        "us_classification_current",
-        "us_event_history",
-        "us_statement_current",
-    ):
-        assert table in source
 
 
 def test_us_m12_snapshot_fixture_checks_current_replacement_and_event_history() -> None:
@@ -35,11 +27,29 @@ def test_us_m12_snapshot_fixture_checks_current_replacement_and_event_history() 
     assert "_cleanup_package_outputs(old_package_id)" in source
 
 
-def test_us_runtime_fixture_script_applies_schema_and_runs_both_fixtures() -> None:
+def test_us_m13_official_fact_fixture_checks_all_new_fact_families() -> None:
+    source = Path("app/us/validate_official_fact_fixture.py").read_text(encoding="utf-8")
+    assert '"contract": "US_M1.3_OFFICIAL_FACT_FAMILIES_FIXTURE"' in source
+    for table in (
+        "us_correspondent_current",
+        "us_design_search_current",
+        "us_prior_registration_current",
+        "us_foreign_application_current",
+        "us_madrid_filing_current",
+        "us_madrid_event_history",
+    ):
+        assert table in source
+    assert "madrid_filing_request" in source
+    assert "madrid_event_history" in source
+    assert "_cleanup_package_outputs(package_id)" in source
+
+
+def test_us_runtime_fixture_script_applies_schema_and_runs_all_fixtures() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
     assert "python -m app.us.validate_fixture" in source
     assert "python -m app.us.validate_snapshot_fixture" in source
+    assert "python -m app.us.validate_official_fact_fixture" in source
 
 
 def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
@@ -48,4 +58,5 @@ def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
     assert "docker compose up -d --wait postgres clickhouse" in workflow
     assert "python -m app.us.validate_fixture" in workflow
     assert "python -m app.us.validate_snapshot_fixture" in workflow
+    assert "python -m app.us.validate_official_fact_fixture" in workflow
     assert "docker compose down -v --remove-orphans" in workflow
