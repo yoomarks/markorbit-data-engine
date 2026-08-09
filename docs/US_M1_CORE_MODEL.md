@@ -1,120 +1,123 @@
-# MarkOrbit US M1.2 Core Model
+# MarkOrbit US M1.3 Core Model
 
-Status: REAL USPTO TDXF OFFICIAL FACT LAYER + HISTORICAL/DAILY RECONCILIATION + READ API
+Status: REAL USPTO TDXF OFFICIAL FACT LAYER + HISTORICAL/DAILY RECONCILIATION
 
-US M1.2 is grounded in real USPTO Trademark Applications TDXF. It supports historical coverage snapshot parts and continuing daily application updates while keeping official facts separate from later legal-status and maintenance interpretation.
+US M1.3 is grounded in the supplied real USPTO Trademark Applications TDXF historical and daily packages. It preserves official source facts, reconciles complete case snapshots, and keeps legal-status/maintenance interpretation outside the fact layer.
 
 ## Source boundary
 
 Two official-source package families are modeled:
 
 - historical coverage parts such as `apc18840407-20251231-05.zip`;
-- daily updates such as `apc260108.zip` / controlled extracted `apc260108.xml`.
+- daily updates such as `apc260108.zip` / controlled extracted XML.
 
-Both package families carry the same TDXF case structure. Historical records can legitimately be sparse, especially very old registrations; absence of modern fields in an early historical case is not itself a quality failure.
+Historical records can legitimately be sparse. Source acquisition remains outside the parser/publisher contract; locally materialized packages are registered and verified by SHA-256 before ingestion.
 
-Source acquisition credentials remain outside the parser/publisher contract. Official packages are first materialized locally, then registered by SHA-256 and processed by the engine.
-
-## Durable identity and precedence
+## Identity and precedence
 
 - `serial_number` is the canonical US case identity.
-- `registration_number` is a case attribute and secondary lookup key.
-- historical snapshot parts always have lower source precedence than daily updates, regardless of ingestion wall-clock order;
-- historical parts use explicit coverage-range + part identity;
-- daily precedence is derived from the package update date.
+- `registration_number` is an attribute and secondary lookup key.
+- every historical source rank is below every daily source rank.
+- historical part identity is coverage-range + part number; daily identity is update date.
 
-This prevents a late-loaded historical snapshot from overwriting a newer daily observation.
+A late-loaded historical snapshot therefore cannot overwrite a later daily observation.
 
-## Real TDXF field layout
+## Real TDXF field families
 
-The real-source contract preserves:
+M1.1 established the real case layout for registration/transaction dates, publication, events, owner nationality, filed/current basis flags, maintenance indicators, and inbound Madrid `international-registration` facts.
 
-- direct `registration-number` and `transaction-date` case fields;
-- `published-for-opposition-date`;
-- `case-file-event-statement` records including `description-text`;
-- USPTO `T/F` indicators;
-- nested owner nationality distinct from mailing address;
-- sibling `international-registration` Madrid facts;
-- filed and current Section 1(a), 1(b), 44(d), 44(e), and 66(a) basis flags as separate official facts.
+M1.3 adds six fact families that were first identified in the old refinery Skill and then verified against the supplied full daily TDXF package:
 
-Partial first-use dates such as `YYYYMM00` stay in raw fields while typed dates remain NULL.
+- `correspondent` plus explicit header `attorney-name`, `attorney-docket-number`, and `domestic-representative-name`;
+- `design-searches / design-search / code`;
+- `prior-registration-applications / prior-registration-application`;
+- `foreign-applications / foreign-application`;
+- `madrid-international-filing-requests / madrid-international-filing-record`;
+- nested `madrid-history-events / madrid-history-event`.
 
-## Core tables
+The inspected daily package contained approximately 36,422 correspondent blocks, 29,867 attorney-name fields, 26,762 design-search rows, 5,575 prior-registration records, 2,801 foreign applications, 953 Madrid filing records, and 5,961 Madrid history events.
 
-### `us_case_current`
+These counts are source-profile evidence, not schema assumptions.
 
-Latest source-ranked official case snapshot: case dates, raw USPTO status, mark metadata, filed/current basis flags, selected post-registration indicators, and Madrid international-registration facts.
+## Madrid separation
 
-### `us_owner_current`
+Two different Madrid fact chains must not be merged:
 
-Current owner rows observed in the latest authoritative case snapshot.
+1. inbound US Section 66(a) case facts use the case-level sibling `international-registration` block and remain on `us_case_current`;
+2. `madrid-international-filing-record` represents the separate Madrid international filing-request process and is persisted in `us_madrid_filing_current` with its own history in `us_madrid_event_history`.
 
-### `us_classification_current`
+A filing-request international-registration number therefore does not populate the inbound 66(a) case-level international-registration fields.
 
-Current class rows and first-use evidence observed in the latest authoritative case snapshot.
+## Durable tables
 
-### `us_statement_current`
+Existing core:
 
-Current typed USPTO statements observed in the latest authoritative case snapshot.
+- `us_case_current`
+- `us_owner_current`
+- `us_classification_current`
+- `us_statement_current`
+- `us_event_history`
 
-### `us_event_history`
+M1.3 official fact families:
 
-Cumulative official event evidence. Events are not treated as a replace-all child collection because an event can remain historically relevant even if a later snapshot no longer repeats it.
+- `us_correspondent_current`
+- `us_design_search_current`
+- `us_prior_registration_current`
+- `us_foreign_application_current`
+- `us_madrid_filing_current`
+- `us_madrid_event_history`
 
-## M1.2 child snapshot reconciliation
+The five new `*_current` families are replaceable snapshot facts. `us_madrid_event_history`, like `us_event_history`, is cumulative event evidence.
 
-TDXF application case files are treated as complete observations for the replaceable child families `owner`, `classification`, and `statement`.
+## Snapshot reconciliation
 
-When a newer source-ranked snapshot touches a serial number:
+For every newer source-ranked case snapshot, the engine compares current child identities with the identities present in the new observation. Older active identities omitted from a complete snapshot receive deterministic tombstones.
 
-1. the engine computes the child identities present in the new snapshot;
-2. it reads the currently active child identities for that serial from ClickHouse;
-3. any older active child identity omitted from the new snapshot receives a deterministic tombstone at the newer source rank;
-4. child identities still present are published normally and are not tombstoned;
-5. events are excluded from this process and remain cumulative historical evidence.
+Replaceable families now include:
 
-This fixes the stale-child failure mode where an owner, class row, or statement from the historical baseline could otherwise remain falsely current forever after disappearing from a daily case snapshot.
+- owner
+- classification
+- statement
+- correspondent
+- design search
+- prior registration
+- foreign application
+- Madrid filing request
 
-The replacement logic is source-rank guarded: a lower-ranked historical package cannot tombstone a child already established by a newer daily source.
+General events and Madrid history events are excluded from tombstoning and remain cumulative evidence.
 
-Tombstones carry the new source package UUID. Full-package retry/cleanup therefore removes both newly published rows and omission tombstones. If a package fails, removing its outputs reveals the prior valid state again before deterministic replay.
+The lookup only considers rows with `source_rank < new_source_rank`, so a lower-ranked historical source cannot retire a newer daily fact. Tombstones carry the current package UUID, allowing full-package failure cleanup to reveal the previous valid snapshot before replay.
 
-## Status boundary
+## Official-fact boundary
 
-US M1.2 preserves official `status_code`, `status_date`, event evidence, and official filing/maintenance indicators. It does **not** turn them into MarkOrbit `ACTIVE/DEAD`, `REGISTERED/ABANDONED`, Section 8 compliance, renewal eligibility, or other legal conclusions in the fact layer.
+M1.3 does not create any of the following from the newly captured fields:
 
-US API responses continue to expose:
+- `has_attorney`
+- `is_pro_se`
+- inferred correspondent/attorney roles
+- a deduplicated cross-case attorney entity
+- `ACTIVE/DEAD`, `REGISTERED/ABANDONED`, Section 8 compliance, renewal eligibility, or other legal conclusions
 
-`status_semantics = OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`
+The old refinery Skill remains a discovery and field-coverage reference only. A field enters the durable engine only after its real TDXF path and semantics are verified.
 
-Any later legal interpretation must be versioned and evidence-linked.
+US API/status consumers must continue to treat the data as:
 
-## Legacy refinery skill
-
-The prior `us_base_refinery` / `us_daily_refinery` skill remains a field-coverage and business-rule reference rather than the ingestion implementation. Useful families identified there include correspondent/attorney, design search codes, prior registrations, foreign applications, Madrid request/events, owner mentions, and basis flags.
-
-The skill's status-code enrichment is not copied into official fact tables without an independently validated status dictionary and interpretation layer.
+`OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`
 
 ## Runtime acceptance gates
 
-Two live PostgreSQL/ClickHouse fixtures run in CI:
+Three live PostgreSQL/ClickHouse fixtures run in CI:
 
-- `app.us.validate_fixture`: US M1.1 real-TDXF field regression, including direct/Madrid, filed/current basis, event description, and partial-date preservation;
-- `app.us.validate_snapshot_fixture`: US M1.2 historical→daily child replacement, verifying owner/classification/statement disappearance plus cumulative event history.
+- `app.us.validate_fixture` — M1.1 real-TDXF field regression;
+- `app.us.validate_snapshot_fixture` — M1.2 historical→daily current-child replacement;
+- `app.us.validate_official_fact_fixture` — M1.3 correspondent/design/prior/foreign/Madrid filing/history publication and cleanup.
 
-Both fixtures clean all package-isolated rows after validation.
-
-## Read API
-
-- `GET /api/us/schema`
-- `GET /api/us/summary`
-- `GET /api/us/cases/{serial_number}`
-
-Serial lookup remains exactly eight digits and returns official facts only.
+All fixtures use isolated package UUIDs and synchronously remove their rows after validation.
 
 ## Next implementation layers
 
-1. run larger real historical→daily acceptance profiles and measure tombstone rates;
-2. port correspondent/attorney, design, prior-registration, foreign-application, and Madrid-request fact families from the old refinery skill using real TDXF identities;
+1. expose the new official fact families through the US read API without adding interpretation;
+2. run larger real historical→daily acceptance profiles and measure row/tombstone rates;
 3. establish full historical replay performance and coverage baselines;
-4. only then build versioned US legal-status and maintenance-deadline interpretation.
+4. add remaining real-source fact families only after direct structural validation;
+5. only then build versioned US legal-status and maintenance-deadline interpretation.
