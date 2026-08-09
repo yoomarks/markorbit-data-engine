@@ -227,8 +227,20 @@ def _score_group(rows: list[dict[str, str]]) -> dict[str, Any]:
     }
 
 
+def _single_packet_value(rows: list[dict[str, str]], column: str) -> str:
+    values = sorted({(row.get(column) or "").strip() for row in rows})
+    if not values or values == [""] or "" in values:
+        raise ValueError(f"review packet has missing {column}")
+    if len(values) > 1:
+        raise ValueError(f"review packet mixes multiple {column} values: {values}")
+    return values[0]
+
+
 def score_review_rows(rows: Iterable[dict[str, str]]) -> dict[str, Any]:
     materialized = list(rows)
+    if not materialized:
+        raise ValueError("review packet contains no review rows")
+
     seen_ids: set[str] = set()
     per_rule_rows: dict[str, list[dict[str, str]]] = defaultdict(list)
 
@@ -255,6 +267,11 @@ def score_review_rows(rows: Iterable[dict[str, str]]) -> dict[str, Any]:
             raise ValueError(f"row {index}: missing rule_id")
         per_rule_rows[rule_id].append(row)
 
+    model_version = _single_packet_value(materialized, "model_version")
+    audit_version = _single_packet_value(materialized, "audit_version")
+    coverage_date = _single_packet_value(materialized, "coverage_date")
+    as_of_date = _single_packet_value(materialized, "as_of_date")
+
     per_rule = {
         rule_id: _score_group(per_rule_rows[rule_id])
         for rule_id in sorted(per_rule_rows, key=_rule_sort_key)
@@ -263,20 +280,15 @@ def score_review_rows(rows: Iterable[dict[str, str]]) -> dict[str, Any]:
         rule_id for rule_id, metrics in per_rule.items() if metrics["decisive"] == 0
     ]
 
-    versions = sorted(
-        {
-            (row.get("model_version") or "").strip()
-            for row in materialized
-            if (row.get("model_version") or "").strip()
-        }
-    )
-    if len(versions) > 1:
-        raise ValueError(f"review packet mixes multiple model versions: {versions}")
-
     return {
         "status": "PASS",
         "review_packet_version": REVIEW_PACKET_VERSION,
-        "model_version": versions[0] if versions else "",
+        "provenance": {
+            "model_version": model_version,
+            "audit_version": audit_version,
+            "coverage_date": coverage_date,
+            "as_of_date": as_of_date,
+        },
         "overall": _score_group(materialized),
         "per_rule": per_rule,
         "ground_truth_readiness": {
