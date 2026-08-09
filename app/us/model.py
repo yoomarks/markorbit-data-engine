@@ -121,9 +121,75 @@ class USStatementRecord:
 
 
 @dataclass(frozen=True)
+class USCorrespondentRecord:
+    serial_number: str
+    address_1: str = ""
+    address_2: str = ""
+    address_3: str = ""
+    address_4: str = ""
+    address_5: str = ""
+    attorney_name: str = ""
+    attorney_docket_number: str = ""
+    domestic_representative_name: str = ""
+
+
+@dataclass(frozen=True)
+class USDesignSearchRecord:
+    serial_number: str
+    code: str = ""
+
+
+@dataclass(frozen=True)
+class USPriorRegistrationRecord:
+    serial_number: str
+    relationship_type: str = ""
+    number: str = ""
+
+
+@dataclass(frozen=True)
+class USForeignApplicationRecord:
+    serial_number: str
+    entry_number: int = 0
+    application_number: str = ""
+    country: str = ""
+    filing_date: date | None = None
+    foreign_priority_claimed: bool = False
+
+
+@dataclass(frozen=True)
+class USMadridFilingRecord:
+    serial_number: str
+    entry_number: int = 0
+    reference_number: str = ""
+    original_filing_date_uspto: date | None = None
+    international_registration_number: str = ""
+    international_registration_date: date | None = None
+    international_status_code: str = ""
+    international_status_date: date | None = None
+    international_renewal_date: date | None = None
+
+
+@dataclass(frozen=True)
+class USMadridHistoryEventRecord:
+    serial_number: str
+    filing_entry_number: int = 0
+    filing_reference_number: str = ""
+    event_entry_number: int = 0
+    code: str = ""
+    event_date: date | None = None
+    description_text: str = ""
+
+
+@dataclass(frozen=True)
 class USCaseBundle:
     case: USCaseRecord
     owners: tuple[USOwnerRecord, ...] = field(default_factory=tuple)
     classifications: tuple[USClassificationRecord, ...] = field(default_factory=tuple)
     events: tuple[USEventRecord, ...] = field(default_factory=tuple)
     statements: tuple[USStatementRecord, ...] = field(default_factory=tuple)
+    correspondent: USCorrespondentRecord | None = None
+    design_searches: tuple[USDesignSearchRecord, ...] = field(default_factory=tuple)
+    prior_registrations: tuple[USPriorRegistrationRecord, ...] = field(default_factory=tuple)
+    foreign_applications: tuple[USForeignApplicationRecord, ...] = field(default_factory=tuple)
+    madrid_filings: tuple[USMadridFilingRecord, ...] = field(default_factory=tuple)
+    madrid_events: tuple[USMadridHistoryEventRecord, ...] = field(default_factory=tuple)

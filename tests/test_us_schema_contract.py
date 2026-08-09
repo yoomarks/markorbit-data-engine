@@ -4,12 +4,14 @@ from pathlib import Path
 CORE_SCHEMA = Path("database/clickhouse/init/004_us_m1_core.sql")
 M11_SCHEMA = Path("database/clickhouse/init/005_us_m11_real_tdxf.sql")
 M12_SCHEMA = Path("database/clickhouse/init/006_us_m12_snapshot_semantics.sql")
+M13_SCHEMA = Path("database/clickhouse/init/007_us_m13_official_fact_families.sql")
 
 
 def test_us_schema_has_core_durable_tables_and_version_upgrades() -> None:
     core = CORE_SCHEMA.read_text(encoding="utf-8")
     m11 = M11_SCHEMA.read_text(encoding="utf-8")
     m12 = M12_SCHEMA.read_text(encoding="utf-8")
+    m13 = M13_SCHEMA.read_text(encoding="utf-8")
     for table in (
         "us_case_current",
         "us_owner_current",
@@ -18,9 +20,19 @@ def test_us_schema_has_core_durable_tables_and_version_upgrades() -> None:
         "us_statement_current",
     ):
         assert f"markorbit_facts.{table}" in core
+    for table in (
+        "us_correspondent_current",
+        "us_design_search_current",
+        "us_prior_registration_current",
+        "us_foreign_application_current",
+        "us_madrid_filing_current",
+        "us_madrid_event_history",
+    ):
+        assert f"markorbit_facts.{table}" in m13
     assert "'US_CORE', 'US_M1.0'" in core
     assert "'US_CORE', 'US_M1.1'" in m11
     assert "'US_CORE', 'US_M1.2'" in m12
+    assert "'US_CORE', 'US_M1.3'" in m13
 
 
 def test_us_m11_models_real_tdxf_fields() -> None:
@@ -41,10 +53,30 @@ def test_us_m11_models_real_tdxf_fields() -> None:
         assert field in source
 
 
+def test_us_m13_models_only_official_fact_fields() -> None:
+    source = M13_SCHEMA.read_text(encoding="utf-8")
+    for field in (
+        "attorney_name",
+        "attorney_docket_number",
+        "domestic_representative_name",
+        "foreign_priority_claimed",
+        "reference_number",
+        "original_filing_date_uspto",
+        "filing_reference_number",
+        "description_text",
+    ):
+        assert field in source
+    for inferred in ("has_attorney", "is_pro_se", "role_inferred"):
+        assert inferred not in source
+
+
 def test_us_preserves_official_status_without_inferred_legal_status() -> None:
     core = CORE_SCHEMA.read_text(encoding="utf-8")
-    upgrade = M11_SCHEMA.read_text(encoding="utf-8") + M12_SCHEMA.read_text(encoding="utf-8")
-    source = core + upgrade
+    upgrades = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (M11_SCHEMA, M12_SCHEMA, M13_SCHEMA)
+    )
+    source = core + upgrades
     assert "status_code String" in core
     assert "status_date Nullable(Date32)" in core
     assert "legal_status" not in source

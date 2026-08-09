@@ -9,8 +9,14 @@ from app.us.model import (
     USCaseBundle,
     USCaseRecord,
     USClassificationRecord,
+    USCorrespondentRecord,
+    USDesignSearchRecord,
     USEventRecord,
+    USForeignApplicationRecord,
+    USMadridFilingRecord,
+    USMadridHistoryEventRecord,
     USOwnerRecord,
+    USPriorRegistrationRecord,
     USStatementRecord,
 )
 
@@ -120,8 +126,6 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
             f"Invalid USPTO serial number {serial_number!r} in {source_name or '<stream>'}"
         )
 
-    # Official TDXF places registration-number and transaction-date directly
-    # under case-file, not inside case-file-header.
     registration_number = _direct_text(
         case_element, "registration-number", "registration-no"
     ) or _text(header, "registration-number", "registration-no")
@@ -135,7 +139,6 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
         )
     )
     use_current = _current_flag(header, ("use-application-currently-in",), use_filed)
-
     itu_filed = _flag(
         _text(
             header,
@@ -145,7 +148,6 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
         )
     )
     itu_current = _current_flag(header, ("intent-to-use-current-in",), itu_filed)
-
     d44_filed = _flag(
         _text(
             header,
@@ -155,7 +157,6 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
         )
     )
     d44_current = _current_flag(header, ("filing-basis-current-44d-in",), d44_filed)
-
     e44_filed = _flag(
         _text(
             header,
@@ -165,7 +166,6 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
         )
     )
     e44_current = _current_flag(header, ("filing-basis-current-44e-in",), e44_filed)
-
     a66_filed = _flag(
         _text(
             header,
@@ -175,7 +175,6 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
         )
     )
     a66_current = _current_flag(header, ("filing-basis-current-66a-in",), a66_filed)
-
     no_basis_current = _flag(
         _text(
             header,
@@ -289,9 +288,7 @@ def _parse_case(case_element: ET.Element, source_name: str) -> USCaseRecord:
                 "international-registration-status-date",
             )
         ),
-        international_priority_claimed=_flag(
-            _text(intl_source, "priority-claimed-in")
-        ),
+        international_priority_claimed=_flag(_text(intl_source, "priority-claimed-in")),
         international_priority_claimed_date=parse_uspto_date(
             _text(intl_source, "priority-claimed-date")
         ),
@@ -320,9 +317,7 @@ def _parse_owners(
         owners.append(
             USOwnerRecord(
                 serial_number=serial_number,
-                entry_number=_integer(
-                    _direct_text(element, "entry-number", "entry-seq-no")
-                ),
+                entry_number=_integer(_direct_text(element, "entry-number", "entry-seq-no")),
                 party_type=_direct_text(element, "party-type", "party-type-code"),
                 legal_entity_type_code=_direct_text(
                     element,
@@ -343,19 +338,13 @@ def _parse_owners(
                     "nationality-state",
                     "nationality-state-code",
                 ),
-                nationality_other=nat_other
-                or _direct_text(element, "nationality-other"),
+                nationality_other=nat_other or _direct_text(element, "nationality-other"),
                 address_1=_direct_text(element, "address-1", "address1"),
                 address_2=_direct_text(element, "address-2", "address2"),
                 city=_direct_text(element, "city"),
                 state=_direct_text(element, "state", "state-code"),
                 country=_direct_text(element, "country", "country-code"),
-                postcode=_direct_text(
-                    element,
-                    "postcode",
-                    "postal-code",
-                    "zip-code",
-                ),
+                postcode=_direct_text(element, "postcode", "postal-code", "zip-code"),
                 dba_aka_text=_direct_text(element, "dba-aka-text"),
                 composed_of_statement=_direct_text(element, "composed-of-statement"),
             )
@@ -461,17 +450,143 @@ def _parse_statements(
     return tuple(statements)
 
 
+def _parse_correspondent(
+    case_element: ET.Element,
+    serial_number: str,
+) -> USCorrespondentRecord | None:
+    header = _header(case_element)
+    correspondent = _direct_element(case_element, "correspondent")
+    values = {
+        "address_1": _direct_text(correspondent, "address-1") if correspondent is not None else "",
+        "address_2": _direct_text(correspondent, "address-2") if correspondent is not None else "",
+        "address_3": _direct_text(correspondent, "address-3") if correspondent is not None else "",
+        "address_4": _direct_text(correspondent, "address-4") if correspondent is not None else "",
+        "address_5": _direct_text(correspondent, "address-5") if correspondent is not None else "",
+        "attorney_name": _direct_text(header, "attorney-name"),
+        "attorney_docket_number": _direct_text(header, "attorney-docket-number"),
+        "domestic_representative_name": _direct_text(header, "domestic-representative-name"),
+    }
+    if not any(values.values()):
+        return None
+    return USCorrespondentRecord(serial_number=serial_number, **values)
+
+
+def _parse_design_searches(
+    case_element: ET.Element,
+    serial_number: str,
+) -> tuple[USDesignSearchRecord, ...]:
+    return tuple(
+        USDesignSearchRecord(serial_number=serial_number, code=_direct_text(element, "code"))
+        for element in _children(case_element, "design-search")
+        if _direct_text(element, "code")
+    )
+
+
+def _parse_prior_registrations(
+    case_element: ET.Element,
+    serial_number: str,
+) -> tuple[USPriorRegistrationRecord, ...]:
+    return tuple(
+        USPriorRegistrationRecord(
+            serial_number=serial_number,
+            relationship_type=_direct_text(element, "relationship-type"),
+            number=_direct_text(element, "number"),
+        )
+        for element in _children(case_element, "prior-registration-application")
+        if _direct_text(element, "number") or _direct_text(element, "relationship-type")
+    )
+
+
+def _parse_foreign_applications(
+    case_element: ET.Element,
+    serial_number: str,
+) -> tuple[USForeignApplicationRecord, ...]:
+    records: list[USForeignApplicationRecord] = []
+    for element in _children(case_element, "foreign-application"):
+        records.append(
+            USForeignApplicationRecord(
+                serial_number=serial_number,
+                entry_number=_integer(_direct_text(element, "entry-number")),
+                application_number=_direct_text(element, "application-number"),
+                country=_direct_text(element, "country"),
+                filing_date=parse_uspto_date(_direct_text(element, "filing-date")),
+                foreign_priority_claimed=_flag(
+                    _direct_text(element, "foreign-priority-claim-in")
+                ),
+            )
+        )
+    return tuple(records)
+
+
+def _parse_madrid_filings(
+    case_element: ET.Element,
+    serial_number: str,
+) -> tuple[tuple[USMadridFilingRecord, ...], tuple[USMadridHistoryEventRecord, ...]]:
+    filings: list[USMadridFilingRecord] = []
+    events: list[USMadridHistoryEventRecord] = []
+    for element in _children(case_element, "madrid-international-filing-record"):
+        entry_number = _integer(_direct_text(element, "entry-number"))
+        reference_number = _direct_text(element, "reference-number")
+        filings.append(
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=entry_number,
+                reference_number=reference_number,
+                original_filing_date_uspto=parse_uspto_date(
+                    _direct_text(element, "original-filing-date-uspto")
+                ),
+                international_registration_number=_direct_text(
+                    element, "international-registration-number"
+                ),
+                international_registration_date=parse_uspto_date(
+                    _direct_text(element, "international-registration-date")
+                ),
+                international_status_code=_direct_text(
+                    element, "international-status-code"
+                ),
+                international_status_date=parse_uspto_date(
+                    _direct_text(element, "international-status-date")
+                ),
+                international_renewal_date=parse_uspto_date(
+                    _direct_text(element, "international-renewal-date")
+                ),
+            )
+        )
+        for event in _children(element, "madrid-history-event"):
+            events.append(
+                USMadridHistoryEventRecord(
+                    serial_number=serial_number,
+                    filing_entry_number=entry_number,
+                    filing_reference_number=reference_number,
+                    event_entry_number=_integer(_direct_text(event, "entry-number")),
+                    code=_direct_text(event, "code"),
+                    event_date=parse_uspto_date(_direct_text(event, "date")),
+                    description_text=_direct_text(event, "description-text"),
+                )
+            )
+    return tuple(filings), tuple(events)
+
+
 def parse_case_element(
     case_element: ET.Element,
     source_name: str = "",
 ) -> USCaseBundle:
     case = _parse_case(case_element, source_name)
+    madrid_filings, madrid_events = _parse_madrid_filings(
+        case_element, case.serial_number
+    )
     return USCaseBundle(
         case=case,
         owners=_parse_owners(case_element, case.serial_number),
         classifications=_parse_classifications(case_element, case.serial_number),
         events=_parse_events(case_element, case.serial_number),
         statements=_parse_statements(case_element, case.serial_number),
+        correspondent=_parse_correspondent(case_element, case.serial_number),
+        design_searches=_parse_design_searches(case_element, case.serial_number),
+        prior_registrations=_parse_prior_registrations(case_element, case.serial_number),
+        foreign_applications=_parse_foreign_applications(case_element, case.serial_number),
+        madrid_filings=madrid_filings,
+        madrid_events=madrid_events,
     )
 
 

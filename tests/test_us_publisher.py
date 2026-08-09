@@ -39,7 +39,7 @@ def test_bundle_rows_have_deterministic_identity_and_lineage() -> None:
     assert len(str(values["record_hash"])) == 64
 
 
-def test_batch_publisher_emits_all_us_core_record_families() -> None:
+def test_batch_publisher_emits_populated_legacy_fixture_families() -> None:
     client = FakeClickHouse()
     publisher = USBatchPublisher(
         client,
@@ -54,9 +54,17 @@ def test_batch_publisher_emits_all_us_core_record_families() -> None:
         publisher.add(bundle, "fixture.xml")
     counts = publisher.close()
 
+    expected_populated = {
+        "markorbit_facts.us_case_current",
+        "markorbit_facts.us_owner_current",
+        "markorbit_facts.us_classification_current",
+        "markorbit_facts.us_event_history",
+        "markorbit_facts.us_statement_current",
+    }
     assert counts["markorbit_facts.us_case_current"] == 2
     assert counts["markorbit_facts.us_owner_current"] == 2
     assert counts["markorbit_facts.us_classification_current"] == 2
     assert counts["markorbit_facts.us_event_history"] == 2
     assert counts["markorbit_facts.us_statement_current"] == 2
-    assert {table for table, _rows, _columns in client.inserts} == set(TABLE_COLUMNS)
+    assert {table for table, _rows, _columns in client.inserts} == expected_populated
+    assert expected_populated.issubset(TABLE_COLUMNS)

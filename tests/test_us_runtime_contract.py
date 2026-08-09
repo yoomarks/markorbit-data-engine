@@ -41,6 +41,12 @@ def test_us_retry_cleanup_covers_every_published_table() -> None:
         "us_classification_current",
         "us_event_history",
         "us_statement_current",
+        "us_correspondent_current",
+        "us_design_search_current",
+        "us_prior_registration_current",
+        "us_foreign_application_current",
+        "us_madrid_filing_current",
+        "us_madrid_event_history",
     ):
         assert table in source
     assert "_cleanup_package_outputs(package_uuid)" in source

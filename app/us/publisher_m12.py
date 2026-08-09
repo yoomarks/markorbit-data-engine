@@ -12,6 +12,11 @@ SNAPSHOT_CHILD_TABLES = {
     "markorbit_facts.us_owner_current": "owner_key",
     "markorbit_facts.us_classification_current": "classification_key",
     "markorbit_facts.us_statement_current": "statement_key",
+    "markorbit_facts.us_correspondent_current": "correspondent_key",
+    "markorbit_facts.us_design_search_current": "design_search_key",
+    "markorbit_facts.us_prior_registration_current": "prior_registration_key",
+    "markorbit_facts.us_foreign_application_current": "foreign_application_key",
+    "markorbit_facts.us_madrid_filing_current": "madrid_filing_key",
 }
 
 
@@ -24,12 +29,13 @@ def _text(value: object) -> str:
 class SnapshotAwareUSBatchPublisher(USBatchPublisher):
     """Publish complete USPTO case snapshots without leaving stale child rows current.
 
-    USPTO application case files are snapshot observations. When a later observation for a serial
-    no longer contains an owner, classification, or statement identity that was current in an
-    earlier observation, the omitted child row must be tombstoned at the newer source rank.
+    TDXF case files are complete observations for the current child families declared in
+    ``SNAPSHOT_CHILD_TABLES``. A later source-ranked observation tombstones an older active child
+    identity when that identity disappears from the new case snapshot.
 
-    Events are intentionally excluded: ``us_event_history`` is cumulative evidence and remains a
-    source-ranked union of observed events.
+    General case events and Madrid history events are intentionally excluded. Both event families
+    are cumulative official evidence and remain source-ranked histories rather than replace-all
+    collections.
     """
 
     def __init__(

@@ -160,6 +160,11 @@ def main() -> None:
             "markorbit_facts.us_owner_current": 1,
             "markorbit_facts.us_classification_current": 1,
             "markorbit_facts.us_statement_current": 1,
+            "markorbit_facts.us_correspondent_current": 0,
+            "markorbit_facts.us_design_search_current": 0,
+            "markorbit_facts.us_prior_registration_current": 0,
+            "markorbit_facts.us_foreign_application_current": 0,
+            "markorbit_facts.us_madrid_filing_current": 0,
         }
         if checks != expected:
             raise RuntimeError(
