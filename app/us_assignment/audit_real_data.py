@@ -5,8 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.db import clickhouse_client, postgres_conn
-from app.us_assignment import ASSIGNMENT_JURISDICTION, ASSIGNMENT_SCHEMA_VERSION
-from app.us_assignment.publisher import TABLE_COLUMNS
+from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
 from app.us_assignment.repository import list_assignment_packages
 
 
@@ -48,7 +47,7 @@ def schema_state() -> dict[str, Any]:
             """
             SELECT version FROM markorbit_facts.schema_version FINAL
             WHERE component = 'US_ASSIGNMENT'
-            ORDER BY applied_at, version
+            ORDER BY version
             """
         ).result_rows
     ]
