@@ -86,7 +86,7 @@ def test_rule_samples_are_scan_order_independent() -> None:
     assert sampled != {f"APP-{index:03d}" for index in range(5)}
 
 
-def test_zero_sample_limit_keeps_counts_without_review_samples() -> None:
+def test_zero_sample_limit_keeps_counts_and_empty_rule_sample_bucket() -> None:
     result = summarize_rows(
         [_row(application_number="A"), _row(application_number="B")],
         as_of_date=date(2023, 1, 31),
@@ -94,7 +94,7 @@ def test_zero_sample_limit_keeps_counts_without_review_samples() -> None:
         sample_per_rule=0,
     )
     assert result["rule_hits"] == {"R1": 2}
-    assert result["samples_by_rule"] == {}
+    assert result["samples_by_rule"] == {"R1": []}
 
 
 def test_summary_warns_when_final_loss_has_no_dated_status_change() -> None:
