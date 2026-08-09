@@ -26,7 +26,7 @@ def test_assignment_parser_reads_reel_frame_parties_and_properties() -> None:
 
 def test_assignment_parser_preserves_current_official_bulk_party_tags() -> None:
     bundles = list(
-        iter_assignment_bundles(Path("tests/fixtures/us_assignment_real_historical_shape.xml"))
+        iter_assignment_bundles(Path("tests/fixtures/us_assignment_current_bulk_party_tags.xml"))
     )
     assert len(bundles) == 2
     first, second = bundles
