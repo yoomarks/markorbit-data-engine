@@ -1,6 +1,6 @@
-# MarkOrbit Data Engine — M1.6 + US M1.1
+# MarkOrbit Data Engine — M1.6 + US M1.2
 
-MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1.1。PostgreSQL 管理跨法域的数据包、任务、质量与实体控制面；ClickHouse 保存各法域的 durable official facts。根目录 `VERSION` 仍是当前引擎发布标记 `M1.6`；美国数据模型独立使用组件版本 `US_M1.1`。
+MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1.2。PostgreSQL 管理跨法域的数据包、任务、质量与实体控制面；ClickHouse 保存各法域的 durable official facts。根目录 `VERSION` 仍是当前引擎发布标记 `M1.6`；美国数据模型独立使用组件版本 `US_M1.2`。
 
 ## CN M1.6 核心能力
 
@@ -17,7 +17,7 @@ MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1.
 
 当前发布标记以仓库根目录 `VERSION` 为唯一来源；API `/api/health`、`/api/cn/summary` 与运行镜像均读取同一标记。
 
-## US M1.1 核心能力
+## US M1.2 核心能力
 
 - **真实 USPTO TDXF 契约**：parser 已按真实历史包与真实日更包的字段层级冻结，不再依赖早期合成 fixture 的字段位置。
 - **历史 + 日更双源模型**：支持 `apcYYYYMMDD-YYYYMMDD-NN.zip` 历史覆盖分片和 `apcYYMMDD.zip` 日更包；所有历史 source rank 永远低于日更 source rank。
@@ -25,14 +25,17 @@ MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1.
 - **filed/current basis 分离**：1(a)、1(b)、44(d)、44(e)、66(a) 的 filed basis 与 current basis 分别保留，不把最初申请基础误当作当前基础。
 - **真实事件与 Madrid 结构**：读取 `case-file-event-statement` 及 description，并从独立 `international-registration` block 保存 Madrid 官方事实。
 - **owner nationality 不混淆地址**：按真实 nested `nationality` block 读取国籍，邮寄地址 country/state 独立保存。
+- **子表 snapshot 替换**：同一 serial 的更新 snapshot 如果不再包含旧 owner、classification 或 statement，M1.2 会在更高 source rank 写 tombstone，避免历史记录永久误留为 current。
+- **event 保留历史证据**：event 不做 snapshot 删除，继续按事件 identity/source rank 形成累计历史。
+- **重试可恢复旧状态**：snapshot tombstone 与新数据都绑定当前 package UUID；失败整包清理后会重新显露上一份有效 snapshot，再从头重放。
 - **官方事实与法律解释分层**：保存 USPTO raw `status_code/status_date`、事件、statement、filing/maintenance flags，不在事实层直接生成 `ACTIVE/DEAD`、Section 8/15 或 renewal 法律结论。
 - **流式 XML 解析**：历史约 GB 级 XML 与日更大 XML 均通过 `iterparse` 流式读取，ZIP 内 XML 不整体解压进内存。
 - **部分日期不伪造**：类似 `YYYYMM00` 的 first-use 日期保留 raw 值，typed date 为 `NULL`。
 - **整包重放恢复**：registered SHA-256 在发布前重新校验；中断/失败时按 source package UUID 清理 US 输出并从权威源整包重放。
 - **一次只处理一个 US 包**：在真实 USPTO 历史/日更验收建立性能与质量基线前，不启用批量自动追赶。
-- **真实数据库 fixture 门禁**：CI 会启动 PostgreSQL + ClickHouse，核对 direct + Madrid、filed/current basis、event description、partial date 等语义，随后强制清理。
+- **双 live fixture 门禁**：CI 同时验证 M1.1 真实 TDXF 字段契约与 M1.2 历史→日更 child snapshot 替换语义。
 
-US M1.1 当前核心表：
+US M1.2 当前核心表：
 
 - `us_case_current`
 - `us_owner_current`
@@ -115,7 +118,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.p
 docker compose start worker
 ```
 
-## US M1.1 本地导入
+## US M1.2 本地导入
 
 US parser/publisher 不保存 USPTO Open Data Portal 登录凭据。把官方历史覆盖分片和日更包放到同一 incoming 目录：
 
@@ -126,11 +129,13 @@ raw_data\incoming\us\apc260108.zip
 
 实际完整历史数据通常包含多个历史 part，应全部放入 incoming。source rank 会确保所有历史分片排在日更之前，不依赖复制文件的先后顺序。
 
-首次使用或代码升级后先运行真实数据库 fixture：
+首次使用或代码升级后先运行真实数据库 fixtures：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
 ```
+
+该脚本会连续运行真实 TDXF regression fixture 和 M1.2 child snapshot fixture。
 
 然后反复执行 one-shot ingestion：
 
@@ -138,7 +143,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\run-us.ps1
 ```
 
-每次最多处理一个 registered package。成功后权威源包移动到 `raw_data\archive\us`。
+每次最多处理一个 registered package。成功后权威源包移动到 `raw_data\archive\us`。包 profile 会记录 `snapshot_tombstone_counts`，便于后续真实历史→日更验收统计。
 
 如果某包失败或源文件缺失，普通 US continuation 会阻断，先执行：
 
@@ -198,6 +203,8 @@ US summary/case 响应会明确标记 `OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`，
 
 - 原始官方 source package 是权威来源；注册后以 SHA-256 识别，不只依赖文件名。
 - US 历史覆盖分片永远低于 US 日更 source rank；导入时间不参与法律事实 precedence。
+- US owner/classification/statement 属于 replaceable snapshot child；较新完整案件 observation 可通过 tombstone 退休旧 child identity。
+- US event 属于累计历史证据，不因后续 snapshot 未重复出现而自动删除。
 - 不保存每次运行的全量 Parquet/DuckDB 快照。
 - CN 月更包未出现的案件或商品，不解释为删除。
 - CN `FIRST_OBSERVED` 不等于状态变化发生日。
