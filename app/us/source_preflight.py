@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from datetime import date
-import io
 import json
 from pathlib import Path
 import re
@@ -98,7 +97,9 @@ def _inspect_zip(path: Path, *, deep_source_test: bool) -> dict[str, Any]:
             members = [item for item in archive.infolist() if not item.is_dir()]
             xml_members = [item for item in members if item.filename.lower().endswith(".xml")]
             duplicate_names = sorted(
-                name for name, count in Counter(item.filename for item in members).items() if count > 1
+                name
+                for name, count in Counter(item.filename for item in members).items()
+                if count > 1
             )
             encrypted = sorted(item.filename for item in members if item.flag_bits & 0x1)
             result: dict[str, Any] = {
@@ -147,7 +148,10 @@ def _inspect_zip(path: Path, *, deep_source_test: bool) -> dict[str, Any]:
                         check = _deep_xml_check(stream)
                     if not check.get("readable"):
                         deep_failures.append(
-                            {"member": member.filename, "error": str(check.get("error") or "")}
+                            {
+                                "member": member.filename,
+                                "error": str(check.get("error") or ""),
+                            }
                         )
                 result["deep_xml_failures"] = deep_failures
                 if deep_failures:
@@ -273,7 +277,10 @@ def _semantic_groups(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         shas = sorted({row["sha256"] for row in rows})
         selected = sorted(
             rows,
-            key=lambda row: (0 if row["location"] == "incoming" else 1, row["path"]),
+            key=lambda row: (
+                0 if row["location"] == "incoming" else 1,
+                row["path"],
+            ),
         )[0]
         groups.append(
             {
@@ -291,7 +298,10 @@ def _semantic_groups(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "location": row["location"],
                         "sha256": row["sha256"],
                     }
-                    for row in sorted(rows, key=lambda row: (row["location"], row["path"]))
+                    for row in sorted(
+                        rows,
+                        key=lambda row: (row["location"], row["path"]),
+                    )
                 ],
             }
         )
@@ -361,16 +371,22 @@ def build_preflight(
     incoming = raw_root / "incoming" / "us"
     archive = raw_root / "archive" / "us"
     incoming_sources, incoming_issues = _scan_directory(
-        incoming, location="incoming", deep_source_test=deep_source_test
+        incoming,
+        location="incoming",
+        deep_source_test=deep_source_test,
     )
     archive_sources, archive_issues = _scan_directory(
-        archive, location="archive", deep_source_test=deep_source_test
+        archive,
+        location="archive",
+        deep_source_test=deep_source_test,
     )
     sources = incoming_sources + archive_sources
     issues = incoming_issues + archive_issues
 
     semantic_groups = _semantic_groups(sources)
-    conflicts = [group for group in semantic_groups if group["distinct_sha256_count"] > 1]
+    conflicts = [
+        group for group in semantic_groups if group["distinct_sha256_count"] > 1
+    ]
     if conflicts:
         issues.extend(
             {
@@ -383,8 +399,14 @@ def build_preflight(
         )
 
     authoritative = _authoritative_sources(sources, semantic_groups)
-    history = [row for row in authoritative if row["package_kind"] == "HISTORICAL_APPLICATIONS"]
-    daily = [row for row in authoritative if row["package_kind"] == "DAILY_APPLICATIONS"]
+    history = [
+        row
+        for row in authoritative
+        if row["package_kind"] == "HISTORICAL_APPLICATIONS"
+    ]
+    daily = [
+        row for row in authoritative if row["package_kind"] == "DAILY_APPLICATIONS"
+    ]
     completeness = historical_part_completeness(
         history,
         expected_history_parts=expected_history_parts,
@@ -442,7 +464,14 @@ def build_preflight(
         warnings.append("identical_semantic_source_copies_deduplicated")
 
     hard_issue_types = sorted({str(issue["type"]) for issue in issues})
-    status = "FAIL" if hard_issue_types else ("NOT_READY" if not_ready else ("PASS_WITH_WARNINGS" if warnings else "PASS"))
+    if hard_issue_types:
+        status = "FAIL"
+    elif not_ready:
+        status = "NOT_READY"
+    elif warnings:
+        status = "PASS_WITH_WARNINGS"
+    else:
+        status = "PASS"
 
     replay_sources = sorted(authoritative, key=_replay_sort_key)
     plan = [
