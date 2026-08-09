@@ -35,10 +35,11 @@ def test_us_m12_snapshot_fixture_checks_current_replacement_and_event_history() 
     assert "_cleanup_package_outputs(old_package_id)" in source
 
 
-def test_us_runtime_fixture_script_applies_schema_and_runs_worker() -> None:
+def test_us_runtime_fixture_script_applies_schema_and_runs_both_fixtures() -> None:
     source = Path("scripts/validate-us-m1-fixture.ps1").read_text(encoding="utf-8")
     assert "apply-us-m1-schema.ps1" in source
     assert "python -m app.us.validate_fixture" in source
+    assert "python -m app.us.validate_snapshot_fixture" in source
 
 
 def test_ci_runs_us_fixtures_against_live_postgres_and_clickhouse() -> None:
