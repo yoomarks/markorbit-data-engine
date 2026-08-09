@@ -150,6 +150,30 @@ def _exclusive_copy_verified(source: Path, destination: Path, expected_sha: str)
     return actual
 
 
+def _preverify_mutation_inputs(rows: list[dict[str, Any]]) -> None:
+    """Fail before the first copy if any planned source/destination is no longer safe."""
+    for row in rows:
+        if row["action"] != "COPY_REQUIRED":
+            continue
+        source = Path(row["source_path"])
+        destination = Path(row["destination_path"])
+        expected_sha = str(row["expected_sha256"]).lower()
+        if not source.is_file():
+            raise RuntimeError(f"Archive source disappeared after preflight: {source}")
+        source_sha = sha256_file(source).lower()
+        if source_sha != expected_sha:
+            raise RuntimeError(
+                f"Archive source changed after preflight: {source.name}: "
+                f"expected={expected_sha} actual={source_sha}"
+            )
+        if destination.exists():
+            if destination.is_file() and sha256_file(destination).lower() == expected_sha:
+                continue
+            raise RuntimeError(
+                f"Refusing to overwrite existing staging destination: {destination}"
+            )
+
+
 def apply_staging(
     raw_root: Path,
     *,
@@ -174,22 +198,19 @@ def apply_staging(
             "postflight": plan["preflight"],
         }
 
+    # Verify the whole mutation set before copying the first byte. This avoids a later
+    # stale archive source causing a partially staged multi-file plan.
+    _preverify_mutation_inputs(plan["staging_rows"])
+
     copied: list[dict[str, Any]] = []
     for row in plan["staging_rows"]:
         if row["action"] != "COPY_REQUIRED":
             continue
         source = Path(row["source_path"])
         destination = Path(row["destination_path"])
-        expected_sha = str(row["expected_sha256"])
+        expected_sha = str(row["expected_sha256"]).lower()
 
-        # Re-verify the authoritative archive source immediately before the mutation.
-        source_sha = sha256_file(source).lower()
-        if source_sha != expected_sha:
-            raise RuntimeError(
-                f"Archive source changed after preflight: {source.name}: "
-                f"expected={expected_sha} actual={source_sha}"
-            )
-
+        # A destination can still appear between preverification and this copy. Never overwrite it.
         if destination.exists():
             if destination.is_file() and sha256_file(destination).lower() == expected_sha:
                 copied.append(
