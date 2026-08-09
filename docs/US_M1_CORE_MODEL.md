@@ -1,6 +1,6 @@
 # MarkOrbit US M1 Core Model
 
-Status: FOUNDATION / OFFICIAL FACT LAYER
+Status: OFFICIAL FACT LAYER + PACKAGE INGESTION
 
 US M1 starts from USPTO Trademark Daily Applications XML (TDXF) materialized under
 `raw_data/incoming/us`. It deliberately separates official USPTO facts from later legal-status
@@ -71,21 +71,31 @@ Unknown filenames have no source precedence and must not be silently ordered.
 US annual/backfile packages, assignment XML, and TTAB datasets will receive separate package
 contracts rather than being guessed from filename order.
 
-## Parser contract
+## Parser and publisher contract
 
 `app.us.parser.iter_case_bundles` uses standard-library XML `iterparse` and clears each completed
-case element after it is emitted. The parser therefore scales with a case record rather than the
-whole daily XML document.
+case element after it is emitted. ZIP XML members are opened as streams and are not extracted into
+a persistent temporary corpus. The parser therefore scales with a case record plus publisher
+batches rather than the whole daily XML document.
 
 The parser accepts known aliases for fields that changed names across USPTO XML generations, but
 US M1 fixture tests freeze the canonical durable output rather than an individual XML spelling.
 
+The publisher assigns deterministic record identities, canonical SHA-256 record hashes, source
+rank, source package UUID, source effective date, and source XML member lineage. Package
+registration and job/status tracking reuse the generic PostgreSQL control plane, while US has its
+own advisory ingestion lock.
+
+Retry is full-package replay. A failed/interrupted package has all rows carrying its package UUID
+removed synchronously before the authoritative registered source is parsed again. Normal
+continuation is blocked while a `FAILED` or `MISSING_FILE` US package remains unresolved.
+
+See `docs/US_M1_INGESTION.md` for operational details.
+
 ## Next implementation layer
 
-After this foundation is green:
-
-1. publish US bundles into ClickHouse with deterministic hashes and source lineage;
-2. add US package registration/ingest/retry guards using the generic PostgreSQL control plane;
-3. add `/api/us/summary` and `/api/us/cases/{serial_number}`;
-4. validate against real USPTO daily packages;
+1. add `/api/us/summary` and `/api/us/cases/{serial_number}`;
+2. run fixture publication against live ClickHouse as a deterministic runtime gate;
+3. validate parsing/publication against real USPTO daily packages;
+4. expand backfile/annual package contracts only after real-source inspection;
 5. only then add official status-code/event interpretation and maintenance-deadline models.
