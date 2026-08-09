@@ -181,7 +181,7 @@ def test_unknown_goods_prevent_total_scope_claim() -> None:
     evidence = CaseEvidence(
         application_number="90123456",
         as_of_date=date(2026, 8, 9),
-        known_item_count=4,
+        known_item_count=5,
         final_inactive_item_count=4,
         unknown_item_count=1,
     )
