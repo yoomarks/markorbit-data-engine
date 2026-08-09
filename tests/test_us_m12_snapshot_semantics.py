@@ -69,13 +69,15 @@ def test_newer_snapshot_tombstones_children_omitted_from_case_snapshot() -> None
         inserted = [rows for name, rows, _columns in client.inserts if name == table]
         assert len(inserted) == 1
         tombstones = [row for row in inserted[0] if row[columns.index("is_deleted")] == 1]
-        assert len(tombstones) == 1
-        tombstone = tombstones[0]
-        assert tombstone[columns.index(key_column)] == existing[table][0][columns.index(key_column)]
-        assert tombstone[columns.index("last_source_package_id")] == package_id
-        assert tombstone[columns.index("source_rank")] == 200
-        assert tombstone[columns.index("source_file")] == "apc260108.xml"
-        assert publisher.tombstone_counts[table] == 1
+        assert len(tombstones) == len(existing[table])
+        expected_keys = {row[columns.index(key_column)] for row in existing[table]}
+        actual_keys = {row[columns.index(key_column)] for row in tombstones}
+        assert actual_keys == expected_keys
+        for tombstone in tombstones:
+            assert tombstone[columns.index("last_source_package_id")] == package_id
+            assert tombstone[columns.index("source_rank")] == 200
+            assert tombstone[columns.index("source_file")] == "apc260108.xml"
+        assert publisher.tombstone_counts[table] == len(existing[table])
 
 
 def test_child_still_present_in_new_snapshot_is_not_tombstoned() -> None:
