@@ -1,5 +1,6 @@
 param(
     [switch]$VerifySourceFiles,
+    [int]$ExpectedHistoryParts = 0,
     [string]$OutputPath = ""
 )
 
@@ -20,9 +21,12 @@ foreach ($service in @("postgres", "clickhouse")) {
     }
 }
 
-$args = @("run", "--rm", "--no-deps", "worker", "python", "-m", "app.us.audit_real_data")
+$args = @("run", "--rm", "--no-deps", "worker", "python", "-m", "app.us.audit_real_data_v2")
 if ($VerifySourceFiles) {
     $args += "--verify-source-files"
+}
+if ($ExpectedHistoryParts -gt 0) {
+    $args += @("--expected-history-parts", "$ExpectedHistoryParts")
 }
 
 $jsonLines = & docker compose @args
@@ -48,6 +52,8 @@ Write-Host "Historical successful packages: $($report.packages.history_success_c
 Write-Host "Daily successful packages: $($report.packages.daily_success_count)"
 Write-Host "Historical coverage end: $($report.coverage.historical_end)"
 Write-Host "Daily coverage end: $($report.coverage.daily_end)"
+Write-Host "Historical expected parts: $($report.historical_part_completeness.expected_history_parts)"
+Write-Host "Historical missing expected parts: $($report.historical_part_completeness.missing_expected_parts -join ',')"
 Write-Host "Snapshot tombstones: $($report.snapshot_reconciliation.total_tombstones)"
 
 if ($report.status -eq "FAIL") {
