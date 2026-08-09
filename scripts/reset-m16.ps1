@@ -51,5 +51,5 @@ docker compose up -d --build postgres clickhouse api
 Assert-LastExitCode "docker compose up postgres clickhouse api"
 
 Write-Host "M1.6 validation environment ready: http://localhost:8080" -ForegroundColor Green
-Write-Host "Next: validate-cn-contract.ps1, validate-cn-fixture.ps1, validate-m16-goods.ps1." -ForegroundColor Green
-Write-Host "Only after all three pass should real CN packages be replayed." -ForegroundColor Green
+Write-Host "Next: validate-m16.ps1, validate-cn-contract.ps1, validate-cn-fixture.ps1, validate-m16-goods.ps1." -ForegroundColor Green
+Write-Host "Only after all gates pass should real CN packages be replayed." -ForegroundColor Green
