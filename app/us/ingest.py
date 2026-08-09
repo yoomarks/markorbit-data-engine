@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 import shutil
 from typing import Iterator
@@ -68,7 +67,7 @@ def _archive_package(path: Path, raw_root: Path) -> Path:
         if sha256_file(path) == sha256_file(destination):
             path.unlink()
             return destination
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+        digest = sha256_file(path)[:8]
         destination = archive_dir / f"{path.stem}_{digest}{path.suffix}"
     shutil.move(str(path), str(destination))
     return destination
@@ -87,11 +86,6 @@ def ingest_us_package(
     package_meta = get_package(str(package_uuid))
     expected_sha = str(package_meta.get("sha256") or "").lower()
     actual_sha = sha256_file(path).lower()
-    if not expected_sha or actual_sha != expected_sha:
-        raise RuntimeError(
-            f"USPTO source SHA-256 mismatch for {path.name}: "
-            f"registered={expected_sha or '<missing>'} actual={actual_sha}"
-        )
 
     run_id = create_job_run(
         job_type="US_PACKAGE_INGESTION",
@@ -119,6 +113,11 @@ def ingest_us_package(
             "PROCESSING",
             package_kind=str(package_meta["package_kind"]),
         )
+        if not expected_sha or actual_sha != expected_sha:
+            raise RuntimeError(
+                f"USPTO source SHA-256 mismatch for {path.name}: "
+                f"registered={expected_sha or '<missing>'} actual={actual_sha}"
+            )
         if retrying:
             _cleanup_package_outputs(package_uuid)
 
