@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import app.cn.guarded_run_once as guard_module
 from app.cn.guarded_run_once import incoming_policy_issues
 
 
@@ -66,8 +68,80 @@ def test_new_filename_for_registered_partition_is_rejected(tmp_path: Path) -> No
     assert any(issue["type"] == "NEW_FILE_FOR_REGISTERED_PARTITION" for issue in issues)
 
 
+def test_clean_first_run_requires_preflight_and_replay_plan(tmp_path: Path, monkeypatch) -> None:
+    incoming = tmp_path / "incoming" / "cn"
+    incoming.mkdir(parents=True)
+    (incoming / "1999.zip").write_bytes(b"base")
+
+    monkeypatch.setattr(guard_module, "get_settings", lambda: SimpleNamespace(raw_data_root=tmp_path))
+    monkeypatch.setattr(guard_module, "_registered_partitions", lambda: [])
+    monkeypatch.setattr(guard_module, "engine_version", lambda: "M1.6")
+    monkeypatch.setattr(
+        guard_module,
+        "build_preflight",
+        lambda: {
+            "status": "PASS_WITH_WARNINGS",
+            "mode": "CLEAN_RESET_READY_FOR_REPLAY",
+            "safe_to_run_replay_command": True,
+            "warning_reasons": ["clean_registry_waiting_for_replay"],
+        },
+    )
+    monkeypatch.setattr(guard_module, "collect_incoming_packages", lambda _root: [object()])
+    monkeypatch.setattr(
+        guard_module,
+        "evaluate_replay_plan",
+        lambda _packages, preflight: {
+            "status": "PASS",
+            "package_count": 1,
+            "warning_reasons": [],
+            "expected_processing_order": [{"file_name": "1999.zip"}],
+        },
+    )
+
+    guard = guard_module.build_execution_guard()
+    assert guard["allowed"] is True
+    assert guard["mode"] == "CLEAN_RESET_FIRST_RUN"
+    assert guard["preflight"]["status"] == "PASS_WITH_WARNINGS"
+    assert guard["replay_plan"]["status"] == "PASS"
+
+
+def test_registered_continuation_checks_m16_replay_boundary(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "incoming" / "cn").mkdir(parents=True)
+    called: list[str] = []
+    monkeypatch.setattr(guard_module, "get_settings", lambda: SimpleNamespace(raw_data_root=tmp_path))
+    monkeypatch.setattr(
+        guard_module,
+        "_registered_partitions",
+        lambda: [_registered("1999.zip", "FILING_YEAR", "1999")],
+    )
+    monkeypatch.setattr(guard_module, "engine_version", lambda: "M1.6")
+    monkeypatch.setattr(
+        guard_module,
+        "ensure_m16_goods_schema",
+        lambda: called.append("schema"),
+    )
+    monkeypatch.setattr(
+        guard_module,
+        "ensure_m16_goods_replay_boundary",
+        lambda: called.append("boundary"),
+    )
+
+    guard = guard_module.build_execution_guard()
+    assert guard["allowed"] is True
+    assert guard["mode"] == "REGISTERED_REPLAY_CONTINUATION"
+    assert called == ["schema", "boundary"]
+
+
 def test_run_cn_uses_guarded_one_shot_entrypoint() -> None:
     script = Path("scripts/run-cn.ps1").read_text(encoding="utf-8")
     assert "python -m app.cn.guarded_run_once" in script
     assert "python -m app.cn.run_once" not in script
     assert "persistent worker is running" in script
+
+
+def test_persistent_worker_cannot_bootstrap_clean_replay() -> None:
+    worker = Path("app/worker.py").read_text(encoding="utf-8")
+    assert "build_execution_guard()" in worker
+    assert 'guard.get("mode") == "CLEAN_RESET_FIRST_RUN"' in worker
+    assert "persistent worker will not bootstrap it automatically" in worker
+    assert 'trigger_type="SCHEDULED_GUARDED"' in worker
