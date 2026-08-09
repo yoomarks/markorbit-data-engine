@@ -85,17 +85,29 @@ def repair_mojibake_cell(value: str) -> tuple[str, bool]:
 
 
 def _record_start(schema: FileSchema, physical_line: str) -> bool:
+    """Identify a physical line that begins a new logical CSV record.
+
+    CN exports exist in both unquoted and fully quoted forms. Parsing only by raw
+    comma splitting makes a quoted application number look like ``\"123...\"``
+    and can concatenate millions of physical lines into one logical record. Use
+    ``csv.reader`` for the prefix probe so production ingestion, audits and raw
+    scans all share the same quoted/unquoted boundary semantics.
+    """
     line = physical_line.lstrip("\ufeff")
-    parts = line.split(",", 3)
+    try:
+        values = next(csv.reader([line], strict=False))
+    except (csv.Error, StopIteration):
+        values = line.split(",", 3)
+
     if schema.role == "agent":
         return True
-    if not parts or not APP_RE.fullmatch(parts[0].strip()):
+    if not values or not APP_RE.fullmatch((values[0] or "").strip()):
         return False
     if schema.requires_class:
-        if len(parts) < 2 or not CLASS_RE.fullmatch(parts[1].strip()):
+        if len(values) < 2 or not CLASS_RE.fullmatch((values[1] or "").strip()):
             return False
     if schema.requires_date:
-        if len(parts) < 3 or not DATE_RE.match(parts[2].strip()):
+        if len(values) < 3 or not DATE_RE.match((values[2] or "").strip()):
             return False
     return True
 

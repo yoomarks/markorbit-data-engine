@@ -4,7 +4,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from app.cn.ingest import ingest_cn_package
+from app.cn.ingest_m16 import ingest_cn_package
+from app.cn.run_guard import cn_ingestion_guard, recover_interrupted_cn_ingestions
 from app.config import get_settings
 from app.repository import (
     create_job_run,
@@ -38,19 +39,21 @@ def _file_sha256(path: Path) -> str:
 
 
 def _resolve_package_path(package: dict[str, Any], raw_root: Path) -> Path | None:
-    """Resolve a registered raw package without trusting a stale location.
+    """Resolve the authoritative registered ZIP by SHA-256.
 
-    Successful ingestion archives the authoritative ZIP. A process can fail after
-    that move but before PostgreSQL is updated, leaving file_path pointing at the
-    old incoming location. Recovery must use the registered SHA-256 rather than a
-    filename-only guess.
+    A successful run may archive the ZIP while ``file_path`` still names the old
+    incoming location. A later file can also reuse the same basename. Never trust
+    a path or filename alone: when a registered SHA is available, every candidate
+    (including the declared path) must match it before use.
     """
     declared = Path(str(package["file_path"]))
-    if declared.exists():
-        return declared
-
     file_name = str(package["file_name"])
     expected_sha = str(package.get("sha256") or "").lower()
+
+    if declared.is_file():
+        if not expected_sha or _file_sha256(declared).lower() == expected_sha:
+            return declared
+
     incoming = raw_root / "incoming" / "cn"
     archive = raw_root / "archive" / "cn"
 
@@ -108,71 +111,89 @@ def ingest_pending_cn(
         "success": 0,
         "failed": 0,
         "skipped_missing": 0,
+        "busy": False,
+        "recovered_interrupted": [],
         "packages": [],
     }
 
-    statuses = ("FAILED", "MISSING_FILE") if include_failed else ("REGISTERED",)
-    candidates = pending_packages(
-        "CN",
-        limit=max(limit * 20, 100),
-        statuses=statuses,
-    )
+    # One session advisory lock covers candidate selection through publication.
+    # If the process/container/host dies, PostgreSQL releases the lock
+    # automatically. The next run can then reclaim any orphaned PROCESSING row.
+    with cn_ingestion_guard() as acquired:
+        if not acquired:
+            result["busy"] = True
+            return result
 
-    for package in candidates:
-        if result["attempted"] >= limit:
-            break
+        recovered = recover_interrupted_cn_ingestions()
+        result["recovered_interrupted"] = recovered
 
-        path = _resolve_package_path(package, settings.raw_data_root)
-        if path is None:
-            declared = Path(str(package["file_path"]))
-            message = (
-                f"Source package file is missing and no SHA-256-matching archive copy "
-                f"was found: {declared}"
-            )
-            update_package_status(
-                str(package["package_id"]),
-                "MISSING_FILE",
-                error_message=message,
-            )
-            result["skipped_missing"] += 1
-            result["packages"].append(
-                {
-                    "package_id": str(package["package_id"]),
-                    "file_name": package["file_name"],
-                    "status": "MISSING_FILE",
-                    "error": message,
-                }
-            )
-            continue
+        statuses = (
+            ("INTERRUPTED", "FAILED", "MISSING_FILE")
+            if include_failed
+            else ("INTERRUPTED", "REGISTERED")
+        )
+        candidates = pending_packages(
+            "CN",
+            limit=max(limit * 20, 100),
+            statuses=statuses,
+        )
 
-        result["attempted"] += 1
-        try:
-            metrics = ingest_cn_package(
-                str(package["package_id"]),
-                path,
-                settings.raw_data_root,
-                trigger_type=trigger_type,
-                retrying=package["status"] in {"FAILED", "MISSING_FILE"},
-            )
-            result["success"] += 1
-            result["packages"].append(
-                {
-                    "package_id": str(package["package_id"]),
-                    "file_name": package["file_name"],
-                    "status": "SUCCESS",
-                    "metrics": metrics,
-                }
-            )
-        except Exception as exc:
-            result["failed"] += 1
-            result["packages"].append(
-                {
-                    "package_id": str(package["package_id"]),
-                    "file_name": package["file_name"],
-                    "status": "FAILED",
-                    "error": str(exc),
-                }
-            )
+        for package in candidates:
+            if result["attempted"] >= limit:
+                break
+
+            path = _resolve_package_path(package, settings.raw_data_root)
+            if path is None:
+                declared = Path(str(package["file_path"]))
+                message = (
+                    f"Source package file is missing and no SHA-256-matching archive copy "
+                    f"was found: {declared}"
+                )
+                update_package_status(
+                    str(package["package_id"]),
+                    "MISSING_FILE",
+                    error_message=message,
+                )
+                result["skipped_missing"] += 1
+                result["packages"].append(
+                    {
+                        "package_id": str(package["package_id"]),
+                        "file_name": package["file_name"],
+                        "status": "MISSING_FILE",
+                        "error": message,
+                    }
+                )
+                continue
+
+            result["attempted"] += 1
+            try:
+                metrics = ingest_cn_package(
+                    str(package["package_id"]),
+                    path,
+                    settings.raw_data_root,
+                    trigger_type=trigger_type,
+                    retrying=package["status"]
+                    in {"INTERRUPTED", "FAILED", "MISSING_FILE"},
+                )
+                result["success"] += 1
+                result["packages"].append(
+                    {
+                        "package_id": str(package["package_id"]),
+                        "file_name": package["file_name"],
+                        "status": "SUCCESS",
+                        "metrics": metrics,
+                    }
+                )
+            except Exception as exc:
+                result["failed"] += 1
+                result["packages"].append(
+                    {
+                        "package_id": str(package["package_id"]),
+                        "file_name": package["file_name"],
+                        "status": "FAILED",
+                        "error": str(exc),
+                    }
+                )
     return result
 
 
