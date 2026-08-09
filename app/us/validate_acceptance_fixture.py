@@ -269,10 +269,13 @@ def main() -> None:
             raise RuntimeError("US acceptance fixture source-rank boundary failed")
         if report["coverage"]["current_case_source_kind_counts"].get("DAILY_APPLICATIONS") != 1:
             raise RuntimeError("US acceptance fixture daily current-case lineage failed")
-        if report["historical_part_completeness"]["complete"] is not True:
+        completeness = report["historical_part_completeness"]
+        if completeness["complete"] is not True:
             raise RuntimeError("US acceptance fixture historical part completeness failed")
-        if report["historical_part_completeness"]["observed_part_count"] if False else False:
-            raise RuntimeError("unreachable")
+        if completeness["observed_part_count"] if "observed_part_count" in completeness else False:
+            raise RuntimeError("historical part summary unexpectedly flattened")
+        if completeness["baseline_coverage"]["observed_parts"] != [1]:
+            raise RuntimeError("US acceptance fixture historical part identity mismatch")
         if report["integrity"]["duplicates_after_final"]:
             raise RuntimeError("US acceptance fixture duplicate audit failed")
         if report["integrity"]["orphan_serials_by_table"]:
@@ -288,7 +291,7 @@ def main() -> None:
                     "audit_status": report["status"],
                     "table_count": len(report["tables"]),
                     "coverage": report["coverage"],
-                    "historical_part_completeness": report["historical_part_completeness"],
+                    "historical_part_completeness": completeness,
                     "warnings": report["warning_reasons"],
                 },
                 ensure_ascii=False,
