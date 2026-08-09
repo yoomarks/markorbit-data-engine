@@ -19,7 +19,7 @@ def test_nonempty_fixture_exists_and_uses_two_publishes():
 def test_real_run_refuses_worker_race():
     script = Path("scripts/run-cn.ps1").read_text(encoding="utf-8")
     assert "docker compose ps --status running --services worker" in script
-    assert "throw \"worker is running" in script
+    assert 'throw "persistent worker is running' in script
 
 
 def test_validation_order_is_explicit():

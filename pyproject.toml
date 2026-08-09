@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "markorbit-data-engine"
 version = "0.4.0"
@@ -14,9 +18,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest==8.4.1", "ruff==0.12.7"]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+"app/cn/ingest.py" = ["F401"]
+"tests/test_m15_insert_contract.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
