@@ -26,6 +26,7 @@ def _parse_history_partition(package: dict[str, Any]) -> dict[str, Any] | None:
             "package_id": str(package.get("package_id") or ""),
             "file_name": str(package.get("file_name") or ""),
             "partition_value": value,
+            "reason": "unrecognized_partition_identity",
         }
     try:
         start = date.fromisoformat(match.group("start"))
@@ -36,6 +37,16 @@ def _parse_history_partition(package: dict[str, Any]) -> dict[str, Any] | None:
             "package_id": str(package.get("package_id") or ""),
             "file_name": str(package.get("file_name") or ""),
             "partition_value": value,
+            "reason": "invalid_coverage_date",
+        }
+    part = int(match.group("part"))
+    if start > end or part < 1:
+        return {
+            "valid": False,
+            "package_id": str(package.get("package_id") or ""),
+            "file_name": str(package.get("file_name") or ""),
+            "partition_value": value,
+            "reason": "invalid_coverage_range_or_part_number",
         }
     return {
         "valid": True,
@@ -44,7 +55,7 @@ def _parse_history_partition(package: dict[str, Any]) -> dict[str, Any] | None:
         "status": str(package.get("status") or ""),
         "coverage_start": start,
         "coverage_end": end,
-        "part": int(match.group("part")),
+        "part": part,
     }
 
 
@@ -72,10 +83,9 @@ def historical_part_completeness(
     group_reports: list[dict[str, Any]] = []
     for (start, end), items in sorted(groups.items()):
         parts = sorted({int(item["part"]) for item in items})
-        start_part = 0 if parts and parts[0] == 0 else 1
         observed_max = max(parts) if parts else None
         expected_through_observed = (
-            set(range(start_part, observed_max + 1)) if observed_max is not None else set()
+            set(range(1, observed_max + 1)) if observed_max is not None else set()
         )
         missing_through_observed = sorted(expected_through_observed - set(parts))
         group_reports.append(
@@ -84,7 +94,7 @@ def historical_part_completeness(
                 "coverage_end": end.isoformat(),
                 "observed_parts": parts,
                 "observed_part_count": len(parts),
-                "numbering_start": start_part,
+                "numbering_start": 1,
                 "missing_through_observed_max": missing_through_observed,
                 "statuses": {
                     status: sum(1 for item in items if item["status"] == status)
@@ -98,20 +108,28 @@ def historical_part_completeness(
         key=lambda item: (item["coverage_end"], item["coverage_start"]),
         default=None,
     )
-    missing_expected: list[int] = []
+
     expected_suffixes: list[int] | None = None
+    missing_expected: list[int] = []
+    unexpected_parts: list[int] = []
     if baseline is not None and expected_history_parts is not None:
-        start_part = int(baseline["numbering_start"])
-        if start_part == 0:
-            expected_suffixes = list(range(0, expected_history_parts))
-        else:
-            expected_suffixes = list(range(1, expected_history_parts + 1))
-        missing_expected = sorted(
-            set(expected_suffixes) - set(int(value) for value in baseline["observed_parts"])
-        )
+        expected_suffixes = list(range(1, expected_history_parts + 1))
+        observed = set(int(value) for value in baseline["observed_parts"])
+        expected = set(expected_suffixes)
+        missing_expected = sorted(expected - observed)
+        unexpected_parts = sorted(observed - expected)
 
     leading_or_interior_gap = bool(
         baseline and baseline["missing_through_observed_max"]
+    )
+    tail_count_pinned = expected_history_parts is not None
+    complete = bool(
+        baseline
+        and not invalid
+        and not leading_or_interior_gap
+        and tail_count_pinned
+        and not missing_expected
+        and not unexpected_parts
     )
     return {
         "expected_history_parts": expected_history_parts,
@@ -122,15 +140,10 @@ def historical_part_completeness(
         "baseline_coverage": baseline,
         "expected_suffixes": expected_suffixes,
         "missing_expected_parts": missing_expected,
+        "unexpected_parts": unexpected_parts,
         "leading_or_interior_gap": leading_or_interior_gap,
-        "tail_count_pinned": expected_history_parts is not None,
-        "complete": bool(
-            baseline
-            and not invalid
-            and not leading_or_interior_gap
-            and expected_history_parts is not None
-            and not missing_expected
-        ),
+        "tail_count_pinned": tail_count_pinned,
+        "complete": complete,
     }
 
 
@@ -168,22 +181,20 @@ def augment_report(
         report["not_ready_reasons"].append("historical_part_sequence_incomplete")
     if completeness["missing_expected_parts"]:
         report["not_ready_reasons"].append("expected_historical_parts_missing")
-    if (
-        completeness["baseline_coverage"] is not None
-        and not completeness["leading_or_interior_gap"]
-        and not completeness["invalid_partition_count"]
-        and expected_history_parts is None
-    ):
-        report["warning_reasons"].append("historical_tail_part_count_not_pinned")
+    if completeness["unexpected_parts"]:
+        report["not_ready_reasons"].append("historical_parts_exceed_expected_count")
+    if completeness["baseline_coverage"] is not None and expected_history_parts is None:
+        report["not_ready_reasons"].append("historical_tail_part_count_not_pinned")
 
     report["not_ready_reasons"] = list(dict.fromkeys(report["not_ready_reasons"]))
     report["warning_reasons"] = list(dict.fromkeys(report["warning_reasons"]))
     _recompute_status(report)
     report["acceptance_note"] = (
-        "Strict US M1.3 acceptance also checks historical coverage-part continuity. A visible "
-        "leading/interior gap is NOT_READY. Because a filename suffix does not disclose the total "
-        "number of trailing parts, strict PASS requires --expected-history-parts to pin the expected "
-        "part count for the latest historical coverage range."
+        "Strict US M1.3 acceptance checks historical coverage-part continuity from part 01. "
+        "Any leading/interior gap is NOT_READY. Because a filename suffix does not disclose "
+        "the total number of trailing parts, strict acceptance also requires "
+        "--expected-history-parts to pin the exact part count for the latest historical "
+        "coverage range."
     )
     return report
 
@@ -227,8 +238,8 @@ def main() -> None:
         type=int,
         default=None,
         help=(
-            "Expected number of parts for the latest historical coverage range. Required for "
-            "strict PASS because the filename does not encode the trailing part count."
+            "Exact number of parts for the latest historical coverage range. Required for "
+            "strict acceptance because the filename does not encode the trailing part count."
         ),
     )
     args = parser.parse_args()
