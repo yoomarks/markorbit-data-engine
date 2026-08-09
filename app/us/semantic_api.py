@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from datetime import date
 import re
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import get_settings
 from app.db import clickhouse_client
+from app.us.application_deadlines import (
+    APPLICATION_DEADLINE_RULE_VERIFIED_ON,
+    APPLICATION_DEADLINE_RULE_VERSION,
+    EVIDENCE_REFS as APPLICATION_DEADLINE_EVIDENCE_REFS,
+    SHORTENED_OA_CUTOFF,
+    calculate_application_deadlines,
+)
 from app.us.event_reference import lookup_active_event_codes
 from app.us.event_reference_inventory import build_inventory as build_event_inventory
 from app.us.maintenance import (
@@ -63,10 +70,16 @@ def _case_semantic_facts(serial: str) -> dict[str, Any]:
         SELECT
             serial_number,
             registration_number,
+            filing_date,
+            publication_date,
             registration_date,
             status_code,
             status_date,
+            intent_to_use_1b,
+            intent_to_use_1b_filed,
+            intent_to_use_1b_current,
             madrid_66a,
+            madrid_66a_filed,
             madrid_66a_current,
             international_registration_number,
             international_registration_date,
@@ -100,7 +113,6 @@ def _case_event_codes(serial: str) -> list[str]:
 
 @router.get("/references/status")
 def us_status_reference_inventory():
-    """Read active official status reference metadata and observed-code coverage."""
     return build_status_inventory()
 
 
@@ -121,7 +133,6 @@ def us_status_reference_lookup(status_code: str):
 
 @router.get("/references/events")
 def us_event_reference_inventory():
-    """Read active official event reference metadata and observed-code coverage."""
     return build_event_inventory()
 
 
@@ -142,7 +153,6 @@ def us_event_reference_lookup(event_code: str):
 
 @router.get("/references/acceptance")
 def us_reference_acceptance():
-    """Verify retained official source bytes and mapping coverage without mutation."""
     return build_reference_acceptance(get_settings().raw_data_root)
 
 
@@ -151,7 +161,6 @@ def us_semantic_readiness(
     expected_history_parts: int = Query(..., ge=1),
     deep_source_test: bool = False,
 ):
-    """Combine source-backed corpus and official-reference readiness."""
     return build_semantic_readiness(
         get_settings().raw_data_root,
         expected_history_parts=expected_history_parts,
@@ -161,7 +170,6 @@ def us_semantic_readiness(
 
 @router.get("/interpretation/ruleset")
 def us_active_interpretation_ruleset():
-    """Read the active MarkOrbit-derived ruleset and verify its retained evidence file."""
     try:
         ruleset = active_ruleset()
     except Exception as exc:
@@ -192,7 +200,6 @@ def us_active_interpretation_ruleset():
 
 @router.get("/status-interpretation/{serial_number}")
 def us_status_interpretation(serial_number: str):
-    """Return raw USPTO facts, official references, and derived interpretation separately."""
     serial = _strict_serial(serial_number)
     case = _case_semantic_facts(serial)
     event_codes = _case_event_codes(serial)
@@ -260,7 +267,6 @@ def us_maintenance_schedule(
     as_of: date | None = None,
     current_term_expiration_date: date | None = None,
 ):
-    """Calculate maintenance filing windows without inferring case legal status."""
     serial = _strict_serial(serial_number)
     case = _case_semantic_facts(serial)
     registration_date = case.get("registration_date")
@@ -297,4 +303,83 @@ def us_maintenance_schedule(
             "section_15_acknowledged": case.get("section_15_acknowledged"),
         },
         "schedule": schedule,
+    }
+
+
+@router.get("/application-deadlines/rules")
+def us_application_deadline_rule_metadata():
+    return {
+        "rule_version": APPLICATION_DEADLINE_RULE_VERSION,
+        "rule_verified_on": APPLICATION_DEADLINE_RULE_VERIFIED_ON,
+        "shortened_oa_cutoff": SHORTENED_OA_CUTOFF,
+        "semantics": "DEADLINE_METADATA_ONLY_NO_APPLICATION_LEGAL_STATUS",
+        "evidence_refs": list(APPLICATION_DEADLINE_EVIDENCE_REFS),
+        "business_day_adjustment": "NOT_CALCULATED_CHECK_OFFICIAL_NOTICE_USPTO_OR_TTAB",
+        "automatic_event_code_inference": False,
+    }
+
+
+@router.get("/application-deadlines/{serial_number}")
+def us_application_deadlines(
+    serial_number: str,
+    as_of: date | None = None,
+    office_action_issue_date: date | None = None,
+    office_action_final: bool = False,
+    office_action_notice_deadline: date | None = None,
+    notice_of_allowance_date: date | None = None,
+    itu_extensions_granted: Annotated[int | None, Query(ge=0, le=5)] = None,
+    statement_of_use_filed: bool = False,
+    opposition_extension_days_granted: int | None = None,
+):
+    serial = _strict_serial(serial_number)
+    case = _case_semantic_facts(serial)
+    madrid = bool(case.get("madrid_66a_current") or case.get("madrid_66a"))
+    publication_date = case.get("publication_date")
+    try:
+        schedule = calculate_application_deadlines(
+            as_of=as_of or date.today(),
+            madrid_66a=madrid,
+            publication_date=publication_date,
+            office_action_issue_date=office_action_issue_date,
+            office_action_final=office_action_final,
+            office_action_notice_deadline=office_action_notice_deadline,
+            notice_of_allowance_date=notice_of_allowance_date,
+            itu_extensions_granted=itu_extensions_granted,
+            statement_of_use_filed=statement_of_use_filed,
+            opposition_extension_days_granted=opposition_extension_days_granted,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "US_APPLICATION_DEADLINE_INPUT_INVALID", "error": str(exc)},
+        ) from exc
+
+    warnings: list[str] = []
+    if notice_of_allowance_date is not None and not bool(
+        case.get("intent_to_use_1b_filed") or case.get("intent_to_use_1b")
+    ):
+        warnings.append(
+            "A Notice of Allowance date was supplied but the current case facts do not show a Section 1(b) filed-basis flag; verify the USPTO record."
+        )
+    return {
+        "serial_number": serial,
+        "source_case_facts": {
+            "filing_date": case.get("filing_date"),
+            "publication_date": publication_date,
+            "intent_to_use_1b_filed": bool(
+                case.get("intent_to_use_1b_filed") or case.get("intent_to_use_1b")
+            ),
+            "intent_to_use_1b_current": bool(case.get("intent_to_use_1b_current")),
+            "madrid_66a": madrid,
+        },
+        "explicit_evidence_inputs": {
+            "office_action_issue_date": office_action_issue_date,
+            "office_action_notice_deadline": office_action_notice_deadline,
+            "notice_of_allowance_date": notice_of_allowance_date,
+            "itu_extensions_granted": itu_extensions_granted,
+            "statement_of_use_filed": statement_of_use_filed,
+            "opposition_extension_days_granted": opposition_extension_days_granted,
+        },
+        "schedule": schedule,
+        "warnings": warnings,
     }

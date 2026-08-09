@@ -137,6 +137,93 @@ def test_status_interpretation_api_keeps_three_layers_separate(monkeypatch) -> N
     assert result["markorbit_derived_interpretation"]["legal_interpretation_produced"] is False
 
 
+def test_application_deadline_rule_metadata_disables_event_guessing() -> None:
+    result = api.us_application_deadline_rule_metadata()
+    assert result["rule_version"].startswith("US_APPLICATION_DEADLINES_")
+    assert result["automatic_event_code_inference"] is False
+    assert result["evidence_refs"]
+
+
+def test_application_deadlines_use_publication_fact_and_explicit_oa_noa_evidence(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api,
+        "_case_semantic_facts",
+        lambda _serial: {
+            "filing_date": date(2026, 1, 1),
+            "publication_date": date(2026, 6, 1),
+            "intent_to_use_1b": 1,
+            "intent_to_use_1b_filed": 1,
+            "intent_to_use_1b_current": 1,
+            "madrid_66a": 0,
+            "madrid_66a_current": 0,
+        },
+    )
+    result = api.us_application_deadlines(
+        "97123456",
+        as_of=date(2026, 8, 9),
+        office_action_issue_date=date(2026, 2, 10),
+        notice_of_allowance_date=date(2026, 7, 1),
+        itu_extensions_granted=0,
+        opposition_extension_days_granted=30,
+    )
+    assert result["source_case_facts"]["publication_date"] == date(2026, 6, 1)
+    assert result["schedule"]["components"]["publication_opposition"][
+        "current_deadline_assessment"
+    ]["total_extension_days"] == 30
+    assert result["schedule"]["components"]["office_action"][
+        "standard_initial_deadline"
+    ] == date(2026, 5, 10)
+    assert result["schedule"]["components"]["notice_of_allowance"][
+        "current_deadline_assessment"
+    ]["extensions_already_granted"] == 0
+    assert result["warnings"] == []
+
+
+def test_application_deadlines_warn_when_noa_conflicts_with_basis_facts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api,
+        "_case_semantic_facts",
+        lambda _serial: {
+            "filing_date": date(2026, 1, 1),
+            "publication_date": None,
+            "intent_to_use_1b": 0,
+            "intent_to_use_1b_filed": 0,
+            "intent_to_use_1b_current": 0,
+            "madrid_66a": 0,
+            "madrid_66a_current": 0,
+        },
+    )
+    result = api.us_application_deadlines(
+        "97123456",
+        as_of=date(2026, 8, 9),
+        notice_of_allowance_date=date(2026, 7, 1),
+    )
+    assert result["warnings"]
+    assert "Section 1(b)" in result["warnings"][0]
+
+
+def test_application_deadline_invalid_extension_total_returns_422(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api,
+        "_case_semantic_facts",
+        lambda _serial: {
+            "publication_date": date(2026, 6, 1),
+            "intent_to_use_1b": 0,
+            "intent_to_use_1b_filed": 0,
+            "intent_to_use_1b_current": 0,
+            "madrid_66a": 0,
+            "madrid_66a_current": 0,
+        },
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        api.us_application_deadlines(
+            "97123456",
+            as_of=date(2026, 8, 9),
+            opposition_extension_days_granted=60,
+        )
+    assert exc_info.value.status_code == 422
+
+
 def test_semantic_api_router_is_read_only() -> None:
     paths = {route.path: methods for route in api.router.routes for methods in [route.methods]}
     assert paths

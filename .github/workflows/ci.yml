@@ -95,6 +95,9 @@ jobs:
       - name: Run US maintenance and reference-pack fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_maintenance_fixture
 
+      - name: Run US application deadline fixture
+        run: docker compose run --rm --no-deps worker python -m app.us.validate_application_deadlines_fixture
+
       - name: Tear down fixture databases
         if: always()
         run: docker compose down -v --remove-orphans
