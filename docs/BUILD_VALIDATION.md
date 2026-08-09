@@ -1,12 +1,14 @@
 # M1.6 Build Validation
 
-M1.6 uses two validation layers: repository CI for deterministic code contracts, and local Docker/data gates for the user's loaded CN source corpus.
+M1.6 uses two validation layers: repository CI for deterministic code/runtime contracts, and local Docker/data gates for the user's loaded CN source corpus.
 
 ## Repository CI
 
-Every pull request and push to `main` runs on Python 3.12 and must pass:
+Every pull request and push to `main` runs two independent jobs.
 
-- editable package installation;
+### Python contract job
+
+- editable package installation on Python 3.12;
 - Ruff across `app` and `tests`;
 - the complete pytest suite.
 
@@ -20,6 +22,15 @@ The tests freeze, among other contracts:
 - historical audit data-clock behavior and deterministic sampling;
 - manual ground-truth packet provenance and scoring;
 - runtime release metadata and M1.6 documentation/validation entry points.
+
+### Runtime image job
+
+- validates `docker compose` configuration;
+- builds `docker/api.Dockerfile` from the real repository context;
+- starts a one-shot Python process inside the built image;
+- imports `app.main` and requires the image runtime marker to resolve to `M1.6`.
+
+This catches packaging/context regressions that a source-only Python test cannot detect, including a missing `VERSION` file in the image.
 
 ## Local runtime/schema validation
 
