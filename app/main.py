@@ -24,7 +24,7 @@ ENGINE_VERSION = engine_version()
 app = FastAPI(
     title="MarkOrbit Data Engine",
     version="0.4.0",
-    description=f"MarkOrbit trademark data engine {ENGINE_VERSION} with US M1",
+    description=f"MarkOrbit trademark data engine {ENGINE_VERSION} with US M1.3",
 )
 
 
@@ -387,6 +387,24 @@ def us_summary():
             UNION ALL
             SELECT 'us_statement_current', count()
             FROM markorbit_facts.us_statement_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'us_correspondent_current', count()
+            FROM markorbit_facts.us_correspondent_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'us_design_search_current', count()
+            FROM markorbit_facts.us_design_search_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'us_prior_registration_current', count()
+            FROM markorbit_facts.us_prior_registration_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'us_foreign_application_current', count()
+            FROM markorbit_facts.us_foreign_application_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'us_madrid_filing_current', count()
+            FROM markorbit_facts.us_madrid_filing_current FINAL WHERE is_deleted = 0
+            UNION ALL
+            SELECT 'us_madrid_event_history', count()
+            FROM markorbit_facts.us_madrid_event_history FINAL
         )
         ORDER BY table_name
         """
@@ -443,6 +461,15 @@ def us_case(serial_number: str):
     )
     if not case_rows:
         raise HTTPException(status_code=404, detail="US trademark case not found")
+    correspondent_rows = _query_dicts(
+        f"""
+        SELECT *
+        FROM markorbit_facts.us_correspondent_current FINAL
+        WHERE serial_number = '{serial}' AND is_deleted = 0
+        ORDER BY correspondent_key
+        LIMIT 1
+        """
+    )
     return {
         "model_version": US_SCHEMA_VERSION,
         "status_semantics": "OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION",
@@ -477,6 +504,47 @@ def us_case(serial_number: str):
             FROM markorbit_facts.us_statement_current FINAL
             WHERE serial_number = '{serial}' AND is_deleted = 0
             ORDER BY type_code, statement_key
+            """
+        ),
+        "correspondent": correspondent_rows[0] if correspondent_rows else None,
+        "design_searches": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.us_design_search_current FINAL
+            WHERE serial_number = '{serial}' AND is_deleted = 0
+            ORDER BY code, design_search_key
+            """
+        ),
+        "prior_registrations": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.us_prior_registration_current FINAL
+            WHERE serial_number = '{serial}' AND is_deleted = 0
+            ORDER BY relationship_type, number, prior_registration_key
+            """
+        ),
+        "foreign_applications": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.us_foreign_application_current FINAL
+            WHERE serial_number = '{serial}' AND is_deleted = 0
+            ORDER BY entry_number, filing_date, foreign_application_key
+            """
+        ),
+        "madrid_filings": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.us_madrid_filing_current FINAL
+            WHERE serial_number = '{serial}' AND is_deleted = 0
+            ORDER BY entry_number, original_filing_date_uspto, madrid_filing_key
+            """
+        ),
+        "madrid_events": _query_dicts(
+            f"""
+            SELECT *
+            FROM markorbit_facts.us_madrid_event_history FINAL
+            WHERE serial_number = '{serial}'
+            ORDER BY event_date, filing_entry_number, event_entry_number, code
             """
         ),
     }

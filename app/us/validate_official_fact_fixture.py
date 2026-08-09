@@ -6,6 +6,7 @@ import time
 import uuid
 
 from app.db import clickhouse_client
+from app.main import us_case
 from app.us.ingest import _cleanup_package_outputs
 from app.us.migrations import ensure_us_m1_schema
 from app.us.model import (
@@ -153,6 +154,7 @@ def main() -> None:
             "FROM markorbit_facts.us_madrid_event_history FINAL "
             f"WHERE serial_number = '{SERIAL}'"
         )
+        api_case = us_case(SERIAL)
 
         checks = {
             "correspondent": "PASS"
@@ -174,6 +176,15 @@ def main() -> None:
             if madrid_event
             and madrid_event[0]
             == (53, 1, "NEWAP", "NEW APPLICATION FOR IR RECEIVED")
+            else "FAIL",
+            "read_api": "PASS"
+            if api_case["status_semantics"] == "OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION"
+            and api_case["correspondent"]["attorney_name"] == "Jane Q. Attorney"
+            and api_case["design_searches"][0]["code"] == "010725"
+            and api_case["prior_registrations"][0]["number"] == "520350"
+            and api_case["foreign_applications"][0]["application_number"] == "UK0000346470"
+            and api_case["madrid_filings"][0]["reference_number"] == "A0048809"
+            and api_case["madrid_events"][0]["code"] == "NEWAP"
             else "FAIL",
         }
         if any(value != "PASS" for value in checks.values()):
