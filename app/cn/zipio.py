@@ -11,6 +11,7 @@ from app.cn.schema import FileSchema, schema_for_filename
 
 ZIP_NAME_ENCODINGS = ("gb18030", "gbk", "cp936", "utf-8", "cp437", "latin1", "big5")
 BOX_CHARS = set("╔╠▒Ω╫ó▓ß╚╦╨┼╧╣·╝╩╗∙╛╙┼╚¿▓╨■╬±┤·└φ")
+TOP_LEVEL_TEXT_SUFFIXES = (".csv", ".xls")
 
 
 def _filename_score(name: str) -> int:
@@ -146,6 +147,11 @@ def _iter_nested_bytes(
                 )
 
 
+def _is_top_level_text_member(name: str) -> bool:
+    lower = name.lower()
+    return any(lower.endswith(suffix) for suffix in TOP_LEVEL_TEXT_SUFFIXES)
+
+
 def iter_package_members(path: Path, max_depth: int = 2) -> Iterator[PackageMember]:
     with zipfile.ZipFile(path) as archive:
         infos = list(archive.infolist())
@@ -154,7 +160,7 @@ def iter_package_members(path: Path, max_depth: int = 2) -> Iterator[PackageMemb
         if info.is_dir():
             continue
         repaired_name, encoding, repaired = repair_zip_member_name(info)
-        if repaired_name.lower().endswith(".csv"):
+        if _is_top_level_text_member(repaired_name):
             yield PackageMember(
                 archive_path=path,
                 internal_name=repaired_name,
