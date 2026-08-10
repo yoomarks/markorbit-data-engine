@@ -3,79 +3,133 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MarkOrbit Data Engine M1.5</title>
+  <title>MarkOrbit Data Engine Control Center</title>
   <style>
-    :root{font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;color:#172033;background:#f4f6fa}
-    body{margin:0}header{background:#fff;border-bottom:1px solid #e3e7ef;padding:22px 32px}
-    h1{margin:0;font-size:22px}header small{color:#667085;margin-left:8px}
-    main{max-width:1280px;margin:24px auto;padding:0 20px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-    .card{background:#fff;border:1px solid #e3e7ef;border-radius:12px;padding:18px;overflow:auto}
-    .label{color:#667085;font-size:13px}.value{margin-top:8px;font-size:25px;font-weight:650}
-    button{border:0;border-radius:8px;padding:10px 16px;cursor:pointer;background:#172033;color:#fff}
-    input{border:1px solid #d0d5dd;border-radius:8px;padding:10px 12px;min-width:240px}
-    table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:10px 8px;vertical-align:top}
-    code{white-space:pre-wrap;word-break:break-all}.section{margin-top:18px}.status-SUCCESS{color:#067647;font-weight:600}
-    .status-FAILED{color:#b42318;font-weight:600}.status-RUNNING{color:#b54708;font-weight:600}
-    .muted{color:#667085;font-size:13px}.warning{color:#b54708}
-    @media(max-width:900px){.grid{grid-template-columns:1fr 1fr}}@media(max-width:600px){.grid{grid-template-columns:1fr}}
+    :root{font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;color:#172033;background:#f3f5f9;--line:#e3e7ef;--muted:#667085;--green:#067647;--red:#b42318;--amber:#b54708;--blue:#175cd3}
+    *{box-sizing:border-box}body{margin:0;background:#f3f5f9}button,input,select{font:inherit}
+    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:16px 28px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+    h1{margin:0;font-size:21px}.subtitle{color:var(--muted);font-size:12px;margin-top:3px}.health{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.health span{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:6px 10px;font-size:12px}
+    main{max-width:1500px;margin:20px auto;padding:0 20px 40px}.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.domain-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}
+    .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;overflow:auto}.kpi-label,.label{color:var(--muted);font-size:12px}.kpi-value{font-size:24px;font-weight:700;margin-top:7px}.tiny{font-size:11px;color:var(--muted)}
+    .domain-title{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}.domain-title span:last-child{font-size:12px;color:var(--muted);font-weight:500}.domain-meta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:13px}.domain-meta b{display:block;margin-top:3px}
+    .progress{height:7px;background:#edf0f5;border-radius:999px;overflow:hidden;margin:13px 0 7px}.progress>i{display:block;height:100%;background:#172033;border-radius:999px}.progress-line{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+    nav{display:flex;gap:6px;margin:18px 0 12px;flex-wrap:wrap}.tab{border:1px solid var(--line);background:#fff;color:#344054;border-radius:9px;padding:9px 14px;cursor:pointer}.tab.active{background:#172033;color:#fff;border-color:#172033}.panel{display:none}.panel.active{display:block}
+    .section{margin-top:12px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h2{font-size:16px;margin:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input,select{border:1px solid #d0d5dd;border-radius:8px;padding:9px 10px;background:#fff;color:#172033}.btn{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;background:#172033;color:#fff}.btn.secondary{background:#667085}.btn.light{background:#eef2f7;color:#344054}.btn.danger{background:#b42318}
+    table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:9px 7px;vertical-align:top}th{color:#475467;font-weight:600;background:#fafbfc;position:sticky;top:0}tbody tr:hover{background:#fafcff}.nowrap{white-space:nowrap}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.muted{color:var(--muted)}
+    .badge{display:inline-block;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:700;background:#f2f4f7;color:#475467}.status-SUCCESS{color:var(--green)}.status-FAILED,.status-MISSING_FILE{color:var(--red)}.status-PROCESSING,.status-RUNNING,.status-INTERRUPTED{color:var(--amber)}.status-REGISTERED{color:var(--blue)}
+    .split{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(320px,.8fr);gap:12px}.facts-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.raw-buckets{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}.bucket{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fafbfc}.bucket b{display:block;font-size:18px;margin-top:5px}
+    pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#101828;color:#eaecf0;border-radius:10px;padding:12px;max-height:440px;overflow:auto;font-size:11px}.detail-empty{color:var(--muted);padding:40px 10px;text-align:center}.detail-block{margin-top:14px}.detail-block h3{font-size:13px;margin:0 0 8px}.error-box{color:var(--red);background:#fff1f0;border:1px solid #fecdca;padding:10px;border-radius:8px}.ok{color:var(--green)}.warn{color:var(--amber)}
+    @media(max-width:1100px){.kpis{grid-template-columns:repeat(3,1fr)}.domain-grid,.raw-buckets{grid-template-columns:repeat(2,1fr)}.split{grid-template-columns:1fr}}
+    @media(max-width:700px){header{padding:14px 16px;align-items:flex-start;flex-direction:column}.kpis,.domain-grid,.raw-buckets,.facts-grid{grid-template-columns:1fr}main{padding:0 10px}.health{justify-content:flex-start}}
   </style>
 </head>
 <body>
-<header><h1>MarkOrbit Data Engine <small>M1.5</small></h1></header>
+<header>
+  <div><h1>MarkOrbit Data Engine</h1><div class="subtitle">Control Center · CN / US Application / Assignment / TTAB</div></div>
+  <div class="health"><span id="engine-version">—</span><span>API <b id="api">—</b></span><span>PG <b id="postgres">—</b></span><span>CH <b id="clickhouse">—</b></span><span id="last-refresh">未刷新</span></div>
+</header>
 <main>
-  <div class="grid">
-    <div class="card"><div class="label">API</div><div id="api" class="value">—</div></div>
-    <div class="card"><div class="label">PostgreSQL</div><div id="postgres" class="value">—</div></div>
-    <div class="card"><div class="label">ClickHouse</div><div id="clickhouse" class="value">—</div></div>
-    <div class="card"><div class="label">案件数量</div><div id="case-count" class="value">—</div></div>
-  </div>
-  <div class="card section">
-    <button onclick="runCn()">扫描并导入中国数据</button>
-    <button onclick="retryCn()" style="margin-left:8px;background:#667085">重试失败包</button>
-    <span id="scan-result" class="muted" style="margin-left:12px"></span>
-  </div>
-  <div class="card section">
-    <h2>中国数据摘要</h2>
-    <div id="cn-summary" class="muted">加载中…</div>
-  </div>
-  <div class="card section">
-    <h2>案件字段检查</h2>
-    <input id="case-input" placeholder="例如 G602365A">
-    <button onclick="findCase()">查询</button>
-    <div id="case-result" style="margin-top:14px"></div>
-  </div>
-  <div class="card section">
-    <h2>最近任务</h2>
-    <table><thead><tr><th>任务</th><th>状态</th><th>开始</th><th>完成</th><th>指标</th></tr></thead><tbody id="runs"></tbody></table>
-  </div>
-  <div class="card section">
-    <h2>来源包</h2>
-    <table><thead><tr><th>文件</th><th>类型</th><th>分区</th><th>大小</th><th>状态</th><th>来源排序</th></tr></thead><tbody id="packages"></tbody></table>
-  </div>
+  <section class="kpis">
+    <div class="card"><div class="kpi-label">Raw 文件</div><div class="kpi-value" id="raw-files">—</div><div class="tiny" id="raw-size">—</div></div>
+    <div class="card"><div class="kpi-label">来源包</div><div class="kpi-value" id="pkg-total">—</div><div class="tiny" id="pkg-success">—</div></div>
+    <div class="card"><div class="kpi-label">运行中任务</div><div class="kpi-value" id="jobs-running">—</div><div class="tiny" id="jobs-failed">—</div></div>
+    <div class="card"><div class="kpi-label">事实表物理行</div><div class="kpi-value" id="fact-rows">—</div><div class="tiny">Active parts · 非 FINAL 逻辑行数</div></div>
+    <div class="card"><div class="kpi-label">ClickHouse 数据量</div><div class="kpi-value" id="fact-bytes">—</div><div class="tiny" id="table-count">—</div></div>
+  </section>
+
+  <section id="domain-grid" class="domain-grid"></section>
+
+  <nav>
+    <button class="tab active" data-tab="overview">总览</button>
+    <button class="tab" data-tab="raw">Raw 数据</button>
+    <button class="tab" data-tab="packages">来源包</button>
+    <button class="tab" data-tab="jobs">任务进展</button>
+    <button class="tab" data-tab="lookup">案件查询 / 操作</button>
+  </nav>
+
+  <section id="overview" class="panel active">
+    <div class="split">
+      <div class="card">
+        <div class="section-head"><h2>ClickHouse 事实表</h2><span class="tiny">物理 active-part 行数与磁盘占用，用于运维观察</span></div>
+        <div style="max-height:520px;overflow:auto"><table><thead><tr><th>数据域</th><th>表</th><th>行数</th><th>磁盘</th></tr></thead><tbody id="fact-tables"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="section-head"><h2>最近任务</h2><button class="btn light" onclick="loadJobs()">刷新</button></div>
+        <div id="recent-jobs"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="raw" class="panel">
+    <div class="card">
+      <div class="section-head"><div><h2>Raw 数据库存</h2><div class="tiny">只看目录/文件名/大小，不计算 SHA、不解析 XML/XLS</div></div><button class="btn light" onclick="loadRaw(true)">刷新 Raw</button></div>
+      <div id="raw-buckets" class="raw-buckets"></div>
+      <div style="max-height:650px;overflow:auto"><table><thead><tr><th>数据域</th><th>区域</th><th>Raw 分类</th><th>文件</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="raw-files-table"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="packages" class="panel">
+    <div class="split">
+      <div class="card">
+        <div class="section-head"><h2>来源包明细</h2><div class="toolbar"><select id="pkg-domain"><option value="">全部数据域</option><option>CN</option><option value="US_APPLICATION">US Application</option><option value="US_ASSIGNMENT">Assignment</option><option value="US_TTAB">TTAB</option></select><select id="pkg-status"><option value="">全部状态</option><option>SUCCESS</option><option>REGISTERED</option><option>PROCESSING</option><option>FAILED</option><option>MISSING_FILE</option><option>INTERRUPTED</option></select><button class="btn light" onclick="loadPackages()">筛选</button></div></div>
+        <div style="max-height:650px;overflow:auto"><table><thead><tr><th>域</th><th>文件</th><th>类型 / 分区</th><th>大小</th><th>状态</th><th>内部文件/行</th><th>处理时间</th><th></th></tr></thead><tbody id="packages-table"></tbody></table></div>
+      </div>
+      <div class="card"><div class="section-head"><h2>包详情</h2><span class="tiny">内部文件 / 质量问题 / profile</span></div><div id="package-detail" class="detail-empty">点击左侧“查看”</div></div>
+    </div>
+  </section>
+
+  <section id="jobs" class="panel">
+    <div class="card">
+      <div class="section-head"><h2>任务进展</h2><button class="btn light" onclick="loadJobs(true)">刷新任务</button></div>
+      <div style="max-height:720px;overflow:auto"><table><thead><tr><th>数据域</th><th>任务</th><th>触发方式</th><th>状态</th><th>开始</th><th>耗时</th><th>指标 / 错误</th></tr></thead><tbody id="jobs-table"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="lookup" class="panel">
+    <div class="split">
+      <div class="card">
+        <div class="section-head"><h2>案件查询</h2></div>
+        <div class="toolbar"><select id="lookup-domain"><option value="CN">中国</option><option value="US">美国 Application</option></select><input id="case-input" placeholder="中国申请号或 8 位美国 Serial No."><button class="btn" onclick="findCase()">查询</button></div>
+        <div id="case-result" style="margin-top:14px"></div>
+      </div>
+      <div class="card">
+        <div class="section-head"><h2>CN 安全操作</h2><span class="tiny">仅沿用既有 guarded API，不开放美国写操作</span></div>
+        <div class="toolbar"><button class="btn" onclick="runCn()">扫描并导入下一包</button><button class="btn secondary" onclick="retryCn()">重试失败包</button></div>
+        <div id="scan-result" class="muted" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
 </main>
 <script>
+const DOMAIN_LABELS={CN:"中国 CN",US_APPLICATION:"美国 Application",US_ASSIGNMENT:"美国 Assignment",US_TTAB:"美国 TTAB",OTHER:"Other",SYSTEM:"System"};
+let overviewCache=null,rawLoaded=false,packagesLoaded=false,jobsLoaded=false;
 async function getJson(url,options){const r=await fetch(url,options);if(!r.ok)throw new Error(await r.text());return r.json()}
-function fmtBytes(v){if(!v)return"0 B";const u=["B","KB","MB","GB","TB"];let i=0,n=v;while(n>=1024&&i<u.length-1){n/=1024;i++}return`${n.toFixed(i?1:0)} ${u[i]}`}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
-async function refresh(){
- const h=await getJson("/api/health");for(const k of["api","postgres","clickhouse"])document.getElementById(k).textContent=h[k];
- const summary=await getJson("/api/cn/summary");const map=Object.fromEntries(summary.tables.map(x=>[x.table_name,x.row_count]));
- document.getElementById("case-count").textContent=(map.cn_case_current??0).toLocaleString();
- const g=summary.goods_status||{};document.getElementById("cn-summary").innerHTML=`
-   案件类别范围：<b>${(map.cn_case_scope_current??0).toLocaleString()}</b>　
-   当前主体关系：<b>${(map.cn_case_party_current??0).toLocaleString()}</b>　
-   派生关系：<b>${(map.cn_case_relation_current??0).toLocaleString()}</b><br><br>
-   来源商品：<b>${Number(g.source_goods_items??0).toLocaleString()}</b>　
-   已解释有效：<b>${Number(g.interpreted_active_items??0).toLocaleString()}</b>　
-   已知非有效：<b>${Number(g.interpreted_inactive_items??0).toLocaleString()}</b>　
-   <span class="warning">状态未映射：<b>${Number(g.unmapped_status_items??0).toLocaleString()}</b></span>`;
- const runs=await getJson("/api/job-runs?limit=20");document.getElementById("runs").innerHTML=runs.map(x=>`<tr><td>${esc(x.job_type)}</td><td class="status-${esc(x.status)}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.finished_at)}</td><td><code>${esc(JSON.stringify(x.metrics??{}))}</code></td></tr>`).join("");
- const packages=await getJson("/api/source-packages?limit=20");document.getElementById("packages").innerHTML=packages.map(x=>`<tr><td>${esc(x.file_name)}</td><td>${esc(x.package_kind)}</td><td>${esc(x.partition_dimension)} ${esc(x.partition_value)}</td><td>${fmtBytes(x.file_size)}</td><td class="status-${esc(x.status)}">${esc(x.status)}</td><td>${esc(x.source_rank)}</td></tr>`).join("")
-}
-async function runCn(){const t=document.getElementById("scan-result");t.textContent="运行中…";try{const r=await getJson("/api/jobs/cn/run",{method:"POST"});t.textContent=JSON.stringify(r);await refresh()}catch(e){t.textContent=e.message}}
-async function retryCn(){const t=document.getElementById("scan-result");t.textContent="重试中…";try{const r=await getJson("/api/jobs/cn/retry",{method:"POST"});t.textContent=JSON.stringify(r);await refresh()}catch(e){t.textContent=e.message}}
-async function findCase(){const value=document.getElementById("case-input").value.trim();const target=document.getElementById("case-result");if(!value)return;target.textContent="查询中…";try{const r=await getJson(`/api/cn/cases/${encodeURIComponent(value)}`);target.innerHTML=`<pre><code>${esc(JSON.stringify(r,null,2))}</code></pre>`}catch(e){target.textContent=e.message}}
-refresh().catch(console.error);setInterval(()=>refresh().catch(console.error),15000);
+function fmtBytes(v){v=Number(v||0);if(!v)return"0 B";const u=["B","KB","MB","GB","TB"];let i=0;while(v>=1024&&i<u.length-1){v/=1024;i++}return`${v.toFixed(i?1:0)} ${u[i]}`}
+function fmtNum(v){return Number(v||0).toLocaleString()}
+function fmtTime(v){if(!v)return"—";try{return new Date(v).toLocaleString()}catch{return String(v)}}
+function fmtDuration(v){const s=Math.max(0,Number(v||0));if(s<60)return`${s.toFixed(1)}s`;if(s<3600)return`${Math.floor(s/60)}m ${Math.floor(s%60)}s`;return`${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`}
+function statusHtml(v){const x=esc(v||"UNKNOWN");return`<span class="status-${x}"><b>${x}</b></span>`}
+function domainLabel(v){return DOMAIN_LABELS[v]||v}
+
+function renderOverview(data){overviewCache=data;document.getElementById("engine-version").textContent=data.engine_version||"—";const domains=data.packages.domains||[];const totals=domains.reduce((a,x)=>{a.total+=Number(x.total||0);a.success+=Number(x.success||0);return a},{total:0,success:0});document.getElementById("raw-files").textContent=fmtNum(data.raw.total_files);document.getElementById("raw-size").textContent=fmtBytes(data.raw.total_bytes);document.getElementById("pkg-total").textContent=fmtNum(totals.total);document.getElementById("pkg-success").textContent=`SUCCESS ${fmtNum(totals.success)}`;document.getElementById("jobs-running").textContent=fmtNum(data.jobs.running);document.getElementById("jobs-failed").textContent=`最近失败 ${fmtNum(data.jobs.failed)}`;const factDomains=data.facts.domains||[];const factTotals=factDomains.reduce((a,x)=>{a.rows+=Number(x.physical_rows||0);a.bytes+=Number(x.bytes_on_disk||0);a.tables+=Number(x.table_count||0);return a},{rows:0,bytes:0,tables:0});document.getElementById("fact-rows").textContent=fmtNum(factTotals.rows);document.getElementById("fact-bytes").textContent=fmtBytes(factTotals.bytes);document.getElementById("table-count").textContent=`${fmtNum(factTotals.tables)} 张 active 表`;
+ document.getElementById("domain-grid").innerHTML=domains.filter(x=>["CN","US_APPLICATION","US_ASSIGNMENT","US_TTAB"].includes(x.domain)).map(x=>`<div class="card"><div class="domain-title"><span>${esc(domainLabel(x.domain))}</span><span>${fmtBytes(x.bytes)}</span></div><div class="progress"><i style="width:${Math.min(100,Number(x.progress_pct||0))}%"></i></div><div class="progress-line"><span>SUCCESS ${fmtNum(x.success)} / ${fmtNum(x.total)}</span><span>${Number(x.progress_pct||0).toFixed(1)}%</span></div><div class="domain-meta"><div><span class="label">待处理</span><b>${fmtNum(Number(x.registered||0)+Number(x.processing||0)+Number(x.interrupted||0))}</b></div><div><span class="label">失败/缺文件</span><b class="${Number(x.failed||0)+Number(x.missing_file||0)?"status-FAILED":"ok"}">${fmtNum(Number(x.failed||0)+Number(x.missing_file||0))}</b></div><div><span class="label">覆盖起点</span><b>${esc(x.source_period_start||"—")}</b></div><div><span class="label">覆盖终点</span><b>${esc(x.source_period_end||"—")}</b></div></div></div>`).join("");
+ document.getElementById("fact-tables").innerHTML=(data.facts.tables||[]).map(x=>`<tr><td class="nowrap">${esc(domainLabel(x.domain))}</td><td class="mono">${esc(x.table_name)}</td><td>${fmtNum(x.physical_rows)}</td><td>${fmtBytes(x.bytes_on_disk)}</td></tr>`).join("");renderRecentJobs(data.jobs.recent||[])}
+function renderRecentJobs(rows){document.getElementById("recent-jobs").innerHTML=rows.slice(0,12).map(x=>`<div style="padding:9px 0;border-bottom:1px solid #edf0f5"><div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:12px">${esc(x.job_type)}</b>${statusHtml(x.status)}</div><div class="tiny" style="margin-top:4px">${esc(domainLabel(x.domain))} · ${fmtTime(x.started_at)} · ${fmtDuration(x.duration_seconds)}</div>${x.error_message?`<div class="tiny status-FAILED" style="margin-top:4px">${esc(x.error_message)}</div>`:""}</div>`).join("")||'<div class="detail-empty">暂无任务</div>'}
+async function refreshOverview(){try{const [h,o]=await Promise.all([getJson("/api/health"),getJson("/api/admin/overview")]);for(const k of["api","postgres","clickhouse"])document.getElementById(k).textContent=h[k];renderOverview(o);document.getElementById("last-refresh").textContent=`刷新 ${new Date().toLocaleTimeString()}`}catch(e){console.error(e);document.getElementById("last-refresh").textContent="刷新失败"}}
+
+async function loadRaw(force=false){if(rawLoaded&&!force)return;const r=await getJson("/api/admin/raw-inventory?limit=1500");rawLoaded=true;document.getElementById("raw-buckets").innerHTML=(r.buckets||[]).map(x=>`<div class="bucket"><span class="label">${esc(domainLabel(x.domain))} · ${esc(x.area)}</span><b>${fmtNum(x.file_count)}</b><div class="tiny">${esc(x.raw_class)} · ${fmtBytes(x.bytes)}</div></div>`).join("");document.getElementById("raw-files-table").innerHTML=(r.files||[]).map(x=>`<tr><td>${esc(domainLabel(x.domain))}</td><td><span class="badge">${esc(x.area)}</span></td><td>${esc(x.raw_class)}</td><td><div>${esc(x.file_name)}</div><div class="tiny mono">${esc(x.relative_path)}</div></td><td>${fmtBytes(x.file_size)}</td><td class="nowrap">${fmtTime(x.modified_at)}</td></tr>`).join("")}
+async function loadPackages(){const d=document.getElementById("pkg-domain").value,s=document.getElementById("pkg-status").value;const q=new URLSearchParams({limit:"300"});if(d)q.set("domain",d);if(s)q.set("status",s);const rows=await getJson(`/api/admin/packages?${q}`);packagesLoaded=true;document.getElementById("packages-table").innerHTML=rows.map(x=>`<tr><td>${esc(domainLabel(x.domain))}</td><td><div>${esc(x.file_name)}</div><div class="tiny mono">${esc(x.package_id)}</div></td><td><div>${esc(x.package_kind)}</div><div class="tiny">${esc(x.partition_dimension)} ${esc(x.partition_value)}</div></td><td>${fmtBytes(x.file_size)}</td><td>${statusHtml(x.status)}${x.error_message?`<div class="tiny status-FAILED">${esc(x.error_message)}</div>`:""}</td><td>${fmtNum(x.internal_file_count)} / ${fmtNum(x.internal_logical_rows)}${Number(x.internal_failed_rows||0)?`<div class="tiny status-FAILED">failed ${fmtNum(x.internal_failed_rows)}</div>`:""}</td><td class="nowrap">${fmtTime(x.processed_at)}</td><td><button class="btn light" onclick="showPackage('${esc(x.package_id)}')">查看</button></td></tr>`).join("")}
+async function showPackage(id){const t=document.getElementById("package-detail");t.className="";t.innerHTML="加载中…";try{const r=await getJson(`/api/admin/packages/${encodeURIComponent(id)}`),p=r.package||{};const files=r.internal_files||[],issues=r.quality_issues||[];t.innerHTML=`<div><b>${esc(p.file_name)}</b> ${statusHtml(p.status)}</div><div class="tiny mono" style="margin-top:6px">${esc(p.package_id)}<br>${esc(p.sha256)}</div><div class="detail-block"><h3>来源</h3><div class="tiny">${esc(domainLabel(p.domain))} · ${esc(p.package_kind)} · ${esc(p.partition_dimension)} ${esc(p.partition_value)}<br>${fmtBytes(p.file_size)} · rank ${esc(p.source_rank)}<br>archive: ${esc(p.archived_path||"—")}</div></div><div class="detail-block"><h3>内部文件 (${files.length})</h3><div style="max-height:250px;overflow:auto"><table><thead><tr><th>角色</th><th>文件</th><th>逻辑行</th><th>失败</th></tr></thead><tbody>${files.map(f=>`<tr><td>${esc(f.file_role)}</td><td>${esc(f.internal_name)}</td><td>${fmtNum(f.logical_rows)}</td><td class="${Number(f.failed_rows||0)?"status-FAILED":""}">${fmtNum(f.failed_rows)}</td></tr>`).join("")}</tbody></table></div></div><div class="detail-block"><h3>质量问题 (${issues.length})</h3>${issues.length?issues.slice(0,30).map(i=>`<div class="tiny" style="padding:5px 0;border-bottom:1px solid #edf0f5"><b>${esc(i.severity)} · ${esc(i.issue_type)}</b> × ${fmtNum(i.occurrence_count)}<br>${esc(i.source_file||"")}</div>`).join(""):'<div class="tiny ok">无记录的质量问题</div>'}</div><div class="detail-block"><h3>Profile</h3><pre>${esc(JSON.stringify(p.profile||{},null,2))}</pre></div>`}catch(e){t.innerHTML=`<div class="error-box">${esc(e.message)}</div>`}}
+async function loadJobs(force=false){if(jobsLoaded&&!force&&overviewCache){renderJobsTable(overviewCache.jobs.recent||[]);return}const rows=await getJson("/api/admin/jobs?limit=300");jobsLoaded=true;renderJobsTable(rows);renderRecentJobs(rows)}
+function renderJobsTable(rows){document.getElementById("jobs-table").innerHTML=rows.map(x=>`<tr><td>${esc(domainLabel(x.domain))}</td><td><b>${esc(x.job_type)}</b></td><td>${esc(x.trigger_type)}</td><td>${statusHtml(x.status)}</td><td class="nowrap">${fmtTime(x.started_at)}</td><td>${fmtDuration(x.duration_seconds)}</td><td>${x.error_message?`<div class="status-FAILED">${esc(x.error_message)}</div>`:`<code class="mono">${esc(JSON.stringify(x.metrics||{}))}</code>`}</td></tr>`).join("")}
+async function findCase(){const domain=document.getElementById("lookup-domain").value,value=document.getElementById("case-input").value.trim(),t=document.getElementById("case-result");if(!value)return;t.textContent="查询中…";try{const url=domain==="US"?`/api/us/cases/${encodeURIComponent(value)}`:`/api/cn/cases/${encodeURIComponent(value)}`;const r=await getJson(url);t.innerHTML=`<pre>${esc(JSON.stringify(r,null,2))}</pre>`}catch(e){t.innerHTML=`<div class="error-box">${esc(e.message)}</div>`}}
+async function runCn(){const t=document.getElementById("scan-result");t.textContent="运行中…";try{const r=await getJson("/api/jobs/cn/run",{method:"POST"});t.textContent=JSON.stringify(r);await refreshOverview()}catch(e){t.textContent=e.message}}
+async function retryCn(){const t=document.getElementById("scan-result");t.textContent="重试中…";try{const r=await getJson("/api/jobs/cn/retry",{method:"POST"});t.textContent=JSON.stringify(r);await refreshOverview()}catch(e){t.textContent=e.message}}
+
+document.querySelectorAll(".tab").forEach(btn=>btn.addEventListener("click",async()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));btn.classList.add("active");document.getElementById(btn.dataset.tab).classList.add("active");try{if(btn.dataset.tab==="raw")await loadRaw();if(btn.dataset.tab==="packages"&&!packagesLoaded)await loadPackages();if(btn.dataset.tab==="jobs")await loadJobs()}catch(e){console.error(e)}}));
+refreshOverview();setInterval(refreshOverview,15000);
 </script>
 </body>
 </html>
