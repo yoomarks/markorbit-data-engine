@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from datetime import date
 from typing import Any
 import uuid
@@ -10,7 +11,12 @@ from app.us.change_history import (
     build_case_observation_row,
 )
 from app.us.model import USCaseBundle
-from app.us.publisher import TABLE_COLUMNS, USBatchPublisher, stable_hash
+from app.us.publisher import (
+    TABLE_COLUMNS,
+    USBatchPublisher,
+    _madrid_filing_identity,
+    stable_hash,
+)
 
 
 SNAPSHOT_CHILD_TABLES = {
@@ -41,6 +47,54 @@ def _normalize_queried_value(value: object) -> object:
     if isinstance(value, (bytes, bytearray, memoryview)):
         return _text(value)
     return value
+
+
+def _compact_madrid_filing_snapshot(bundle: USCaseBundle) -> USCaseBundle:
+    """Keep one deterministic current Madrid filing row per filing identity.
+
+    Real USPTO application XML may repeat one Madrid reference across several
+    entry numbers and historical international-status dates. Those source rows
+    remain available to package observations/history, but the replaceable
+    current table needs exactly one winner for the reference.
+    """
+    if len(bundle.madrid_filings) < 2:
+        return bundle
+
+    grouped: dict[tuple[object, ...], list[Any]] = {}
+    for filing in bundle.madrid_filings:
+        grouped.setdefault(_madrid_filing_identity(filing), []).append(filing)
+
+    if all(len(records) == 1 for records in grouped.values()):
+        return bundle
+
+    winners: list[Any] = []
+    for identity in sorted(grouped, key=lambda item: tuple(str(value) for value in item)):
+        candidates = grouped[identity]
+        latest_status_date = max(
+            (record.international_status_date or date.min for record in candidates),
+            default=date.min,
+        )
+        candidates = [
+            record
+            for record in candidates
+            if (record.international_status_date or date.min) == latest_status_date
+        ]
+
+        latest_entry_number = max((record.entry_number for record in candidates), default=0)
+        candidates = [
+            record for record in candidates if record.entry_number == latest_entry_number
+        ]
+
+        by_hash = {stable_hash(asdict(record)): record for record in candidates}
+        if len(by_hash) != 1:
+            raise ValueError(
+                "Ambiguous Madrid filing current snapshot for "
+                f"identity={identity!r}, status_date={latest_status_date}, "
+                f"entry_number={latest_entry_number}"
+            )
+        winners.append(next(iter(by_hash.values())))
+
+    return replace(bundle, madrid_filings=tuple(winners))
 
 
 class SnapshotAwareUSBatchPublisher(USBatchPublisher):
@@ -86,7 +140,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                 source_rank=self.source_rank,
             )
         )
-        super().add(bundle, source_file)
+        super().add(_compact_madrid_filing_snapshot(bundle), source_file)
 
     def _stale_current_serials(self) -> set[str]:
         if not self._touched_serial_transactions:
@@ -122,7 +176,9 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             columns = TABLE_COLUMNS[table]
             serial_index = columns.index("serial_number")
             self.buffers[table][:] = [
-                row for row in self.buffers[table] if _text(row[serial_index]) not in stale_serials
+                row
+                for row in self.buffers[table]
+                if _text(row[serial_index]) not in stale_serials
             ]
         for serial in stale_serials:
             self._touched_serial_sources.pop(serial, None)

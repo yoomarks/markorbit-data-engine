@@ -5,7 +5,7 @@ import uuid
 from app.us.model import USCaseBundle, USCaseRecord, USMadridFilingRecord
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, bundle_rows
-from app.us.publisher_m12 import SNAPSHOT_CHILD_TABLES
+from app.us.publisher_m12 import SNAPSHOT_CHILD_TABLES, _compact_madrid_filing_snapshot
 
 
 FIXTURE = Path("tests/fixtures/us_m13_official_facts.xml")
@@ -95,6 +95,54 @@ def test_madrid_filing_reference_distinguishes_reused_entry_number() -> None:
 
     assert len(rows) == 2
     assert rows[0][key_index] != rows[1][key_index]
+
+
+def test_madrid_filing_current_compacts_reference_status_history() -> None:
+    serial_number = "78650787"
+    bundle = USCaseBundle(
+        case=USCaseRecord(serial_number=serial_number),
+        madrid_filings=(
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=12,
+                reference_number="A0003329",
+                international_registration_number="0899295",
+                international_status_code="480",
+                international_status_date=date(2019, 7, 1),
+            ),
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=11,
+                reference_number="A0003329",
+                international_registration_number="0899295",
+                international_status_code="480",
+                international_status_date=date(2022, 12, 14),
+            ),
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=13,
+                reference_number="A0003329",
+                international_registration_number="0899295",
+                international_status_code="480",
+                international_status_date=date(2006, 11, 2),
+            ),
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=13,
+                reference_number="A0003329",
+                international_registration_number="0899295",
+                international_status_code="480",
+                international_status_date=date(2022, 12, 14),
+            ),
+        ),
+    )
+
+    current = _compact_madrid_filing_snapshot(bundle)
+
+    assert len(current.madrid_filings) == 1
+    assert current.madrid_filings[0].reference_number == "A0003329"
+    assert current.madrid_filings[0].international_status_date == date(2022, 12, 14)
+    assert current.madrid_filings[0].entry_number == 13
 
 
 def test_m13_publisher_outputs_all_official_fact_tables_with_lineage() -> None:
