@@ -322,10 +322,10 @@ def _foreign_application_key(record: Any) -> str:
 
 
 def _madrid_filing_identity(record: Any) -> tuple[object, ...]:
-    if record.entry_number > 0:
-        return (record.serial_number, "ENTRY", record.entry_number)
     if record.reference_number:
         return (record.serial_number, "REF", record.reference_number)
+    if record.entry_number > 0:
+        return (record.serial_number, "ENTRY", record.entry_number)
     return (
         record.serial_number,
         "FACT",
