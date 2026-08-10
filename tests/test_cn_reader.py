@@ -34,7 +34,7 @@ def make_members_zip(tmp_path: Path, name: str, members: dict[str, bytes]) -> Pa
 
 def test_multiline_and_unbalanced_quote_do_not_absorb_next_record(tmp_path: Path):
     row1 = (
-        '12345678,9,2023-01-01,TEST,普通,100,,,,,,,'
+        '12345678,9,2023-01-01,TEST,普通,100,,,,,,,,'
         '"第一行说明\n第二行说明,,,,否,否,文字,,,否'
     )
     row2 = "12345679,35,2023-01-02,NEXT,普通,101,,,,,,,,,,,,否,否,文字,,,否"
@@ -69,7 +69,7 @@ def test_header_alias_announcement_date_is_role_scoped(tmp_path: Path):
 
 def test_quoted_comma_is_preserved_in_design_description(tmp_path: Path):
     row = (
-        '12345678,9,2023-01-01,TEST,普通,100,,,,,,,'
+        '12345678,9,2023-01-01,TEST,普通,100,,,,,,,,'
         '"含有,逗号的说明",,,,否,否,文字,,,否'
     )
     path = make_zip(tmp_path, "sample.zip", HEADER + "\n" + row + "\n")
