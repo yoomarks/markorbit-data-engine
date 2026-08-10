@@ -15,6 +15,8 @@ def test_cn_failure_diagnostic_is_read_only_and_wired_into_replay():
     assert "query_duration_ms" in diagnostic
     assert "memory_usage" in diagnostic
     assert "query" in diagnostic
+    assert "has(databases, 'markorbit_facts')" in diagnostic
+    assert "database = 'markorbit_facts'" not in diagnostic
     assert "INSERT INTO" not in diagnostic
     assert "ALTER TABLE" not in diagnostic
     assert "DROP TABLE" not in diagnostic
