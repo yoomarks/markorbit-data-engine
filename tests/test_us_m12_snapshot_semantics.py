@@ -6,6 +6,7 @@ import uuid
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, bundle_rows
 from app.us.publisher_m12 import (
+    CURRENT_SNAPSHOT_TABLES,
     SNAPSHOT_CHILD_TABLES,
     SnapshotAwareUSBatchPublisher,
     _text,
@@ -21,13 +22,22 @@ class QueryResult:
 
 
 class FakeClickHouse:
-    def __init__(self, existing: dict[str, list[list[object]]]) -> None:
+    def __init__(
+        self,
+        existing: dict[str, list[list[object]]],
+        existing_case_dates: dict[str, date] | None = None,
+    ) -> None:
         self.existing = existing
+        self.existing_case_dates = existing_case_dates or {}
         self.queries: list[str] = []
         self.inserts: list[tuple[str, list[list[object]], list[str]]] = []
 
     def query(self, sql: str) -> QueryResult:
         self.queries.append(sql)
+        if "FROM markorbit_facts.us_case_current FINAL" in sql:
+            return QueryResult(
+                [(serial, transaction_date) for serial, transaction_date in self.existing_case_dates.items()]
+            )
         for table, rows in self.existing.items():
             if f"FROM {table} FINAL" in sql:
                 return QueryResult([tuple(row) for row in rows])
@@ -130,9 +140,67 @@ def test_snapshot_lookup_only_considers_older_current_children() -> None:
     publisher.add(replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml")
     publisher.close()
 
-    assert len(client.queries) == len(SNAPSHOT_CHILD_TABLES)
-    assert all("source_rank < 200" in sql for sql in client.queries)
-    assert all("is_deleted = 0" in sql for sql in client.queries)
+    assert len(client.queries) == len(SNAPSHOT_CHILD_TABLES) + 1
+    assert "FROM markorbit_facts.us_case_current FINAL" in client.queries[0]
+    child_queries = client.queries[1:]
+    assert all("source_rank < 200" in sql for sql in child_queries)
+    assert all("is_deleted = 0" in sql for sql in child_queries)
+
+
+def test_older_transaction_does_not_replace_newer_current_snapshot() -> None:
+    old_bundle, existing = _old_child_rows()
+    serial = old_bundle.case.serial_number
+    incoming = replace(
+        old_bundle,
+        case=replace(old_bundle.case, transaction_date=date(2026, 1, 8)),
+    )
+    client = FakeClickHouse(existing, {serial: date(2026, 3, 4)})
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("77777777-7777-7777-7777-777777777777"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=3_000_000_000_000_001,
+        batch_size=100,
+    )
+
+    publisher.add(incoming, "apc260108.xml")
+    publisher.close()
+
+    inserted_tables = {name for name, _rows, _columns in client.inserts}
+    assert not (inserted_tables & CURRENT_SNAPSHOT_TABLES)
+    assert "markorbit_facts.us_case_observation_history" in inserted_tables
+    assert all(count == 0 for count in publisher.tombstone_counts.values())
+
+
+def test_newer_transaction_still_updates_current_snapshot() -> None:
+    old_bundle, existing = _old_child_rows()
+    serial = old_bundle.case.serial_number
+    incoming = replace(
+        old_bundle,
+        case=replace(old_bundle.case, transaction_date=date(2026, 3, 4)),
+    )
+    client = FakeClickHouse(existing, {serial: date(2026, 1, 8)})
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("88888888-8888-8888-8888-888888888888"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 3, 4),
+        source_rank=3_000_000_000_000_002,
+        batch_size=100,
+    )
+
+    publisher.add(incoming, "apc260304.xml")
+    publisher.close()
+
+    case_rows = [
+        rows
+        for name, rows, _columns in client.inserts
+        if name == "markorbit_facts.us_case_current"
+    ]
+    assert len(case_rows) == 1
+    transaction_index = TABLE_COLUMNS["markorbit_facts.us_case_current"].index("transaction_date")
+    assert case_rows[0][0][transaction_index] == date(2026, 3, 4)
 
 
 def test_event_histories_are_not_snapshot_tombstoned() -> None:
