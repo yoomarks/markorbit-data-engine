@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 import uuid
 
+from app.us.model import USCaseBundle, USCaseRecord, USMadridFilingRecord
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, bundle_rows
 from app.us.publisher_m12 import SNAPSHOT_CHILD_TABLES
@@ -59,6 +60,41 @@ def test_madrid_filing_request_is_distinct_from_inbound_66a_case_fact() -> None:
     assert bundle.case.madrid_66a_current is False
     assert bundle.case.international_registration_number == ""
     assert bundle.madrid_filings[0].international_registration_number == "1271416"
+
+
+def test_madrid_filing_reference_distinguishes_reused_entry_number() -> None:
+    serial_number = "78650787"
+    bundle = USCaseBundle(
+        case=USCaseRecord(serial_number=serial_number),
+        madrid_filings=(
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=12,
+                reference_number="A1000001",
+                international_registration_number="1800001",
+            ),
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=12,
+                reference_number="A1000002",
+                international_registration_number="1800002",
+            ),
+        ),
+    )
+    rows = bundle_rows(
+        bundle,
+        package_id=uuid.UUID("77777777-7777-7777-7777-777777777777"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 9),
+        source_file="apc260109.xml",
+        source_rank=201,
+    )["markorbit_facts.us_madrid_filing_current"]
+    key_index = TABLE_COLUMNS["markorbit_facts.us_madrid_filing_current"].index(
+        "madrid_filing_key"
+    )
+
+    assert len(rows) == 2
+    assert rows[0][key_index] != rows[1][key_index]
 
 
 def test_m13_publisher_outputs_all_official_fact_tables_with_lineage() -> None:
