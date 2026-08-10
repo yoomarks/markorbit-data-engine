@@ -52,5 +52,6 @@ def clickhouse_client():
         username=settings.clickhouse_user,
         password=settings.clickhouse_password,
         database=settings.clickhouse_db,
+        send_receive_timeout=settings.clickhouse_send_receive_timeout,
         settings=query_settings,
     )
