@@ -11,6 +11,7 @@ def test_clickhouse_client_has_large_package_spill_controls():
     assert "clickhouse_external_sort_bytes: int = 536_870_912" in config
     assert 'clickhouse_join_algorithm: str = ""' in config
     assert "clickhouse_grace_hash_join_initial_buckets: int = 32" in config
+    assert "clickhouse_send_receive_timeout: int = 300" in config
 
     assert '"max_threads": settings.clickhouse_max_threads' in db
     assert '"max_bytes_before_external_group_by"' in db
@@ -21,6 +22,8 @@ def test_clickhouse_client_has_large_package_spill_controls():
     assert 'query_settings["join_algorithm"] = settings.clickhouse_join_algorithm' in db
     assert 'if settings.clickhouse_join_algorithm == "grace_hash":' in db
     assert 'query_settings["grace_hash_join_initial_buckets"]' in db
+    assert "send_receive_timeout=settings.clickhouse_send_receive_timeout" in db
 
     assert '"CLICKHOUSE_JOIN_ALGORITHM=grace_hash"' in replay
     assert '"CLICKHOUSE_GRACE_HASH_JOIN_INITIAL_BUCKETS=32"' in replay
+    assert '"CLICKHOUSE_SEND_RECEIVE_TIMEOUT=3600"' in replay
