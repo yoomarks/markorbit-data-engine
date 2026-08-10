@@ -40,5 +40,9 @@ def clickhouse_client():
                 settings.clickhouse_external_group_by_bytes
             ),
             "max_bytes_before_external_sort": settings.clickhouse_external_sort_bytes,
+            "join_algorithm": settings.clickhouse_join_algorithm,
+            "grace_hash_join_initial_buckets": (
+                settings.clickhouse_grace_hash_join_initial_buckets
+            ),
         },
     )
