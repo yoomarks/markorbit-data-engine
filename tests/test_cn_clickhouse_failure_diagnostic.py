@@ -20,4 +20,6 @@ def test_cn_failure_diagnostic_is_read_only_and_wired_into_replay():
     assert "DROP TABLE" not in diagnostic
 
     assert "python -m app.cn.clickhouse_failure" in replay
+    assert '"compose", "run", "--build"' in replay
     assert "app.cn.clickhouse_failure" in standalone
+    assert "compose run --build" in standalone
