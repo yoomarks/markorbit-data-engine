@@ -31,11 +31,13 @@ def _bundle(
     *,
     status_code: str = "630",
     owner: USOwnerRecord | None = None,
+    transaction_date: date | None = None,
 ) -> USCaseBundle:
     return USCaseBundle(
         case=USCaseRecord(
             serial_number=SERIAL,
             registration_number="7654321",
+            transaction_date=transaction_date,
             filing_date=date(2025, 1, 2),
             status_code=status_code,
             status_date=date(2026, 1, 2),
@@ -162,3 +164,35 @@ def test_derive_changes_skips_unchanged_observation() -> None:
         for index in (1, 2)
     ]
     assert derive_changes(rows) == []
+
+
+def test_derive_changes_orders_real_freshness_before_package_rank() -> None:
+    historical_newer = _observation_dict(
+        build_case_observation_row(
+            _bundle(status_code="700", transaction_date=date(2026, 3, 4)),
+            package_id=uuid.UUID("00000000-0000-0000-0000-000000000010"),
+            package_kind="HISTORICAL_APPLICATIONS",
+            source_effective_date=date(2025, 12, 31),
+            source_file="apc18840407-20251231-05.xml",
+            source_rank=1_000_000_000_000_005,
+        )
+    )
+    daily_older = _observation_dict(
+        build_case_observation_row(
+            _bundle(status_code="630", transaction_date=date(2026, 1, 8)),
+            package_id=uuid.UUID("00000000-0000-0000-0000-000000000011"),
+            package_kind="DAILY_APPLICATIONS",
+            source_effective_date=date(2026, 1, 8),
+            source_file="apc260108.xml",
+            source_rank=3_000_000_000_000_001,
+        )
+    )
+
+    changes = derive_changes([historical_newer, daily_older])
+
+    assert len(changes) == 1
+    assert changes[0]["field_changes"]["status_code"] == {
+        "before": "630",
+        "after": "700",
+    }
+    assert changes[0]["observation_key"] == historical_newer["observation_key"]
