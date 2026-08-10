@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
-from typing import Iterator
+from typing import Any, Iterator
 import uuid
 import zipfile
 
@@ -14,6 +14,7 @@ from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import USCaseBundle
 from app.us.parser import iter_case_bundles
 from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
+from app.us.repository import list_us_replay_registry
 
 
 OUTPUT_PACKAGE_COLUMNS = {
@@ -81,6 +82,46 @@ def _archive_package(path: Path, raw_root: Path) -> Path:
     return destination
 
 
+def _later_successful_packages(
+    package_meta: dict[str, Any],
+    registry_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    package_id = str(package_meta["package_id"])
+    source_rank = int(package_meta["source_rank"])
+    return sorted(
+        (
+            row
+            for row in registry_rows
+            if str(row.get("package_id") or "") != package_id
+            and str(row.get("status") or "") == "SUCCESS"
+            and int(row.get("source_rank") or 0) > source_rank
+        ),
+        key=lambda row: (
+            int(row.get("source_rank") or 0),
+            str(row.get("package_id") or ""),
+        ),
+    )
+
+
+def _assert_monotonic_package_order(
+    package_meta: dict[str, Any],
+    registry_rows: list[dict[str, Any]],
+) -> None:
+    later = _later_successful_packages(package_meta, registry_rows)
+    if not later:
+        return
+    examples = ", ".join(
+        f"{row.get('file_name')}@{row.get('source_rank')}" for row in later[:5]
+    )
+    raise RuntimeError(
+        "Out-of-order US Application ingestion blocked: "
+        f"{package_meta.get('file_name')}@{package_meta.get('source_rank')} is earlier than "
+        f"already-successful package(s) {examples}. "
+        "Run a clean deterministic source-rank replay instead of inserting an earlier package "
+        "behind later current snapshots."
+    )
+
+
 def ingest_us_package(
     package_id: str,
     path: Path,
@@ -94,6 +135,7 @@ def ingest_us_package(
     package_meta = get_package(str(package_uuid))
     expected_sha = str(package_meta.get("sha256") or "").lower()
     actual_sha = sha256_file(path).lower()
+    _assert_monotonic_package_order(package_meta, list_us_replay_registry())
 
     run_id = create_job_run(
         job_type="US_PACKAGE_INGESTION",
