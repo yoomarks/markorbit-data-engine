@@ -19,13 +19,15 @@ class Settings(BaseSettings):
     clickhouse_user: str = "markorbit"
     clickhouse_password: str = "change-me-clickhouse"
 
-    # Large CN base packages can drive ClickHouse aggregation above Docker's
-    # available memory when many aggregation threads retain group states at once.
-    # Keep normal SQL semantics unchanged, but let aggregation/sort spill to the
-    # ClickHouse volume before the server-wide OvercommitTracker has to kill it.
+    # Large CN base packages can drive ClickHouse aggregation and joins above
+    # Docker's available memory. Keep SQL semantics unchanged, but constrain
+    # parallelism and let GROUP BY / SORT / JOIN spill to the ClickHouse volume
+    # before the server-wide OvercommitTracker has to kill the query.
     clickhouse_max_threads: int = 4
     clickhouse_external_group_by_bytes: int = 536_870_912
     clickhouse_external_sort_bytes: int = 536_870_912
+    clickhouse_join_algorithm: str = "grace_hash"
+    clickhouse_grace_hash_join_initial_buckets: int = 32
 
     raw_data_root: Path = Path("./raw_data")
     cn_scan_interval_seconds: int = 300
