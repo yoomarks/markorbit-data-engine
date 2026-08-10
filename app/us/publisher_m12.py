@@ -23,6 +23,7 @@ SNAPSHOT_CHILD_TABLES = {
     "markorbit_facts.us_foreign_application_current": "foreign_application_key",
     "markorbit_facts.us_madrid_filing_current": "madrid_filing_key",
 }
+CURRENT_SNAPSHOT_TABLES = {"markorbit_facts.us_case_current", *SNAPSHOT_CHILD_TABLES}
 
 
 def _text(value: object) -> str:
@@ -64,6 +65,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             batch_size=batch_size,
         )
         self._touched_serial_sources: dict[str, str] = {}
+        self._touched_serial_transactions: dict[str, date | None] = {}
         self.tombstone_counts: dict[str, int] = {
             table: 0 for table in SNAPSHOT_CHILD_TABLES
         }
@@ -71,7 +73,9 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
         self.observation_count = 0
 
     def add(self, bundle: USCaseBundle, source_file: str) -> None:
-        self._touched_serial_sources[bundle.case.serial_number] = source_file
+        serial = bundle.case.serial_number
+        self._touched_serial_sources[serial] = source_file
+        self._touched_serial_transactions[serial] = bundle.case.transaction_date
         self.observation_buffer.append(
             build_case_observation_row(
                 bundle,
@@ -83,6 +87,46 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             )
         )
         super().add(bundle, source_file)
+
+    def _stale_current_serials(self) -> set[str]:
+        if not self._touched_serial_transactions:
+            return set()
+        serial_sql = ", ".join(
+            f"'{serial}'" for serial in sorted(self._touched_serial_transactions)
+        )
+        rows = self.client.query(
+            f"""
+            SELECT serial_number, transaction_date
+            FROM markorbit_facts.us_case_current FINAL
+            WHERE is_deleted = 0
+              AND serial_number IN ({serial_sql})
+            """
+        ).result_rows
+        existing_dates = {
+            _text(serial): transaction_date
+            for serial, transaction_date in rows
+            if transaction_date is not None
+        }
+        return {
+            serial
+            for serial, incoming_date in self._touched_serial_transactions.items()
+            if incoming_date is not None
+            and serial in existing_dates
+            and incoming_date < existing_dates[serial]
+        }
+
+    def _drop_stale_current_rows(self, stale_serials: set[str]) -> None:
+        if not stale_serials:
+            return
+        for table in CURRENT_SNAPSHOT_TABLES:
+            columns = TABLE_COLUMNS[table]
+            serial_index = columns.index("serial_number")
+            self.buffers[table][:] = [
+                row for row in self.buffers[table] if _text(row[serial_index]) not in stale_serials
+            ]
+        for serial in stale_serials:
+            self._touched_serial_sources.pop(serial, None)
+            self._touched_serial_transactions.pop(serial, None)
 
     def _append_snapshot_tombstones(self) -> None:
         if not self._touched_serial_sources:
@@ -154,10 +198,12 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
         self.observation_buffer.clear()
 
     def flush(self) -> None:
+        self._drop_stale_current_rows(self._stale_current_serials())
         self._append_snapshot_tombstones()
         super().flush()
         self._flush_observations()
         self._touched_serial_sources.clear()
+        self._touched_serial_transactions.clear()
 
     def close(self) -> dict[str, int]:
         counts = super().close()
