@@ -20,13 +20,13 @@ class Settings(BaseSettings):
     clickhouse_password: str = "change-me-clickhouse"
 
     # Large CN base packages can drive ClickHouse aggregation and joins above
-    # Docker's available memory. Keep SQL semantics unchanged, but constrain
-    # parallelism and let GROUP BY / SORT / JOIN spill to the ClickHouse volume
-    # before the server-wide OvercommitTracker has to kill the query.
+    # Docker's available memory. GROUP BY / SORT spill controls are safe global
+    # defaults. JOIN spilling is opt-in because ClickHouse 24.8 does not support
+    # grace_hash for every strictness/storage combination used by other domains.
     clickhouse_max_threads: int = 4
     clickhouse_external_group_by_bytes: int = 536_870_912
     clickhouse_external_sort_bytes: int = 536_870_912
-    clickhouse_join_algorithm: str = "grace_hash"
+    clickhouse_join_algorithm: str = ""
     clickhouse_grace_hash_join_initial_buckets: int = 32
 
     raw_data_root: Path = Path("./raw_data")
