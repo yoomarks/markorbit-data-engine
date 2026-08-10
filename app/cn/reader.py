@@ -25,6 +25,7 @@ MOJIBAKE_MARKERS = (
     "锛", "锝", "鍙", "鍚", "鍏", "鍟", "鐢", "鐮", "浠", "悊", "浜", "�",
 )
 ENCODING_CANDIDATES = ("utf-8-sig", "utf-8", "gb18030", "gbk", "cp936", "big5", "latin1")
+OLE_COMPOUND_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 APP_RE = re.compile(r"^(?:G)?\d{5,}[A-Z]*$", re.I)
 CLASS_RE = re.compile(r"^\d{1,2}$")
@@ -52,6 +53,39 @@ def detect_encoding(sample: bytes, forced: str = "auto") -> str:
         scored.append((score_decoded_text(text), encoding))
     return max(scored)[1] if scored else "utf-8-sig"
 
+
+def _detect_member_delimiter(member: PackageMember, sample: bytes, encoding: str) -> str:
+    if not member.internal_name.lower().endswith(".xls"):
+        return ","
+
+    if sample.startswith(OLE_COMPOUND_MAGIC):
+        raise RuntimeError(
+            f"Binary OLE/BIFF .xls is not supported for streaming CN ingestion: "
+            f"{member.internal_name}"
+        )
+
+    decoded = sample.decode(encoding, errors="replace").lstrip("\ufeff\x00\r\n \t")
+    lower_head = decoded[:4096].lower()
+    if (
+        lower_head.startswith("<?xml")
+        or "<workbook" in lower_head
+        or "urn:schemas-microsoft-com:office:spreadsheet" in lower_head
+    ):
+        raise RuntimeError(
+            f"SpreadsheetML/XML .xls is not supported by the CN delimited-text reader: "
+            f"{member.internal_name}"
+        )
+
+    header_line = next((line for line in decoded.splitlines() if line.strip()), "")
+    comma_count = header_line.count(",")
+    tab_count = header_line.count("\t")
+    if tab_count > comma_count and tab_count > 0:
+        return "\t"
+    if comma_count > 0:
+        return ","
+    raise RuntimeError(
+        f"Unable to identify comma/tab delimiter for text .xls member: {member.internal_name}"
+    )
 
 
 def _cjk_score(value: str) -> int:
@@ -84,20 +118,13 @@ def repair_mojibake_cell(value: str) -> tuple[str, bool]:
     return (best, best != value) if _cjk_score(best) > _cjk_score(value) else (value, False)
 
 
-def _record_start(schema: FileSchema, physical_line: str) -> bool:
-    """Identify a physical line that begins a new logical CSV record.
-
-    CN exports exist in both unquoted and fully quoted forms. Parsing only by raw
-    comma splitting makes a quoted application number look like ``\"123...\"``
-    and can concatenate millions of physical lines into one logical record. Use
-    ``csv.reader`` for the prefix probe so production ingestion, audits and raw
-    scans all share the same quoted/unquoted boundary semantics.
-    """
+def _record_start(schema: FileSchema, physical_line: str, delimiter: str = ",") -> bool:
+    """Identify a physical line that begins a new logical delimited record."""
     line = physical_line.lstrip("\ufeff")
     try:
-        values = next(csv.reader([line], strict=False))
+        values = next(csv.reader([line], delimiter=delimiter, strict=False))
     except (csv.Error, StopIteration):
-        values = line.split(",", 3)
+        values = line.split(delimiter, 3)
 
     if schema.role == "agent":
         return True
@@ -127,6 +154,7 @@ class FileProfile:
     role: str
     internal_name: str
     encoding: str
+    delimiter: str
     header_raw: list[str]
     header_canonical: list[str]
     physical_rows: int = 0
@@ -146,6 +174,7 @@ class FileProfile:
             "role": self.role,
             "internal_name": self.internal_name,
             "encoding": self.encoding,
+            "delimiter": "TAB" if self.delimiter == "\t" else self.delimiter,
             "header_raw": self.header_raw,
             "header_canonical": self.header_canonical,
             "physical_rows": self.physical_rows,
@@ -162,9 +191,9 @@ class FileProfile:
         }
 
 
-def _parse_csv_record(raw_record: str) -> list[str] | None:
+def _parse_delimited_record(raw_record: str, delimiter: str) -> list[str] | None:
     try:
-        return next(csv.reader([raw_record], strict=False))
+        return next(csv.reader([raw_record], delimiter=delimiter, strict=False))
     except (csv.Error, StopIteration):
         return None
 
@@ -173,6 +202,7 @@ def _merge_variable_column(
     schema: FileSchema,
     header: list[str],
     values: list[str],
+    delimiter: str = ",",
 ) -> list[str] | None:
     expected = len(header)
     if len(values) == expected:
@@ -188,7 +218,7 @@ def _merge_variable_column(
         return None
     merged = (
         values[:variable_index]
-        + [",".join(values[variable_index:len(values) - stable_tail])]
+        + [delimiter.join(values[variable_index:len(values) - stable_tail])]
         + (values[-stable_tail:] if stable_tail else [])
     )
     return merged if len(merged) == expected else None
@@ -198,21 +228,22 @@ def _repair_values(
     schema: FileSchema,
     header: list[str],
     raw_record: str,
+    delimiter: str = ",",
 ) -> tuple[list[str] | None, str]:
-    values = _parse_csv_record(raw_record)
+    values = _parse_delimited_record(raw_record, delimiter)
     if values is not None:
         if len(values) == len(header):
             return values, "OK"
-        merged = _merge_variable_column(schema, header, values)
+        merged = _merge_variable_column(schema, header, values, delimiter)
         if merged is not None:
             return merged, "MERGED_EXTRA_COLUMNS"
 
     # A malformed quote must never be allowed to absorb later records.
     # Record boundaries were already reconstructed from physical line starts.
-    fallback_values = raw_record.replace('"', "＂").split(",")
+    fallback_values = raw_record.replace('"', "＂").split(delimiter)
     if len(fallback_values) == len(header):
         return fallback_values, "FALLBACK_QUOTE_NEUTRALIZED"
-    merged = _merge_variable_column(schema, header, fallback_values)
+    merged = _merge_variable_column(schema, header, fallback_values, delimiter)
     if merged is not None:
         return merged, "FALLBACK_QUOTE_NEUTRALIZED_AND_MERGED"
     return None, f"UNREPAIRABLE_COLUMNS:{len(fallback_values)}/{len(header)}"
@@ -227,12 +258,18 @@ def iter_member_rows(
         raise ValueError(f"Unclassified member: {member.internal_name}")
 
     sample = member.sample(65_536)
+    if member.internal_name.lower().endswith(".xls") and sample.startswith(OLE_COMPOUND_MAGIC):
+        raise RuntimeError(
+            f"Binary OLE/BIFF .xls is not supported for streaming CN ingestion: "
+            f"{member.internal_name}"
+        )
     encoding = detect_encoding(sample, forced_encoding)
+    delimiter = _detect_member_delimiter(member, sample, encoding)
     binary = member.open_binary()
     text = io.TextIOWrapper(binary, encoding=encoding, errors="replace", newline="")
 
     raw_header_line = text.readline().rstrip("\r\n")
-    raw_header = next(csv.reader([raw_header_line]))
+    raw_header = next(csv.reader([raw_header_line], delimiter=delimiter))
     header = canonical_header(member.schema, raw_header)
 
     # New basic files can omit 商标名称. Header-driven parsing keeps them valid
@@ -241,6 +278,7 @@ def iter_member_rows(
         role=member.schema.role,
         internal_name=member.internal_name,
         encoding=encoding,
+        delimiter=delimiter,
         header_raw=raw_header,
         header_canonical=header,
         physical_rows=1,
@@ -261,7 +299,12 @@ def iter_member_rows(
             replacement_chars = raw_record.count("\ufffd")
             profile.replacement_chars += replacement_chars
 
-            values, repair_status = _repair_values(member.schema, header, raw_record)
+            values, repair_status = _repair_values(
+                member.schema,
+                header,
+                raw_record,
+                delimiter,
+            )
             profile.repairs[repair_status] += 1
             if values is None:
                 profile.failed_rows += 1
@@ -302,7 +345,7 @@ def iter_member_rows(
         for physical_line_no, physical_line in enumerate(text, start=2):
             profile.physical_rows += 1
             line = physical_line.rstrip("\r\n")
-            if _record_start(member.schema, line):
+            if _record_start(member.schema, line, delimiter):
                 if current is not None:
                     parsed = emit(current, start_line, end_line, continuation_count)
                     if parsed is not None and not profile_only:
