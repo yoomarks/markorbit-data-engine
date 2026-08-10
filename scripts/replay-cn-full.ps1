@@ -32,6 +32,9 @@ if ($ResumeFailed) {
 }
 
 & docker @argsList
-if ($LASTEXITCODE -ne 0) {
-    throw "CN full replay exited with code $LASTEXITCODE. See the JSON event above for the exact package error."
+$replayExitCode = $LASTEXITCODE
+if ($replayExitCode -ne 0) {
+    Write-Host "CN replay failed. Reading recent ClickHouse query failures before exiting..."
+    & docker compose run --rm --no-deps -T worker python -m app.cn.clickhouse_failure
+    throw "CN full replay exited with code $replayExitCode. The ClickHouse diagnostic above identifies the failed SQL when query_log captured it."
 }
