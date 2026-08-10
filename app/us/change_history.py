@@ -87,7 +87,7 @@ def owner_snapshot_fingerprints(
             for owner in owners
             if owner.party_name.strip()
         },
-        key=str.casefold,
+        key=lambda value: (value.casefold(), value),
     )
     return {
         "owner_set_hash": stable_hash(identities),

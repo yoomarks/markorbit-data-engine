@@ -65,6 +65,18 @@ def test_owner_identity_fingerprint_detects_name_change() -> None:
     assert first["owner_set_hash"] != second["owner_set_hash"]
 
 
+def test_owner_names_have_deterministic_casefold_tie_break() -> None:
+    upper = replace(_owner("ALPHA BRAND LLC"), entry_number=1)
+    title = replace(_owner("Alpha Brand LLC"), entry_number=2)
+    expected = ["ALPHA BRAND LLC", "Alpha Brand LLC"]
+
+    first = owner_snapshot_fingerprints((upper, title))
+    second = owner_snapshot_fingerprints((title, upper))
+
+    assert first["owner_names"] == expected
+    assert second["owner_names"] == expected
+
+
 def test_observation_row_has_deterministic_lineage_and_owner_snapshot() -> None:
     package_id = uuid.UUID("00000000-0000-0000-0000-000000000123")
     row = build_case_observation_row(
