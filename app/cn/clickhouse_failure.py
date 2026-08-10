@@ -6,7 +6,7 @@ from typing import Any
 from app.db import clickhouse_client
 
 
-DIAGNOSTIC_VERSION = "CN_CLICKHOUSE_FAILURE_DIAGNOSTIC_V1"
+DIAGNOSTIC_VERSION = "CN_CLICKHOUSE_FAILURE_DIAGNOSTIC_V2_QUERY_LOG_DATABASES"
 
 
 def recent_clickhouse_failures(limit: int = 3) -> dict[str, Any]:
@@ -30,7 +30,7 @@ def recent_clickhouse_failures(limit: int = 3) -> dict[str, Any]:
         FROM system.query_log
         WHERE type = 'ExceptionWhileProcessing'
           AND exception_code != 0
-          AND database = 'markorbit_facts'
+          AND has(databases, 'markorbit_facts')
           AND query NOT LIKE '%system.query_log%'
         ORDER BY event_time_microseconds DESC
         LIMIT {safe_limit}
