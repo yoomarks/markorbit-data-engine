@@ -244,14 +244,23 @@ def derive_change(
     }
 
 
-def derive_changes(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ordered = sorted(
-        observations,
-        key=lambda item: (
-            int(item.get("source_rank") or 0),
-            str(item.get("source_package_id") or ""),
-        ),
+def _observation_order_key(item: dict[str, Any]) -> tuple[date, int, str]:
+    transaction_date = item.get("transaction_date")
+    if isinstance(transaction_date, str):
+        transaction_date = date.fromisoformat(transaction_date)
+    source_effective_date = item.get("source_effective_date")
+    if isinstance(source_effective_date, str):
+        source_effective_date = date.fromisoformat(source_effective_date)
+    observed_date = transaction_date or source_effective_date or date.min
+    return (
+        observed_date,
+        int(item.get("source_rank") or 0),
+        str(item.get("source_package_id") or ""),
     )
+
+
+def derive_changes(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(observations, key=_observation_order_key)
     changes: list[dict[str, Any]] = []
     for previous, current in zip(ordered, ordered[1:]):
         change = derive_change(previous, current)
@@ -303,7 +312,7 @@ def load_case_observations(
         LIMIT {int(limit)}
         """
     )
-    return _rows_to_dicts(result)
+    return sorted(_rows_to_dicts(result), key=_observation_order_key)
 
 
 def build_case_timeline(
