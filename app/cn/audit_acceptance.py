@@ -8,6 +8,7 @@ from app.cn.audit_followup import _orphan_parties, _packages, _scan_goods_drops
 
 
 POLICY_VERSION = "CN_M16_ACCEPTANCE_POLICY_V1_SOURCE_BACKED_INCOMPLETE_WARN"
+_FAILURE_PACKAGE_STATUSES = {"FAILED", "MISSING_FILE", "INTERRUPTED"}
 
 
 def _int_sum(values: dict[str, Any]) -> int:
@@ -118,6 +119,7 @@ def evaluate_acceptance(
         "policy_version": POLICY_VERSION,
         "legacy_audit_status": audit.get("status"),
         "hard_fail_reasons": hard_fail_reasons,
+        "not_ready_reasons": [],
         "warning_reasons": warning_reasons,
         "reconciliation": {
             "parsed_to_stage_dropped": total_dropped,
@@ -151,18 +153,87 @@ def evaluate_acceptance(
     }
 
 
+def apply_package_registry_gate(
+    result: dict[str, Any],
+    packages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Require the registered CN corpus to be fully successful before formal acceptance."""
+    status_counts: dict[str, int] = {}
+    non_success: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+
+    for row in packages:
+        status = str(row.get("status") or "UNKNOWN")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status == "SUCCESS":
+            continue
+        item = {
+            "file_name": str(row.get("file_name") or ""),
+            "status": status,
+            "source_rank": row.get("source_rank"),
+            "error_message": row.get("error_message"),
+        }
+        non_success.append(item)
+        if status in _FAILURE_PACKAGE_STATUSES:
+            failed.append(item)
+        else:
+            pending.append(item)
+
+    hard_fail_reasons = list(result.get("hard_fail_reasons") or [])
+    not_ready_reasons = list(result.get("not_ready_reasons") or [])
+    if not packages:
+        not_ready_reasons.append("no_cn_packages_registered")
+    if failed:
+        hard_fail_reasons.append("cn_package_failure_or_interruption_present")
+    if pending:
+        not_ready_reasons.append("cn_corpus_replay_not_complete")
+
+    hard_fail_reasons = sorted(set(hard_fail_reasons))
+    not_ready_reasons = sorted(set(not_ready_reasons))
+    warning_reasons = list(result.get("warning_reasons") or [])
+    status = (
+        "FAIL"
+        if hard_fail_reasons
+        else "NOT_READY"
+        if not_ready_reasons
+        else "PASS_WITH_WARNINGS"
+        if warning_reasons
+        else "PASS"
+    )
+
+    return {
+        **result,
+        "status": status,
+        "hard_fail_reasons": hard_fail_reasons,
+        "not_ready_reasons": not_ready_reasons,
+        "package_registry": {
+            "package_count": len(packages),
+            "status_counts": dict(sorted(status_counts.items())),
+            "all_success": bool(packages) and not non_success,
+            "non_success_count": len(non_success),
+            "failed_or_interrupted_count": len(failed),
+            "pending_count": len(pending),
+            "non_success_samples": non_success[:25],
+        },
+    }
+
+
 def build_acceptance_audit() -> dict[str, Any]:
     audit = build_audit(deep=True)
     packages = _packages()
     package_names = {str(row["package_id"]): str(row["file_name"]) for row in packages}
     orphan_parties = _orphan_parties(package_names)
     goods_drop_scan = _scan_goods_drops(packages)
-    return evaluate_acceptance(audit, orphan_parties, goods_drop_scan)
+    result = evaluate_acceptance(audit, orphan_parties, goods_drop_scan)
+    return apply_package_registry_gate(result, packages)
 
 
-def main() -> None:
-    print(json.dumps(build_acceptance_audit(), ensure_ascii=False, indent=2, default=str))
+def main() -> int:
+    result = build_acceptance_audit()
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    return 0 if result.get("status") in {"PASS", "PASS_WITH_WARNINGS"} else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
