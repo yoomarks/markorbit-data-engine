@@ -40,11 +40,11 @@ ORDER BY rows DESC, event_type
 
 PARTY_RELATION_ACTIONS_SQL = """
 SELECT
-    relation_action,
+    action,
     count() AS rows
 FROM markorbit_facts.cn_case_party_relation_history
-GROUP BY relation_action
-ORDER BY rows DESC, relation_action
+GROUP BY action
+ORDER BY rows DESC, action
 """
 
 READ_ONLY_QUERIES = (
