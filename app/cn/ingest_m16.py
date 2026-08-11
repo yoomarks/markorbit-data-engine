@@ -34,16 +34,22 @@ def _publish_m16(
 ) -> dict[str, Any]:
     lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
 
-    # The legacy publisher still owns case, party, relation, event and scope
-    # persistence. For M1.6 only its scope source is replaced: touched scopes are
-    # reconstructed from the complete durable goods-item current table rather
-    # than from the rows present in this package.
+    # The bounded M1.6 lifecycle publisher has already reconstructed every
+    # touched scope from the complete durable goods-item state and materialized
+    # that compact result by contiguous application ranges. Reuse that snapshot
+    # for legacy scope events/current writes instead of rebuilding millions of
+    # goods items inside each legacy INSERT.
     original_scope = legacy._scope_aggregate_sql
-    legacy._scope_aggregate_sql = lambda package: goods.scope_from_current_items_sql(package)
+    legacy._scope_aggregate_sql = lambda package: goods.scope_publish_stage_sql(package)
     try:
         metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
     finally:
         legacy._scope_aggregate_sql = original_scope
+
+    # The snapshot is transient. On a publish failure the outer legacy retry
+    # cleanup calls _cleanup_partial_outputs_m16, so only the successful path
+    # needs to remove it here.
+    goods.cleanup_scope_publish_stage(package_uuid)
 
     metrics.update(lifecycle_metrics)
     metrics["goods_status_model_version"] = "M1.6"
