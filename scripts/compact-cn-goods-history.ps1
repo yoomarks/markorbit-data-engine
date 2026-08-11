@@ -1,6 +1,6 @@
 param(
-    [ValidateSet("Plan", "Apply", "Rollback", "Finalize")]
-    [string]$Mode = "Plan",
+    [ValidateSet("Status", "Plan", "Apply", "Rollback", "Finalize")]
+    [string]$Mode = "Status",
     [switch]$Compact
 )
 
