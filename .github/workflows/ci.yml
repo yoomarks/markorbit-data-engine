@@ -71,6 +71,9 @@ jobs:
       - name: Run CN M1.6 bounded goods publisher fixture
         run: docker compose run --rm --no-deps worker python -m app.cn.validate_bounded_goods_fixture
 
+      - name: Run CN M1.6 bounded party publisher fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_bounded_party_fixture
+
       - name: Run US M1.1 real-TDXF regression fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_fixture
 
