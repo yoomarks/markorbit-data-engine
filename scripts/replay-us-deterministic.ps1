@@ -28,7 +28,7 @@ foreach ($service in @("postgres", "clickhouse")) {
 }
 
 $args = @(
-    "run", "--rm", "--no-deps", "worker",
+    "run", "--build", "--rm", "--no-deps", "worker",
     "python", "-m", "app.us.replay_executor",
     "--expected-history-parts", "$ExpectedHistoryParts"
 )
@@ -68,6 +68,9 @@ Write-Host "Report: $OutputPath"
 if ($report.processed_count -ne $null) {
     Write-Host "Processed this run: $($report.processed_count)"
 }
+if ($report.source_preflight_runs -ne $null) {
+    Write-Host "Full source preflights this run: $($report.source_preflight_runs)"
+}
 if ($report.final_plan -and $report.final_plan.remaining_count -ne $null) {
     Write-Host "Remaining: $($report.final_plan.remaining_count)"
 }
@@ -75,7 +78,7 @@ if (-not $Apply -and $report.status -eq "READY") {
     Write-Host "Dry run only. Re-run with -Apply to process the next package, or -Apply -All for the full remaining plan."
 }
 if ($report.status -eq "COMPLETE") {
-    Write-Host "Replay is complete. Run audit-us-real-data.ps1 with -VerifySourceFiles before treating the corpus as accepted."
+    Write-Host "Replay is complete. Run audit-us-real-data.ps1 for the normal lightweight acceptance audit; VerifySourceFiles/source re-hash remains optional."
 }
 
 if ($report.status -in @("BLOCKED", "FAILED", "BUSY")) {

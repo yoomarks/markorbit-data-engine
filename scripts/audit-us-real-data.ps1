@@ -21,7 +21,7 @@ foreach ($service in @("postgres", "clickhouse")) {
     }
 }
 
-$args = @("run", "--rm", "--no-deps", "worker", "python", "-m", "app.us.audit_real_data_v2")
+$args = @("run", "--build", "--rm", "--no-deps", "worker", "python", "-m", "app.us.audit_real_data_v2")
 if ($VerifySourceFiles) {
     $args += "--verify-source-files"
 }

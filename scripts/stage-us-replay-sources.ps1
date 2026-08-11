@@ -18,7 +18,7 @@ if ($worker) {
 }
 
 $args = @(
-    "run", "--rm", "--no-deps", "worker",
+    "run", "--build", "--rm", "--no-deps", "worker",
     "python", "-m", "app.us.stage_sources",
     "--expected-history-parts", "$ExpectedHistoryParts"
 )
