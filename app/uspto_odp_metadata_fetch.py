@@ -5,7 +5,6 @@ from hashlib import sha256
 import json
 import os
 import re
-import sys
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
