@@ -8,6 +8,7 @@ from typing import Any
 from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
 from app.cn import party_publish as party
+from app.cn import storage_v2_events as events
 from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
@@ -65,26 +66,33 @@ def _publish_m16(
     # millions of raw stage rows inside each INSERT.
     original_scope = legacy._scope_aggregate_sql
     original_party = legacy._party_aggregate_sql
+    original_case_events = legacy._insert_case_events
     original_clickhouse_client = legacy.clickhouse_client
     legacy._scope_aggregate_sql = lambda package: goods.scope_publish_stage_sql(package)
     legacy._party_aggregate_sql = lambda package: party.party_publish_stage_sql(package)
+    legacy._insert_case_events = events.insert_case_delta_events
 
-    # Storage V2 keeps the legacy current-state publisher intact while making
-    # permanent party relation history delta-only. The adapter is installed only
-    # for this serialized M1.6 publish call and fails closed if the legacy SQL
-    # shape changes.
-    delta_client = party.PartyHistoryDeltaClient(
+    # Storage V2 keeps current-state persistence intact while making two wide
+    # history families delta-first: party relation history and CN observed events.
+    # EventBaselineDeltaClient deliberately leaves all party relation events
+    # untouched; it only suppresses goods-scope/derived-case baseline events that
+    # are embedded directly in the legacy publisher. Case-level baseline events
+    # are replaced above by insert_case_delta_events.
+    party_delta_client = party.PartyHistoryDeltaClient(
         original_clickhouse_client(),
         source_rank=int(package_meta["source_rank"]),
     )
-    legacy.clickhouse_client = lambda: delta_client
+    event_delta_client = events.EventBaselineDeltaClient(party_delta_client)
+    legacy.clickhouse_client = lambda: event_delta_client
     try:
         metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
-        delta_client.assert_observed_current_rewritten()
+        party_delta_client.assert_observed_current_rewritten()
+        event_delta_client.assert_rewrite_counts()
     finally:
         legacy.clickhouse_client = original_clickhouse_client
         legacy._scope_aggregate_sql = original_scope
         legacy._party_aggregate_sql = original_party
+        legacy._insert_case_events = original_case_events
 
     # Snapshots are transient. On publish failure the outer legacy retry cleanup
     # calls _cleanup_partial_outputs_m16, so only the successful path removes
@@ -101,6 +109,7 @@ def _publish_m16(
     )
     metrics["recovery_mode"] = "PACKAGE_REPLAY"
     metrics["goods_observation_history_policy"] = "TRUE_DELTA_ONLY_V2"
+    metrics["observed_event_history_policy"] = "TRUE_DELTA_PLUS_PARTY_V2"
     metrics["party_history_policy"] = "DELTA_ONLY_V1"
     return metrics
 

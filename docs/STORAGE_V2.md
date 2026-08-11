@@ -49,6 +49,45 @@ This does not mean that a monthly omission is deletion. Existing M1.6 rules rema
 
 A later Storage V2 phase may compact legacy first-observation party rows only after compact provenance coverage is proven. The current party-history change affects future growth only.
 
+## CN observed-event policy
+
+`cn_observed_event` is a change/evidence stream, not a second copy of every first-seen current fact. Storage V2 does not persist these reconstructible baseline-only events going forward:
+
+- `APPLICATION_OBSERVED`;
+- `GOODS_SCOPE_OBSERVED`;
+- `DERIVED_CASE_OBSERVED`;
+- first `PRELIMINARY_PUBLICATION_OBSERVED` with an empty old value;
+- first `REGISTRATION_PUBLICATION_OBSERVED` with an empty old value;
+- first `EXCLUSIVE_TERM_OBSERVED` with an empty old value.
+
+The event table continues to retain:
+
+- all events carrying non-empty prior-state evidence;
+- case/goods/term/name/agent-code change events;
+- OWNER, CO_OWNER, and AGENT relation observed/superseded events.
+
+Party relation events remain intentionally out of this compaction phase. Their first-vs-later lineage is handled separately so event compaction cannot silently erase party evidence.
+
+Read-only plan:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-observed-event.ps1 -Mode Plan
+```
+
+The plan fails closed on unknown event types or a leftover temporary shadow. Commit is single-process and revalidates a count-plus-event-hash fingerprint before and after the atomic table exchange:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-observed-event.ps1 -Mode Commit
+```
+
+If execution is interrupted around the atomic exchange, rerunning the same Commit command only resumes a structurally proven pre-exchange shadow or post-exchange pending-drop state. The final validated DROP uses a query-scoped `max_table_size_to_drop=0`; it does not change ClickHouse global configuration or create a force-drop file.
+
+Status is read-only:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-observed-event.ps1 -Mode Status
+```
+
 ## Read-only storage audit
 
 Run the physical audit without starting the persistent worker:
@@ -120,6 +159,7 @@ Storage V2 does not:
 - reset the corpus;
 - infer deletion from monthly omission;
 - remove true goods changes;
+- remove party relation events during observed-event compaction;
 - alter US Application, Assignment, or TTAB semantics;
 - modify Core/Gateway repositories;
 - shrink or rewrite the Docker VHDX as part of database compaction.
