@@ -6,7 +6,31 @@ import uuid
 INTRA_PACKAGE_STATUS_RESOLUTION_VERSION = "CN_GOODS_STATUS_RESOLUTION_V1_STRONGEST_SIGNAL"
 
 
-def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
+def _sql_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _application_range_predicate(
+    application_lower: str | None,
+    application_upper: str | None,
+    *,
+    column: str = "application_number",
+) -> str:
+    predicates: list[str] = []
+    if application_lower is not None:
+        predicates.append(f"{column} >= {_sql_string(application_lower)}")
+    if application_upper is not None:
+        predicates.append(f"{column} < {_sql_string(application_upper)}")
+    if not predicates:
+        return ""
+    return "\n                      AND " + "\n                      AND ".join(predicates)
+
+
+def incoming_goods_sql(
+    package_uuid: uuid.UUID | str,
+    application_lower: str | None = None,
+    application_upper: str | None = None,
+) -> str:
     """Build the M1.6 incoming-goods query with a strict alias boundary.
 
     ClickHouse 24.8 resolves SELECT aliases aggressively. Reusing permanent
@@ -27,8 +51,17 @@ def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
     ordinary active/blank. The line number is only a deterministic tie-breaker
     between rows of equal signal strength. This rule is package-local; a later
     package still participates through the normal source-rank lifecycle logic.
+
+    Large base partitions may contain tens of millions of goods rows. Optional
+    application-number bounds are applied directly to the physically sorted
+    stage table so callers can publish one contiguous application range at a
+    time without changing item identity or package-local status precedence.
     """
     package = str(package_uuid)
+    range_predicate = _application_range_predicate(
+        application_lower,
+        application_upper,
+    )
     return f"""
         SELECT
             normalized.*,
@@ -158,7 +191,7 @@ def incoming_goods_sql(package_uuid: uuid.UUID | str) -> str:
                         source_end_line AS stage_source_end_line,
                         row_hash
                     FROM markorbit_facts.cn_stage_goods
-                    WHERE package_id = toUUID('{package}')
+                    WHERE package_id = toUUID('{package}'){range_predicate}
                 ) AS prepared
                 GROUP BY case_id, application_number, class_no, goods_item_key
             ) AS aggregated

@@ -111,6 +111,42 @@ ENGINE = ReplacingMergeTree(source_rank, is_deleted)
 ORDER BY (application_number, class_no);
 
 
+-- Transient compact snapshot used by the bounded M1.6 publisher. Large base
+-- packages are reconstructed from durable goods items one application range at
+-- a time, then legacy scope/event persistence reads this much smaller snapshot
+-- instead of repeating the full goods-item aggregation.
+CREATE TABLE IF NOT EXISTS markorbit_facts.cn_stage_scope_publish
+(
+    package_id UUID,
+    case_id UUID,
+    application_number String,
+    class_no UInt8,
+    source_item_count UInt32,
+    interpreted_active_item_count UInt32,
+    interpreted_inactive_item_count UInt32,
+    unmapped_status_item_count UInt32,
+    effective_item_count Nullable(UInt32),
+    interpretation_complete UInt8,
+    scope_interpretation_status LowCardinality(String),
+    goods_status_mapping_version String,
+    observed_status_codes Array(String),
+    goods_items_compact String,
+    goods_text_search String,
+    similar_groups Array(String),
+    active_similar_groups Array(String),
+    scope_hash FixedString(64),
+    effective_scope_hash String,
+    source_file String,
+    source_first_line UInt64,
+    source_last_line UInt64,
+    source_row_hash FixedString(64),
+    ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)
+)
+ENGINE = MergeTree
+ORDER BY (package_id, application_number, class_no)
+TTL toDateTime(ingested_at) + INTERVAL 7 DAY DELETE;
+
+
 INSERT INTO markorbit_facts.schema_version (component, version)
 SELECT 'CN_GOODS', 'M1.6'
 WHERE NOT EXISTS
