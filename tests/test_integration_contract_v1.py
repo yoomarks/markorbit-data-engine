@@ -1,4 +1,4 @@
-from app import integration_api
+from app import integration_api, integration_security
 
 
 def test_integration_contract_freezes_service_and_write_boundaries():
@@ -14,10 +14,14 @@ def test_integration_contract_freezes_service_and_write_boundaries():
         "consumer_writeback_to_source_facts": False,
         "business_state_owned_outside_data_engine": True,
     }
+    assert contract["security"]["scheme"] == "BEARER_API_KEY"
+    assert contract["security"]["default_mode"] == "disabled"
+    assert contract["security"]["required_mode"] == "required"
+    assert contract["security"]["fail_closed_when_required"] is True
     assert contract["planes"]["admin"]["part_of_consumer_contract"] is False
 
 
-def test_every_versioned_integration_route_is_read_only():
+def test_every_versioned_integration_route_is_read_only_and_authenticated():
     mutating_methods = {"POST", "PUT", "PATCH", "DELETE"}
     integration_routes = [
         route for route in integration_api.router.routes if route.path.startswith("/api/v1")
@@ -26,6 +30,8 @@ def test_every_versioned_integration_route_is_read_only():
     assert integration_routes
     for route in integration_routes:
         assert not (set(route.methods or ()) & mutating_methods), route.path
+        dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
+        assert integration_security.require_integration_auth in dependency_calls, route.path
 
 
 def test_main_registers_stable_integration_routes_outside_admin_plane():

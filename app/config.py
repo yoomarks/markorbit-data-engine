@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     cn_scan_interval_seconds: int = 300
     us_download_enabled: bool = False
     us_base_url: str = ""
+
+    # Consumer-facing /api/v1 authentication is disabled by default for local
+    # compatibility. Production deployments can switch to required and provide
+    # comma-separated bearer keys to support overlap during key rotation.
+    integration_auth_mode: str = "disabled"
+    integration_api_keys: str = ""
+
     log_level: str = "INFO"
 
     @property
