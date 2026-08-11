@@ -1,4 +1,15 @@
+import json
+from pathlib import Path
+
+from app.us_assignment.corpus_manifest import load_manifest as load_assignment_manifest
+from app.us_ttab.corpus_manifest import load_manifest as load_ttab_manifest
 from app.uspto_odp_manifest_builder import build_manifest
+
+
+def _write_manifest(tmp_path: Path, manifest: dict) -> Path:
+    path = tmp_path / "corpus.json"
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def test_assignment_manifest_is_built_from_explicit_kind_and_authoritative_dates() -> None:
@@ -40,6 +51,33 @@ def test_assignment_manifest_is_built_from_explicit_kind_and_authoritative_dates
         "2026-08-08",
         "2026-08-09",
     ]
+
+
+def test_generated_assignment_manifest_loads_through_frozen_parser(tmp_path: Path) -> None:
+    result = build_manifest(
+        domain="assignment",
+        metadata={
+            "productIdentifier": "trtdxfag",
+            "files": [
+                {"fileName": "snapshot.zip", "fileDate": "2026-08-01"},
+                {"fileName": "daily.zip", "fileDate": "2026-08-09"},
+            ],
+        },
+        source_specs=[
+            {
+                "path": "incoming/us_assignment/snapshot.zip",
+                "source_kind": "ASSIGNMENT_SNAPSHOT_XML",
+            },
+            {
+                "path": "incoming/us_assignment/daily.zip",
+                "source_kind": "DAILY_ASSIGNMENT_XML",
+            },
+        ],
+    )
+    loaded = load_assignment_manifest(_write_manifest(tmp_path, result["manifest"]))
+    assert loaded.expected_snapshot_packages == 1
+    assert loaded.expected_daily_packages == 1
+    assert loaded.daily_through.isoformat() == "2026-08-09"
 
 
 def test_assignment_manifest_rejects_duplicate_effective_date() -> None:
@@ -121,6 +159,39 @@ def test_ttab_manifest_normalizes_explicit_timestamps_to_utc() -> None:
     assert manifest["daily_through"] == "2026-08-10"
     assert manifest["sources"][0]["snapshot_at"] == "2026-08-01T14:00:00.000Z"
     assert manifest["sources"][1]["snapshot_at"] == "2026-08-10T00:15:30.000Z"
+
+
+def test_generated_ttab_manifest_loads_through_frozen_parser(tmp_path: Path) -> None:
+    result = build_manifest(
+        domain="ttab",
+        metadata={
+            "productIdentifier": "ttabtdxf",
+            "files": [
+                {
+                    "fileName": "historical.zip",
+                    "releaseDateTime": "2026-08-01T10:00:00-04:00",
+                },
+                {
+                    "fileName": "daily.zip",
+                    "releaseDateTime": "2026-08-09T20:15:30-04:00",
+                },
+            ],
+        },
+        source_specs=[
+            {
+                "path": "incoming/us_ttab/historical.zip",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+            },
+            {
+                "path": "incoming/us_ttab/daily.zip",
+                "source_kind": "TTAB_BULK_DAILY_XML",
+            },
+        ],
+    )
+    loaded = load_ttab_manifest(_write_manifest(tmp_path, result["manifest"]))
+    assert loaded.expected_historical_packages == 1
+    assert loaded.expected_daily_packages == 1
+    assert loaded.daily_through == "2026-08-10"
 
 
 def test_ttab_manifest_remains_not_ready_for_date_only_metadata() -> None:
