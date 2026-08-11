@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, us_case
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
@@ -15,7 +16,11 @@ from app.version import engine_version
 
 CONTRACT_VERSION = "MARKORBIT_DATA_ENGINE_INTEGRATION_V1"
 SOURCE_OWNER = "MARKORBIT_DATA_ENGINE"
-router = APIRouter(prefix="/api/v1", tags=["MarkOrbit integration V1"])
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["MarkOrbit integration V1"],
+    dependencies=[Depends(require_integration_auth)],
+)
 
 
 def _envelope(
@@ -50,6 +55,7 @@ def integration_contract() -> dict[str, Any]:
             "consumer_writeback_to_source_facts": False,
             "business_state_owned_outside_data_engine": True,
         },
+        "security": integration_security_contract(),
         "planes": {
             "query": {
                 "prefix": "/api/v1",
