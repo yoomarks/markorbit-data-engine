@@ -40,6 +40,19 @@ class _PlanClient:
         raise AssertionError(sql)
 
 
+class _AlreadyCompactNoArchiveClient(_PlanClient):
+    def query(self, sql: str):
+        if "GROUP BY transition_type" in sql:
+            return _Result([])
+        if "FROM markorbit_facts.cn_goods_item_current FINAL" in sql:
+            return _Result([(368_363_530, 0)])
+        if "FROM system.parts" in sql:
+            return _Result([(0,)])
+        if "FROM system.tables" in sql:
+            return _Result([(0,)])
+        raise AssertionError(sql)
+
+
 def test_goods_observation_adapter_suppresses_first_observation_rows():
     delegate = _Delegate()
     client = GoodsObservationDeltaClient(delegate)
@@ -81,6 +94,16 @@ def test_goods_compaction_plan_preserves_only_true_deltas():
     assert plan["estimated_reclaim_bytes"] > 100_000
 
 
+def test_goods_compaction_plan_refuses_second_apply_when_archive_is_missing():
+    plan = build_plan(client=_AlreadyCompactNoArchiveClient())
+
+    assert plan["source_rows"] == 0
+    assert plan["current_goods_rows"] == 368_363_530
+    assert plan["archive_exists"] is False
+    assert plan["ambiguous_compact_without_archive"] is True
+    assert plan["safe_to_apply"] is False
+
+
 def test_compaction_wrapper_never_starts_persistent_worker():
     source = Path("scripts/compact-cn-goods-history.ps1").read_text(encoding="utf-8")
     lowered = source.lower()
@@ -88,4 +111,5 @@ def test_compaction_wrapper_never_starts_persistent_worker():
     assert "docker compose start worker" not in lowered
     assert "docker compose up -d worker" not in lowered
     assert "docker compose stop worker" in lowered
+    assert 'ValidateSet("Status", "Plan", "Apply", "Rollback", "Finalize")' in source
     assert "app.cn.storage_v2_goods_compaction" in source
