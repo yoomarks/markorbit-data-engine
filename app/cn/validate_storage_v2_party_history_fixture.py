@@ -24,7 +24,12 @@ def _insert_event(
     source_rank: int,
     hash_char: str,
 ) -> None:
-    event_type = f"{role}_RELATION_{kind}_OBSERVED"
+    if kind == "OBSERVED":
+        event_type = f"{role}_RELATION_OBSERVED"
+    elif kind == "SUPERSEDED":
+        event_type = f"{role}_RELATION_SUPERSEDED_OBSERVED"
+    else:
+        raise ValueError(f"Unknown fixture PARTY event kind: {kind}")
     relation_key = relation_key_char * 64
     if kind == "OBSERVED":
         old_value = ""
