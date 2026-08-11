@@ -110,6 +110,9 @@ jobs:
       - name: Run US M1.4 durable change history fixture
         run: docker compose run --rm --no-deps worker python -m app.us.validate_change_history_fixture
 
+      - name: Run deterministic US Assignment manifest replay fixture
+        run: docker compose run --rm --no-deps worker python -m app.us_assignment.validate_corpus_replay_fixture
+
       - name: Run US Assignment M1.0 recorded-interest fixture
         run: docker compose run --rm --no-deps worker python -m app.us_assignment.validate_fixture
 
