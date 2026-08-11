@@ -60,8 +60,11 @@ def test_party_publish_snapshot_preserves_legacy_relation_shape():
     assert "case_id, application_number, role, relation_id, relation_key" in sql
     assert "party.materialize_party_publish_stage" in wrapper
     assert "legacy._party_aggregate_sql = lambda package: party.party_publish_stage_sql(package)" in wrapper
-    assert "PartyHistoryDeltaClient" in wrapper
-    assert 'metrics["party_history_policy"] = "DELTA_ONLY_V1"' in wrapper
+    assert "PartyHistorySuppressionClient" in wrapper
+    assert (
+        'metrics["party_history_policy"] = "CANONICAL_IN_OBSERVED_EVENT_V2"'
+        in wrapper
+    )
     assert "PARTY_PUBLISH_TARGET_BASIC_ROWS = 250_000" in Path(
         "app/cn/party_publish.py"
     ).read_text(encoding="utf-8")
