@@ -3,10 +3,29 @@ from pathlib import Path
 from app.cn.goods_lifecycle import (
     GOODS_ITEM_IDENTITY_VERSION,
     ApplicationRange,
+    _plan_goods_application_ranges,
     scope_from_current_items_sql,
     scope_publish_stage_sql,
 )
 from app.cn.goods_lifecycle_sql import incoming_goods_sql as runtime_incoming_goods_sql
+
+
+class _Result:
+    def __init__(self, rows):
+        self.result_rows = rows
+
+
+class _BoundaryClient:
+    """Simulate a package where application B alone exceeds the row target."""
+
+    def query(self, sql: str):
+        if "application_number > 'B'" in sql:
+            return _Result([("C",)])
+        if "application_number >= 'C'" in sql:
+            return _Result([])
+        if "application_number >= 'B'" in sql:
+            return _Result([("B",)])
+        return _Result([("B",)])
 
 
 def test_monthly_scope_is_rebuilt_from_durable_current_items():
@@ -42,6 +61,19 @@ def test_large_goods_publish_range_is_applied_at_stage_source():
         "item.application_number >= '2007001000' AND "
         "item.application_number < '2008001000'"
     )
+
+
+def test_chunk_planner_never_splits_one_application_across_ranges():
+    ranges = _plan_goods_application_ranges(
+        "00000000-0000-0000-0000-000000000001",
+        client=_BoundaryClient(),
+        target_rows=3,
+    )
+    assert ranges == [
+        ApplicationRange(None, "B"),
+        ApplicationRange("B", "C"),
+        ApplicationRange("C", None),
+    ]
 
 
 def test_compact_scope_snapshot_is_the_legacy_publish_source():
