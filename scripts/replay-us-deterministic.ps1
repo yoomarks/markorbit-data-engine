@@ -78,7 +78,7 @@ if (-not $Apply -and $report.status -eq "READY") {
     Write-Host "Dry run only. Re-run with -Apply to process the next package, or -Apply -All for the full remaining plan."
 }
 if ($report.status -eq "COMPLETE") {
-    Write-Host "Replay is complete. Run the lightweight manifest/registry-aware acceptance audit; source re-hash remains optional."
+    Write-Host "Replay is complete. Run audit-us-real-data.ps1 for the normal lightweight acceptance audit; VerifySourceFiles/source re-hash remains optional."
 }
 
 if ($report.status -in @("BLOCKED", "FAILED", "BUSY")) {
