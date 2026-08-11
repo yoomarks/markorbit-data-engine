@@ -4,6 +4,7 @@ import sys
 
 from app import main_core as _core
 from app.admin_api import router as admin_router
+from app.integration_api import router as integration_router
 from app.us.alert_api import router as us_alert_router
 from app.us.case360_api import router as us_case_360_router
 from app.us.change_history_api import router as us_change_history_router
@@ -19,6 +20,7 @@ _core.app.description = (
     "US Assignment M1.0 + US TTAB M1.1 + US Case 360 M1.0 + US Alert Engine M1.0"
 )
 _core.app.include_router(admin_router)
+_core.app.include_router(integration_router)
 _core.app.include_router(us_alert_router)
 _core.app.include_router(us_case_360_router)
 _core.app.include_router(us_deadline_docket_router)
