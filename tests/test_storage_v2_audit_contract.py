@@ -35,7 +35,13 @@ class _Client:
                 ]
             )
         if "cn_observed_event" in sql:
-            return _Result([("CASE_FIRST_OBSERVED", 50)])
+            return _Result(
+                [
+                    ("APPLICATION_OBSERVED", 50, 50, 0),
+                    ("PRELIMINARY_PUBLICATION_OBSERVED", 20, 18, 2),
+                    ("OWNER_RELATION_OBSERVED", 10, 10, 0),
+                ]
+            )
         if "cn_case_party_relation_history" in sql:
             return _Result(
                 [
@@ -81,13 +87,24 @@ def test_physical_audit_does_not_scan_fact_history():
     assert "FROM system.parts" in client.queries[0]
 
 
-def test_deep_audit_quantifies_legacy_noop_history():
+def test_deep_audit_quantifies_legacy_noop_and_baseline_history():
     client = _Client()
     report = build_storage_audit(deep=True, client=client)
 
     goods = report["cn_goods_item_observation"]
+    assert goods["first_observed_rows"] == 100
     assert goods["reobserved_rows"] == 80
-    assert goods["policy"] == "REOBSERVED_IS_NO_OP_AND_NOT_PERSISTED_BY_STORAGE_V2"
+    assert goods["policy"] == "FIRST_SOURCE_ON_CURRENT_PLUS_TRUE_DELTA_HISTORY"
+
+    events = report["cn_observed_event"]
+    assert events["reconstructible_baseline_candidate_rows"] == 68
+    prelim = next(
+        row
+        for row in events["event_profile"]
+        if row["event_type"] == "PRELIMINARY_PUBLICATION_OBSERVED"
+    )
+    assert prelim["empty_old_value_rows"] == 18
+    assert prelim["prior_value_rows"] == 2
 
     party = report["cn_case_party_relation_history"]
     assert party["observed_current_rows"] == 120

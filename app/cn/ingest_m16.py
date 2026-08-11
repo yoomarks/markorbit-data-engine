@@ -12,6 +12,7 @@ from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
 )
+from app.cn.storage_v2_goods import GoodsObservationDeltaClient
 
 
 # ClickHouse 24.8 resolves aliases aggressively inside aggregate queries. Keep
@@ -34,7 +35,20 @@ def _publish_m16(
     package_uuid: uuid.UUID,
     package_meta: dict[str, Any],
 ) -> dict[str, Any]:
-    lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
+    # Storage V2 keeps first-observation provenance on cn_goods_item_current and
+    # reserves the wide observation table for true deltas. Install the adapter
+    # only around the serialized M1.6 goods publisher so legacy paths remain
+    # untouched and any future SQL-shape drift fails closed.
+    original_goods_client = goods.clickhouse_client
+    goods_delta_client = GoodsObservationDeltaClient(original_goods_client())
+    goods.clickhouse_client = lambda: goods_delta_client
+    try:
+        lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
+        goods_delta_client.assert_rewrite_count(
+            int(lifecycle_metrics["goods_publish_chunk_count"])
+        )
+    finally:
+        goods.clickhouse_client = original_goods_client
 
     # PARTY aggregation is also materialized once, in bounded whole-application
     # ranges. Large yearly packages otherwise rebuild the OWNER/CO_OWNER/AGENT
@@ -86,6 +100,7 @@ def _publish_m16(
         INTRA_PACKAGE_STATUS_RESOLUTION_VERSION
     )
     metrics["recovery_mode"] = "PACKAGE_REPLAY"
+    metrics["goods_observation_history_policy"] = "TRUE_DELTA_ONLY_V2"
     metrics["party_history_policy"] = "DELTA_ONLY_V1"
     return metrics
 
