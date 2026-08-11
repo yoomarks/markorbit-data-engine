@@ -14,6 +14,7 @@ from app.cn.goods_lifecycle_sql import (
     incoming_goods_sql,
 )
 from app.cn.storage_v2_goods import GoodsObservationDeltaClient
+from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
 
 
 # ClickHouse 24.8 resolves aliases aggressively inside aggregate queries. Keep
@@ -72,21 +73,18 @@ def _publish_m16(
     legacy._party_aggregate_sql = lambda package: party.party_publish_stage_sql(package)
     legacy._insert_case_events = events.insert_case_delta_events
 
-    # Storage V2 keeps current-state persistence intact while making two wide
-    # history families delta-first: party relation history and CN observed events.
-    # EventBaselineDeltaClient deliberately leaves all party relation events
-    # untouched; it only suppresses goods-scope/derived-case baseline events that
-    # are embedded directly in the legacy publisher. Case-level baseline events
-    # are replaced above by insert_case_delta_events.
-    party_delta_client = party.PartyHistoryDeltaClient(
-        original_clickhouse_client(),
-        source_rank=int(package_meta["source_rank"]),
-    )
-    event_delta_client = events.EventBaselineDeltaClient(party_delta_client)
+    # Storage V2 uses cn_observed_event as the canonical durable PARTY relation
+    # history. The legacy publisher emits relation events before the parallel
+    # cn_case_party_relation_history INSERTs, so the latter are duplicate wide
+    # history and are suppressed completely. EventBaselineDeltaClient continues
+    # to preserve every PARTY relation event while suppressing only reconstructible
+    # non-PARTY baselines.
+    party_history_client = PartyHistorySuppressionClient(original_clickhouse_client())
+    event_delta_client = events.EventBaselineDeltaClient(party_history_client)
     legacy.clickhouse_client = lambda: event_delta_client
     try:
         metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
-        party_delta_client.assert_observed_current_rewritten()
+        party_history_client.assert_suppression_complete()
         event_delta_client.assert_rewrite_counts()
     finally:
         legacy.clickhouse_client = original_clickhouse_client
@@ -110,7 +108,7 @@ def _publish_m16(
     metrics["recovery_mode"] = "PACKAGE_REPLAY"
     metrics["goods_observation_history_policy"] = "TRUE_DELTA_ONLY_V2"
     metrics["observed_event_history_policy"] = "TRUE_DELTA_PLUS_PARTY_V2"
-    metrics["party_history_policy"] = "DELTA_ONLY_V1"
+    metrics["party_history_policy"] = "CANONICAL_IN_OBSERVED_EVENT_V2"
     return metrics
 
 
