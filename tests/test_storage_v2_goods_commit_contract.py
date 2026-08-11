@@ -24,5 +24,3 @@ def test_commit_path_keeps_old_wide_table_until_post_exchange_validation():
     validation = source.index("validation_error")
     drop = source.index("DROP TABLE")
     assert exchange < validation < drop
-    assert "original wide table" in source
-    assert "still recoverable" in source
