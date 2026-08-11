@@ -116,6 +116,9 @@ jobs:
       - name: Run US Assignment M1.0 recorded-interest fixture
         run: docker compose run --rm --no-deps worker python -m app.us_assignment.validate_fixture
 
+      - name: Run deterministic US TTAB bulk manifest replay fixture
+        run: docker compose run --rm --no-deps worker python -m app.us_ttab.validate_corpus_replay_fixture
+
       - name: Run US TTAB M1.1 real-rawxml contract fixture
         run: docker compose run --rm --no-deps worker python -m app.us_ttab.validate_fixture
 
