@@ -8,6 +8,7 @@ from app.cn.storage_v2_goods_compaction import (
     SOURCE_TABLE,
     apply_compaction,
     build_plan,
+    build_status,
     finalize_compaction,
     rollback_compaction,
 )
@@ -109,6 +110,10 @@ def main() -> None:
             raise AssertionError(plan)
 
         applied = apply_compaction(client=client)
+        status_after_apply = build_status(client=client)
+        if status_after_apply["state"] != "APPLIED_REVERSIBLE":
+            raise AssertionError(status_after_apply)
+
         after_apply = _scalar(
             f"SELECT count() FROM {DATABASE}.{SOURCE_TABLE} "
             f"WHERE application_number = '{APPLICATION}' AND transition_type = 'STATUS_CHANGED'"
@@ -148,14 +153,24 @@ def main() -> None:
         if archive_exists_after_finalize != 0:
             raise AssertionError(finalized)
 
+        status_after_finalize = build_status(client=client)
+        if status_after_finalize["state"] != "COMPACT_WITHOUT_ARCHIVE_OR_ALREADY_FINALIZED":
+            raise AssertionError(status_after_finalize)
+        post_finalize_plan = build_plan(client=client)
+        if post_finalize_plan["safe_to_apply"]:
+            raise AssertionError(post_finalize_plan)
+
         print(
             json.dumps(
                 {
                     "status": "PASS",
                     "plan": plan,
                     "applied": applied["status"],
+                    "status_after_apply": status_after_apply["state"],
                     "rolled_back": rolled_back["status"],
                     "finalized": finalized["status"],
+                    "status_after_finalize": status_after_finalize["state"],
+                    "post_finalize_safe_to_apply": post_finalize_plan["safe_to_apply"],
                 },
                 ensure_ascii=False,
                 indent=2,
