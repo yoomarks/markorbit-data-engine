@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from app.storage_audit import READ_ONLY_QUERIES, build_storage_audit
+from app.storage_audit import (
+    PARTY_RELATION_ACTIONS_SQL,
+    READ_ONLY_QUERIES,
+    build_storage_audit,
+)
 
 
 class _Result:
@@ -51,6 +55,17 @@ def test_storage_audit_query_set_is_select_only():
         assert "OPTIMIZE TABLE" not in normalized
         assert "TRUNCATE TABLE" not in normalized
         assert "INSERT INTO" not in normalized
+
+
+def test_party_history_audit_uses_physical_action_column():
+    schema = Path("database/clickhouse/init/001_fact_schema.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "    action LowCardinality(String)," in schema
+    assert "SELECT\n    action," in PARTY_RELATION_ACTIONS_SQL
+    assert "GROUP BY action" in PARTY_RELATION_ACTIONS_SQL
+    assert "relation_action" not in PARTY_RELATION_ACTIONS_SQL
 
 
 def test_physical_audit_does_not_scan_fact_history():
