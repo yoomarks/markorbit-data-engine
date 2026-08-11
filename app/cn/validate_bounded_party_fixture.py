@@ -132,7 +132,7 @@ def _party_rows(sql: str) -> list[tuple]:
     return clickhouse_client().query(f"""
         SELECT
             application_number, role, toString(relation_key), raw_name,
-            class_nos, record_hash
+            class_nos, toString(record_hash)
         FROM ({sql})
         ORDER BY application_number, role, relation_key
     """).result_rows
