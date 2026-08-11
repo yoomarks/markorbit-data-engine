@@ -17,7 +17,7 @@ foreach ($service in @("postgres", "clickhouse")) {
 }
 
 $manifest = "/data/raw/" + ($ManifestRelativePath -replace '\\', '/')
-$jsonLines = & docker compose run --rm --no-deps -T worker python -m app.us_assignment.corpus_audit --manifest $manifest
+$jsonLines = & docker compose run --build --rm --no-deps -T worker python -m app.us_assignment.corpus_audit --manifest $manifest
 $exitCode = $LASTEXITCODE
 $json = $jsonLines -join "`n"
 if (-not $OutputPath) {

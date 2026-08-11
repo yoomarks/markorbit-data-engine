@@ -27,7 +27,7 @@ if ($Apply) {
 
 $manifest = "/data/raw/" + ($ManifestRelativePath -replace '\\', '/')
 $args = @(
-    "run", "--rm", "--no-deps", "-T", "worker",
+    "run", "--build", "--rm", "--no-deps", "-T", "worker",
     "python", "-m", "app.us_assignment.corpus_replay",
     "--manifest", $manifest,
     "--max-packages", "$MaxPackages"
