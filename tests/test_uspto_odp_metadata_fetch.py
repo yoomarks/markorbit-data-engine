@@ -3,9 +3,9 @@ from urllib.error import HTTPError
 
 import pytest
 
+from app import uspto_odp_metadata_fetch as fetch_module
 from app.uspto_odp_bulk_metadata import evaluate_metadata
 from app.uspto_odp_metadata_fetch import (
-    MAX_METADATA_BYTES,
     MetadataFetchError,
     fetch_product_metadata,
     product_data_url,
@@ -147,17 +147,19 @@ def test_fetch_rejects_invalid_json() -> None:
     assert exc_info.value.code == "ODP_METADATA_JSON_INVALID"
 
 
-def test_fetch_rejects_oversized_response() -> None:
+def test_fetch_rejects_oversized_response(monkeypatch) -> None:
+    monkeypatch.setattr(fetch_module, "MAX_METADATA_BYTES", 8)
+
     class LargeResponse:
         def read(self, size: int = -1) -> bytes:
-            assert size == MAX_METADATA_BYTES + 1
-            return b"x" * (MAX_METADATA_BYTES + 1)
+            assert size == 9
+            return b"x" * 9
 
         def close(self) -> None:
             pass
 
     with pytest.raises(MetadataFetchError) as exc_info:
-        fetch_product_metadata(
+        fetch_module.fetch_product_metadata(
             domain="assignment",
             api_key="secret",
             api_key_header="X-Test-Key",
