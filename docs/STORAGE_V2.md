@@ -2,37 +2,40 @@
 
 ## Purpose
 
-Storage V2 keeps MarkOrbit Data Engine evidentiary semantics while preventing no-op source re-observations from becoming permanent history.
+Storage V2 keeps MarkOrbit Data Engine evidentiary semantics while preventing baseline or no-op source observations from becoming permanent wide history.
 
-The initial Storage V2 changes are intentionally narrow and non-destructive. They change future CN goods and party-relation history writes and add read-only diagnostics. They do not delete existing facts, compact the live database, run `OPTIMIZE`, reset replay state, or change legal interpretation rules.
-
-## Three storage layers
+The storage model is:
 
 1. **Raw authority** — official source packages remain the reproducible source evidence and are kept outside ClickHouse in `RAW_DATA_ROOT`.
 2. **Current fact state** — query-facing current tables retain the latest accepted source state and provenance.
-3. **Delta history** — history tables retain first observations and real changes, not repeated identical observations.
+3. **True delta history** — wide history tables retain real state changes, not a second copy of the initial corpus.
 
 Raw evidence and derived/current storage serve different purposes. Retaining an official source package does not require duplicating every unchanged fact from that package into permanent hot history.
 
 ## CN goods observation policy
 
-`cn_goods_item_observation` persists these transitions:
+`cn_goods_item_current` already stores durable first-observation provenance:
 
-- `FIRST_OBSERVED`
+- `first_source_package_id`
+- `first_source_package_kind`
+- `first_source_rank`
+
+Together with the retained authoritative raw package and the durable goods item identity, those fields make the first observation reconstructible without a second full-width goods-history row.
+
+Storage V2 therefore reserves `cn_goods_item_observation` for true changes only:
+
 - `STATUS_CHANGED`
 - `ITEM_DETAILS_CHANGED`
 
-An unchanged later appearance of the same durable goods item is a no-op for fact history. Storage V2 therefore does **not** persist `REOBSERVED` rows going forward.
+`FIRST_OBSERVED` and `REOBSERVED` are not persisted by the M1.6 runtime path going forward. `REOBSERVED` is a no-op; first-observation package provenance lives on current state.
 
 This does not mean that a monthly omission is deletion. Existing M1.6 rules remain unchanged:
 
 - full application number is the case identity;
 - monthly patches override base data according to source semantics and source rank;
 - omission from a monthly package is not deletion;
-- `FIRST_OBSERVED` is evidence of first observation, not a legal event date;
+- first observation is evidence of first observation, not a legal event date;
 - status semantics remain empirical unless separately validated.
-
-`cn_goods_item_current` continues to accept the latest source provenance under the existing source-rank rules. Storage V2 deliberately does not redefine `last_source_*` semantics in this phase.
 
 ## CN party relation history policy
 
@@ -44,7 +47,7 @@ This does not mean that a monthly omission is deletion. Existing M1.6 rules rema
 
 `SUPERSEDED` remains change-driven under the existing publisher rules. A later package that repeats an identical current OWNER, CO_OWNER, or AGENT relation does not append another permanent `OBSERVED_CURRENT` row.
 
-This changes only future history growth. `cn_case_party_current` keeps its existing current/provenance semantics, and no legacy history rows are deleted by ingestion.
+A later Storage V2 phase may compact legacy first-observation party rows only after compact provenance coverage is proven. The current party-history change affects future growth only.
 
 ## Read-only storage audit
 
@@ -54,33 +57,71 @@ Run the physical audit without starting the persistent worker:
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-storage.ps1
 ```
 
-The default audit reads `system.parts` only and reports active/inactive rows and bytes by table.
-
 For logical CN history distributions:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-storage.ps1 -Deep
 ```
 
-Deep mode additionally groups:
+Deep mode reports:
 
-- `cn_goods_item_observation` by `transition_type`;
-- `cn_observed_event` by `event_type`;
-- `cn_case_party_relation_history` by `relation_action`.
+- goods observation transitions;
+- CN observed-event rows split by event type and whether an old value exists;
+- reconstructible event-baseline candidate rows;
+- party history actions.
 
-Deep mode can scan very large history tables. It remains read-only, but should be run when the corpus is idle and enough I/O headroom is available.
+Party observed events are deliberately excluded from automatic event-baseline classification until first-vs-later relation rank can be proven.
 
-## What this version does not do
+Deep mode remains read-only, but it can scan very large history tables and should be run while corpus replay is idle.
 
-Storage V2 V1 does not:
+## Guarded goods-history compaction
 
-- delete legacy `REOBSERVED` rows;
-- delete legacy repeated `OBSERVED_CURRENT` party rows;
-- mutate or optimize the live ClickHouse volume;
-- shrink the Docker/WSL VHDX;
-- remove `FIRST_OBSERVED` history;
-- deduplicate legal/source facts by guesswork;
-- change CN replay ordering or acceptance gates;
-- change US, Assignment, or TTAB semantics.
+The goods compactor is deliberately reversible until finalization.
 
-Any later historical compaction must first prove that the affected rows are reconstructible from retained source packages and that no evidentiary or chronology semantics are lost.
+Read-only plan:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-goods-history.ps1 -Mode Plan
+```
+
+The plan fails closed if:
+
+- an unknown goods transition exists;
+- any current goods item lacks `first_source_package_id` or `first_source_rank`;
+- a prior compaction shadow/archive is present.
+
+Apply the compact table while keeping the original wide table as a rollback archive:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-goods-history.ps1 -Mode Apply
+```
+
+Rollback before finalization:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-goods-history.ps1 -Mode Rollback
+```
+
+After audits confirm the compact table is correct, finalization drops only the archived wide goods-observation table:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\compact-cn-goods-history.ps1 -Mode Finalize
+```
+
+Finalization is the irreversible ClickHouse space-reclaim step. It does not delete raw authority packages or current goods state.
+
+The ClickHouse filesystem can immediately reuse released blocks. The outer Docker/WSL `docker_data.vhdx` file can remain physically large until a separate filesystem/VHDX compaction is performed.
+
+## Safety boundaries
+
+Storage V2 does not:
+
+- run CN replay automatically;
+- reset the corpus;
+- infer deletion from monthly omission;
+- remove true goods changes;
+- alter US Application, Assignment, or TTAB semantics;
+- modify Core/Gateway repositories;
+- shrink or rewrite the Docker VHDX as part of database compaction.
+
+Historical compaction is allowed only where retained raw authority plus durable current provenance can reconstruct the removed baseline evidence and the compactor validates that every true delta remains present.
