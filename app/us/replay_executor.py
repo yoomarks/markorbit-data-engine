@@ -54,11 +54,12 @@ def build_replay_plan(
     expected_history_parts: int,
     deep_source_test: bool = False,
     registry_rows: list[dict[str, Any]] | None = None,
+    source_preflight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if expected_history_parts < 1:
         raise ValueError("expected_history_parts must be at least 1")
 
-    preflight = build_preflight(
+    preflight = source_preflight or build_preflight(
         raw_root,
         expected_history_parts=expected_history_parts,
         deep_source_test=deep_source_test,
@@ -314,6 +315,7 @@ def execute_replay(
         "recovered_interrupted": [],
         "busy": False,
         "acceptance_required_after_complete": True,
+        "source_preflight_runs": 0,
     }
 
     with us_ingestion_guard() as acquired:
@@ -322,10 +324,23 @@ def execute_replay(
 
         ensure_us_m1_schema()
         result["recovered_interrupted"] = recover_interrupted_us_ingestions()
+
+        # The source preflight hashes and structurally inspects the complete corpus.
+        # Freeze it once per process so an N-package replay does not become O(N^2)
+        # full-corpus I/O. Every selected package is still SHA-verified again by
+        # _discovered_package immediately before ingestion. A restarted executor
+        # performs a fresh complete preflight before any new mutation.
+        source_preflight = build_preflight(
+            raw_root,
+            expected_history_parts=expected_history_parts,
+            deep_source_test=deep_source_test,
+        )
+        result["source_preflight_runs"] = 1
         initial = build_replay_plan(
             raw_root,
             expected_history_parts=expected_history_parts,
             deep_source_test=deep_source_test,
+            source_preflight=source_preflight,
         )
         result["initial_plan"] = initial
         if initial["status"] == "BLOCKED":
@@ -341,6 +356,7 @@ def execute_replay(
                 "expected_history_parts": expected_history_parts,
                 "deep_source_test": deep_source_test,
                 "max_packages": max_packages,
+                "source_preflight_runs": 1,
             },
         )
         try:
@@ -349,6 +365,7 @@ def execute_replay(
                     raw_root,
                     expected_history_parts=expected_history_parts,
                     deep_source_test=deep_source_test,
+                    source_preflight=source_preflight,
                 )
                 if plan["status"] == "BLOCKED":
                     result["status"] = "BLOCKED"
@@ -411,6 +428,7 @@ def execute_replay(
                         raw_root,
                         expected_history_parts=expected_history_parts,
                         deep_source_test=deep_source_test,
+                        source_preflight=source_preflight,
                     )
                     finish_job_run(
                         run_id,
@@ -441,6 +459,7 @@ def execute_replay(
                     raw_root,
                     expected_history_parts=expected_history_parts,
                     deep_source_test=deep_source_test,
+                    source_preflight=source_preflight,
                 )
             if result["status"] == "UNKNOWN":
                 result["status"] = (
@@ -455,6 +474,7 @@ def execute_replay(
                     "processed_count": result["processed_count"],
                     "status": result["status"],
                     "remaining_count": result["final_plan"].get("remaining_count"),
+                    "source_preflight_runs": result["source_preflight_runs"],
                 },
             )
             return result

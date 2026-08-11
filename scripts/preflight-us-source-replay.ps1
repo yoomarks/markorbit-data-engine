@@ -15,7 +15,7 @@ if ($worker) {
 }
 
 $args = @(
-    "run", "--rm", "--no-deps", "worker",
+    "run", "--build", "--rm", "--no-deps", "worker",
     "python", "-m", "app.us.source_preflight"
 )
 if ($ExpectedHistoryParts -gt 0) {
