@@ -160,7 +160,7 @@ def evaluate_metadata(
 
     issues: list[dict[str, Any]] = []
     product_ids = _product_identifiers(metadata)
-    if product_ids and product_ids.isdisjoint(accepted_product_ids):
+    if product_ids and not product_ids.issubset(accepted_product_ids):
         issues.append(
             {
                 "type": "ODP_PRODUCT_IDENTIFIER_MISMATCH",
