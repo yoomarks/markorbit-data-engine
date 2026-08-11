@@ -61,7 +61,7 @@ def integration_contract() -> dict[str, Any]:
                 "cursor_semantics": "LOSSLESS_OBSERVATION_CURSOR_NOT_LEGAL_CONCLUSION",
             },
             "admin": {
-                "prefix": "/api/admin",
+                "prefixes": ["/api/admin", "/api/jobs"],
                 "part_of_consumer_contract": False,
             },
         },
