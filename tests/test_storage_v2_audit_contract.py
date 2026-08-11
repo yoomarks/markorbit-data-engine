@@ -1,0 +1,78 @@
+from pathlib import Path
+
+from app.storage_audit import READ_ONLY_QUERIES, build_storage_audit
+
+
+class _Result:
+    def __init__(self, rows):
+        self.result_rows = rows
+
+
+class _Client:
+    def __init__(self):
+        self.queries: list[str] = []
+
+    def query(self, sql: str):
+        self.queries.append(sql)
+        if "FROM system.parts" in sql:
+            return _Result(
+                [
+                    ("cn_goods_item_current", 1, 4, 100, 1024),
+                    ("cn_goods_item_current", 0, 2, 20, 512),
+                    ("cn_stage_goods", 1, 1, 10, 256),
+                ]
+            )
+        if "cn_goods_item_observation" in sql:
+            return _Result(
+                [
+                    ("FIRST_OBSERVED", 100),
+                    ("REOBSERVED", 80),
+                    ("STATUS_CHANGED", 5),
+                ]
+            )
+        if "cn_observed_event" in sql:
+            return _Result([("CASE_FIRST_OBSERVED", 50)])
+        raise AssertionError(sql)
+
+
+def test_storage_audit_query_set_is_select_only():
+    for sql in READ_ONLY_QUERIES:
+        normalized = sql.lstrip().upper()
+        assert normalized.startswith("SELECT")
+        assert "ALTER TABLE" not in normalized
+        assert "DELETE WHERE" not in normalized
+        assert "OPTIMIZE TABLE" not in normalized
+        assert "TRUNCATE TABLE" not in normalized
+        assert "INSERT INTO" not in normalized
+
+
+def test_physical_audit_does_not_scan_fact_history():
+    client = _Client()
+    report = build_storage_audit(client=client)
+
+    assert report["read_only"] is True
+    assert report["mode"] == "physical"
+    assert report["physical"]["active_bytes"] == 1280
+    assert report["physical"]["inactive_bytes"] == 512
+    assert report["physical"]["active_stage_bytes"] == 256
+    assert len(client.queries) == 1
+    assert "FROM system.parts" in client.queries[0]
+
+
+def test_deep_audit_quantifies_legacy_noop_reobservations():
+    client = _Client()
+    report = build_storage_audit(deep=True, client=client)
+
+    goods = report["cn_goods_item_observation"]
+    assert goods["reobserved_rows"] == 80
+    assert goods["policy"] == "REOBSERVED_IS_NO_OP_AND_NOT_PERSISTED_BY_STORAGE_V2"
+    assert len(client.queries) == 3
+
+
+def test_powershell_wrapper_does_not_start_persistent_worker():
+    source = Path("scripts/audit-storage.ps1").read_text(encoding="utf-8")
+    lowered = source.lower()
+    assert "docker compose run --rm --no-deps" in lowered
+    assert "docker compose start worker" not in lowered
+    assert "docker compose up -d worker" not in lowered
+    assert "app.storage_audit" in source
