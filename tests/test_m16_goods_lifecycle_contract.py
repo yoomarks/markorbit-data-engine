@@ -88,6 +88,20 @@ def test_compact_scope_snapshot_is_the_legacy_publish_source():
     assert "_insert_scope_publish_stage" in lifecycle
 
 
+def test_goods_observation_history_excludes_noop_reobservations():
+    lifecycle = Path("app/cn/goods_lifecycle.py").read_text(encoding="utf-8")
+    observation_sql = lifecycle.split(
+        "INSERT INTO markorbit_facts.cn_goods_item_observation", 1
+    )[1].split("INSERT INTO markorbit_facts.cn_goods_item_current", 1)[0]
+
+    assert "'REOBSERVED'" not in observation_sql
+    assert "cur.application_number = '', 'FIRST_OBSERVED'" in observation_sql
+    assert "'STATUS_CHANGED'" in observation_sql
+    assert "'ITEM_DETAILS_CHANGED'" in observation_sql
+    assert "cur.goods_status_raw != incoming.goods_status_raw" in observation_sql
+    assert "OR cur.record_hash != incoming.record_hash" in observation_sql
+
+
 def test_ingest_entrypoint_routes_through_m16_wrapper_and_runtime_builder():
     jobs = Path("app/jobs.py").read_text(encoding="utf-8")
     wrapper = Path("app/cn/ingest_m16.py").read_text(encoding="utf-8")
