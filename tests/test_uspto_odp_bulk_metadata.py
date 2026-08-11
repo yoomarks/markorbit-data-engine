@@ -21,6 +21,20 @@ def test_assignment_uses_explicit_odp_date_without_filename_inference() -> None:
     assert result["effective_date_inferred_from_filename"] is False
 
 
+def test_assignment_accepts_federal_catalog_identifier_for_same_dataset() -> None:
+    result = evaluate_metadata(
+        domain="assignment",
+        metadata={
+            "productIdentifier": "EIP-5903T-OL",
+            "files": [{"fileName": "assignment.zip", "releaseDate": "2026-08-09"}],
+        },
+        expected_file_names=["assignment.zip"],
+    )
+    assert result["status"] == "READY"
+    assert result["federal_catalog_identifier"] == "EIP-5903T-OL"
+    assert result["odp_dataset_slug"] == "trtdxfag"
+
+
 def test_assignment_does_not_parse_date_from_filename_when_metadata_date_missing() -> None:
     result = evaluate_metadata(
         domain="assignment",
