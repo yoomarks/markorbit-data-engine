@@ -147,6 +147,41 @@ ORDER BY (package_id, application_number, class_no)
 TTL toDateTime(ingested_at) + INTERVAL 7 DAY DELETE;
 
 
+-- Transient compact PARTY snapshot. The M1.6 wrapper aggregates applicant,
+-- co-owner, and agent relations once in bounded application ranges, then the
+-- proven legacy event/history/current writer reuses these exact relation rows.
+CREATE TABLE IF NOT EXISTS markorbit_facts.cn_stage_party_publish
+(
+    package_id UUID,
+    case_id UUID,
+    application_number String,
+    role LowCardinality(String),
+    relation_id UUID,
+    relation_key FixedString(64),
+    mention_id UUID,
+    entity_id Nullable(UUID),
+    agent_code String,
+    raw_name String,
+    normalized_name String,
+    raw_address String,
+    normalized_address String,
+    country_code String,
+    region_code String,
+    city String,
+    class_nos Array(UInt8),
+    confidence_score Float32,
+    source_file String,
+    source_first_line UInt64,
+    source_last_line UInt64,
+    source_row_hash FixedString(64),
+    record_hash FixedString(64),
+    ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)
+)
+ENGINE = MergeTree
+ORDER BY (package_id, application_number, role, relation_key)
+TTL toDateTime(ingested_at) + INTERVAL 7 DAY DELETE;
+
+
 INSERT INTO markorbit_facts.schema_version (component, version)
 SELECT 'CN_GOODS', 'M1.6'
 WHERE NOT EXISTS
