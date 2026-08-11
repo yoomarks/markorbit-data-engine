@@ -1,4 +1,4 @@
-from app.cn.audit_acceptance import evaluate_acceptance
+from app.cn.audit_acceptance import apply_package_registry_gate, evaluate_acceptance
 
 
 def _base_audit() -> dict:
@@ -48,12 +48,16 @@ def _source_backed_orphan() -> dict:
     }
 
 
-def test_source_backed_incomplete_records_are_warnings_not_failures() -> None:
-    result = evaluate_acceptance(
+def _passing_integrity_result() -> dict:
+    return evaluate_acceptance(
         _base_audit(),
         [_source_backed_orphan()],
         [{"file_name": "fixture.zip", "expected_drop": 1, "explained_drop": 1}],
     )
+
+
+def test_source_backed_incomplete_records_are_warnings_not_failures() -> None:
+    result = _passing_integrity_result()
     assert result["status"] == "PASS_WITH_WARNINGS"
     assert result["hard_fail_reasons"] == []
     assert result["reconciliation"]["unexplained_dropped"] == 0
@@ -93,3 +97,38 @@ def test_final_replacement_character_is_hard_failure() -> None:
     )
     assert result["status"] == "FAIL"
     assert "replacement_characters_in_final_tables" in result["hard_fail_reasons"]
+
+
+def test_cn_corpus_acceptance_requires_registered_packages() -> None:
+    result = apply_package_registry_gate(_passing_integrity_result(), [])
+    assert result["status"] == "NOT_READY"
+    assert result["not_ready_reasons"] == ["no_cn_packages_registered"]
+    assert result["package_registry"]["all_success"] is False
+
+
+def test_cn_corpus_acceptance_requires_all_packages_successful() -> None:
+    packages = [
+        {"file_name": "2023_4.zip", "status": "SUCCESS", "source_rank": 1},
+        {"file_name": "2023_5.zip", "status": "REGISTERED", "source_rank": 2},
+    ]
+    result = apply_package_registry_gate(_passing_integrity_result(), packages)
+    assert result["status"] == "NOT_READY"
+    assert result["not_ready_reasons"] == ["cn_corpus_replay_not_complete"]
+    assert result["package_registry"]["pending_count"] == 1
+
+
+def test_cn_corpus_acceptance_failed_package_is_hard_failure() -> None:
+    packages = [
+        {"file_name": "2023_4.zip", "status": "FAILED", "source_rank": 1, "error_message": "boom"},
+    ]
+    result = apply_package_registry_gate(_passing_integrity_result(), packages)
+    assert result["status"] == "FAIL"
+    assert "cn_package_failure_or_interruption_present" in result["hard_fail_reasons"]
+    assert result["package_registry"]["failed_or_interrupted_count"] == 1
+
+
+def test_cn_corpus_acceptance_preserves_integrity_warnings_when_all_success() -> None:
+    packages = [{"file_name": "2023_4.zip", "status": "SUCCESS", "source_rank": 1}]
+    result = apply_package_registry_gate(_passing_integrity_result(), packages)
+    assert result["status"] == "PASS_WITH_WARNINGS"
+    assert result["package_registry"]["all_success"] is True
