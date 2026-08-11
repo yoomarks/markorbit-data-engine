@@ -1,4 +1,5 @@
-from app.cn.replay_readiness_cli import _row_to_dict, _status_counts
+from app.cn import replay_readiness as core
+from app.cn import replay_readiness_cli as compat_cli
 
 
 def test_status_counts_accepts_psycopg_dict_rows():
@@ -7,11 +8,11 @@ def test_status_counts_accepts_psycopg_dict_rows():
         {"status": "REGISTERED", "count": 1},
     ]
 
-    assert _status_counts(rows) == {"SUCCESS": 84, "REGISTERED": 1}
+    assert core._status_counts(rows) == {"SUCCESS": 84, "REGISTERED": 1}
 
 
 def test_status_counts_keeps_tuple_compatibility():
-    assert _status_counts([("SUCCESS", 84), ("REGISTERED", 1)]) == {
+    assert core._status_counts([("SUCCESS", 84), ("REGISTERED", 1)]) == {
         "SUCCESS": 84,
         "REGISTERED": 1,
     }
@@ -35,13 +36,18 @@ def test_row_to_dict_preserves_psycopg_dict_values():
         "status",
     )
 
-    assert _row_to_dict(row, columns) == row
+    assert core._row_to_dict(row, columns) == row
 
 
 def test_row_to_dict_keeps_tuple_compatibility():
     columns = ("package_id", "file_name", "status")
-    assert _row_to_dict(("pkg-1", "2019_2.zip", "REGISTERED"), columns) == {
+    assert core._row_to_dict(("pkg-1", "2019_2.zip", "REGISTERED"), columns) == {
         "package_id": "pkg-1",
         "file_name": "2019_2.zip",
         "status": "REGISTERED",
     }
+
+
+def test_compatibility_cli_uses_core_implementation():
+    assert compat_cli.build_readiness is core.build_readiness
+    assert compat_cli.main is core.main

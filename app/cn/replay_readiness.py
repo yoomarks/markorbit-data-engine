@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.cn.goods_lifecycle import REQUIRED_M16_GOODS_COLUMNS
@@ -116,20 +117,39 @@ ORDER BY name
 """
 
 
-def _dict_or_none(row: Any | None, columns: tuple[str, ...]) -> dict[str, Any] | None:
+def _row_to_dict(
+    row: Mapping[str, Any] | Sequence[Any] | None,
+    columns: tuple[str, ...],
+) -> dict[str, Any] | None:
     if row is None:
         return None
+    if isinstance(row, Mapping):
+        return {column: row.get(column) for column in columns}
     return {column: value for column, value in zip(columns, row)}
+
+
+def _status_counts(rows: Sequence[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        if isinstance(row, Mapping):
+            status = row.get("status")
+            count = row.get("count")
+            if count is None:
+                count = row.get("package_count")
+        else:
+            status, count = row
+        counts[str(status)] = int(count or 0)
+    return counts
 
 
 def _package_state() -> dict[str, Any]:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(_PACKAGE_STATUS_SQL)
-            status_counts = {str(status): int(count or 0) for status, count in cur.fetchall()}
+            status_counts = _status_counts(cur.fetchall())
 
             cur.execute(_NEXT_PENDING_SQL)
-            next_pending = _dict_or_none(
+            next_pending = _row_to_dict(
                 cur.fetchone(),
                 (
                     "package_id",
@@ -142,7 +162,7 @@ def _package_state() -> dict[str, Any]:
             )
 
             cur.execute(_NEXT_RETRY_SQL)
-            next_retry = _dict_or_none(
+            next_retry = _row_to_dict(
                 cur.fetchone(),
                 (
                     "package_id",
@@ -156,7 +176,7 @@ def _package_state() -> dict[str, Any]:
             )
 
             cur.execute(_LATEST_SUCCESS_SQL)
-            latest_success = _dict_or_none(
+            latest_success = _row_to_dict(
                 cur.fetchone(),
                 (
                     "package_id",
@@ -183,7 +203,10 @@ def _scalar(client: Any, sql: str) -> int:
 
 def _storage_state() -> dict[str, Any]:
     client = clickhouse_client()
-    available = {(str(table), str(name)) for table, name in client.query(_SCHEMA_SQL).result_rows}
+    available = {
+        (str(table), str(name))
+        for table, name in client.query(_SCHEMA_SQL).result_rows
+    }
     missing_schema = sorted(
         f"{table}.{column}" for table, column in REQUIRED_M16_GOODS_COLUMNS - available
     )
