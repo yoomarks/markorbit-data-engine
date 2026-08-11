@@ -89,13 +89,14 @@ if (-not $Apply) {
 if (-not $ManifestOutputPath) {
     throw "-ManifestOutputPath is required when -Apply is used."
 }
-$manifestDirectory = Split-Path -Parent $ManifestOutputPath
+$resolvedManifestOutputPath = [System.IO.Path]::GetFullPath($ManifestOutputPath)
+$manifestDirectory = Split-Path -Parent $resolvedManifestOutputPath
 if ($manifestDirectory) {
     New-Item -ItemType Directory -Force -Path $manifestDirectory | Out-Null
 }
 $manifestJson = $report.manifest | ConvertTo-Json -Depth 100
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText((Join-Path (Get-Location) $ManifestOutputPath), $manifestJson, $utf8NoBom)
+[System.IO.File]::WriteAllText($resolvedManifestOutputPath, $manifestJson, $utf8NoBom)
 
-Write-Host "Manifest written: $ManifestOutputPath"
+Write-Host "Manifest written: $resolvedManifestOutputPath"
 Write-Host "Persistent worker remains stopped. No replay or ingestion was started."
