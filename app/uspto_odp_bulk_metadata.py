@@ -9,9 +9,15 @@ from typing import Any, Iterable
 
 
 PREFLIGHT_VERSION = "USPTO_ODP_BULK_METADATA_PREFLIGHT_V1"
-PRODUCT_IDENTIFIERS = {
-    "assignment": "trtdxfag",
-    "ttab": "ttabtdxf",
+PRODUCT_IDENTITY = {
+    "assignment": {
+        "dataset_slug": "trtdxfag",
+        "federal_catalog_identifier": "EIP-5903T-OL",
+    },
+    "ttab": {
+        "dataset_slug": "ttabtdxf",
+        "federal_catalog_identifier": "EIP-5904T-OL",
+    },
 }
 _FILE_NAME_KEYS = ("fileName", "filename", "file_name")
 _DATE_KEYS = ("fileDate", "releaseDate", "file_date", "release_date")
@@ -86,7 +92,9 @@ def _matching_rows(payload: Any, expected_file_name: str) -> list[dict[str, Any]
     return matches
 
 
-def _assignment_source(row: dict[str, Any], expected_file_name: str) -> tuple[dict[str, Any] | None, str | None]:
+def _assignment_source(
+    row: dict[str, Any], expected_file_name: str
+) -> tuple[dict[str, Any] | None, str | None]:
     date_key, date_value = _first_text(row, _DATE_KEYS)
     if not date_value:
         timestamp_key, timestamp_value = _first_text(row, _TIMESTAMP_KEYS)
@@ -115,7 +123,9 @@ def _assignment_source(row: dict[str, Any], expected_file_name: str) -> tuple[di
     )
 
 
-def _ttab_source(row: dict[str, Any], expected_file_name: str) -> tuple[dict[str, Any] | None, str | None]:
+def _ttab_source(
+    row: dict[str, Any], expected_file_name: str
+) -> tuple[dict[str, Any] | None, str | None]:
     timestamp_key, timestamp_value = _first_text(row, _TIMESTAMP_KEYS)
     if timestamp_value:
         snapshot_at = _parse_timezone_aware_timestamp(timestamp_value)
@@ -143,17 +153,18 @@ def evaluate_metadata(
     expected_file_names: list[str],
 ) -> dict[str, Any]:
     normalized_domain = domain.strip().lower()
-    if normalized_domain not in PRODUCT_IDENTIFIERS:
-        raise ValueError(f"domain must be one of {sorted(PRODUCT_IDENTIFIERS)}")
-    expected_product = PRODUCT_IDENTIFIERS[normalized_domain]
+    if normalized_domain not in PRODUCT_IDENTITY:
+        raise ValueError(f"domain must be one of {sorted(PRODUCT_IDENTITY)}")
+    identity = PRODUCT_IDENTITY[normalized_domain]
+    accepted_product_ids = set(identity.values())
 
     issues: list[dict[str, Any]] = []
     product_ids = _product_identifiers(metadata)
-    if product_ids and expected_product not in product_ids:
+    if product_ids and product_ids.isdisjoint(accepted_product_ids):
         issues.append(
             {
                 "type": "ODP_PRODUCT_IDENTIFIER_MISMATCH",
-                "expected": expected_product,
+                "expected_any_of": sorted(accepted_product_ids),
                 "observed": sorted(product_ids),
             }
         )
@@ -196,7 +207,8 @@ def evaluate_metadata(
         "status": "READY" if safe else "NOT_READY",
         "safe": safe,
         "domain": normalized_domain,
-        "odp_product_identifier": expected_product,
+        "odp_dataset_slug": identity["dataset_slug"],
+        "federal_catalog_identifier": identity["federal_catalog_identifier"],
         "metadata_product_identifiers_observed": sorted(product_ids),
         "expected_file_count": len(seen_expected),
         "resolved_file_count": len(plan),
@@ -215,7 +227,9 @@ def evaluate_metadata(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate saved USPTO Open Data Portal bulk product metadata without filename inference"
+        description=(
+            "Validate saved USPTO Open Data Portal bulk product metadata without filename inference"
+        )
     )
     parser.add_argument("--stdin", action="store_true")
     args = parser.parse_args()
