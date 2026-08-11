@@ -25,6 +25,14 @@ def normalize_request_id(value: str | None) -> str:
     return str(uuid.uuid4())
 
 
+def response_headers(path: str, request_id: str) -> dict[str, str]:
+    headers = {REQUEST_ID_HEADER: request_id}
+    if path == "/api/v1" or path.startswith("/api/v1/"):
+        headers[CONTRACT_VERSION_HEADER] = CONTRACT_VERSION
+        headers[SOURCE_OWNER_HEADER] = SOURCE_OWNER
+    return headers
+
+
 def install_integration_transport(app: Any) -> None:
     if getattr(app.state, "integration_transport_installed", False):
         return
@@ -34,10 +42,8 @@ def install_integration_transport(app: Any) -> None:
         request_id = normalize_request_id(request.headers.get(REQUEST_ID_HEADER))
         request.state.request_id = request_id
         response = await call_next(request)
-        response.headers[REQUEST_ID_HEADER] = request_id
-        if request.url.path == "/api/v1" or request.url.path.startswith("/api/v1/"):
-            response.headers[CONTRACT_VERSION_HEADER] = CONTRACT_VERSION
-            response.headers[SOURCE_OWNER_HEADER] = SOURCE_OWNER
+        for name, value in response_headers(request.url.path, request_id).items():
+            response.headers[name] = value
         return response
 
     app.state.integration_transport_installed = True
