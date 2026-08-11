@@ -53,6 +53,31 @@ V1 resources:
 
 The V1 layer delegates to existing domain implementations. It does not duplicate SQL or create a second fact model.
 
+## Service authentication
+
+The V1 consumer plane supports service-to-service bearer-key authentication without changing source-fact semantics or storage ownership.
+
+Configuration:
+
+```text
+INTEGRATION_AUTH_MODE=disabled|required
+INTEGRATION_API_KEYS=<key>[,<rotation-key>...]
+```
+
+Rules:
+
+- `disabled` is the default so existing local development and CI remain compatible.
+- production/private-service deployments should use `required` before exposing `/api/v1` to another service or network boundary;
+- requests use `Authorization: Bearer <key>`;
+- every configured key must contain at least 32 characters;
+- multiple comma-separated keys are supported so a new key can overlap with the old key during rotation;
+- when `required`, missing keys, weak keys, or an invalid auth mode fail closed instead of silently disabling authentication;
+- missing or invalid request credentials return `401` with `WWW-Authenticate: Bearer`;
+- invalid required-mode configuration returns `503` so operators can distinguish service configuration failure from caller authentication failure;
+- `/api/v1/contract` reports authentication mode and policy but never exposes key material.
+
+This authentication boundary applies only to the versioned consumer plane. It does **not** make `/api/admin`, `/api/jobs`, ingestion, replay, retry, reset, or repair part of the consumer contract, and it must not be treated as the security policy for those control-plane surfaces.
+
 ## Response authority
 
 V1 responses use a common owner envelope:
@@ -164,4 +189,4 @@ This contract does not:
 - infer Assignment legal title;
 - infer TTAB substantive rights or legal outcome;
 - authorize external execution;
-- define production authentication or network deployment. Those are deployment/security work layered on this contract.
+- define public-network exposure, TLS termination, firewalling, service discovery, or deployment topology.
