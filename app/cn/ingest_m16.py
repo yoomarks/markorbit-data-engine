@@ -7,6 +7,7 @@ from typing import Any
 
 from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
+from app.cn import party_publish as party
 from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
@@ -26,6 +27,7 @@ goods.incoming_goods_sql = incoming_goods_sql
 _LOCK = threading.RLock()
 _LEGACY_PUBLISH = legacy._publish
 _LEGACY_CLEANUP_PARTIAL = legacy._cleanup_partial_outputs
+_LEGACY_PARTY_AGG = legacy._party_aggregate_sql
 
 
 def _publish_m16(
@@ -34,24 +36,37 @@ def _publish_m16(
 ) -> dict[str, Any]:
     lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
 
-    # The bounded M1.6 lifecycle publisher has already reconstructed every
-    # touched scope from the complete durable goods-item state and materialized
-    # that compact result by contiguous application ranges. Reuse that snapshot
-    # for legacy scope events/current writes instead of rebuilding millions of
-    # goods items inside each legacy INSERT.
+    # PARTY aggregation is also materialized once, in bounded whole-application
+    # ranges. Large yearly packages otherwise rebuild the OWNER/CO_OWNER/AGENT
+    # UNION for every party event/history/current INSERT and can exhaust the
+    # ClickHouse server before the join-spill controls can help.
+    party_metrics = party.materialize_party_publish_stage(
+        package_uuid,
+        _LEGACY_PARTY_AGG,
+    )
+
+    # The bounded M1.6 publishers have already reconstructed every touched goods
+    # scope and every party relation into compact package snapshots. Reuse those
+    # snapshots for the proven legacy persistence logic instead of rebuilding
+    # millions of raw stage rows inside each INSERT.
     original_scope = legacy._scope_aggregate_sql
+    original_party = legacy._party_aggregate_sql
     legacy._scope_aggregate_sql = lambda package: goods.scope_publish_stage_sql(package)
+    legacy._party_aggregate_sql = lambda package: party.party_publish_stage_sql(package)
     try:
         metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
     finally:
         legacy._scope_aggregate_sql = original_scope
+        legacy._party_aggregate_sql = original_party
 
-    # The snapshot is transient. On a publish failure the outer legacy retry
-    # cleanup calls _cleanup_partial_outputs_m16, so only the successful path
-    # needs to remove it here.
+    # Snapshots are transient. On publish failure the outer legacy retry cleanup
+    # calls _cleanup_partial_outputs_m16, so only the successful path removes
+    # them here.
     goods.cleanup_scope_publish_stage(package_uuid)
+    party.cleanup_party_publish_stage(package_uuid)
 
     metrics.update(lifecycle_metrics)
+    metrics.update(party_metrics)
     metrics["goods_status_model_version"] = "M1.6"
     metrics["goods_item_identity_version"] = goods.GOODS_ITEM_IDENTITY_VERSION
     metrics["intra_package_status_resolution_version"] = (
@@ -64,6 +79,7 @@ def _publish_m16(
 def _cleanup_partial_outputs_m16(package_uuid: uuid.UUID) -> None:
     _LEGACY_CLEANUP_PARTIAL(package_uuid)
     goods.cleanup_goods_outputs(package_uuid)
+    party.cleanup_party_publish_stage(package_uuid)
 
 
 def ingest_cn_package(
@@ -84,6 +100,7 @@ def ingest_cn_package(
     with _LOCK:
         goods.ensure_m16_goods_schema()
         goods.ensure_m16_goods_replay_boundary()
+        party.ensure_party_publish_schema()
 
         original_publish = legacy._publish
         original_cleanup_partial = legacy._cleanup_partial_outputs
