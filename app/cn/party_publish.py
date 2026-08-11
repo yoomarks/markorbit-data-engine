@@ -44,6 +44,83 @@ TTL toDateTime(ingested_at) + INTERVAL 7 DAY DELETE
 """
 
 
+class PartyHistoryDeltaClient:
+    """Narrow adapter that makes legacy OBSERVED_CURRENT history delta-only.
+
+    M1.6 deliberately reuses the proven legacy publisher after materializing a
+    bounded party snapshot. The legacy publisher historically appended one
+    ``OBSERVED_CURRENT`` history row for every relation in every package, even
+    when the relation was unchanged. That creates permanent no-op history at
+    corpus scale.
+
+    This adapter rewrites exactly that one INSERT so its predicate matches the
+    already-delta-aware party observed-event predicate: persist a relation when
+    it is first seen, reactivated, or materially changed. All other commands and
+    queries pass through untouched. The adapter fails closed if the expected
+    legacy SQL shape changes or if the target INSERT is seen more than once.
+    """
+
+    _TARGET_TABLE = "INSERT INTO markorbit_facts.cn_case_party_relation_history"
+    _TARGET_ACTION = "'OBSERVED_CURRENT'"
+
+    def __init__(self, delegate: Any, *, source_rank: int) -> None:
+        self._delegate = delegate
+        self._source_rank = int(source_rank)
+        self._rewrite_count = 0
+
+    @property
+    def rewrite_count(self) -> int:
+        return self._rewrite_count
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def command(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        if self._TARGET_TABLE in sql and self._TARGET_ACTION in sql:
+            sql = self._rewrite_observed_current(sql)
+        return self._delegate.command(sql, *args, **kwargs)
+
+    def assert_observed_current_rewritten(self) -> None:
+        if self._rewrite_count != 1:
+            raise RuntimeError(
+                "Storage V2 expected exactly one CN party OBSERVED_CURRENT history "
+                f"INSERT, rewrote {self._rewrite_count}. Legacy publisher shape changed."
+            )
+
+    def _rewrite_observed_current(self, sql: str) -> str:
+        if self._rewrite_count != 0:
+            raise RuntimeError(
+                "Storage V2 encountered multiple CN party OBSERVED_CURRENT history "
+                "INSERTs; refusing ambiguous publisher behavior."
+            )
+
+        stripped = sql.rstrip()
+        if not stripped.endswith("AS incoming"):
+            raise RuntimeError(
+                "Legacy CN party OBSERVED_CURRENT SQL shape changed; expected the "
+                "history INSERT to end with 'AS incoming'."
+            )
+        if "cn_case_party_current AS cur FINAL" in stripped:
+            raise RuntimeError(
+                "Legacy CN party OBSERVED_CURRENT history already contains a current "
+                "relation join; refusing to apply Storage V2 twice."
+            )
+
+        self._rewrite_count += 1
+        return stripped + f"""
+        LEFT JOIN markorbit_facts.cn_case_party_current AS cur FINAL
+          ON cur.application_number = incoming.application_number
+         AND cur.role = incoming.role
+         AND cur.relation_key = incoming.relation_key
+        WHERE (cur.application_number = '' OR cur.source_rank < {self._source_rank})
+          AND (
+              cur.application_number = ''
+              OR cur.is_current = 0
+              OR cur.record_hash != incoming.record_hash
+          )
+        """
+
+
 def _sql_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 

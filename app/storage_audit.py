@@ -38,7 +38,21 @@ GROUP BY event_type
 ORDER BY rows DESC, event_type
 """
 
-READ_ONLY_QUERIES = (PARTS_SQL, GOODS_TRANSITIONS_SQL, CN_EVENT_TYPES_SQL)
+PARTY_RELATION_ACTIONS_SQL = """
+SELECT
+    relation_action,
+    count() AS rows
+FROM markorbit_facts.cn_case_party_relation_history
+GROUP BY relation_action
+ORDER BY rows DESC, relation_action
+"""
+
+READ_ONLY_QUERIES = (
+    PARTS_SQL,
+    GOODS_TRANSITIONS_SQL,
+    CN_EVENT_TYPES_SQL,
+    PARTY_RELATION_ACTIONS_SQL,
+)
 
 
 def _assert_read_only() -> None:
@@ -125,9 +139,9 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
 
     The default mode only reads ``system.parts`` and is suitable while the large
     corpus is idle or being inspected. ``deep=True`` additionally scans the CN
-    observation/event tables to quantify logical history categories. It still
-    performs SELECT statements only and never runs FINAL, mutation, OPTIMIZE, or
-    cleanup statements.
+    observation/event/party-history tables to quantify logical history categories.
+    It still performs SELECT statements only and never runs FINAL, mutation,
+    OPTIMIZE, or cleanup statements.
     """
     _assert_read_only()
     client = client or clickhouse_client()
@@ -144,10 +158,18 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
             client, GOODS_TRANSITIONS_SQL, "transition_type"
         )
         event_types = _grouped_counts(client, CN_EVENT_TYPES_SQL, "event_type")
+        relation_actions = _grouped_counts(
+            client, PARTY_RELATION_ACTIONS_SQL, "relation_action"
+        )
         reobserved_rows = sum(
             row["rows"]
             for row in transitions
             if row["transition_type"] == "REOBSERVED"
+        )
+        observed_current_rows = sum(
+            row["rows"]
+            for row in relation_actions
+            if row["relation_action"] == "OBSERVED_CURRENT"
         )
         report["cn_goods_item_observation"] = {
             "transition_counts": transitions,
@@ -155,6 +177,11 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
             "policy": "REOBSERVED_IS_NO_OP_AND_NOT_PERSISTED_BY_STORAGE_V2",
         }
         report["cn_observed_event"] = {"event_type_counts": event_types}
+        report["cn_case_party_relation_history"] = {
+            "relation_action_counts": relation_actions,
+            "observed_current_rows": observed_current_rows,
+            "policy": "UNCHANGED_OBSERVED_CURRENT_IS_NO_OP_IN_STORAGE_V2",
+        }
     return report
 
 
@@ -165,7 +192,7 @@ def main() -> int:
     parser.add_argument(
         "--deep",
         action="store_true",
-        help="Also scan CN history tables by transition/event type.",
+        help="Also scan CN history tables by transition/event/relation action type.",
     )
     parser.add_argument(
         "--compact",

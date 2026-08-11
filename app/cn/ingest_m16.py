@@ -51,11 +51,24 @@ def _publish_m16(
     # millions of raw stage rows inside each INSERT.
     original_scope = legacy._scope_aggregate_sql
     original_party = legacy._party_aggregate_sql
+    original_clickhouse_client = legacy.clickhouse_client
     legacy._scope_aggregate_sql = lambda package: goods.scope_publish_stage_sql(package)
     legacy._party_aggregate_sql = lambda package: party.party_publish_stage_sql(package)
+
+    # Storage V2 keeps the legacy current-state publisher intact while making
+    # permanent party relation history delta-only. The adapter is installed only
+    # for this serialized M1.6 publish call and fails closed if the legacy SQL
+    # shape changes.
+    delta_client = party.PartyHistoryDeltaClient(
+        original_clickhouse_client(),
+        source_rank=int(package_meta["source_rank"]),
+    )
+    legacy.clickhouse_client = lambda: delta_client
     try:
         metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
+        delta_client.assert_observed_current_rewritten()
     finally:
+        legacy.clickhouse_client = original_clickhouse_client
         legacy._scope_aggregate_sql = original_scope
         legacy._party_aggregate_sql = original_party
 
@@ -73,6 +86,7 @@ def _publish_m16(
         INTRA_PACKAGE_STATUS_RESOLUTION_VERSION
     )
     metrics["recovery_mode"] = "PACKAGE_REPLAY"
+    metrics["party_history_policy"] = "DELTA_ONLY_V1"
     return metrics
 
 

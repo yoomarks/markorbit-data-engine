@@ -32,6 +32,13 @@ class _Client:
             )
         if "cn_observed_event" in sql:
             return _Result([("CASE_FIRST_OBSERVED", 50)])
+        if "cn_case_party_relation_history" in sql:
+            return _Result(
+                [
+                    ("OBSERVED_CURRENT", 120),
+                    ("SUPERSEDED", 7),
+                ]
+            )
         raise AssertionError(sql)
 
 
@@ -59,14 +66,18 @@ def test_physical_audit_does_not_scan_fact_history():
     assert "FROM system.parts" in client.queries[0]
 
 
-def test_deep_audit_quantifies_legacy_noop_reobservations():
+def test_deep_audit_quantifies_legacy_noop_history():
     client = _Client()
     report = build_storage_audit(deep=True, client=client)
 
     goods = report["cn_goods_item_observation"]
     assert goods["reobserved_rows"] == 80
     assert goods["policy"] == "REOBSERVED_IS_NO_OP_AND_NOT_PERSISTED_BY_STORAGE_V2"
-    assert len(client.queries) == 3
+
+    party = report["cn_case_party_relation_history"]
+    assert party["observed_current_rows"] == 120
+    assert party["policy"] == "UNCHANGED_OBSERVED_CURRENT_IS_NO_OP_IN_STORAGE_V2"
+    assert len(client.queries) == 4
 
 
 def test_powershell_wrapper_does_not_start_persistent_worker():
