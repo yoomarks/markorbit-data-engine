@@ -29,10 +29,12 @@ GROUP BY transition_type
 ORDER BY rows DESC, transition_type
 """
 
-CN_EVENT_TYPES_SQL = """
+CN_EVENT_PROFILE_SQL = """
 SELECT
     event_type,
-    count() AS rows
+    count() AS rows,
+    countIf(old_value_compact = '') AS empty_old_value_rows,
+    countIf(old_value_compact != '') AS prior_value_rows
 FROM markorbit_facts.cn_observed_event
 GROUP BY event_type
 ORDER BY rows DESC, event_type
@@ -50,9 +52,20 @@ ORDER BY rows DESC, action
 READ_ONLY_QUERIES = (
     PARTS_SQL,
     GOODS_TRANSITIONS_SQL,
-    CN_EVENT_TYPES_SQL,
+    CN_EVENT_PROFILE_SQL,
     PARTY_RELATION_ACTIONS_SQL,
 )
+
+_BASELINE_ONLY_EVENT_TYPES = {
+    "APPLICATION_OBSERVED",
+    "GOODS_SCOPE_OBSERVED",
+    "DERIVED_CASE_OBSERVED",
+}
+_BASELINE_WHEN_OLD_EMPTY_EVENT_TYPES = {
+    "PRELIMINARY_PUBLICATION_OBSERVED",
+    "REGISTRATION_PUBLICATION_OBSERVED",
+    "EXCLUSIVE_TERM_OBSERVED",
+}
 
 
 def _assert_read_only() -> None:
@@ -134,6 +147,30 @@ def _grouped_counts(client: Any, sql: str, key_name: str) -> list[dict[str, Any]
     ]
 
 
+def _event_profile(client: Any) -> list[dict[str, Any]]:
+    rows = client.query(CN_EVENT_PROFILE_SQL).result_rows
+    return [
+        {
+            "event_type": str(event_type),
+            "rows": int(row_count or 0),
+            "empty_old_value_rows": int(empty_old or 0),
+            "prior_value_rows": int(prior_value or 0),
+        }
+        for event_type, row_count, empty_old, prior_value in rows
+    ]
+
+
+def _reconstructible_event_baseline_rows(profile: list[dict[str, Any]]) -> int:
+    total = 0
+    for row in profile:
+        event_type = row["event_type"]
+        if event_type in _BASELINE_ONLY_EVENT_TYPES:
+            total += row["rows"]
+        elif event_type in _BASELINE_WHEN_OLD_EMPTY_EVENT_TYPES:
+            total += row["empty_old_value_rows"]
+    return total
+
+
 def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dict[str, Any]:
     """Return a read-only physical/logical storage report.
 
@@ -147,7 +184,7 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
     client = client or clickhouse_client()
     parts = _part_rows(client)
     report: dict[str, Any] = {
-        "audit_version": "DATA_ENGINE_STORAGE_V2_AUDIT_V1",
+        "audit_version": "DATA_ENGINE_STORAGE_V2_AUDIT_V2",
         "mode": "deep" if deep else "physical",
         "read_only": True,
         "physical": _physical_summary(parts),
@@ -157,7 +194,7 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
         transitions = _grouped_counts(
             client, GOODS_TRANSITIONS_SQL, "transition_type"
         )
-        event_types = _grouped_counts(client, CN_EVENT_TYPES_SQL, "event_type")
+        event_profile = _event_profile(client)
         relation_actions = _grouped_counts(
             client, PARTY_RELATION_ACTIONS_SQL, "relation_action"
         )
@@ -166,6 +203,11 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
             for row in transitions
             if row["transition_type"] == "REOBSERVED"
         )
+        first_observed_rows = sum(
+            row["rows"]
+            for row in transitions
+            if row["transition_type"] == "FIRST_OBSERVED"
+        )
         observed_current_rows = sum(
             row["rows"]
             for row in relation_actions
@@ -173,10 +215,22 @@ def build_storage_audit(*, deep: bool = False, client: Any | None = None) -> dic
         )
         report["cn_goods_item_observation"] = {
             "transition_counts": transitions,
+            "first_observed_rows": first_observed_rows,
             "reobserved_rows": reobserved_rows,
-            "policy": "REOBSERVED_IS_NO_OP_AND_NOT_PERSISTED_BY_STORAGE_V2",
+            "policy": "FIRST_SOURCE_ON_CURRENT_PLUS_TRUE_DELTA_HISTORY",
         }
-        report["cn_observed_event"] = {"event_type_counts": event_types}
+        report["cn_observed_event"] = {
+            "event_profile": event_profile,
+            "reconstructible_baseline_candidate_rows": (
+                _reconstructible_event_baseline_rows(event_profile)
+            ),
+            "baseline_candidate_policy": (
+                "APPLICATION/GOODS_SCOPE/DERIVED_CASE first observations and "
+                "publication/registration/term observations with empty old values "
+                "are baseline candidates. Party observed events are deliberately "
+                "excluded until their relation-history rank can prove first-vs-later."
+            ),
+        }
         report["cn_case_party_relation_history"] = {
             "relation_action_counts": relation_actions,
             "observed_current_rows": observed_current_rows,
