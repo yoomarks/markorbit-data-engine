@@ -521,8 +521,7 @@ def publish_goods_lifecycle(
                 multiIf(
                     cur.application_number = '', 'FIRST_OBSERVED',
                     cur.goods_status_raw != incoming.goods_status_raw, 'STATUS_CHANGED',
-                    cur.record_hash != incoming.record_hash, 'ITEM_DETAILS_CHANGED',
-                    'REOBSERVED'
+                    'ITEM_DETAILS_CHANGED'
                 ),
                 incoming.evidence_label,
                 toUUID('{package}'),
@@ -546,7 +545,14 @@ def publish_goods_lifecycle(
               ON cur.application_number = incoming.application_number
              AND cur.class_no = incoming.class_no
              AND cur.goods_item_key = incoming.goods_item_key
-            WHERE cur.application_number = '' OR cur.source_rank <= {source_rank}
+            WHERE cur.application_number = ''
+               OR (
+                    cur.source_rank <= {source_rank}
+                    AND (
+                        cur.goods_status_raw != incoming.goods_status_raw
+                        OR cur.record_hash != incoming.record_hash
+                    )
+               )
         """)
 
         client.command(f"""
