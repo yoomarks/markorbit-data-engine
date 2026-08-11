@@ -5,8 +5,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 
+from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
 from app.integration_security import integration_security_contract, require_integration_auth
-from app.main_core import cn_case, us_case
+from app.main_core import cn_case, health, us_case
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
 from app.us_assignment.api import us_assignments_for_serial
@@ -14,8 +15,6 @@ from app.us_ttab.api import us_ttab_by_serial
 from app.version import engine_version
 
 
-CONTRACT_VERSION = "MARKORBIT_DATA_ENGINE_INTEGRATION_V1"
-SOURCE_OWNER = "MARKORBIT_DATA_ENGINE"
 router = APIRouter(
     prefix="/api/v1",
     tags=["MarkOrbit integration V1"],
@@ -41,13 +40,29 @@ def _envelope(
     }
 
 
+@router.get("/health")
+def integration_health() -> dict[str, Any]:
+    dependency_health = health()
+    dependencies_ok = all(
+        dependency_health.get(name) == "ok" for name in ("api", "postgres", "clickhouse")
+    )
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "engine_version": engine_version(),
+        "source_owner": SOURCE_OWNER,
+        "service_role": SERVICE_ROLE,
+        "status": "ok" if dependencies_ok else "degraded",
+        "dependencies": dependency_health,
+    }
+
+
 @router.get("/contract")
 def integration_contract() -> dict[str, Any]:
     return {
         "contract_version": CONTRACT_VERSION,
         "engine_version": engine_version(),
         "source_owner": SOURCE_OWNER,
-        "service_role": "SOURCE_FACT_SERVICE",
+        "service_role": SERVICE_ROLE,
         "consumer_policy": {
             "query_plane_read_only": True,
             "change_feed_read_only": True,
@@ -56,6 +71,12 @@ def integration_contract() -> dict[str, Any]:
             "business_state_owned_outside_data_engine": True,
         },
         "security": integration_security_contract(),
+        "transport": {
+            "request_id_header": "X-Request-ID",
+            "request_id_echoed": True,
+            "contract_version_header": "X-MarkOrbit-Contract-Version",
+            "source_owner_header": "X-MarkOrbit-Source-Owner",
+        },
         "planes": {
             "query": {
                 "prefix": "/api/v1",
@@ -72,6 +93,7 @@ def integration_contract() -> dict[str, Any]:
             },
         },
         "stable_resources": [
+            "/api/v1/health",
             "/api/v1/cn/cases/{application_number}",
             "/api/v1/us/cases/{serial_number}",
             "/api/v1/us/cases/{serial_number}/360",
