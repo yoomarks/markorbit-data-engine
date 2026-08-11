@@ -17,7 +17,7 @@ try {
     }
 
     $persistentWorkerId = docker compose ps --status running -q worker
-    $diagnosticArgs = @("-m", "app.cn.replay_readiness")
+    $diagnosticArgs = @("-m", "app.cn.replay_readiness_cli")
     if ($persistentWorkerId) {
         $diagnosticArgs += "--persistent-worker-running"
     }
