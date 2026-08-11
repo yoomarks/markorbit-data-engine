@@ -54,18 +54,7 @@ def _active_bytes(client: Any, table: str) -> int:
     )
 
 
-def build_plan(*, client: Any | None = None) -> dict[str, Any]:
-    """Return a read-only compaction plan for CN goods observation history."""
-    client = client or clickhouse_client()
-    counts = _transition_counts(client)
-    total_rows = sum(counts.values())
-    removable_rows = sum(counts.get(name, 0) for name in BASELINE_TRANSITIONS)
-    keep_rows = sum(counts.get(name, 0) for name in DELTA_TRANSITIONS)
-    unknown = {
-        name: count for name, count in counts.items() if name not in KNOWN_TRANSITIONS
-    }
-    unknown_rows = sum(unknown.values())
-
+def _current_goods_summary(client: Any) -> tuple[int, int]:
     current_rows, missing_first_source_rows = client.query(
         f"""
         SELECT
@@ -78,9 +67,157 @@ def build_plan(*, client: Any | None = None) -> dict[str, Any]:
         WHERE is_deleted = 0
         """
     ).result_rows[0]
-    current_rows = int(current_rows or 0)
-    missing_first_source_rows = int(missing_first_source_rows or 0)
+    return int(current_rows or 0), int(missing_first_source_rows or 0)
 
+
+def _related_tables(client: Any) -> list[dict[str, Any]]:
+    rows = client.query(
+        f"""
+        SELECT name, toString(uuid), engine
+        FROM system.tables
+        WHERE database = '{DATABASE}'
+          AND startsWith(name, 'cn_goods_item_observation')
+        ORDER BY name
+        """
+    ).result_rows
+    result: list[dict[str, Any]] = []
+    for name, table_uuid, engine in rows:
+        table = str(name)
+        result.append(
+            {
+                "table": table,
+                "uuid": str(table_uuid),
+                "engine": str(engine),
+                "rows": _scalar(client, f"SELECT count() FROM {DATABASE}.{table}"),
+                "active_bytes": _active_bytes(client, table),
+                "transition_counts": _transition_counts(client, table),
+            }
+        )
+    return result
+
+
+def _recent_dropped_tables(client: Any) -> list[dict[str, Any]]:
+    has_table = _scalar(
+        client,
+        "SELECT count() FROM system.tables "
+        "WHERE database = 'system' AND name = 'dropped_tables'",
+    )
+    if not has_table:
+        return []
+
+    columns = {
+        str(row[0])
+        for row in client.query(
+            "SELECT name FROM system.columns "
+            "WHERE database = 'system' AND table = 'dropped_tables'"
+        ).result_rows
+    }
+    required = {"database", "table", "uuid"}
+    if not required.issubset(columns):
+        return []
+
+    rows = client.query(
+        f"""
+        SELECT database, table, toString(uuid)
+        FROM system.dropped_tables
+        WHERE database = '{DATABASE}'
+          AND startsWith(table, 'cn_goods_item_observation')
+        ORDER BY table
+        """
+    ).result_rows
+    return [
+        {"database": str(database), "table": str(table), "uuid": str(table_uuid)}
+        for database, table, table_uuid in rows
+    ]
+
+
+def _recent_ddl(client: Any) -> list[dict[str, Any]]:
+    has_query_log = _scalar(
+        client,
+        "SELECT count() FROM system.tables "
+        "WHERE database = 'system' AND name = 'query_log'",
+    )
+    if not has_query_log:
+        return []
+    try:
+        rows = client.query(
+            """
+            SELECT toString(event_time), query
+            FROM system.query_log
+            WHERE type = 'QueryFinish'
+              AND event_time >= now() - INTERVAL 2 HOUR
+              AND positionCaseInsensitive(query, 'cn_goods_item_observation') > 0
+              AND (
+                  positionCaseInsensitive(query, 'RENAME TABLE') > 0
+                  OR positionCaseInsensitive(query, 'EXCHANGE TABLES') > 0
+                  OR positionCaseInsensitive(query, 'DROP TABLE') > 0
+                  OR positionCaseInsensitive(query, 'UNDROP TABLE') > 0
+                  OR positionCaseInsensitive(query, 'CREATE TABLE') > 0
+              )
+            ORDER BY event_time DESC
+            LIMIT 50
+            """
+        ).result_rows
+    except Exception:
+        return []
+    return [{"event_time": str(event_time), "query": str(query)} for event_time, query in rows]
+
+
+def build_status(*, client: Any | None = None) -> dict[str, Any]:
+    """Return read-only diagnostics for the CN goods compaction state."""
+    client = client or clickhouse_client()
+    current_rows, missing_first_source_rows = _current_goods_summary(client)
+    related_tables = _related_tables(client)
+    by_name = {row["table"]: row for row in related_tables}
+    source = by_name.get(SOURCE_TABLE)
+    archive = by_name.get(ARCHIVE_TABLE)
+    shadow = by_name.get(SHADOW_TABLE)
+
+    if archive and not shadow:
+        state = "APPLIED_REVERSIBLE"
+    elif shadow:
+        state = "INCOMPLETE_SHADOW_PRESENT"
+    elif source:
+        source_counts = source["transition_counts"]
+        baseline_rows = sum(source_counts.get(name, 0) for name in BASELINE_TRANSITIONS)
+        if baseline_rows:
+            state = "LEGACY_OR_UNCOMPACTED_ACTIVE"
+        elif current_rows:
+            state = "COMPACT_WITHOUT_ARCHIVE_OR_ALREADY_FINALIZED"
+        else:
+            state = "EMPTY"
+    else:
+        state = "SOURCE_TABLE_MISSING"
+
+    return {
+        "status_version": "CN_STORAGE_V2_GOODS_STATUS_V2",
+        "read_only": True,
+        "state": state,
+        "current_goods_rows": current_rows,
+        "current_rows_missing_first_source": missing_first_source_rows,
+        "related_tables": related_tables,
+        "recent_dropped_tables": _recent_dropped_tables(client),
+        "recent_ddl": _recent_ddl(client),
+        "safety_note": (
+            "Do not re-apply compaction when the active observation table is already "
+            "baseline-free and the archive is missing. Inspect status/recovery evidence first."
+        ),
+    }
+
+
+def build_plan(*, client: Any | None = None) -> dict[str, Any]:
+    """Return a read-only compaction plan for CN goods observation history."""
+    client = client or clickhouse_client()
+    counts = _transition_counts(client)
+    total_rows = sum(counts.values())
+    removable_rows = sum(counts.get(name, 0) for name in BASELINE_TRANSITIONS)
+    keep_rows = sum(counts.get(name, 0) for name in DELTA_TRANSITIONS)
+    unknown = {
+        name: count for name, count in counts.items() if name not in KNOWN_TRANSITIONS
+    }
+    unknown_rows = sum(unknown.values())
+
+    current_rows, missing_first_source_rows = _current_goods_summary(client)
     source_bytes = _active_bytes(client, SOURCE_TABLE)
     estimated_reclaim_bytes = (
         int(source_bytes * removable_rows / total_rows) if total_rows else 0
@@ -88,14 +225,26 @@ def build_plan(*, client: Any | None = None) -> dict[str, Any]:
     shadow_exists = _table_exists(client, SHADOW_TABLE)
     archive_exists = _table_exists(client, ARCHIVE_TABLE)
 
+    # Never allow a second Apply against an already baseline-free active table.
+    # That state is either a completed finalization or an abnormal loss/rename of
+    # the reversible archive and must be diagnosed instead of overwritten.
+    baseline_rows_present = removable_rows > 0
+    ambiguous_compact_without_archive = (
+        current_rows > 0
+        and not baseline_rows_present
+        and not archive_exists
+        and not shadow_exists
+    )
     safe_to_apply = (
-        unknown_rows == 0
+        baseline_rows_present
+        and unknown_rows == 0
         and missing_first_source_rows == 0
         and not shadow_exists
         and not archive_exists
+        and not ambiguous_compact_without_archive
     )
     return {
-        "plan_version": "CN_STORAGE_V2_GOODS_COMPACTION_V1",
+        "plan_version": "CN_STORAGE_V2_GOODS_COMPACTION_V2",
         "read_only": True,
         "policy": "CURRENT_FIRST_SOURCE_PLUS_TRUE_DELTA_HISTORY",
         "transition_counts": counts,
@@ -110,6 +259,7 @@ def build_plan(*, client: Any | None = None) -> dict[str, Any]:
         "estimated_reclaim_bytes": estimated_reclaim_bytes,
         "shadow_exists": shadow_exists,
         "archive_exists": archive_exists,
+        "ambiguous_compact_without_archive": ambiguous_compact_without_archive,
         "safe_to_apply": safe_to_apply,
         "evidence_note": (
             "FIRST_OBSERVED is reconstructible from retained raw authority plus "
@@ -121,11 +271,7 @@ def build_plan(*, client: Any | None = None) -> dict[str, Any]:
 
 
 def apply_compaction(*, client: Any | None = None) -> dict[str, Any]:
-    """Build and atomically activate a compact goods-observation table.
-
-    The original wide table is retained as ``ARCHIVE_TABLE`` so the operation is
-    reversible until ``finalize_compaction`` is explicitly run.
-    """
+    """Build and atomically activate a compact goods-observation table."""
     client = client or clickhouse_client()
     plan = build_plan(client=client)
     if not plan["safe_to_apply"]:
@@ -148,12 +294,8 @@ def apply_compaction(*, client: Any | None = None) -> dict[str, Any]:
             """
         )
 
-    shadow_rows = _scalar(
-        client, f"SELECT count() FROM {DATABASE}.{SHADOW_TABLE}"
-    )
-    source_rows_now = _scalar(
-        client, f"SELECT count() FROM {DATABASE}.{SOURCE_TABLE}"
-    )
+    shadow_rows = _scalar(client, f"SELECT count() FROM {DATABASE}.{SHADOW_TABLE}")
+    source_rows_now = _scalar(client, f"SELECT count() FROM {DATABASE}.{SOURCE_TABLE}")
     if shadow_rows != keep_rows_expected:
         raise RuntimeError(
             "CN goods compaction shadow validation failed: "
@@ -165,9 +307,6 @@ def apply_compaction(*, client: Any | None = None) -> dict[str, Any]:
             f"before={source_rows_before}, now={source_rows_now}."
         )
 
-    # markorbit_facts is an Atomic database on supported ClickHouse releases.
-    # EXCHANGE swaps names atomically; the old wide table is then retained under
-    # ARCHIVE_TABLE for explicit rollback/finalization.
     client.command(
         f"EXCHANGE TABLES {DATABASE}.{SOURCE_TABLE} AND {DATABASE}.{SHADOW_TABLE}"
     )
@@ -181,31 +320,28 @@ def apply_compaction(*, client: Any | None = None) -> dict[str, Any]:
             "CN goods compaction activated a table that still contains baseline rows."
         )
     if sum(active_counts.values()) != keep_rows_expected:
-        raise RuntimeError(
-            "CN goods compact table row count changed after activation."
-        )
+        raise RuntimeError("CN goods compact table row count changed after activation.")
 
     return {
         "status": "APPLIED_REVERSIBLE",
         "plan": plan,
         "active_transition_counts": active_counts,
-        "archive_rows": _scalar(
-            client, f"SELECT count() FROM {DATABASE}.{ARCHIVE_TABLE}"
-        ),
+        "archive_rows": _scalar(client, f"SELECT count() FROM {DATABASE}.{ARCHIVE_TABLE}"),
         "archive_active_bytes": _active_bytes(client, ARCHIVE_TABLE),
         "next_step": (
-            "Run plan/audits against the compact table. Use rollback before "
-            "finalize if anything is unexpected; finalize is the irreversible "
-            "space-reclaim step."
+            "Run status/plan/audits against the compact table. Use rollback before "
+            "finalize if anything is unexpected; finalize is irreversible."
         ),
     }
 
 
 def rollback_compaction(*, client: Any | None = None) -> dict[str, Any]:
-    """Restore the archived wide table before finalization."""
     client = client or clickhouse_client()
     if not _table_exists(client, ARCHIVE_TABLE):
-        raise RuntimeError("No CN goods Storage V1 archive exists to roll back.")
+        raise RuntimeError(
+            "No CN goods Storage V1 archive exists to roll back. Status: "
+            + json.dumps(build_status(client=client), default=str)
+        )
     if _table_exists(client, SHADOW_TABLE):
         raise RuntimeError("Unexpected compaction shadow table exists; refusing rollback.")
 
@@ -216,17 +352,16 @@ def rollback_compaction(*, client: Any | None = None) -> dict[str, Any]:
         f"EXCHANGE TABLES {DATABASE}.{SOURCE_TABLE} AND {DATABASE}.{SHADOW_TABLE}"
     )
     client.command(f"DROP TABLE {DATABASE}.{SHADOW_TABLE} SYNC")
-    return {
-        "status": "ROLLED_BACK",
-        "transition_counts": _transition_counts(client, SOURCE_TABLE),
-    }
+    return {"status": "ROLLED_BACK", "transition_counts": _transition_counts(client)}
 
 
 def finalize_compaction(*, client: Any | None = None) -> dict[str, Any]:
-    """Drop the reversible archive after validating the compact active table."""
     client = client or clickhouse_client()
     if not _table_exists(client, ARCHIVE_TABLE):
-        raise RuntimeError("No CN goods Storage V1 archive exists to finalize.")
+        raise RuntimeError(
+            "No CN goods Storage V1 archive exists to finalize. Status: "
+            + json.dumps(build_status(client=client), default=str)
+        )
     if _table_exists(client, SHADOW_TABLE):
         raise RuntimeError("Unexpected compaction shadow table exists; refusing finalize.")
 
@@ -242,9 +377,7 @@ def finalize_compaction(*, client: Any | None = None) -> dict[str, Any]:
         )
 
     archive_counts = _transition_counts(client, ARCHIVE_TABLE)
-    archive_delta_rows = sum(
-        archive_counts.get(name, 0) for name in DELTA_TRANSITIONS
-    )
+    archive_delta_rows = sum(archive_counts.get(name, 0) for name in DELTA_TRANSITIONS)
     if archive_delta_rows != sum(active_counts.values()):
         raise RuntimeError(
             "Active compact history does not preserve every delta row from the archive; "
@@ -273,13 +406,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("plan", "apply", "rollback", "finalize"),
-        default="plan",
+        choices=("status", "plan", "apply", "rollback", "finalize"),
+        default="status",
     )
     parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
 
-    if args.mode == "plan":
+    if args.mode == "status":
+        result = build_status()
+    elif args.mode == "plan":
         result = build_plan()
     elif args.mode == "apply":
         result = apply_compaction()
