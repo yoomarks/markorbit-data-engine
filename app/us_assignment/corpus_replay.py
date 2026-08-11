@@ -149,8 +149,7 @@ def _registry_state(preflight: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_replay_plan(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
-    preflight = preflight_manifest(manifest_path, raw_root)
+def _build_replay_plan_from_preflight(preflight: dict[str, Any]) -> dict[str, Any]:
     if not preflight.get("safe"):
         return {
             "replay_version": REPLAY_VERSION,
@@ -182,6 +181,10 @@ def build_replay_plan(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
     }
 
 
+def build_replay_plan(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
+    return _build_replay_plan_from_preflight(preflight_manifest(manifest_path, raw_root))
+
+
 def execute_replay(
     manifest_path: Path,
     raw_root: Path,
@@ -193,10 +196,14 @@ def execute_replay(
 ) -> dict[str, Any]:
     if max_packages < 1:
         raise ValueError("max_packages must be positive")
-    initial = build_replay_plan(manifest_path, raw_root)
-    if initial["status"] == "BLOCKED":
-        return {"mode": "APPLY" if apply else "DRY_RUN", **initial, "processed_count": 0}
-    if initial["status"] == "COMPLETE":
+
+    # Source validation and SHA-256 are intentionally performed once per process.
+    # Ingestion moves successful files from incoming to archive, but this immutable
+    # preflight plan has already frozen source identity. Registry state is cheap and
+    # is refreshed after each package. A restarted replay performs a fresh preflight.
+    preflight = preflight_manifest(manifest_path, raw_root)
+    initial = _build_replay_plan_from_preflight(preflight)
+    if initial["status"] in {"BLOCKED", "COMPLETE"}:
         return {"mode": "APPLY" if apply else "DRY_RUN", **initial, "processed_count": 0}
     if initial["status"] == "RETRY_REQUIRED" and not resume_failed:
         return {"mode": "APPLY" if apply else "DRY_RUN", **initial, "processed_count": 0}
@@ -207,7 +214,7 @@ def execute_replay(
     processed: list[dict[str, Any]] = []
 
     for _ in range(limit):
-        current = build_replay_plan(manifest_path, raw_root)
+        current = _build_replay_plan_from_preflight(preflight)
         if current["status"] == "COMPLETE":
             break
         if current["status"] == "BLOCKED":
@@ -249,7 +256,7 @@ def execute_replay(
                 "processed": processed,
                 "error": str(exc),
                 "failed_source": next_action,
-                "final_plan": build_replay_plan(manifest_path, raw_root),
+                "final_plan": _build_replay_plan_from_preflight(preflight),
             }
         if result.get("status") != "SUCCESS":
             return {
@@ -258,11 +265,11 @@ def execute_replay(
                 "processed_count": len(processed),
                 "processed": processed,
                 "result": result,
-                "final_plan": build_replay_plan(manifest_path, raw_root),
+                "final_plan": _build_replay_plan_from_preflight(preflight),
             }
         processed.append(result)
 
-    final_plan = build_replay_plan(manifest_path, raw_root)
+    final_plan = _build_replay_plan_from_preflight(preflight)
     status = "COMPLETE" if final_plan["status"] == "COMPLETE" else "PAUSED"
     return {
         "mode": "APPLY",
@@ -271,6 +278,7 @@ def execute_replay(
         "processed_count": len(processed),
         "processed": processed,
         "final_plan": final_plan,
+        "source_preflight_runs": 1,
         "legal_ownership_conclusion": False,
     }
 

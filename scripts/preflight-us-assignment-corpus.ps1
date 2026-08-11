@@ -10,7 +10,7 @@ if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Docker Compose worker state.
 if ($worker) { throw "Persistent worker is running. Stop it before Assignment corpus preflight." }
 
 $manifest = "/data/raw/" + ($ManifestRelativePath -replace '\\', '/')
-$jsonLines = & docker compose run --rm --no-deps -T worker python -m app.us_assignment.corpus_preflight --manifest $manifest
+$jsonLines = & docker compose run --build --rm --no-deps -T worker python -m app.us_assignment.corpus_preflight --manifest $manifest
 $exitCode = $LASTEXITCODE
 $json = $jsonLines -join "`n"
 if (-not $OutputPath) {
