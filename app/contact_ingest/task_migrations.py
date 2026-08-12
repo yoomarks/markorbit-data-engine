@@ -34,8 +34,10 @@ CREATE TABLE IF NOT EXISTS contact.ingest_task (
     ))
 );
 
+-- Existing V1 task tables did not have this column. Adding it with a blank
+-- default lets runtime migration distinguish old plans from fresh V1.1 plans.
 ALTER TABLE contact.ingest_task
-ADD COLUMN IF NOT EXISTS ingest_version text NOT NULL DEFAULT '{CONTACT_INGEST_VERSION}';
+ADD COLUMN IF NOT EXISTS ingest_version text NOT NULL DEFAULT '';
 
 ALTER TABLE contact.ingest_task
 ALTER COLUMN ingest_version SET DEFAULT '{CONTACT_INGEST_VERSION}';
@@ -72,9 +74,9 @@ def _apply_task_schema(conn) -> None:
             """
         )
 
-        # Parser/profile upgrades must get one chance to re-evaluate old READY,
-        # FAILED and INVALID plans. MISSING_FILE is deliberate because the normal
-        # scanner already treats it as a request to resolve/reparse the file.
+        # Parser/profile upgrades get one re-evaluation pass. MISSING_FILE is used
+        # as the scanner's existing re-resolve/reparse state; no contact data is
+        # written by this migration.
         cur.execute(
             """
             UPDATE contact.ingest_task
