@@ -15,7 +15,7 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 | US Assignment schema | `US_ASSIGNMENT_M1.0` | USPTO recorded assignment/interest facts; not title conclusion. |
 | US TTAB schema | `US_TTAB_M1.2` | USPTO TTAB procedural facts; not outcome/substantive-rights conclusion. |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` | Read-only normalized alert/event projection. |
-| Contact ingestion | `CONTACT_INGEST_V1.4` | Multi-format contact ingestion including legacy XLS, broader historical/multilingual agent headers, conservative headerless tables, unresolved case-linked contact evidence, and serialized/retried Postgres apply. |
+| Contact ingestion | `CONTACT_INGEST_V1.5` | Multi-format contact ingestion including legacy XLS, broader historical/multilingual agent headers, conservative headerless tables, narrative lawyer/agent directories, unresolved case-linked contact evidence, and serialized/retried Postgres apply. |
 | Contact task control | `CONTACT_TASK_CONTROL_V1.1` | Incoming-folder discovery, parser-version re-evaluation, interrupted-task recovery, background admin execution, and archive workflow. |
 | Storage policy | `DATA_ENGINE_STORAGE_V2` | Current-fact + true-delta history policy. |
 | Storage headroom | `DATA_ENGINE_STORAGE_HEADROOM_V1` | Host + ClickHouse pre-mutation free-space gate. |
