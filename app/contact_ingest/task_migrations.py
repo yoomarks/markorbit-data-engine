@@ -37,28 +37,28 @@ ON contact.ingest_task(last_seen_at DESC);
 """
 
 
+def _apply_task_schema(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(TASK_SCHEMA_SQL)
+        cur.execute(
+            """
+            INSERT INTO control.schema_version(component, version)
+            VALUES ('CONTACT_TASK_CONTROL', %s)
+            ON CONFLICT (component)
+            DO UPDATE SET version = EXCLUDED.version, applied_at = now()
+            """,
+            (CONTACT_TASK_CONTROL_VERSION,),
+        )
+
+
 def ensure_contact_task_schema(conn=None) -> None:
     """Install the additive contact task-control schema."""
+    if conn is not None:
+        _apply_task_schema(conn)
+        return
+
     from app.db import postgres_conn
 
-    owned = conn is None
-    if owned:
-        context = postgres_conn()
-        conn = context.__enter__()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(TASK_SCHEMA_SQL)
-            cur.execute(
-                """
-                INSERT INTO control.schema_version(component, version)
-                VALUES ('CONTACT_TASK_CONTROL', %s)
-                ON CONFLICT (component)
-                DO UPDATE SET version = EXCLUDED.version, applied_at = now()
-                """,
-                (CONTACT_TASK_CONTROL_VERSION,),
-            )
-        if owned:
-            conn.commit()
-    finally:
-        if owned:
-            context.__exit__(None, None, None)
+    with postgres_conn() as owned_conn:
+        _apply_task_schema(owned_conn)
+        owned_conn.commit()
