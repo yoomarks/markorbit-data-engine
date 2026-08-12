@@ -38,6 +38,9 @@ ON contact.ingest_task(last_seen_at DESC);
 
 
 def _apply_task_schema(conn) -> None:
+    from app.contact_ingest.migrations import ensure_contact_schema
+
+    ensure_contact_schema(conn)
     with conn.cursor() as cur:
         cur.execute(TASK_SCHEMA_SQL)
         cur.execute(
@@ -52,7 +55,7 @@ def _apply_task_schema(conn) -> None:
 
 
 def ensure_contact_task_schema(conn=None) -> None:
-    """Install the additive contact task-control schema."""
+    """Install base contact + additive task-control schema."""
     if conn is not None:
         _apply_task_schema(conn)
         return
