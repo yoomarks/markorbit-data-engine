@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 
 CONTACT_TASK_CONTROL_VERSION = "CONTACT_TASK_CONTROL_V1"
 
@@ -36,6 +38,9 @@ CREATE INDEX IF NOT EXISTS ix_contact_ingest_task_seen
 ON contact.ingest_task(last_seen_at DESC);
 """
 
+_schema_ready = False
+_schema_lock = threading.Lock()
+
 
 def _apply_task_schema(conn) -> None:
     from app.contact_ingest.migrations import ensure_contact_schema
@@ -56,12 +61,20 @@ def _apply_task_schema(conn) -> None:
 
 def ensure_contact_task_schema(conn=None) -> None:
     """Install base contact + additive task-control schema."""
+    global _schema_ready
+
     if conn is not None:
         _apply_task_schema(conn)
+        return
+    if _schema_ready:
         return
 
     from app.db import postgres_conn
 
-    with postgres_conn() as owned_conn:
-        _apply_task_schema(owned_conn)
-        owned_conn.commit()
+    with _schema_lock:
+        if _schema_ready:
+            return
+        with postgres_conn() as owned_conn:
+            _apply_task_schema(owned_conn)
+            owned_conn.commit()
+        _schema_ready = True
