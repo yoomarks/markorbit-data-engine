@@ -111,10 +111,12 @@ function Start-DataEngineReplayTelemetry {
         Write-Warning "Replay telemetry start runtime snapshot failed: $runtimeError"
     }
 
-    $host = $null
+    # PowerShell variable names are case-insensitive and $Host is a built-in,
+    # read-only automatic variable. Never use $host here.
+    $hostSnapshot = $null
     $hostError = ""
     try {
-        $host = Get-DataEngineReplayTelemetryHostSnapshot -RepoRoot $repoRoot
+        $hostSnapshot = Get-DataEngineReplayTelemetryHostSnapshot -RepoRoot $repoRoot
     }
     catch {
         $hostError = $_.Exception.Message
@@ -133,7 +135,7 @@ function Start-DataEngineReplayTelemetry {
         start = [ordered]@{
             runtime = $runtime
             runtime_error = $runtimeError
-            host = $host
+            host = $hostSnapshot
             host_error = $hostError
         }
         start_report = Join-Path $runDirectory "${runId}.start.json"
