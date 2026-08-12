@@ -13,7 +13,7 @@
     .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;overflow:auto}.kpi-label,.label{color:var(--muted);font-size:12px}.kpi-value{font-size:24px;font-weight:700;margin-top:7px}.tiny{font-size:11px;color:var(--muted)}
     .domain-title{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}.domain-title span:last-child{font-size:12px;color:var(--muted);font-weight:500}.domain-meta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:13px}.domain-meta b{display:block;margin-top:3px}
     .progress{height:7px;background:#edf0f5;border-radius:999px;overflow:hidden;margin:13px 0 7px}.progress>i{display:block;height:100%;background:#172033;border-radius:999px}.progress-line{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
-    nav{display:flex;gap:6px;margin:18px 0 12px;flex-wrap:wrap}.tab{border:1px solid var(--line);background:#fff;color:#344054;border-radius:9px;padding:9px 14px;cursor:pointer}.tab.active{background:#172033;color:#fff;border-color:#172033}.panel{display:none}.panel.active{display:block}
+    nav{display:flex;gap:6px;margin:18px 0 12px;flex-wrap:wrap}.tab{border:1px solid var(--line);background:#fff;color:#344054;border-radius:9px;padding:9px 14px;cursor:pointer;text-decoration:none}.tab.active{background:#172033;color:#fff;border-color:#172033}.panel{display:none}.panel.active{display:block}
     .section{margin-top:12px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h2{font-size:16px;margin:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
     input,select{border:1px solid #d0d5dd;border-radius:8px;padding:9px 10px;background:#fff;color:#172033}.btn{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;background:#172033;color:#fff}.btn.secondary{background:#667085}.btn.light{background:#eef2f7;color:#344054}.btn.danger{background:#b42318}
     table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:9px 7px;vertical-align:top}th{color:#475467;font-weight:600;background:#fafbfc;position:sticky;top:0}tbody tr:hover{background:#fafcff}.nowrap{white-space:nowrap}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.muted{color:var(--muted)}
@@ -26,7 +26,7 @@
 </head>
 <body>
 <header>
-  <div><h1>MarkOrbit Data Engine</h1><div class="subtitle">Control Center · CN / US Application / Assignment / TTAB</div></div>
+  <div><h1>MarkOrbit Data Engine</h1><div class="subtitle">Control Center · CN / US Application / Assignment / TTAB / Contacts</div></div>
   <div class="health"><span id="engine-version">—</span><span>API <b id="api">—</b></span><span>PG <b id="postgres">—</b></span><span>CH <b id="clickhouse">—</b></span><span id="last-refresh">未刷新</span></div>
 </header>
 <main>
@@ -46,6 +46,7 @@
     <button class="tab" data-tab="packages">来源包</button>
     <button class="tab" data-tab="jobs">任务进展</button>
     <button class="tab" data-tab="lookup">案件查询 / 操作</button>
+    <a class="tab" href="/contacts">Contacts 联系人</a>
   </nav>
 
   <section id="overview" class="panel active">
@@ -128,7 +129,7 @@ async function findCase(){const domain=document.getElementById("lookup-domain").
 async function runCn(){const t=document.getElementById("scan-result");t.textContent="运行中…";try{const r=await getJson("/api/jobs/cn/run",{method:"POST"});t.textContent=JSON.stringify(r);await refreshOverview()}catch(e){t.textContent=e.message}}
 async function retryCn(){const t=document.getElementById("scan-result");t.textContent="重试中…";try{const r=await getJson("/api/jobs/cn/retry",{method:"POST"});t.textContent=JSON.stringify(r);await refreshOverview()}catch(e){t.textContent=e.message}}
 
-document.querySelectorAll(".tab").forEach(btn=>btn.addEventListener("click",async()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));btn.classList.add("active");document.getElementById(btn.dataset.tab).classList.add("active");try{if(btn.dataset.tab==="raw")await loadRaw();if(btn.dataset.tab==="packages"&&!packagesLoaded)await loadPackages();if(btn.dataset.tab==="jobs")await loadJobs()}catch(e){console.error(e)}}));
+document.querySelectorAll("button.tab").forEach(btn=>btn.addEventListener("click",async()=>{document.querySelectorAll("button.tab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));btn.classList.add("active");document.getElementById(btn.dataset.tab).classList.add("active");try{if(btn.dataset.tab==="raw")await loadRaw();if(btn.dataset.tab==="packages"&&!packagesLoaded)await loadPackages();if(btn.dataset.tab==="jobs")await loadJobs()}catch(e){console.error(e)}}));
 refreshOverview();setInterval(refreshOverview,15000);
 </script>
 </body>
