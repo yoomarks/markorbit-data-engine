@@ -17,6 +17,7 @@ from app.version import engine_version
 
 COMPONENT_MATRIX_VERSION = "MARKORBIT_DATA_ENGINE_COMPONENT_MATRIX_V1"
 STORAGE_POLICY_VERSION = "DATA_ENGINE_STORAGE_V2"
+REPLAY_TELEMETRY_VERSION = "DATA_ENGINE_REPLAY_TELEMETRY_V1"
 
 
 def component_versions() -> dict[str, Any]:
@@ -49,6 +50,7 @@ def component_versions() -> dict[str, Any]:
             "storage": {
                 "policy_version": STORAGE_POLICY_VERSION,
                 "headroom_version": HEADROOM_VERSION,
+                "replay_telemetry_version": REPLAY_TELEMETRY_VERSION,
             },
             "integration": {
                 "contract_version": CONTRACT_VERSION,
