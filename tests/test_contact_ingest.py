@@ -151,10 +151,10 @@ def test_zip_can_mix_supported_structured_contact_files(tmp_path: Path) -> None:
     }
 
 
-def test_unsupported_legacy_xls_fails_clearly(tmp_path: Path) -> None:
+def test_invalid_legacy_xls_fails_clearly(tmp_path: Path) -> None:
     path = tmp_path / "legacy.xls"
     path.write_bytes(b"not-an-xls")
-    with pytest.raises(ValueError, match="Unsupported contact input type"):
+    with pytest.raises(ValueError, match="Invalid or unreadable XLS file"):
         build_plan(path)
 
 
@@ -177,7 +177,7 @@ def test_contact_schema_keeps_person_channel_observation_and_marketing_view_sepa
         "CHECK ((entity_id IS NOT NULL)::int + (person_id IS NOT NULL)::int = 1)",
     ):
         assert required in SCHEMA_SQL
-    assert CONTACT_SCHEMA_VERSION == "CONTACT_SCHEMA_V1"
+    assert CONTACT_SCHEMA_VERSION == "CONTACT_SCHEMA_V1.1"
 
 
 def test_repository_never_reassigns_existing_trademark_mentions() -> None:
