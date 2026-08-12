@@ -1,224 +1,290 @@
-# MarkOrbit Data Engine — M1.6 + US M1.2
+# MarkOrbit Data Engine — M1.6
 
-MarkOrbit Data Engine 当前同时承载中国商标 M1.6 与美国商标 US M1.2。PostgreSQL 管理跨法域的数据包、任务、质量与实体控制面；ClickHouse 保存各法域的 durable official facts。根目录 `VERSION` 仍是当前引擎发布标记 `M1.6`；美国数据模型独立使用组件版本 `US_M1.2`。
+MarkOrbit Data Engine 是 MarkOrbit 的 **authoritative source-fact service**：PostgreSQL 管理 source package / job / control-plane state，ClickHouse 保存 CN、US Application、US Assignment、US TTAB 等 durable official facts。事实层保留来源、时间与可重放证据，不把原始官方状态、Assignment 或 TTAB 程序事实直接提升为法律结论。
 
-## CN M1.6 核心能力
+根目录 `VERSION` 是 Data Engine **发布标记**，当前为 `M1.6`。各数据域拥有独立组件版本，不再用一个总版本推断所有组件。
 
-- **案件身份稳定**：完整申请号是一案一键；`A/B/AA` 等后缀形成结构派生关系，具体法律原因无证据时保持 `UNKNOWN`。
-- **中国直接申请与马德里指定中国统一建模**：`G` 号仍是 CN 案件，WIPO 国际注册号只作为跨源关联键。
-- **来源优先级由来源语义决定**：`BASE_PARTITION` 是申请年份分片；`MONTHLY_PATCH` 是后续更新，月更优先于基础分片，导入时间不决定当前事实。
-- **商品项持久化**：M1.6 新增 `cn_goods_item_current`，不再只保存 class 聚合结果。
-- **商品状态变化可追溯**：`cn_goods_item_observation` 保存真实 item transition；`FIRST_OBSERVED` 只是首次看见，不伪装成法律事件时间。
-- **月更遗漏不等于删除**：月更只标识 touched scope，最终 class scope 从完整 durable goods universe 重建。
-- **范围生命周期**：`cn_goods_scope_lifecycle_current` 区分 operational effective、risk、high-confidence inactive、final inactive 与 unknown。
-- **严格商品身份**：商品 identity 由申请号、类别、商品序号、类似群、规范化名称共同形成，避免仅凭序号错误合并。
-- **官方事实与推理彻底分层**：商品代码描述商品证据，不直接编码案件法律状态或原因。
-- **案件状态推理仍为 EMPIRICAL**：R1–R7 只在独立验证层运行，不写入官方事实表；必须经过官方证据人工真值复核后才可能升级。
+## 当前组件版本
 
-当前发布标记以仓库根目录 `VERSION` 为唯一来源；API `/api/health`、`/api/cn/summary` 与运行镜像均读取同一标记。
+| 组件 | 当前版本 |
+|---|---|
+| Data Engine release | `M1.6` |
+| CN fact model | `CN_M1.6` |
+| US Application | `US_M1.4` |
+| US Assignment | `US_ASSIGNMENT_M1.0` |
+| US TTAB | `US_TTAB_M1.2` |
+| US Alert Engine | `US_ALERT_ENGINE_M1.0` |
+| Storage policy | `DATA_ENGINE_STORAGE_V2` |
+| Integration contract | `MARKORBIT_DATA_ENGINE_INTEGRATION_V1` |
+| Domain lifecycle | `MARKORBIT_DOMAIN_LIFECYCLE_V1` |
+| Four-domain acceptance | `MARKORBIT_FOUR_DOMAIN_ACCEPTANCE_V1` |
 
-## US M1.2 核心能力
+机器可读的权威矩阵由 `app.component_versions.component_versions()` 提供，并暴露在 `GET /api/v1/contract` 的 `component_versions` 字段。完整规则见 `docs/COMPONENT_VERSIONS.md`。
 
-- **真实 USPTO TDXF 契约**：parser 已按真实历史包与真实日更包的字段层级冻结，不再依赖早期合成 fixture 的字段位置。
-- **历史 + 日更双源模型**：支持 `apcYYYYMMDD-YYYYMMDD-NN.zip` 历史覆盖分片和 `apcYYMMDD.zip` 日更包；所有历史 source rank 永远低于日更 source rank。
-- **USPTO serial number 为案件身份**：registration number 仅作为属性和辅助查询键。
-- **filed/current basis 分离**：1(a)、1(b)、44(d)、44(e)、66(a) 的 filed basis 与 current basis 分别保留，不把最初申请基础误当作当前基础。
-- **真实事件与 Madrid 结构**：读取 `case-file-event-statement` 及 description，并从独立 `international-registration` block 保存 Madrid 官方事实。
-- **owner nationality 不混淆地址**：按真实 nested `nationality` block 读取国籍，邮寄地址 country/state 独立保存。
-- **子表 snapshot 替换**：同一 serial 的更新 snapshot 如果不再包含旧 owner、classification 或 statement，M1.2 会在更高 source rank 写 tombstone，避免历史记录永久误留为 current。
-- **event 保留历史证据**：event 不做 snapshot 删除，继续按事件 identity/source rank 形成累计历史。
-- **重试可恢复旧状态**：snapshot tombstone 与新数据都绑定当前 package UUID；失败整包清理后会重新显露上一份有效 snapshot，再从头重放。
-- **官方事实与法律解释分层**：保存 USPTO raw `status_code/status_date`、事件、statement、filing/maintenance flags，不在事实层直接生成 `ACTIVE/DEAD`、Section 8/15 或 renewal 法律结论。
-- **流式 XML 解析**：历史约 GB 级 XML 与日更大 XML 均通过 `iterparse` 流式读取，ZIP 内 XML 不整体解压进内存。
-- **部分日期不伪造**：类似 `YYYYMM00` 的 first-use 日期保留 raw 值，typed date 为 `NULL`。
-- **整包重放恢复**：registered SHA-256 在发布前重新校验；中断/失败时按 source package UUID 清理 US 输出并从权威源整包重放。
-- **一次只处理一个 US 包**：在真实 USPTO 历史/日更验收建立性能与质量基线前，不启用批量自动追赶。
-- **双 live fixture 门禁**：CI 同时验证 M1.1 真实 TDXF 字段契约与 M1.2 历史→日更 child snapshot 替换语义。
+## 冻结的数据域顺序
 
-US M1.2 当前核心表：
+真实 corpus 的推进顺序固定为：
 
-- `us_case_current`
-- `us_owner_current`
-- `us_classification_current`
-- `us_event_history`
-- `us_statement_current`
+```text
+CN
+ ↓
+US Application
+ ↓
+US Assignment
+ ↓
+US TTAB
+ ↓
+Final Four-domain Acceptance
+```
 
-旧 `us_base_refinery` / `us_daily_refinery` Skill 作为字段覆盖与业务经验参考；其中 correspondent/attorney、design search、prior registrations、foreign applications、Madrid request/events 等将按真实 TDXF identity 逐步进入独立事实表。旧 Skill 的 whole-member 内存读取和未经独立验证的状态解释不会直接搬入引擎。
+下游真实写入不是靠人工记忆控制：所有正式 US mutation entrypoint 都有 upstream apply gate；CN/US 写入口也有磁盘 headroom guard。不要绕过这些脚本直接执行数据库写入或 ad-hoc ingestion。
+
+统一只读状态入口：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\status-domain-lifecycle.ps1 `
+  -ExpectedHistoryParts 91
+```
+
+## CN M1.6
+
+核心语义：
+
+- 完整申请号是案件 identity；结构后缀关系与法律原因分离。
+- `BASE_PARTITION` / `MONTHLY_PATCH` 的优先级由来源语义决定，不由导入时间决定。
+- 月更未出现不解释为删除。
+- `cn_goods_item_current` 保存 durable goods current facts 和 first-source provenance。
+- `cn_goods_item_observation` 在 Storage V2 下只保存真实 transition，不保存重复 baseline observation。
+- `cn_observed_event` 保存真实 delta + canonical PARTY history；可重建 baseline event 被抑制。
+- `cn_case_party_relation_history` 仅保留 legacy compatibility schema，不再作为 canonical history。
+- 案件状态推理与官方事实严格分层；经验规则仍需独立真值验证。
+
+真实 CN replay 前必须先运行非破坏性 M1.6 preflight：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\preflight-m16-real-data.ps1
+```
+
+只有 preflight 明确允许后才进入真实 replay。状态推理审计是另一条更严格的边界：只有报告明确显示 `safe_to_run_inference_audit = true` 时才允许运行推理审计；这不会改变官方事实层。
+
+CN 全量 replay：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\replay-cn-full.ps1
+```
+
+失败包显式恢复：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\replay-cn-full.ps1 `
+  -ResumeFailed
+```
+
+只读 readiness：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\check-cn-replay-readiness.ps1
+```
+
+CN 完成后的最终 checkpoint：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\check-cn-final-checkpoint.ps1
+```
+
+## Storage V2
+
+Storage V2 采用三层思路：
+
+1. **Raw Authority**：官方 ZIP/XML 原始源保留，可校验 SHA-256、可重放。
+2. **Current Fact Store**：ClickHouse 保存查询面需要的最新 durable facts。
+3. **True Delta History**：只保存真实变化，不重复堆同一 baseline/current observation。
+
+关键规则：
+
+- raw source 是最终 authority；
+- current 表承担可重建的当前状态；
+- history 只保留不可由 current + raw 直接替代的真实 transition/provenance；
+- 不依赖盲目 `OPTIMIZE FINAL` 清空间；
+- 大规模 compaction 使用受保护 shadow/exchange 语义；
+- replay 后必须保持 Storage V2 baseline regression = 0。
+
+只读深度审计：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\audit-storage.ps1 `
+  -Deep
+```
+
+## 磁盘安全门
+
+Windows + Docker Desktop 环境同时检查宿主盘和 ClickHouse 内部盘。默认两层都必须至少保留：
+
+```text
+max(128 GiB, 10% total capacity) + 32 GiB reserve
+```
+
+手工检查：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\assert-storage-headroom.ps1
+```
+
+真实 CN/US mutation 脚本会自动调用该 gate。详见 `docs/STORAGE_HEADROOM_GUARD.md`。
+
+## US Application M1.4
+
+US Application 使用 USPTO serial number 作为 case identity，并支持历史覆盖分片 + daily package 的 deterministic precedence。
+
+M1.4 当前包括：
+
+- filed basis / current basis 分离；
+- owner nationality 与地址国家分离；
+- owner/classification/statement/correspondent 等 snapshot child replacement；
+- event / Madrid event 累积历史；
+- durable `us_case_observation_history` change history；
+- 部分日期如 `YYYYMM00` 保留 raw，typed date 不伪造；
+- source rank 与 package SHA-256 驱动 deterministic replay；
+- raw status/event/statement/maintenance indicators 不直接解释成法律结论。
+
+在 CN final checkpoint 通过后，US Application deterministic replay 才允许 `-Apply`：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\replay-us-deterministic.ps1 `
+  -ExpectedHistoryParts 91 `
+  -Apply -All
+```
+
+正式 acceptance 使用 source-backed audit。
+
+## US Assignment M1.0
+
+Assignment 域保存 USPTO recorded assignment / recorded-interest facts。
+
+边界：
+
+- 不把 recordation 自动解释为当前 title / legal ownership；
+- source kind、recorded metadata、property serial 等保持显式；
+- 不从文件名制造 effective date；
+- 只有 US Application source-backed accepted 后才允许 Assignment mutation。
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\replay-us-assignment-deterministic.ps1 `
+  -ExpectedApplicationHistoryParts 91 `
+  -Apply -All
+```
+
+## US TTAB M1.2
+
+TTAB 域保存程序性官方事实，不推断案件实体权利或最终结果。
+
+边界：
+
+- authoritative snapshot timestamp 必须可追溯；
+- 不制造 midnight timestamp；
+- 不从文件名推断程序时间；
+- Assignment accepted 后才允许 TTAB mutation。
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\replay-us-ttab-deterministic.ps1 `
+  -ExpectedApplicationHistoryParts 91 `
+  -Apply -All
+```
+
+## 四域最终验收
+
+四域都 accepted 后，统一 runner 会按冻结顺序重新生成正确的正式报告并调用现有 formal gate：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\run-four-domain-final-acceptance.ps1 `
+  -ExpectedApplicationHistoryParts 91 `
+  -ExpectedApplicationDailyThrough <authoritative-coverage-date>
+```
+
+它会保留 lifecycle、四域 acceptance、final acceptance 与 SHA-256 manifest，防止人工拿错 report 类型。
+
+## Integration API V1
+
+稳定只读 integration plane：
+
+- `GET /api/v1/health`
+- `GET /api/v1/contract`
+- `GET /api/v1/cn/cases/{application_number}`
+- `GET /api/v1/us/cases/{serial_number}`
+- `GET /api/v1/us/cases/{serial_number}/360`
+- `GET /api/v1/us/cases/{serial_number}/history`
+- `GET /api/v1/us/cases/{serial_number}/assignments`
+- `GET /api/v1/us/cases/{serial_number}/ttab`
+- `GET /api/v1/us/changes`
+
+Transport headers：
+
+- `X-Request-ID`
+- `X-MarkOrbit-Contract-Version`
+- `X-MarkOrbit-Source-Owner`
+
+Integration plane 是 read-only source-fact contract；consumer 不写回 Data Engine source facts，也不应跨服务直连数据库。
 
 ## 本地目录
 
 ```text
 D:\yoomarks\markorbit-data-engine\
 ├── raw_data\
-│   ├── incoming\cn\       # 待导入/待重放 CN ZIP
-│   ├── archive\cn\        # 已成功导入的 CN 权威原 ZIP
-│   ├── incoming\us\       # US 历史覆盖分片 + 日更 XML/ZIP
-│   ├── archive\us\        # 已成功导入的 US 权威源包
+│   ├── incoming\cn\
+│   ├── archive\cn\
+│   ├── incoming\us\
+│   ├── archive\us\
 │   ├── quarantine\
 │   └── temp\
 ├── reports\
 └── ...
 ```
 
-## CN M1.6 干净重建
+## CI
 
-M1.6 durable item history 不能从旧的 class aggregate 凭空恢复，因此从 M1.5 升级或需要完整重放时，应进行一次干净重建。`reset-m16.ps1` 会删除 PostgreSQL/ClickHouse 开发卷，但**不会删除 raw ZIP**；它还会把 archive 中缺失于 incoming 的 ZIP 复制回待重放目录。
+主 CI 同时覆盖：
 
-```powershell
-cd D:\yoomarks\markorbit-data-engine
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\reset-m16.ps1
-```
+- Ruff + Pytest；
+- Linux runtime image；
+- CN / Storage V2 fixtures；
+- US Application / Assignment / TTAB / Alert fixtures；
+- `windows-latest` 原生 PowerShell parser；
+- 关键 operator script 参数契约。
 
-验证环境创建后，persistent worker 保持关闭。先运行：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-m16.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-cn-contract.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-cn-fixture.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-m16-goods.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.ps1
-```
-
-最后一条 preflight 是**非破坏性真实数据安全门禁**：它检查当前 M1.6 运行时、数据库、CN ingestion 锁、原始 ZIP/SHA、durable goods replay boundary，并明确输出是否允许开始真实重放。
-
-只有这些 gate 通过后才开始真实 ZIP 重放。
-
-## CN 真实数据重放
-
-先确认 worker 未运行：
-
-```powershell
-docker compose stop worker
-```
-
-逐包或按既定顺序执行：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\run-cn.ps1
-```
-
-失败后修复并重试：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\retry-cn.ps1
-```
-
-M1.6 验收可使用：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-m16-acceptance.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-m16-goods-identity.ps1 -FileName 1999.zip
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-m16-monthly-patch.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.ps1
-```
-
-完成真实数据验收前，不要启动 persistent worker。生产式自动扫描需要恢复时再执行：
-
-```powershell
-docker compose start worker
-```
-
-## US M1.2 本地导入
-
-US parser/publisher 不保存 USPTO Open Data Portal 登录凭据。把官方历史覆盖分片和日更包放到同一 incoming 目录：
-
-```text
-raw_data\incoming\us\apc18840407-20251231-05.zip
-raw_data\incoming\us\apc260108.zip
-```
-
-实际完整历史数据通常包含多个历史 part，应全部放入 incoming。source rank 会确保所有历史分片排在日更之前，不依赖复制文件的先后顺序。
-
-首次使用或代码升级后先运行真实数据库 fixtures：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\validate-us-m1-fixture.ps1
-```
-
-该脚本会连续运行真实 TDXF regression fixture 和 M1.2 child snapshot fixture。
-
-然后反复执行 one-shot ingestion：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\run-us.ps1
-```
-
-每次最多处理一个 registered package。成功后权威源包移动到 `raw_data\archive\us`。包 profile 会记录 `snapshot_tombstone_counts`，便于后续真实历史→日更验收统计。
-
-如果某包失败或源文件缺失，普通 US continuation 会阻断，先执行：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\retry-us.ps1
-```
-
-US 与 CN 使用不同 PostgreSQL advisory lock，因此 US one-shot 不复用或削弱 CN guarded ingestion lock。详细约束见 `docs/US_M1_INGESTION.md`。
-
-## CN 案件状态推理验证
-
-推理层不改变官方事实。历史审计的时间基准来自**已加载数据覆盖截止日**，不是电脑当前日期；只有真实 `STATUS_CHANGED` transition 可提供商品失效时间证据。
-
-先运行 preflight。只有报告中的 `safe_to_run_inference_audit = true` 时，才进入案件状态历史推理验证：
-
-```powershell
-docker compose stop worker
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\preflight-m16-real-data.ps1
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\audit-cn-case-status-inference.ps1 -SamplePerRule 50
-```
-
-审计 V2 使用每条规则独立的 deterministic SHA-256 bottom-k 样本，不取扫描顺序中的“前 N 个”案件。
-
-将审计 JSON 转为人工复核 CSV：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File `
-  .\scripts\build-cn-case-status-review-packet.ps1 `
-  -AuditPath .\reports\cn_case_status_inference_<timestamp>.json
-```
-
-人工依据 CNIPA 官方证据填写 `CONFIRMED` / `REJECTED` / `INSUFFICIENT_EVIDENCE` 后评分：
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File `
-  .\scripts\score-cn-case-status-review-packet.ps1 `
-  -ReviewPath .\reports\cn_case_status_inference_<timestamp>_review.csv
-```
-
-评分只计算验证指标，**不会自动把 EMPIRICAL 规则升级为 VALIDATED**。
-
-## API
-
-- 控制台：`http://localhost:8080`
-- API 文档：`http://localhost:8080/docs`
-- 健康与发布版本：`GET /api/health`
-- CN 字段结构：`GET /api/cn/schema`
-- CN 数据汇总：`GET /api/cn/summary`
-- CN 案件详情：`GET /api/cn/cases/{application_number}`
-- US 字段结构：`GET /api/us/schema`
-- US 数据汇总：`GET /api/us/summary`
-- US 案件详情：`GET /api/us/cases/{serial_number}`
-
-US summary/case 响应会明确标记 `OFFICIAL_RAW_NOT_LEGAL_INTERPRETATION`，提醒调用方当前 status、events、statements 和官方 maintenance/basis indicators 都是 USPTO 官方事实证据，不是 MarkOrbit 的法律状态结论。
+Windows CI 不启动 live Docker corpus，只检查 PowerShell 语法和 operator contract；真实数据库行为继续由 Linux fixture 与本地受保护 replay 验证。
 
 ## 数据边界
 
-- 原始官方 source package 是权威来源；注册后以 SHA-256 识别，不只依赖文件名。
-- US 历史覆盖分片永远低于 US 日更 source rank；导入时间不参与法律事实 precedence。
-- US owner/classification/statement 属于 replaceable snapshot child；较新完整案件 observation 可通过 tombstone 退休旧 child identity。
-- US event 属于累计历史证据，不因后续 snapshot 未重复出现而自动删除。
-- 不保存每次运行的全量 Parquet/DuckDB 快照。
-- CN 月更包未出现的案件或商品，不解释为删除。
-- CN `FIRST_OBSERVED` 不等于状态变化发生日。
-- US raw status/event/statement/maintenance flag 不直接冒充 MarkOrbit 法律状态结论。
-- 推理状态、推理原因、人工复核标签均不得覆盖官方事实层。
-- 实证规则必须保留 model version、rule ID、confidence 与证据来源，并可重算、可撤销。
+- 原始官方 source package 是权威来源，注册后以 SHA-256 标识。
+- source precedence 不由导入时间决定。
+- CN 月更 omission 不等于 deletion。
+- `FIRST_OBSERVED` 不等于法律状态发生日。
+- US Assignment recordation 不等于 title conclusion。
+- TTAB procedural fact 不等于 substantive-rights / outcome conclusion。
+- 推理、风险、deadline interpretation 与官方事实分层保存。
+- 跨 Application / Assignment / TTAB 不制造无权威来源支撑的 chronology。
 
 进一步阅读：
 
 - `docs/ARCHITECTURE.md`
-- `docs/CN_GOODS_LIFECYCLE_MODEL_V2.md`
+- `docs/COMPONENT_VERSIONS.md`
+- `docs/DOMAIN_APPLY_GATES.md`
+- `docs/STORAGE_HEADROOM_GUARD.md`
+- `docs/FOUR_DOMAIN_FINAL_RUNNER.md`
 - `docs/M1_6_REAL_DATA_PREFLIGHT.md`
+- `docs/CN_GOODS_LIFECYCLE_MODEL_V2.md`
 - `docs/CN_CASE_STATUS_INFERENCE_MODEL_V1.md`
-- `docs/CN_CASE_STATUS_INFERENCE_HISTORICAL_AUDIT.md`
-- `docs/CN_CASE_STATUS_GROUND_TRUTH_REVIEW.md`
 - `docs/US_M1_CORE_MODEL.md`
 - `docs/US_M1_INGESTION.md`
