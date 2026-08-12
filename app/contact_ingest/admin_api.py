@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+import threading
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -16,6 +18,14 @@ from app.contact_ingest.task_queue import (
 
 
 router = APIRouter(tags=["contact-admin"])
+_logger = logging.getLogger("markorbit.contact-admin")
+
+
+def _apply_in_background(task_id: str) -> None:
+    try:
+        apply_contact_task(task_id)
+    except Exception:
+        _logger.exception("Background contact import failed: task_id=%s", task_id)
 
 
 @router.on_event("startup")
@@ -57,18 +67,30 @@ def admin_contact_scan():
     return scan_contact_incoming()
 
 
-@router.post("/api/admin/contacts/tasks/{task_id}/apply")
+@router.post("/api/admin/contacts/tasks/{task_id}/apply", status_code=202)
 def admin_contact_apply(task_id: str):
+    """Queue one explicit contact import without holding the browser request open."""
     try:
-        return apply_contact_task(task_id)
+        task = get_contact_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
+
+    status = str(task.get("status") or "")
+    if status == "SUCCESS":
+        return {"status": "SUCCESS", "already_completed": True, "task_id": task_id}
+    if status == "PROCESSING":
+        return {"status": "PROCESSING", "already_running": True, "task_id": task_id}
+    if status not in {"READY", "FAILED"}:
         raise HTTPException(
-            status_code=500,
-            detail={"error_type": type(exc).__name__, "error": str(exc)},
-        ) from exc
+            status_code=409,
+            detail=f"Contact task is not executable from status {status}",
+        )
+
+    thread = threading.Thread(
+        target=_apply_in_background,
+        args=(task_id,),
+        name=f"contact-import-{task_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "PROCESSING", "task_id": task_id, "background": True}
