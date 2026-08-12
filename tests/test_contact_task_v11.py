@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_task_schema_tracks_parser_version_for_re_evaluation() -> None:
-    assert CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.4"
+    assert CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.5"
     assert CONTACT_TASK_CONTROL_VERSION == "CONTACT_TASK_CONTROL_V1.1"
     assert "ingest_version text NOT NULL" in TASK_SCHEMA_SQL
     assert "ADD COLUMN IF NOT EXISTS ingest_version" in TASK_SCHEMA_SQL
@@ -50,5 +50,5 @@ def test_bootstrap_schema_publishes_task_and_ingest_versions() -> None:
         ROOT / "database" / "postgres" / "init" / "006_contact_task_control.sql"
     ).read_text(encoding="utf-8")
     assert "CONTACT_TASK_CONTROL_V1.1" in sql
-    assert "CONTACT_INGEST_V1.4" in sql
+    assert "CONTACT_INGEST_V1.5" in sql
     assert "ingest_version" in sql
