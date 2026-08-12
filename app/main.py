@@ -4,6 +4,7 @@ import sys
 
 from app import main_core as _core
 from app.admin_api import router as admin_router
+from app.contact_ingest.admin_api import router as contact_admin_router
 from app.integration_api import router as integration_router
 from app.integration_transport import install_integration_transport
 from app.us.alert_api import router as us_alert_router
@@ -22,6 +23,7 @@ _core.app.description = (
 )
 install_integration_transport(_core.app)
 _core.app.include_router(admin_router)
+_core.app.include_router(contact_admin_router)
 _core.app.include_router(integration_router)
 _core.app.include_router(us_alert_router)
 _core.app.include_router(us_case_360_router)
