@@ -53,6 +53,7 @@ class EntityPlan:
     region_code: str = ""
     city: str = ""
     external_status: str = ""
+    entity_type_hint: str = ""
     identifiers: dict[str, str] = field(default_factory=dict)
     aliases: list[tuple[str, str]] = field(default_factory=list)
     channels: list[ChannelPlan] = field(default_factory=list)

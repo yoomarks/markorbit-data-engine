@@ -11,7 +11,9 @@ from app.contact_ingest.normalization import normalized_match_text
 CONTACT_ENTITY_NAMESPACE = uuid.UUID("8e10d6f7-e4e5-44b4-88a4-3a54a76644ae")
 
 
-def _entity_candidates_by_name(cur, normalized_name: str, normalized_address: str) -> list[dict[str, Any]]:
+def _entity_candidates_by_name(
+    cur, normalized_name: str, normalized_address: str
+) -> list[dict[str, Any]]:
     if normalized_address:
         cur.execute(
             """
@@ -39,7 +41,9 @@ def _entity_candidates_by_name(cur, normalized_name: str, normalized_address: st
     return list(cur.fetchall())
 
 
-def _find_by_identifier(cur, identifiers: dict[str, str], country_code: str) -> dict[str, Any] | None:
+def _find_by_identifier(
+    cur, identifiers: dict[str, str], country_code: str
+) -> dict[str, Any] | None:
     for identifier_type, value in identifiers.items():
         cur.execute(
             """
@@ -69,28 +73,45 @@ def _contact_entity_material(entity: EntityPlan, profile: str) -> str:
     )
 
 
-def _create_or_update_entity(cur, entity: EntityPlan, profile: str) -> tuple[str, str, float, bool]:
+def _create_or_update_entity(
+    cur, entity: EntityPlan, profile: str
+) -> tuple[str, str, float, bool]:
     identifier_match = _find_by_identifier(cur, entity.identifiers, entity.country_code)
     if identifier_match:
         entity_id = str(identifier_match["entity_id"])
         method, confidence, created = "CONTACT_IDENTIFIER_MATCH", 0.995, False
     else:
-        candidates = _entity_candidates_by_name(cur, entity.normalized_name, entity.normalized_address)
+        candidates = _entity_candidates_by_name(
+            cur, entity.normalized_name, entity.normalized_address
+        )
         if len(candidates) == 1:
             entity_id = str(candidates[0]["entity_id"])
-            exact_address = bool(entity.normalized_address) and candidates[0]["normalized_address"] == entity.normalized_address
-            method = "CONTACT_EXACT_NAME_ADDRESS" if exact_address else "CONTACT_UNIQUE_EXACT_NAME"
+            exact_address = (
+                bool(entity.normalized_address)
+                and candidates[0]["normalized_address"] == entity.normalized_address
+            )
+            method = (
+                "CONTACT_EXACT_NAME_ADDRESS"
+                if exact_address
+                else "CONTACT_UNIQUE_EXACT_NAME"
+            )
             confidence = 0.98 if exact_address else 0.94
             created = False
         else:
             ambiguous = len(candidates) > 1
-            method = "CONTACT_SOURCE_NEW_AMBIGUOUS" if ambiguous else "CONTACT_SOURCE_NEW"
+            method = (
+                "CONTACT_SOURCE_NEW_AMBIGUOUS"
+                if ambiguous
+                else "CONTACT_SOURCE_NEW"
+            )
             confidence = 0.75 if ambiguous else 0.90
             material = _contact_entity_material(entity, profile)
             entity_uuid = uuid.uuid5(CONTACT_ENTITY_NAMESPACE, material)
             entity_id = str(entity_uuid)
             entity_key = hashlib.sha256(material.encode("utf-8")).hexdigest()
-            entity_type = "AGENT_FIRM" if profile == "AGENT_CONTACT_LIST" else "ORGANIZATION"
+            entity_type = entity.entity_type_hint or (
+                "AGENT_FIRM" if profile == "AGENT_CONTACT_LIST" else "ORGANIZATION"
+            )
             cur.execute("SELECT 1 FROM entity.entity WHERE entity_id = %s", (entity_id,))
             existed = cur.fetchone() is not None
             cur.execute(
@@ -193,7 +214,9 @@ def _create_or_update_entity(cur, entity: EntityPlan, profile: str) -> tuple[str
     return entity_id, method, confidence, created
 
 
-def _link_trademark_mentions(cur, entity_id: str, entity: EntityPlan, method: str) -> int:
+def _link_trademark_mentions(
+    cur, entity_id: str, entity: EntityPlan, method: str
+) -> int:
     if not entity.normalized_name or method == "CONTACT_SOURCE_NEW_AMBIGUOUS":
         return 0
     params: list[Any] = [entity_id, method, entity.normalized_name]
