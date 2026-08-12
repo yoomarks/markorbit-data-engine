@@ -1,4 +1,4 @@
-# MarkOrbit Data Engine
+# MarkOrbit Data Engine — M1.6
 
 MarkOrbit Data Engine 是 MarkOrbit 的 **authoritative source-fact service**：PostgreSQL 管理 source package / job / control-plane state，ClickHouse 保存 CN、US Application、US Assignment、US TTAB 等 durable official facts。事实层保留来源、时间与可重放证据，不把原始官方状态、Assignment 或 TTAB 程序事实直接提升为法律结论。
 
@@ -60,7 +60,14 @@ powershell.exe -ExecutionPolicy Bypass `
 - `cn_case_party_relation_history` 仅保留 legacy compatibility schema，不再作为 canonical history。
 - 案件状态推理与官方事实严格分层；经验规则仍需独立真值验证。
 
-CN 全量 replay：
+真实 CN replay 前必须先运行非破坏性 M1.6 preflight：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File .\scripts\preflight-m16-real-data.ps1
+```
+
+只有 preflight 明确允许后才进入真实 replay。CN 全量 replay：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass `
