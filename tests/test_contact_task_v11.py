@@ -33,15 +33,16 @@ def test_stale_processing_tasks_are_recovered_on_api_restart() -> None:
     assert "status = 'FAILED'" in source
 
 
-def test_admin_apply_and_scan_return_without_running_work_inline() -> None:
+def test_admin_apply_is_background_but_manual_scan_keeps_metrics_contract() -> None:
     source = (ROOT / "app" / "contact_ingest" / "admin_api.py").read_text(
         encoding="utf-8"
     )
     assert 'status_code=202' in source
     assert 'target=_apply_in_background' in source
-    assert 'target=_scan_in_background' in source
     assert 'return {"status": "PROCESSING"' in source
-    assert 'return {"status": "SCANNING"' in source
+    assert 'def admin_contact_scan()' in source
+    assert 'return scan_contact_incoming()' in source
+    assert 'target=_scan_in_background' not in source
 
 
 def test_bootstrap_schema_publishes_task_and_ingest_versions() -> None:
