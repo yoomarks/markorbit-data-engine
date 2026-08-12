@@ -99,6 +99,11 @@ def _plan_entity(
         else normalize_country_code(_first(values, "COUNTRY"))
     )
     address = _first(values, "ADDRESS")
+    person_only_agent = (
+        profile == "AGENT_CONTACT_LIST"
+        and not firm_name
+        and bool(agent_name or contact_name)
+    )
     entity = EntityPlan(
         canonical_name=name,
         normalized_name=normalized_match_text(name),
@@ -107,6 +112,7 @@ def _plan_entity(
         region_code=_first(values, "PROVINCE"),
         city=_first(values, "CITY"),
         external_status=_first(values, "ENTITY_STATUS"),
+        entity_type_hint="AGENT_PERSON" if person_only_agent else "",
         source_row=source_row,
         raw_record={
             header: _row_value(row, idx)
