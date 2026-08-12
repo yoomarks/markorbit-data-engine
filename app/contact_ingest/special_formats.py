@@ -95,6 +95,69 @@ def _adapt_singapore_foreign_agent(table: TableData) -> TableData | None:
     )
 
 
+def _adapt_uspto_practitioner(table: TableData) -> TableData | None:
+    """Normalize the USPTO practitioner CSV/TXT export, preserving middle names."""
+    header_index = -1
+    index_by_key: dict[str, int] = {}
+    for index, row in enumerate(table.rows[:10]):
+        candidate = {_key(value): col for col, value in enumerate(row) if clean_text(value)}
+        required = {"lastname", "firstname", "registrationnumber", "status"}
+        if required <= set(candidate):
+            header_index = index
+            index_by_key = candidate
+            break
+    if header_index < 0:
+        return None
+
+    def value(row: list[str], key: str) -> str:
+        idx = index_by_key.get(key, -1)
+        return clean_text(row[idx]) if 0 <= idx < len(row) else ""
+
+    rows = [[
+        "Attorney",
+        "Firm",
+        "Address",
+        "City",
+        "Province",
+        "Country",
+        "Phone",
+        "Agent Code",
+        "Status",
+        "Title",
+    ]]
+    for source_row in table.rows[header_index + 1 :]:
+        first = value(source_row, "firstname")
+        middle = value(source_row, "middlename")
+        last = value(source_row, "lastname")
+        suffix = value(source_row, "suffix")
+        attorney = clean_text(" ".join(part for part in (first, middle, last, suffix) if part))
+        if not attorney:
+            continue
+        address_parts = [
+            value(source_row, "address"),
+            value(source_row, "roomnumber"),
+        ]
+        rows.append([
+            attorney,
+            value(source_row, "firmname"),
+            clean_text(" ".join(part for part in address_parts if part)),
+            value(source_row, "city"),
+            value(source_row, "state"),
+            value(source_row, "country"),
+            value(source_row, "phonenumber"),
+            value(source_row, "registrationnumber"),
+            value(source_row, "status"),
+            value(source_row, "jobtile") or value(source_row, "jobtitle"),
+        ])
+    if len(rows) < 2:
+        return None
+    return TableData(
+        source_member=table.source_member,
+        sheet_name=f"{table.sheet_name}-uspto-practitioner" if table.sheet_name else "uspto-practitioner",
+        rows=rows,
+    )
+
+
 _MOZAMBIQUE_HEADERS = {
     "nodo": "Agent Code",
     "nodoaopi": "Agent Code",
@@ -293,6 +356,10 @@ def adapt_contact_tables(tables: list[TableData]) -> list[TableData]:
         singapore = _adapt_singapore_foreign_agent(table)
         if singapore is not None:
             out.append(singapore)
+            continue
+        uspto = _adapt_uspto_practitioner(table)
+        if uspto is not None:
+            out.append(uspto)
             continue
         mozambique = _adapt_mozambique_table(table)
         if mozambique is not None:
