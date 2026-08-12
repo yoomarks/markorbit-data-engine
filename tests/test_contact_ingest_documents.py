@@ -77,7 +77,7 @@ def _docx_bytes(rows: list[list[str]]) -> bytes:
 
 def _assert_single_entity(path: Path, expected_name: str, expected_email: str) -> None:
     plan = build_plan(path)
-    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.5"
+    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.6"
     entity = plan.tables[0].entities[0]
     assert entity.canonical_name == expected_name
     channels = entity.channels + [channel for person in entity.people for channel in person.channels]
@@ -155,4 +155,4 @@ def test_legacy_doc_uses_antiword_text_extraction(tmp_path: Path, monkeypatch) -
 
 
 def test_task_discovery_advertises_all_document_suffixes() -> None:
-    assert {".pdf", ".txt", ".html", ".htm", ".docx", ".doc", ".xls"} <= SUPPORTED_CONTACT_SUFFIXES
+    assert {".pdf", ".txt", ".html", ".htm", ".docx", ".doc", ".xls", ".josn"} <= SUPPORTED_CONTACT_SUFFIXES
