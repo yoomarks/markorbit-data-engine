@@ -4,7 +4,16 @@
 
 ## Scope
 
-V1 accepts structured `.xlsx`, `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson`, and `.zip` inputs. It automatically locates a likely header row, maps known Chinese/English field names, classifies the source profile, normalizes contact values, and produces a deterministic import plan. Dry-run is the default.
+V1.3 accepts structured `.xlsx`, `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson`, `.txt`, `.html`, `.htm`, `.pdf`, `.docx`, `.doc`, and `.zip` inputs. It automatically locates a likely header row, maps known Chinese/English field names, classifies the source profile, normalizes contact values, and produces a deterministic import plan. Dry-run is the default.
+
+Document readers preserve structure where possible:
+
+- TXT accepts delimited tables, JSON-like records, whitespace tables, and `field: value` contact cards;
+- HTML reads native `<table>` content and falls back to visible structured text;
+- PDF extracts native text/tables; image-only/scanned PDFs are rejected with an explicit OCR-required message rather than silently producing empty contacts;
+- DOCX reads native Word tables and structured paragraphs;
+- legacy DOC uses the `antiword` runtime extractor inside the API container;
+- ZIP members may contain any supported non-ZIP format above.
 
 Source profiles currently include:
 

@@ -32,29 +32,27 @@ def test_contact_task_schema_has_idempotent_sha_and_explicit_statuses() -> None:
 def test_candidate_files_only_accept_supported_structured_contact_formats(tmp_path: Path) -> None:
     incoming = tmp_path / "incoming" / "contacts"
     incoming.mkdir(parents=True)
-    for name in (
+    supported_names = (
         "qcc.xlsx",
         "agents.csv",
         "contacts.tsv",
         "data.json",
         "rows.jsonl",
         "rows.ndjson",
+        "notes.txt",
+        "directory.html",
+        "directory.htm",
+        "directory.pdf",
+        "directory.docx",
+        "directory.doc",
         "bundle.zip",
-    ):
+    )
+    for name in supported_names:
         (incoming / name).write_text("x", encoding="utf-8")
-    (incoming / "notes.txt").write_text("x", encoding="utf-8")
     (incoming / "image.png").write_bytes(b"x")
 
     names = {path.name for path in _candidate_files(incoming)}
-    assert names == {
-        "qcc.xlsx",
-        "agents.csv",
-        "contacts.tsv",
-        "data.json",
-        "rows.jsonl",
-        "rows.ndjson",
-        "bundle.zip",
-    }
+    assert names == set(supported_names)
     assert SUPPORTED_CONTACT_SUFFIXES == {
         ".xlsx",
         ".csv",
@@ -62,6 +60,12 @@ def test_candidate_files_only_accept_supported_structured_contact_formats(tmp_pa
         ".json",
         ".jsonl",
         ".ndjson",
+        ".txt",
+        ".html",
+        ".htm",
+        ".pdf",
+        ".docx",
+        ".doc",
         ".zip",
     }
 
