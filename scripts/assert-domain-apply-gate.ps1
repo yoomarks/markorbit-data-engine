@@ -11,6 +11,13 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
+    Write-Host "Running mandatory storage headroom gate before $TargetDomain mutation..."
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $PSScriptRoot "assert-storage-headroom.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Storage headroom gate blocked mutation for $TargetDomain."
+    }
+
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     switch ($TargetDomain) {
         "US_APPLICATION" {

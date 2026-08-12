@@ -10,6 +10,12 @@ if ($persistentWorker -match "worker") {
     throw "persistent worker is running. Stop it first: docker compose stop worker"
 }
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+    (Join-Path $PSScriptRoot "assert-storage-headroom.ps1")
+if ($LASTEXITCODE -ne 0) {
+    throw "Storage headroom gate blocked CN full replay."
+}
+
 $argsList = @(
     "compose", "run", "--build", "--rm", "--no-deps", "-T",
     "--env", "CLICKHOUSE_JOIN_ALGORITHM=grace_hash",
