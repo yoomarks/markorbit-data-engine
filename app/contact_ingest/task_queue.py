@@ -10,3 +10,5 @@ _legacy.SUPPORTED_CONTACT_SUFFIXES.add(".josn")
 from app.contact_ingest.task_queue_v11 import *  # noqa: E402,F401,F403
 
 SUPPORTED_CONTACT_SUFFIXES = _legacy.SUPPORTED_CONTACT_SUFFIXES
+_candidate_files = _legacy._candidate_files
+_profile_from_summary = _legacy._profile_from_summary
