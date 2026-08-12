@@ -17,7 +17,10 @@ from app.contact_ingest.task_migrations import ensure_contact_task_schema
 from app.db import postgres_conn
 
 
-SUPPORTED_CONTACT_SUFFIXES = {".xlsx", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".zip"}
+SUPPORTED_CONTACT_SUFFIXES = {
+    ".xlsx", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".txt",
+    ".html", ".htm", ".pdf", ".docx", ".doc", ".zip",
+}
 DISCOVERY_LOCK_NAME = "markorbit:contact:task-discovery"
 
 _scanner_started = False
