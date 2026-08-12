@@ -31,6 +31,73 @@ jobs:
       - name: Pytest
         run: python -m pytest -q
 
+  windows-powershell:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse all PowerShell operator scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $failed = $false
+          Get-ChildItem -Path .\scripts -Filter *.ps1 -Recurse | Sort-Object FullName | ForEach-Object {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  $_.FullName,
+                  [ref]$tokens,
+                  [ref]$errors
+              ) | Out-Null
+              if ($errors.Count -gt 0) {
+                  $failed = $true
+                  foreach ($parseError in $errors) {
+                      Write-Host "::error file=$($_.FullName)::PowerShell parse error: $($parseError.Message)"
+                  }
+              }
+          }
+          if ($failed) {
+              throw "One or more PowerShell operator scripts failed Windows PowerShell parsing."
+          }
+
+      - name: Validate critical PowerShell parameter contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Assert-Parameter {
+              param(
+                  [Parameter(Mandatory = $true)][string]$Script,
+                  [Parameter(Mandatory = $true)][string]$Name,
+                  [bool]$Mandatory = $false
+              )
+              $command = Get-Command (Resolve-Path -LiteralPath $Script)
+              if (-not $command.Parameters.ContainsKey($Name)) {
+                  throw "$Script is missing required parameter contract: $Name"
+              }
+              if ($Mandatory) {
+                  $parameterAttributes = @(
+                      $command.Parameters[$Name].Attributes |
+                          Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }
+                  )
+                  if (-not ($parameterAttributes | Where-Object { $_.Mandatory })) {
+                      throw "$Script parameter $Name must remain Mandatory."
+                  }
+              }
+          }
+
+          Assert-Parameter .\scripts\replay-us-deterministic.ps1 ExpectedHistoryParts $true
+          Assert-Parameter .\scripts\replay-us-deterministic.ps1 Apply
+          Assert-Parameter .\scripts\replay-us-deterministic.ps1 All
+          Assert-Parameter .\scripts\replay-us-assignment-deterministic.ps1 ExpectedApplicationHistoryParts $true
+          Assert-Parameter .\scripts\replay-us-ttab-deterministic.ps1 ExpectedApplicationHistoryParts $true
+          Assert-Parameter .\scripts\assert-domain-apply-gate.ps1 TargetDomain $true
+          Assert-Parameter .\scripts\assert-storage-headroom.ps1 MinimumHostFreeGiB
+          Assert-Parameter .\scripts\assert-storage-headroom.ps1 MinimumClickHouseFreeGiB
+          Assert-Parameter .\scripts\run-four-domain-final-acceptance.ps1 ExpectedApplicationHistoryParts $true
+          Assert-Parameter .\scripts\run-four-domain-final-acceptance.ps1 ExpectedApplicationDailyThrough $true
+
   runtime-image:
     runs-on: ubuntu-latest
     steps:
