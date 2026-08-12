@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS contact.ingest_task (
     file_size bigint NOT NULL DEFAULT 0,
     file_modified_at timestamptz,
     file_type text NOT NULL DEFAULT '',
-    ingest_version text NOT NULL DEFAULT '',
+    ingest_version text NOT NULL DEFAULT 'CONTACT_INGEST_V1.1',
     status text NOT NULL,
     detected_profile text NOT NULL DEFAULT '',
     plan_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -24,7 +24,10 @@ CREATE TABLE IF NOT EXISTS contact.ingest_task (
 );
 
 ALTER TABLE contact.ingest_task
-ADD COLUMN IF NOT EXISTS ingest_version text NOT NULL DEFAULT '';
+ADD COLUMN IF NOT EXISTS ingest_version text NOT NULL DEFAULT 'CONTACT_INGEST_V1.1';
+
+ALTER TABLE contact.ingest_task
+ALTER COLUMN ingest_version SET DEFAULT 'CONTACT_INGEST_V1.1';
 
 CREATE INDEX IF NOT EXISTS ix_contact_ingest_task_status
 ON contact.ingest_task(status, discovered_at DESC);
