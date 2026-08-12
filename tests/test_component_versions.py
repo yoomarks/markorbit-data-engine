@@ -4,6 +4,7 @@ from app.cn import CN_MODEL_VERSION
 from app.cn.final_checkpoint import CHECKPOINT_VERSION as CN_CHECKPOINT_VERSION
 from app.component_versions import (
     COMPONENT_MATRIX_VERSION,
+    REPLAY_TELEMETRY_VERSION,
     STORAGE_POLICY_VERSION,
     component_versions,
 )
@@ -35,6 +36,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert components["us_alert_engine"]["version"] == ALERT_ENGINE_VERSION
     assert components["storage"]["policy_version"] == STORAGE_POLICY_VERSION
     assert components["storage"]["headroom_version"] == HEADROOM_VERSION
+    assert components["storage"]["replay_telemetry_version"] == REPLAY_TELEMETRY_VERSION
     assert components["integration"]["contract_version"] == CONTRACT_VERSION
     assert components["domain_lifecycle"]["version"] == LIFECYCLE_VERSION
     assert components["four_domain_acceptance"]["version"] == FOUR_DOMAIN_ACCEPTANCE_VERSION
@@ -55,6 +57,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         TTAB_SCHEMA_VERSION,
         ALERT_ENGINE_VERSION,
         STORAGE_POLICY_VERSION,
+        REPLAY_TELEMETRY_VERSION,
         CONTRACT_VERSION,
         LIFECYCLE_VERSION,
         FOUR_DOMAIN_ACCEPTANCE_VERSION,
