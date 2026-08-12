@@ -71,6 +71,39 @@ def _candidate_files(incoming: Path) -> list[Path]:
     )
 
 
+def _touch_known_task(cur, *, path: Path, source_sha256: str) -> str | None:
+    """Return a durable existing status without reparsing unchanged source content."""
+    cur.execute(
+        "SELECT status FROM contact.ingest_task WHERE source_sha256 = %s",
+        (source_sha256,),
+    )
+    row = cur.fetchone()
+    if not row or row["status"] == "MISSING_FILE":
+        return None
+
+    status = str(row["status"])
+    stat = path.stat()
+    cur.execute(
+        """
+        UPDATE contact.ingest_task
+        SET file_name = CASE WHEN status = 'SUCCESS' THEN file_name ELSE %s END,
+            file_path = CASE WHEN status = 'SUCCESS' THEN file_path ELSE %s END,
+            file_size = %s,
+            file_modified_at = %s,
+            last_seen_at = now()
+        WHERE source_sha256 = %s
+        """,
+        (
+            path.name,
+            str(path),
+            int(stat.st_size),
+            datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            source_sha256,
+        ),
+    )
+    return status
+
+
 def _upsert_ready_task(
     cur,
     *,
@@ -160,6 +193,17 @@ def _upsert_invalid_task(cur, *, path: Path, source_sha256: str, error: str) -> 
     return str(cur.fetchone()["status"])
 
 
+def _count_status(metrics: dict[str, Any], status: str) -> None:
+    key = {
+        "READY": "ready",
+        "INVALID": "invalid",
+        "SUCCESS": "existing_success",
+        "FAILED": "existing_failed",
+        "PROCESSING": "processing",
+    }.get(status, "invalid")
+    metrics[key] += 1
+
+
 def scan_contact_incoming() -> dict[str, Any]:
     """Discover and classify contact files without importing contact data."""
     incoming, archive = ensure_contact_directories()
@@ -178,7 +222,10 @@ def scan_contact_incoming() -> dict[str, Any]:
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(hashtext(%s)) AS acquired", (DISCOVERY_LOCK_NAME,))
+            cur.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s)) AS acquired",
+                (DISCOVERY_LOCK_NAME,),
+            )
             acquired = bool(cur.fetchone()["acquired"])
             if not acquired:
                 metrics["busy"] = True
@@ -187,6 +234,14 @@ def scan_contact_incoming() -> dict[str, Any]:
                 for path in _candidate_files(incoming):
                     metrics["files_seen"] += 1
                     source_sha256 = _file_sha256(path)
+                    known_status = _touch_known_task(
+                        cur,
+                        path=path,
+                        source_sha256=source_sha256,
+                    )
+                    if known_status is not None:
+                        _count_status(metrics, known_status)
+                        continue
                     try:
                         plan = build_plan(path, source_name=path.name)
                         if plan.source_sha256 != source_sha256:
@@ -204,15 +259,7 @@ def scan_contact_incoming() -> dict[str, Any]:
                             source_sha256=source_sha256,
                             error=f"{type(exc).__name__}: {exc}",
                         )
-                    metrics[
-                        {
-                            "READY": "ready",
-                            "INVALID": "invalid",
-                            "SUCCESS": "existing_success",
-                            "FAILED": "existing_failed",
-                            "PROCESSING": "processing",
-                        }.get(status, "invalid")
-                    ] += 1
+                    _count_status(metrics, status)
                 conn.commit()
             finally:
                 cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (DISCOVERY_LOCK_NAME,))
@@ -289,7 +336,13 @@ def contact_task_summary() -> dict[str, Any]:
             cur.execute(
                 """
                 SELECT
-                    (SELECT count(*) FROM entity.entity) AS entities,
+                    (
+                        SELECT count(*) FROM (
+                            SELECT entity_id FROM contact.channel WHERE entity_id IS NOT NULL
+                            UNION
+                            SELECT entity_id FROM contact.entity_person_relation
+                        ) AS contact_entities
+                    ) AS entities,
                     (SELECT count(*) FROM contact.person) AS people,
                     (SELECT count(*) FROM contact.channel) AS channels,
                     (SELECT count(*) FROM contact.channel_observation) AS observations,
@@ -333,7 +386,13 @@ def _claim_task(task_id: str) -> dict[str, Any]:
             return dict(row)
 
 
-def _finish_task(task_id: str, status: str, *, archived_path: str | None = None, error: str | None = None) -> None:
+def _finish_task(
+    task_id: str,
+    status: str,
+    *,
+    archived_path: str | None = None,
+    error: str | None = None,
+) -> None:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
