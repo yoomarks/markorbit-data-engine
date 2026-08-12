@@ -98,6 +98,36 @@ jobs:
           Assert-Parameter .\scripts\run-four-domain-final-acceptance.ps1 ExpectedApplicationHistoryParts $true
           Assert-Parameter .\scripts\run-four-domain-final-acceptance.ps1 ExpectedApplicationDailyThrough $true
 
+      - name: Validate replay telemetry host snapshot on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . .\scripts\replay-telemetry.ps1
+
+          function Get-DataEngineReplayTelemetryRuntimeSnapshot {
+              param([string]$RepoRoot, [string]$Jurisdiction)
+              return [pscustomobject]@{
+                  packages = [pscustomobject]@{ status_counts = [pscustomobject]@{} }
+                  clickhouse = [pscustomobject]@{
+                      active_bytes = 0
+                      active_rows = 0
+                      active_stage_bytes = 0
+                  }
+              }
+          }
+
+          $context = Start-DataEngineReplayTelemetry `
+              -Domain "CN" `
+              -Jurisdiction "CN" `
+              -CommandName "ci-replay-telemetry"
+          if (-not $context.start.host) {
+              throw "Replay telemetry did not capture a host snapshot."
+          }
+          if ([int64]$context.start.host.total_space -le 0) {
+              throw "Replay telemetry host total_space must be positive."
+          }
+          Remove-Item -LiteralPath $context.start_report -Force -ErrorAction SilentlyContinue
+
   runtime-image:
     runs-on: ubuntu-latest
     steps:
