@@ -38,12 +38,19 @@ if ($ResumeFailed) {
     Write-Host "FAILED/MISSING_FILE barrier repair is explicitly enabled."
 }
 
-$telemetry = Start-DataEngineReplayTelemetry `
-    -Domain "CN" `
-    -Jurisdiction "CN" `
-    -CommandName "replay-cn-full.ps1"
-$telemetryStatus = "COMMAND_RUNNING"
+$telemetry = $null
+$telemetryStatus = "NOT_RECORDED"
 $telemetryError = ""
+try {
+    $telemetry = Start-DataEngineReplayTelemetry `
+        -Domain "CN" `
+        -Jurisdiction "CN" `
+        -CommandName "replay-cn-full.ps1"
+    $telemetryStatus = "COMMAND_RUNNING"
+}
+catch {
+    Write-Warning "Replay telemetry start failed without blocking CN replay: $($_.Exception.Message)"
+}
 
 try {
     & docker @argsList
@@ -53,16 +60,22 @@ try {
         & docker compose run --build --rm --no-deps -T worker python -m app.cn.clickhouse_failure
         throw "CN full replay exited with code $replayExitCode. The ClickHouse diagnostic above identifies the failed SQL when query_log captured it."
     }
-    $telemetryStatus = "COMMAND_SUCCEEDED"
+    if ($telemetry) {
+        $telemetryStatus = "COMMAND_SUCCEEDED"
+    }
 }
 catch {
-    $telemetryStatus = "COMMAND_FAILED"
-    $telemetryError = $_.Exception.Message
+    if ($telemetry) {
+        $telemetryStatus = "COMMAND_FAILED"
+        $telemetryError = $_.Exception.Message
+    }
     throw
 }
 finally {
-    Complete-DataEngineReplayTelemetry `
-        -Context $telemetry `
-        -Status $telemetryStatus `
-        -ErrorMessage $telemetryError
+    if ($telemetry) {
+        Complete-DataEngineReplayTelemetry `
+            -Context $telemetry `
+            -Status $telemetryStatus `
+            -ErrorMessage $telemetryError
+    }
 }
