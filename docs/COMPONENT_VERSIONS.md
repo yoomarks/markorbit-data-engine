@@ -15,6 +15,7 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 | US Assignment schema | `US_ASSIGNMENT_M1.0` | USPTO recorded assignment/interest facts; not title conclusion. |
 | US TTAB schema | `US_TTAB_M1.2` | USPTO TTAB procedural facts; not outcome/substantive-rights conclusion. |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` | Read-only normalized alert/event projection. |
+| Contact ingestion | `CONTACT_INGEST_V1` | Auto-detected external entity/person/contact-channel ingestion and trademark entity linking. |
 | Storage policy | `DATA_ENGINE_STORAGE_V2` | Current-fact + true-delta history policy. |
 | Storage headroom | `DATA_ENGINE_STORAGE_HEADROOM_V1` | Host + ClickHouse pre-mutation free-space gate. |
 | Replay telemetry | `DATA_ENGINE_REPLAY_TELEMETRY_V1` | Read-only before/after replay storage/package telemetry with local append-only ledger. |
@@ -30,6 +31,7 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 4. **Integration contract version changes only for contract compatibility changes.** Internal schema increments do not automatically require a new external contract version.
 5. **No legal-conclusion version is implied.** Assignment and TTAB versions continue to represent recorded/procedural source facts only.
 6. **Operational telemetry versions do not redefine source facts.** Replay telemetry is an observability contract over runs, not a new fact-model authority.
+7. **Contact ingestion versions describe the external-contact ingestion contract.** They do not authorize marketing execution or redefine trademark source facts.
 
 ## Release process
 
