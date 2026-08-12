@@ -12,6 +12,7 @@ import tempfile
 from zipfile import BadZipFile, ZipFile
 import xml.etree.ElementTree as ET
 
+from app.contact_ingest.directory_text import directory_contact_text_table
 from app.contact_ingest.models import TableData
 from app.contact_ingest.normalization import clean_text
 
@@ -316,7 +317,14 @@ def _tables_from_text(text: str, *, source_member: str) -> list[TableData]:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.strip():
         return []
-    for parser in (_json_text_table, _delimited_text_table, _key_value_text_table, _whitespace_text_table):
+    for parser in (_json_text_table, _delimited_text_table):
+        tables = parser(text, source_member=source_member)
+        if tables:
+            return tables
+    directory_table = directory_contact_text_table(text, source_member=source_member)
+    if directory_table is not None:
+        return [directory_table]
+    for parser in (_key_value_text_table, _whitespace_text_table):
         tables = parser(text, source_member=source_member)
         if tables:
             return tables
@@ -399,9 +407,13 @@ def read_html_bytes(data: bytes, *, source_member: str) -> list[TableData]:
         TableData(source_member=source_member, sheet_name=f"table-{index}", rows=rows)
         for index, rows in enumerate(parser.tables, start=1)
     ]
+    visible_text = "".join(parser.visible)
+    directory_table = directory_contact_text_table(visible_text, source_member=source_member)
+    if directory_table is not None:
+        return [directory_table]
     if tables:
         return tables
-    return _tables_from_text("".join(parser.visible), source_member=source_member)
+    return _tables_from_text(visible_text, source_member=source_member)
 
 
 def _word_node_text(node: ET.Element) -> str:
@@ -505,10 +517,15 @@ def read_pdf_bytes(data: bytes, *, source_member: str) -> list[TableData]:
     except Exception as exc:
         raise ValueError(f"Invalid or unreadable PDF file: {source_member}: {exc}") from exc
 
+    combined_text = "\n\n".join(page_text)
+    if combined_text:
+        directory_table = directory_contact_text_table(combined_text, source_member=source_member)
+        if directory_table is not None:
+            return [directory_table]
     if tables:
         return tables
-    if page_text:
-        return _tables_from_text("\n\n".join(page_text), source_member=source_member)
+    if combined_text:
+        return _tables_from_text(combined_text, source_member=source_member)
     raise ValueError(
         "PDF contains no extractable text or tables; scanned/image-only PDFs require OCR"
     )
