@@ -15,6 +15,7 @@ MarkOrbit Data Engine 是 MarkOrbit 的 **authoritative source-fact service**：
 | US TTAB | `US_TTAB_M1.2` |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` |
 | Storage policy | `DATA_ENGINE_STORAGE_V2` |
+| Replay telemetry | `DATA_ENGINE_REPLAY_TELEMETRY_V1` |
 | Integration contract | `MARKORBIT_DATA_ENGINE_INTEGRATION_V1` |
 | Domain lifecycle | `MARKORBIT_DOMAIN_LIFECYCLE_V1` |
 | Four-domain acceptance | `MARKORBIT_FOUR_DOMAIN_ACCEPTANCE_V1` |
@@ -139,6 +140,17 @@ powershell.exe -ExecutionPolicy Bypass `
 ```
 
 真实 CN/US mutation 脚本会自动调用该 gate。详见 `docs/STORAGE_HEADROOM_GUARD.md`。
+
+## Replay Telemetry
+
+主 deterministic replay 会自动记录 `DATA_ENGINE_REPLAY_TELEMETRY_V1` 运行账本：Git SHA、组件版本、开始/结束时间、package status 变化、ClickHouse active bytes/rows、stage bytes、ClickHouse 内部磁盘以及 Windows 宿主盘 free space。
+
+```text
+reports/replay_runs/<run_id>.json
+reports/replay_ledger.jsonl
+```
+
+US 只有真实 `-Apply` 才记录，dry-run 不进入 ledger；CN full replay 始终属于真实 mutation command。所有 delta 都是 before/after observation，不是增长预测，也不宣称测到了运行过程中的 peak temporary usage。Telemetry 只做 SELECT + 本地 `reports/` 写入，失败只告警，不得覆盖 replay 原始结果。详见 `docs/REPLAY_TELEMETRY.md`。
 
 ## US Application M1.4
 
@@ -282,6 +294,7 @@ Windows CI 不启动 live Docker corpus，只检查 PowerShell 语法和 operato
 - `docs/COMPONENT_VERSIONS.md`
 - `docs/DOMAIN_APPLY_GATES.md`
 - `docs/STORAGE_HEADROOM_GUARD.md`
+- `docs/REPLAY_TELEMETRY.md`
 - `docs/FOUR_DOMAIN_FINAL_RUNNER.md`
 - `docs/M1_6_REAL_DATA_PREFLIGHT.md`
 - `docs/CN_GOODS_LIFECYCLE_MODEL_V2.md`
