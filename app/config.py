@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     raw_data_root: Path = Path("./raw_data")
     cn_scan_interval_seconds: int = 300
+    contact_scan_interval_seconds: int = 60
     us_download_enabled: bool = False
     us_base_url: str = ""
 
