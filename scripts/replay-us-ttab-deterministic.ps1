@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "replay-telemetry.ps1")
 
 $worker = docker compose ps --status running -q worker
 if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Docker Compose worker state." }
@@ -31,41 +32,84 @@ if ($Apply) {
     if ($LASTEXITCODE -ne 0) {
         throw "US TTAB apply gate failed; replay was not started."
     }
-
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "apply-us-ttab-schema.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "US TTAB schema gate failed." }
 }
 
-$manifest = "/data/raw/" + ($ManifestRelativePath -replace '\\', '/')
-$args = @(
-    "run", "--build", "--rm", "--no-deps", "-T", "worker",
-    "python", "-m", "app.us_ttab.corpus_replay",
-    "--manifest", $manifest,
-    "--max-packages", "$MaxPackages"
-)
-if ($Apply) { $args += "--apply" }
-if ($All) { $args += "--all" }
-if ($ResumeFailed) { $args += "--resume-failed" }
-
-$jsonLines = & docker compose @args
-$exitCode = $LASTEXITCODE
-$json = $jsonLines -join "`n"
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$mode = if ($Apply) { "apply" } else { "dryrun" }
 if (-not $OutputPath) {
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $mode = if ($Apply) { "apply" } else { "dryrun" }
     $OutputPath = Join-Path "reports" "us_ttab_replay_${mode}_$timestamp.json"
 }
-$outputDirectory = Split-Path -Parent $OutputPath
-if ($outputDirectory) { New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null }
-$json | Set-Content -Encoding UTF8 $OutputPath
-Write-Host $json
-Write-Host "Report: $OutputPath"
 
-if ($exitCode -ne 0) { throw "Deterministic US TTAB replay failed. See the JSON report above." }
-$report = $json | ConvertFrom-Json
-if ($report.status -eq "RETRY_REQUIRED" -and -not $ResumeFailed) {
-    throw "US TTAB replay requires explicit -ResumeFailed before the failed package can be retried."
+$telemetry = $null
+$telemetryStatus = "NOT_RECORDED"
+$telemetryError = ""
+if ($Apply) {
+    try {
+        $telemetry = Start-DataEngineReplayTelemetry `
+            -Domain "US_TTAB" `
+            -Jurisdiction "US_TTAB" `
+            -CommandName "replay-us-ttab-deterministic.ps1"
+        $telemetryStatus = "COMMAND_RUNNING"
+    }
+    catch {
+        Write-Warning "Replay telemetry start failed without blocking TTAB replay: $($_.Exception.Message)"
+    }
 }
-if ($report.status -in @("BLOCKED", "FAILED", "BUSY")) {
-    throw "Deterministic US TTAB replay stopped: $($report.status)"
+
+try {
+    if ($Apply) {
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "apply-us-ttab-schema.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "US TTAB schema gate failed." }
+    }
+
+    $manifest = "/data/raw/" + ($ManifestRelativePath -replace '\\', '/')
+    $args = @(
+        "run", "--build", "--rm", "--no-deps", "-T", "worker",
+        "python", "-m", "app.us_ttab.corpus_replay",
+        "--manifest", $manifest,
+        "--max-packages", "$MaxPackages"
+    )
+    if ($Apply) { $args += "--apply" }
+    if ($All) { $args += "--all" }
+    if ($ResumeFailed) { $args += "--resume-failed" }
+
+    $jsonLines = & docker compose @args
+    $exitCode = $LASTEXITCODE
+    $json = $jsonLines -join "`n"
+    if (-not $OutputPath) {
+        throw "US TTAB replay output path was not resolved."
+    }
+    $outputDirectory = Split-Path -Parent $OutputPath
+    if ($outputDirectory) { New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null }
+    $json | Set-Content -Encoding UTF8 $OutputPath
+    Write-Host $json
+    Write-Host "Report: $OutputPath"
+
+    if ($exitCode -ne 0) { throw "Deterministic US TTAB replay failed. See the JSON report above." }
+    $report = $json | ConvertFrom-Json
+    if ($report.status -eq "RETRY_REQUIRED" -and -not $ResumeFailed) {
+        throw "US TTAB replay requires explicit -ResumeFailed before the failed package can be retried."
+    }
+    if ($report.status -in @("BLOCKED", "FAILED", "BUSY")) {
+        throw "Deterministic US TTAB replay stopped: $($report.status)"
+    }
+    if ($telemetry) {
+        $telemetryStatus = [string]$report.status
+    }
+}
+catch {
+    if ($telemetry) {
+        $telemetryStatus = "COMMAND_FAILED"
+        $telemetryError = $_.Exception.Message
+    }
+    throw
+}
+finally {
+    if ($telemetry) {
+        Complete-DataEngineReplayTelemetry `
+            -Context $telemetry `
+            -Status $telemetryStatus `
+            -ErrorMessage $telemetryError `
+            -ReportPath $OutputPath
+    }
 }
