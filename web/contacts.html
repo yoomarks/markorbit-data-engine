@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MarkOrbit Contacts Control Center</title>
+  <style>
+    :root{font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;color:#172033;background:#f3f5f9;--line:#e3e7ef;--muted:#667085;--green:#067647;--red:#b42318;--amber:#b54708;--blue:#175cd3}
+    *{box-sizing:border-box}body{margin:0;background:#f3f5f9}button,select{font:inherit}
+    header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:16px 28px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+    h1{margin:0;font-size:21px}.subtitle{color:var(--muted);font-size:12px;margin-top:3px}.header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    main{max-width:1500px;margin:20px auto;padding:0 20px 40px}.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;overflow:auto}.kpi-label{color:var(--muted);font-size:12px}.kpi-value{font-size:24px;font-weight:700;margin-top:7px}.tiny{font-size:11px;color:var(--muted)}
+    .section{margin-top:14px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h2{font-size:16px;margin:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    select{border:1px solid #d0d5dd;border-radius:8px;padding:9px 10px;background:#fff;color:#172033}.btn{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;background:#172033;color:#fff;text-decoration:none;display:inline-block}.btn.secondary{background:#667085}.btn.light{background:#eef2f7;color:#344054}.btn:disabled{opacity:.45;cursor:not-allowed}
+    table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:9px 7px;vertical-align:top}th{color:#475467;font-weight:600;background:#fafbfc;position:sticky;top:0}tbody tr:hover{background:#fafcff}.nowrap{white-space:nowrap}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.muted{color:var(--muted)}
+    .status{font-weight:700}.status-SUCCESS{color:var(--green)}.status-FAILED,.status-INVALID,.status-MISSING_FILE{color:var(--red)}.status-PROCESSING{color:var(--amber)}.status-READY{color:var(--blue)}
+    .split{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,.8fr);gap:12px}.path{padding:10px 12px;border:1px dashed #d0d5dd;border-radius:9px;background:#fafbfc;word-break:break-all}.profile{display:inline-block;background:#eef4ff;color:#3538cd;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:700}
+    .metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric{border:1px solid var(--line);border-radius:9px;padding:10px;background:#fafbfc}.metric b{display:block;margin-top:4px;font-size:17px}.detail-empty{color:var(--muted);padding:50px 10px;text-align:center}.detail-block{margin-top:14px}.detail-block h3{font-size:13px;margin:0 0 8px}.error-box{color:var(--red);background:#fff1f0;border:1px solid #fecdca;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-word}pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#101828;color:#eaecf0;border-radius:10px;padding:12px;max-height:430px;overflow:auto;font-size:11px}
+    .notice{margin-top:12px;padding:11px 13px;border-radius:9px;background:#fffaeb;border:1px solid #fedf89;color:#93370d;font-size:12px}.okbox{margin-top:12px;padding:11px 13px;border-radius:9px;background:#ecfdf3;border:1px solid #abefc6;color:#067647;font-size:12px}
+    @media(max-width:1100px){.kpis{grid-template-columns:repeat(3,1fr)}.split{grid-template-columns:1fr}}@media(max-width:700px){header{padding:14px 16px;align-items:flex-start;flex-direction:column}.kpis,.metric-grid{grid-template-columns:1fr}main{padding:0 10px}}
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Contacts</h1>
+    <div class="subtitle">Universal Contact Ingestion · 自动发现 / 识别 / 审核 / 导入</div>
+  </div>
+  <div class="header-actions">
+    <a class="btn light" href="/">返回 Data Engine</a>
+    <button class="btn light" onclick="refreshAll()">刷新</button>
+    <button class="btn" id="scan-btn" onclick="scanNow()">立即扫描 incoming</button>
+  </div>
+</header>
+<main>
+  <section class="kpis">
+    <div class="card"><div class="kpi-label">待导入 READY</div><div class="kpi-value" id="k-ready">—</div><div class="tiny">已自动识别，可人工执行</div></div>
+    <div class="card"><div class="kpi-label">处理中</div><div class="kpi-value" id="k-processing">—</div><div class="tiny">单任务显式执行</div></div>
+    <div class="card"><div class="kpi-label">已完成</div><div class="kpi-value" id="k-success">—</div><div class="tiny">成功后移入 archive/contacts</div></div>
+    <div class="card"><div class="kpi-label">异常任务</div><div class="kpi-value" id="k-errors">—</div><div class="tiny">FAILED / INVALID / MISSING</div></div>
+    <div class="card"><div class="kpi-label">联系方式</div><div class="kpi-value" id="k-channels">—</div><div class="tiny" id="k-observations">—</div></div>
+    <div class="card"><div class="kpi-label">已关联主体</div><div class="kpi-value" id="k-entities">—</div><div class="tiny" id="k-people">—</div></div>
+  </section>
+
+  <section class="card section">
+    <div class="section-head"><h2>Incoming 监听目录</h2><span class="tiny" id="scan-interval">—</span></div>
+    <div class="path mono" id="incoming-path">—</div>
+    <div class="tiny" style="margin-top:8px">支持 XLSX / CSV / TSV / JSON / JSONL / NDJSON / ZIP。后台只自动发现并生成任务，不会自动导入联系人数据。</div>
+    <div id="scan-result"></div>
+  </section>
+
+  <section class="section split">
+    <div class="card">
+      <div class="section-head">
+        <h2>Contact Ingest 任务</h2>
+        <div class="toolbar">
+          <select id="status-filter" onchange="loadTasks()">
+            <option value="">全部状态</option>
+            <option>READY</option><option>PROCESSING</option><option>SUCCESS</option>
+            <option>FAILED</option><option>INVALID</option><option>MISSING_FILE</option>
+          </select>
+          <button class="btn light" onclick="loadTasks()">刷新任务</button>
+        </div>
+      </div>
+      <div style="max-height:680px;overflow:auto">
+        <table>
+          <thead><tr><th>文件</th><th>识别类型</th><th>规模</th><th>状态</th><th>发现 / 完成</th><th></th></tr></thead>
+          <tbody id="tasks-table"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-head"><h2>任务详情</h2><span class="tiny">识别映射 / 规模 / 执行记录</span></div>
+      <div id="task-detail" class="detail-empty">点击左侧“查看”</div>
+    </div>
+  </section>
+</main>
+<script>
+let selectedTaskId=null;
+async function api(url,options){const r=await fetch(url,options);const text=await r.text();let body;try{body=JSON.parse(text)}catch{body=text}if(!r.ok)throw new Error(typeof body==="string"?body:JSON.stringify(body));return body}
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+function fmtNum(v){return Number(v||0).toLocaleString()}
+function fmtBytes(v){v=Number(v||0);if(!v)return"0 B";const u=["B","KB","MB","GB","TB"];let i=0;while(v>=1024&&i<u.length-1){v/=1024;i++}return`${v.toFixed(i?1:0)} ${u[i]}`}
+function fmtTime(v){if(!v)return"—";try{return new Date(v).toLocaleString()}catch{return String(v)}}
+function statusHtml(v){const x=esc(v||"UNKNOWN");return`<span class="status status-${x}">${x}</span>`}
+function summaryMetric(plan,key){return Number((plan||{})[key]||0)}
+
+async function loadSummary(){
+  const d=await api('/api/admin/contacts/summary');
+  const s=d.statuses||{},t=d.totals||{};
+  document.getElementById('k-ready').textContent=fmtNum(s.READY);
+  document.getElementById('k-processing').textContent=fmtNum(s.PROCESSING);
+  document.getElementById('k-success').textContent=fmtNum(s.SUCCESS);
+  document.getElementById('k-errors').textContent=fmtNum(Number(s.FAILED||0)+Number(s.INVALID||0)+Number(s.MISSING_FILE||0));
+  document.getElementById('k-channels').textContent=fmtNum(t.channels);
+  document.getElementById('k-observations').textContent=`Evidence ${fmtNum(t.observations)}`;
+  document.getElementById('k-entities').textContent=fmtNum(t.entities);
+  document.getElementById('k-people').textContent=`联系人 ${fmtNum(t.people)}`;
+  document.getElementById('incoming-path').textContent=d.incoming_directory||'—';
+  document.getElementById('scan-interval').textContent=`后台扫描间隔 ${d.scan_interval_seconds||'—'} 秒`;
+}
+
+async function loadTasks(){
+  const status=document.getElementById('status-filter').value;
+  const rows=await api('/api/admin/contacts/tasks?limit=500'+(status?`&status=${encodeURIComponent(status)}`:''));
+  const body=document.getElementById('tasks-table');
+  if(!rows.length){body.innerHTML='<tr><td colspan="6" class="muted">暂无任务。把文件放进 incoming/contacts 后会自动识别。</td></tr>';return}
+  body.innerHTML=rows.map(x=>{
+    const p=x.plan_summary||{};
+    const size=`${fmtNum(summaryMetric(p,'source_rows'))} 行<br><span class="tiny">${fmtNum(summaryMetric(p,'entities_planned'))} 主体 · ${fmtNum(summaryMetric(p,'channels_planned'))} 联系方式</span>`;
+    const profile=x.detected_profile?`<span class="profile">${esc(x.detected_profile)}</span>`:'—';
+    const action=(x.status==='READY'||x.status==='FAILED')?`<button class="btn" onclick="runTask('${esc(x.task_id)}',event)">${x.status==='FAILED'?'重试':'执行导入'}</button>`:'';
+    return `<tr><td><b>${esc(x.file_name)}</b><div class="tiny mono">${esc(String(x.source_sha256||'').slice(0,16))}… · ${fmtBytes(x.file_size)}</div></td><td>${profile}<div class="tiny">${esc(x.file_type||'')}</div></td><td>${size}</td><td>${statusHtml(x.status)}${x.error_message?'<div class="tiny" style="color:#b42318;max-width:230px">'+esc(x.error_message)+'</div>':''}</td><td class="nowrap">${fmtTime(x.discovered_at)}<br><span class="tiny">${x.finished_at?fmtTime(x.finished_at):''}</span></td><td class="nowrap"><button class="btn light" onclick="showTask('${esc(x.task_id)}')">查看</button> ${action}</td></tr>`
+  }).join('');
+}
+
+async function showTask(id){
+  selectedTaskId=id;
+  const x=await api(`/api/admin/contacts/tasks/${encodeURIComponent(id)}`);
+  const p=x.plan_summary||{};
+  const tables=p.tables||[];
+  const action=(x.status==='READY'||x.status==='FAILED')?`<button class="btn" onclick="runTask('${esc(id)}')">${x.status==='FAILED'?'重试导入':'执行导入'}</button>`:'';
+  const metrics=`<div class="metric-grid"><div class="metric"><span class="tiny">源数据行</span><b>${fmtNum(p.source_rows)}</b></div><div class="metric"><span class="tiny">识别主体</span><b>${fmtNum(p.entities_planned)}</b></div><div class="metric"><span class="tiny">联系方式</span><b>${fmtNum(p.channels_planned)}</b></div><div class="metric"><span class="tiny">联系人</span><b>${fmtNum(p.people_planned)}</b></div><div class="metric"><span class="tiny">表/Sheet</span><b>${fmtNum(p.tables_detected)}</b></div><div class="metric"><span class="tiny">跳过行</span><b>${fmtNum(p.skipped_rows)}</b></div></div>`;
+  const tableHtml=tables.map(t=>`<div class="detail-block"><h3>${esc(t.source_member||x.file_name)}${t.sheet_name?' · '+esc(t.sheet_name):''}</h3><div class="tiny">Profile: <b>${esc(t.profile||'UNKNOWN')}</b> · confidence ${esc(t.profile_confidence??'—')} · header row ${esc(t.header_row??'—')} · ${fmtNum(t.source_rows)} rows</div><pre>${esc(JSON.stringify(t.field_mappings||[],null,2))}</pre></div>`).join('');
+  const runs=(x.import_runs||[]).map(r=>`<tr><td>${statusHtml(r.status)}</td><td>${fmtTime(r.started_at)}</td><td>${fmtTime(r.finished_at)}</td><td class="mono">${esc(JSON.stringify(r.metrics||{}))}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">尚未执行导入</td></tr>';
+  document.getElementById('task-detail').className='';
+  document.getElementById('task-detail').innerHTML=`<div class="toolbar"><span>${statusHtml(x.status)}</span>${action}</div><div class="detail-block"><h3>源文件</h3><div class="path mono">${esc(x.file_path)}</div>${x.archived_path?'<div class="tiny" style="margin-top:6px">Archive: '+esc(x.archived_path)+'</div>':''}</div>${x.error_message?'<div class="error-box">'+esc(x.error_message)+'</div>':''}<div class="detail-block"><h3>识别规模</h3>${metrics}</div>${tableHtml}<div class="detail-block"><h3>执行记录</h3><div style="max-height:220px;overflow:auto"><table><thead><tr><th>状态</th><th>开始</th><th>完成</th><th>Metrics</th></tr></thead><tbody>${runs}</tbody></table></div></div>`;
+}
+
+async function scanNow(){
+  const b=document.getElementById('scan-btn');b.disabled=true;b.textContent='扫描中…';
+  try{const d=await api('/api/admin/contacts/scan',{method:'POST'});document.getElementById('scan-result').innerHTML=`<div class="okbox">扫描完成：发现 ${fmtNum(d.files_seen)} 个文件，READY ${fmtNum(d.ready)}，已完成 ${fmtNum(d.existing_success)}，异常 ${fmtNum(d.invalid)}。</div>`;await refreshAll()}
+  catch(e){document.getElementById('scan-result').innerHTML=`<div class="error-box">${esc(e.message)}</div>`}
+  finally{b.disabled=false;b.textContent='立即扫描 incoming'}
+}
+
+async function runTask(id,event){
+  if(event)event.stopPropagation();
+  if(!confirm('确认执行这一个联系人导入任务？成功后源文件会移入 archive/contacts。'))return;
+  try{await api(`/api/admin/contacts/tasks/${encodeURIComponent(id)}/apply`,{method:'POST'});await refreshAll();await showTask(id)}catch(e){alert('导入失败：'+e.message);await refreshAll();await showTask(id)}
+}
+
+async function refreshAll(){
+  try{await Promise.all([loadSummary(),loadTasks()]);if(selectedTaskId)await showTask(selectedTaskId)}catch(e){document.getElementById('scan-result').innerHTML=`<div class="error-box">后台连接失败：${esc(e.message)}</div>`}
+}
+refreshAll();
+setInterval(refreshAll,15000);
+</script>
+</body>
+</html>
