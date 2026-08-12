@@ -83,18 +83,39 @@ def test_contact_admin_routes_and_page_are_registered() -> None:
     assert "/api/admin/contacts/tasks" in routes
     assert "/api/admin/contacts/tasks/{task_id}" in routes
     assert "/api/admin/contacts/scan" in routes
+    assert "/api/admin/contacts/tasks/batch-apply" in routes
     assert "/api/admin/contacts/tasks/{task_id}/apply" in routes
 
     markup = (ROOT / "web" / "contacts.html").read_text(encoding="utf-8")
     assert "Contact Ingest 任务" in markup
     assert "incoming/contacts" in markup
     assert "执行导入" in markup
+    assert "批量执行导入" in markup
     assert "/api/admin/contacts/scan" in markup
+    assert "/api/admin/contacts/tasks/batch-apply" in markup
     assert "/api/admin/contacts/tasks/" in markup
 
     main_markup = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     assert 'href="/contacts"' in main_markup
     assert "Contacts 联系人" in main_markup
+
+
+def test_contact_batch_apply_is_explicit_sequential_background_work() -> None:
+    source = (ROOT / "app" / "contact_ingest" / "admin_api.py").read_text(encoding="utf-8")
+    batch_worker = source[
+        source.index("def _apply_batch_in_background") : source.index("@router.on_event")
+    ]
+    batch_route = source[
+        source.index('def admin_contact_batch_apply()') : source.index(
+            '@router.post("/api/admin/contacts/tasks/{task_id}/apply"'
+        )
+    ]
+    assert "for task_id in task_ids" in batch_worker
+    assert "_apply_in_background(task_id)" in batch_worker
+    assert 'list_contact_tasks(status="READY", limit=1000)' in batch_route
+    assert "reversed(ready_tasks)" in batch_route
+    assert "target=_apply_batch_in_background" in batch_route
+    assert '"accepted_count": len(task_ids)' in batch_route
 
 
 def test_background_discovery_never_auto_applies_contact_data() -> None:

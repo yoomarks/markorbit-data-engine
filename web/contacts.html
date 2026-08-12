@@ -35,7 +35,7 @@
 <main>
   <section class="kpis">
     <div class="card"><div class="kpi-label">待导入 READY</div><div class="kpi-value" id="k-ready">—</div><div class="tiny">已自动识别，可人工执行</div></div>
-    <div class="card"><div class="kpi-label">处理中</div><div class="kpi-value" id="k-processing">—</div><div class="tiny">单任务显式执行</div></div>
+    <div class="card"><div class="kpi-label">处理中</div><div class="kpi-value" id="k-processing">—</div><div class="tiny">显式执行 / 批量执行</div></div>
     <div class="card"><div class="kpi-label">已完成</div><div class="kpi-value" id="k-success">—</div><div class="tiny">成功后移入 archive/contacts</div></div>
     <div class="card"><div class="kpi-label">异常任务</div><div class="kpi-value" id="k-errors">—</div><div class="tiny">FAILED / INVALID / MISSING</div></div>
     <div class="card"><div class="kpi-label">联系方式</div><div class="kpi-value" id="k-channels">—</div><div class="tiny" id="k-observations">—</div></div>
@@ -59,6 +59,7 @@
             <option>READY</option><option>PROCESSING</option><option>SUCCESS</option>
             <option>FAILED</option><option>INVALID</option><option>MISSING_FILE</option>
           </select>
+          <button class="btn" id="batch-apply-btn" onclick="runBatch()" disabled>批量执行导入 (0)</button>
           <button class="btn light" onclick="loadTasks()">刷新任务</button>
         </div>
       </div>
@@ -77,6 +78,7 @@
 </main>
 <script>
 let selectedTaskId=null;
+let readyTaskCount=0;
 async function api(url,options){const r=await fetch(url,options);const text=await r.text();let body;try{body=JSON.parse(text)}catch{body=text}if(!r.ok)throw new Error(typeof body==="string"?body:JSON.stringify(body));return body}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
 function fmtNum(v){return Number(v||0).toLocaleString()}
@@ -88,7 +90,8 @@ function summaryMetric(plan,key){return Number((plan||{})[key]||0)}
 async function loadSummary(){
   const d=await api('/api/admin/contacts/summary');
   const s=d.statuses||{},t=d.totals||{};
-  document.getElementById('k-ready').textContent=fmtNum(s.READY);
+  readyTaskCount=Number(s.READY||0);
+  document.getElementById('k-ready').textContent=fmtNum(readyTaskCount);
   document.getElementById('k-processing').textContent=fmtNum(s.PROCESSING);
   document.getElementById('k-success').textContent=fmtNum(s.SUCCESS);
   document.getElementById('k-errors').textContent=fmtNum(Number(s.FAILED||0)+Number(s.INVALID||0)+Number(s.MISSING_FILE||0));
@@ -98,6 +101,9 @@ async function loadSummary(){
   document.getElementById('k-people').textContent=`联系人 ${fmtNum(t.people)}`;
   document.getElementById('incoming-path').textContent=d.incoming_directory||'—';
   document.getElementById('scan-interval').textContent=`后台扫描间隔 ${d.scan_interval_seconds||'—'} 秒`;
+  const batch=document.getElementById('batch-apply-btn');
+  batch.textContent=`批量执行导入 (${fmtNum(readyTaskCount)})`;
+  batch.disabled=readyTaskCount===0;
 }
 
 async function loadTasks(){
@@ -132,6 +138,23 @@ async function scanNow(){
   try{const d=await api('/api/admin/contacts/scan',{method:'POST'});document.getElementById('scan-result').innerHTML=`<div class="okbox">扫描完成：发现 ${fmtNum(d.files_seen)} 个文件，READY ${fmtNum(d.ready)}，已完成 ${fmtNum(d.existing_success)}，异常 ${fmtNum(d.invalid)}。</div>`;await refreshAll()}
   catch(e){document.getElementById('scan-result').innerHTML=`<div class="error-box">${esc(e.message)}</div>`}
   finally{b.disabled=false;b.textContent='立即扫描 incoming'}
+}
+
+async function runBatch(){
+  if(!readyTaskCount)return;
+  if(!confirm(`确认批量执行全部 ${fmtNum(readyTaskCount)} 个 READY 联系人导入任务？任务会在后台按顺序执行，成功后源文件会移入 archive/contacts。`))return;
+  const b=document.getElementById('batch-apply-btn');
+  b.disabled=true;b.textContent='批量提交中…';
+  try{
+    const d=await api('/api/admin/contacts/tasks/batch-apply',{method:'POST'});
+    document.getElementById('scan-result').innerHTML=d.accepted_count
+      ?`<div class="okbox">已提交 ${fmtNum(d.accepted_count)} 个 READY 任务，后台按顺序执行。</div>`
+      :'<div class="notice">当前没有 READY 任务需要导入。</div>';
+    await refreshAll();
+  }catch(e){
+    document.getElementById('scan-result').innerHTML=`<div class="error-box">批量导入提交失败：${esc(e.message)}</div>`;
+    await refreshAll();
+  }
 }
 
 async function runTask(id,event){

@@ -52,9 +52,11 @@ A PostgreSQL advisory lock prevents multiple API processes from registering the 
 
 ## Explicit apply boundary
 
-The scanner only creates work. Actual writes into `entity.*` and `contact.*` happen only when an operator clicks **执行导入** in the Contacts page or calls the apply API directly.
+The scanner only creates work. Actual writes into `entity.*` and `contact.*` happen only when an operator clicks **执行导入** / **批量执行导入** in the Contacts page or calls the apply APIs directly.
 
-Before apply, the source SHA-256 is recomputed. A file that changed after discovery is rejected and must be discovered as a new task.
+The batch action snapshots the currently `READY` tasks (up to 1000 per request) and executes them sequentially in one background thread. It does not include `FAILED`, `INVALID`, or `MISSING_FILE` tasks; those remain explicit single-task review/retry operations.
+
+Before each apply, the source SHA-256 is recomputed. A file that changed after discovery is rejected and must be discovered as a new task.
 
 After successful import, the exact source file is moved to:
 
@@ -82,7 +84,8 @@ The page provides:
 - field mapping detail for each sheet/member;
 - import-run history;
 - manual scan;
-- explicit import/retry actions.
+- explicit single import/retry actions;
+- explicit batch execution of all currently READY tasks.
 
 The page refreshes its read model periodically, while file recognition is performed by the server-side discovery loop.
 
@@ -93,6 +96,7 @@ GET  /api/admin/contacts/summary
 GET  /api/admin/contacts/tasks
 GET  /api/admin/contacts/tasks/{task_id}
 POST /api/admin/contacts/scan
+POST /api/admin/contacts/tasks/batch-apply
 POST /api/admin/contacts/tasks/{task_id}/apply
 ```
 

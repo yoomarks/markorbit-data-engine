@@ -28,6 +28,11 @@ def _apply_in_background(task_id: str) -> None:
         _logger.exception("Background contact import failed: task_id=%s", task_id)
 
 
+def _apply_batch_in_background(task_ids: list[str]) -> None:
+    for task_id in task_ids:
+        _apply_in_background(task_id)
+
+
 @router.on_event("startup")
 def start_contact_discovery() -> None:
     start_contact_task_scanner()
@@ -68,6 +73,34 @@ def admin_contact_scan():
     # Automatic periodic discovery already runs in the background; the explicit
     # operator button intentionally waits for one deterministic scan result.
     return scan_contact_incoming()
+
+
+@router.post("/api/admin/contacts/tasks/batch-apply", status_code=202)
+def admin_contact_batch_apply():
+    """Queue every currently READY contact task as one sequential background batch."""
+    ready_tasks = list_contact_tasks(status="READY", limit=1000)
+    task_ids = [str(task["task_id"]) for task in reversed(ready_tasks)]
+    if not task_ids:
+        return {
+            "status": "IDLE",
+            "accepted_count": 0,
+            "task_ids": [],
+            "background": False,
+        }
+
+    thread = threading.Thread(
+        target=_apply_batch_in_background,
+        args=(task_ids,),
+        name="contact-import-batch",
+        daemon=True,
+    )
+    thread.start()
+    return {
+        "status": "PROCESSING",
+        "accepted_count": len(task_ids),
+        "task_ids": task_ids,
+        "background": True,
+    }
 
 
 @router.post("/api/admin/contacts/tasks/{task_id}/apply", status_code=202)
