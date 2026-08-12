@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 
-CONTACT_TASK_CONTROL_VERSION = "CONTACT_TASK_CONTROL_V1"
+CONTACT_TASK_CONTROL_VERSION = "CONTACT_TASK_CONTROL_V1.1"
 
 
 TASK_SCHEMA_SQL = r"""
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS contact.ingest_task (
     file_size bigint NOT NULL DEFAULT 0,
     file_modified_at timestamptz,
     file_type text NOT NULL DEFAULT '',
+    ingest_version text NOT NULL DEFAULT '',
     status text NOT NULL,
     detected_profile text NOT NULL DEFAULT '',
     plan_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -30,6 +31,9 @@ CREATE TABLE IF NOT EXISTS contact.ingest_task (
         'READY', 'PROCESSING', 'SUCCESS', 'FAILED', 'INVALID', 'MISSING_FILE'
     ))
 );
+
+ALTER TABLE contact.ingest_task
+ADD COLUMN IF NOT EXISTS ingest_version text NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS ix_contact_ingest_task_status
 ON contact.ingest_task(status, discovered_at DESC);
