@@ -67,7 +67,9 @@ powershell.exe -ExecutionPolicy Bypass `
   -File .\scripts\preflight-m16-real-data.ps1
 ```
 
-只有 preflight 明确允许后才进入真实 replay。CN 全量 replay：
+只有 preflight 明确允许后才进入真实 replay。状态推理审计是另一条更严格的边界：只有报告明确显示 `safe_to_run_inference_audit = true` 时才允许运行推理审计；这不会改变官方事实层。
+
+CN 全量 replay：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass `
@@ -281,6 +283,7 @@ Windows CI 不启动 live Docker corpus，只检查 PowerShell 语法和 operato
 - `docs/DOMAIN_APPLY_GATES.md`
 - `docs/STORAGE_HEADROOM_GUARD.md`
 - `docs/FOUR_DOMAIN_FINAL_RUNNER.md`
+- `docs/M1_6_REAL_DATA_PREFLIGHT.md`
 - `docs/CN_GOODS_LIFECYCLE_MODEL_V2.md`
 - `docs/CN_CASE_STATUS_INFERENCE_MODEL_V1.md`
 - `docs/US_M1_CORE_MODEL.md`
