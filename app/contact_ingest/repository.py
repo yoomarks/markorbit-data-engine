@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from psycopg.errors import DeadlockDetected, LockNotAvailable
 
@@ -26,7 +27,42 @@ from app.contact_ingest.models import ImportPlan
 
 
 CONTACT_APPLY_MAX_ATTEMPTS = 4
+CONTACT_APPLY_LOCK_NAME = "markorbit:contact:apply"
 _TRANSIENT_LOCK_ERRORS = (DeadlockDetected, LockNotAvailable)
+
+
+@contextmanager
+def _contact_apply_lock() -> Iterator[None]:
+    """Queue contact imports across threads/processes without tripping lock_timeout.
+
+    ``pg_advisory_lock`` itself is subject to the connection's 15s lock timeout.
+    Polling ``pg_try_advisory_lock`` instead keeps long imports queued safely. The
+    session-level advisory lock survives commits while the connection remains open.
+    """
+    from app.db import postgres_conn
+
+    with postgres_conn() as lock_conn:
+        acquired = False
+        try:
+            while not acquired:
+                with lock_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_try_advisory_lock(hashtext(%s)) AS acquired",
+                        (CONTACT_APPLY_LOCK_NAME,),
+                    )
+                    acquired = bool(cur.fetchone()["acquired"])
+                lock_conn.commit()
+                if not acquired:
+                    time.sleep(0.5)
+            yield
+        finally:
+            if acquired:
+                with lock_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(hashtext(%s))",
+                        (CONTACT_APPLY_LOCK_NAME,),
+                    )
+                lock_conn.commit()
 
 
 def _new_metrics() -> dict[str, Any]:
@@ -177,13 +213,7 @@ def _record_failure(plan: ImportPlan, exc: Exception) -> None:
         return
 
 
-def apply_plan(plan: ImportPlan) -> dict[str, Any]:
-    """Apply a deterministic plan; lock/deadlock aborts retry from a clean transaction."""
-    # Schema installation is an additive, independently committed prerequisite so
-    # a row-level import failure can still record durable failure evidence.
-    ensure_contact_schema()
-    ensure_case_contact_schema()
-
+def _apply_with_retry(plan: ImportPlan) -> dict[str, Any]:
     last_error: Exception | None = None
     for attempt in range(1, CONTACT_APPLY_MAX_ATTEMPTS + 1):
         try:
@@ -203,3 +233,13 @@ def apply_plan(plan: ImportPlan) -> dict[str, Any]:
         raise RuntimeError("Contact import retry loop ended without a result")
     _record_failure(plan, last_error)
     raise last_error
+
+
+def apply_plan(plan: ImportPlan) -> dict[str, Any]:
+    """Apply a deterministic plan with one cross-process contact writer at a time."""
+    # Schema installation is an additive, independently committed prerequisite so
+    # a row-level import failure can still record durable failure evidence.
+    ensure_contact_schema()
+    ensure_case_contact_schema()
+    with _contact_apply_lock():
+        return _apply_with_retry(plan)
