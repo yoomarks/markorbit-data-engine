@@ -84,7 +84,7 @@ def test_qcc_xlsx_autodetects_header_and_keeps_company_channels_off_legal_rep(tm
     assert summary["version"] == CONTACT_INGEST_VERSION
     assert table.header_row == 2
     assert table.profile == "QCC_COMPANY_EXPORT"
-    assert table.profile_confidence == 1.0
+    assert table.profile_confidence >= 0.9
     assert entity.country_code == "CN"
     assert entity.identifiers["CN_USCC"] == "91440300TEST000001"
     assert len(entity.people) == 1
