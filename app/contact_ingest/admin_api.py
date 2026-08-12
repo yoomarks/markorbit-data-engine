@@ -28,6 +28,13 @@ def _apply_in_background(task_id: str) -> None:
         _logger.exception("Background contact import failed: task_id=%s", task_id)
 
 
+def _scan_in_background() -> None:
+    try:
+        scan_contact_incoming()
+    except Exception:
+        _logger.exception("Background contact scan failed")
+
+
 @router.on_event("startup")
 def start_contact_discovery() -> None:
     start_contact_task_scanner()
@@ -62,9 +69,15 @@ def admin_contact_task_detail(task_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/api/admin/contacts/scan")
+@router.post("/api/admin/contacts/scan", status_code=202)
 def admin_contact_scan():
-    return scan_contact_incoming()
+    thread = threading.Thread(
+        target=_scan_in_background,
+        name="contact-manual-scan",
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "SCANNING", "background": True}
 
 
 @router.post("/api/admin/contacts/tasks/{task_id}/apply", status_code=202)
