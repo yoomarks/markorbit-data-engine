@@ -5,6 +5,7 @@ from typing import Any
 from app.cn import CN_MODEL_VERSION
 from app.cn.final_checkpoint import CHECKPOINT_VERSION as CN_CHECKPOINT_VERSION
 from app.contact_ingest import CONTACT_INGEST_VERSION
+from app.contact_ingest.task_migrations import CONTACT_TASK_CONTROL_VERSION
 from app.domain_lifecycle import LIFECYCLE_VERSION
 from app.four_domain_acceptance import AUDIT_VERSION as FOUR_DOMAIN_ACCEPTANCE_VERSION
 from app.integration_contract import CONTRACT_VERSION
@@ -50,6 +51,7 @@ def component_versions() -> dict[str, Any]:
             },
             "contact_ingestion": {
                 "version": CONTACT_INGEST_VERSION,
+                "task_control_version": CONTACT_TASK_CONTROL_VERSION,
             },
             "storage": {
                 "policy_version": STORAGE_POLICY_VERSION,
