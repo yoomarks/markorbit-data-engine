@@ -53,12 +53,14 @@ catch {
 }
 
 try {
+    $replayStartedUtc = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ")
     & docker @argsList
     $replayExitCode = $LASTEXITCODE
     if ($replayExitCode -ne 0) {
-        Write-Host "CN replay failed. Reading recent ClickHouse query failures before exiting..."
-        & docker compose run --build --rm --no-deps -T worker python -m app.cn.clickhouse_failure
-        throw "CN full replay exited with code $replayExitCode. The ClickHouse diagnostic above identifies the failed SQL when query_log captured it."
+        Write-Host "CN replay failed. Reading ClickHouse query failures from this replay window only..."
+        & docker compose run --build --rm --no-deps -T worker python -m app.cn.clickhouse_failure `
+            --since-utc $replayStartedUtc
+        throw "CN full replay exited with code $replayExitCode. The ClickHouse diagnostic above is scoped to this replay; failure_count=0 means the package failed outside captured ClickHouse query_log and the CN_FULL_REPLAY_PACKAGE error above is authoritative."
     }
     if ($telemetry) {
         $telemetryStatus = "COMMAND_SUCCEEDED"
