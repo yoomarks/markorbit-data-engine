@@ -27,7 +27,7 @@ def test_chinese_registered_agent_headers_keep_firm_and_person_distinct(tmp_path
     table = plan.tables[0]
     entity = table.entities[0]
 
-    assert plan.version == "CONTACT_INGEST_V1.5"
+    assert plan.version == "CONTACT_INGEST_V1.6"
     assert table.profile == "AGENT_CONTACT_LIST"
     assert entity.canonical_name == "北京示例知识产权代理有限公司"
     assert entity.people[0].full_name == "张三"
@@ -174,4 +174,4 @@ def test_transient_lock_failure_retries_whole_transaction(monkeypatch: pytest.Mo
 
 
 def test_contact_ingestion_version_bumped() -> None:
-    assert CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.5"
+    assert CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.6"

@@ -53,7 +53,7 @@ def test_modern_qcc_batch_export_is_ingestible(tmp_path: Path) -> None:
     table = plan.tables[0]
     entity = table.entities[0]
 
-    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.5"
+    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.6"
     assert table.header_row == 2
     assert table.profile == "QCC_COMPANY_EXPORT"
     assert table.profile_confidence >= 0.9

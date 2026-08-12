@@ -92,7 +92,7 @@ def test_v15_parses_berlin_style_narrative_attorney_pdf(tmp_path: Path) -> None:
     entities = plan.tables[0].entities
     people = {person.full_name for entity in entities for person in entity.people}
 
-    assert CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.5"
+    assert CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.6"
     assert plan.tables[0].profile == "AGENT_CONTACT_LIST"
     assert summary["entities_planned"] == 2
     assert {entity.canonical_name for entity in entities} == {
