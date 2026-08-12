@@ -18,7 +18,7 @@ def test_legacy_raw_agent_export_is_ingestible(tmp_path: Path) -> None:
     table = plan.tables[0]
     entity = table.entities[0]
 
-    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.3"
+    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.4"
     assert table.profile == "AGENT_CONTACT_LIST"
     assert entity.canonical_name == "Example IP LLP"
     assert entity.people[0].full_name == "Alex Example"

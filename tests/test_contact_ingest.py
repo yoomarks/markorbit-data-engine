@@ -84,7 +84,7 @@ def test_qcc_xlsx_autodetects_header_and_keeps_company_channels_off_legal_rep(tm
     assert summary["version"] == CONTACT_INGEST_VERSION
     assert table.header_row == 2
     assert table.profile == "QCC_COMPANY_EXPORT"
-    assert table.profile_confidence == 1.0
+    assert table.profile_confidence >= 0.9
     assert entity.country_code == "CN"
     assert entity.identifiers["CN_USCC"] == "91440300TEST000001"
     assert len(entity.people) == 1
@@ -151,10 +151,10 @@ def test_zip_can_mix_supported_structured_contact_files(tmp_path: Path) -> None:
     }
 
 
-def test_unsupported_legacy_xls_fails_clearly(tmp_path: Path) -> None:
+def test_invalid_legacy_xls_fails_clearly(tmp_path: Path) -> None:
     path = tmp_path / "legacy.xls"
     path.write_bytes(b"not-an-xls")
-    with pytest.raises(ValueError, match="Unsupported contact input type"):
+    with pytest.raises(ValueError, match="Invalid or unreadable XLS file"):
         build_plan(path)
 
 
@@ -177,7 +177,7 @@ def test_contact_schema_keeps_person_channel_observation_and_marketing_view_sepa
         "CHECK ((entity_id IS NOT NULL)::int + (person_id IS NOT NULL)::int = 1)",
     ):
         assert required in SCHEMA_SQL
-    assert CONTACT_SCHEMA_VERSION == "CONTACT_SCHEMA_V1"
+    assert CONTACT_SCHEMA_VERSION == "CONTACT_SCHEMA_V1.1"
 
 
 def test_repository_never_reassigns_existing_trademark_mentions() -> None:

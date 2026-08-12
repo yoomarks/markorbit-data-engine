@@ -18,7 +18,7 @@ from app.db import postgres_conn
 
 
 SUPPORTED_CONTACT_SUFFIXES = {
-    ".xlsx", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".txt",
+    ".xlsx", ".xls", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".txt",
     ".html", ".htm", ".pdf", ".docx", ".doc", ".zip",
 }
 DISCOVERY_LOCK_NAME = "markorbit:contact:task-discovery"

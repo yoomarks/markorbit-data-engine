@@ -34,6 +34,7 @@ def test_candidate_files_only_accept_supported_structured_contact_formats(tmp_pa
     incoming.mkdir(parents=True)
     supported_names = (
         "qcc.xlsx",
+        "legacy.xls",
         "agents.csv",
         "contacts.tsv",
         "data.json",
@@ -55,6 +56,7 @@ def test_candidate_files_only_accept_supported_structured_contact_formats(tmp_pa
     assert names == set(supported_names)
     assert SUPPORTED_CONTACT_SUFFIXES == {
         ".xlsx",
+        ".xls",
         ".csv",
         ".tsv",
         ".json",
