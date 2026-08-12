@@ -100,7 +100,7 @@ _ALIAS_SPECS = (
         "申请号", "申请号码", "applicationnumber", "serialnumber", "serialno",
     )),
     AliasSpec("TRADEMARK_REGISTRATION_NUMBER", (
-        "商标注册号", "registrationnumber", "registrationno", "regnumber", "regno",
+        "商标注册号", "trademarkregistrationnumber", "trademarkregnumber",
     )),
     # Some public-register exports use a single mixed contact cell (phone/email).
     # The planner classifies the value by its content without changing ownership.
@@ -222,10 +222,8 @@ def detect_profile(headers: list[str], mappings: list[FieldMapping]) -> tuple[st
     has_case_reference = bool(canonical & {
         "TRADEMARK_APPLICATION_NUMBER", "TRADEMARK_REGISTRATION_NUMBER"
     })
-    has_name = bool(canonical & {
-        "ENTITY_NAME", "SOURCE_ENTITY_NAME", "AGENT_NAME", "CONTACT_PERSON", "PERSON_SURNAME", "PERSON_GIVEN_NAMES"
-    })
-    if has_case_reference and has_channel and not has_name:
+    has_firm_identity = bool(canonical & {"ENTITY_NAME", "SOURCE_ENTITY_NAME"})
+    if has_case_reference and has_channel and not has_firm_identity:
         return "CASE_CONTACT_TABLE", 0.85
 
     agent_header_markers = {
