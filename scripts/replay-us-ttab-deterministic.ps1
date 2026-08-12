@@ -1,5 +1,8 @@
 param(
     [string]$ManifestRelativePath = "manifests/us_ttab/corpus.json",
+    [Parameter(Mandatory = $true)]
+    [ValidateRange(1, 9999)]
+    [int]$ExpectedApplicationHistoryParts,
     [switch]$Apply,
     [switch]$All,
     [switch]$ResumeFailed,
@@ -21,6 +24,14 @@ foreach ($service in @("postgres", "clickhouse")) {
 }
 
 if ($Apply) {
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $PSScriptRoot "assert-domain-apply-gate.ps1") `
+        -TargetDomain "US_TTAB" `
+        -ExpectedApplicationHistoryParts $ExpectedApplicationHistoryParts
+    if ($LASTEXITCODE -ne 0) {
+        throw "US TTAB apply gate failed; replay was not started."
+    }
+
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "apply-us-ttab-schema.ps1")
     if ($LASTEXITCODE -ne 0) { throw "US TTAB schema gate failed." }
 }
