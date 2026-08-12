@@ -17,7 +17,7 @@ class AliasSpec:
 
 _ALIAS_SPECS = (
     AliasSpec("ENTITY_NAME", (
-        "企业名称", "公司名称", "机构名称", "主体名称", "申请人名称", "申请人", "代理机构名称", "代理机构",
+        "企业名称", "系统匹配企业名称", "公司名称", "机构名称", "主体名称", "申请人名称", "申请人", "代理机构名称", "代理机构",
         "代理公司", "代理机构全称", "事务所名称", "律所名称", "知识产权代理机构",
         "company", "companyname", "organization", "organizationname", "firm", "firmname", "lawfirm", "agency", "agencyname",
         "rawfirmname", "rawagentfirmname", "canonicalfirmname",
@@ -54,7 +54,7 @@ _ALIAS_SPECS = (
         "businessphone", "officephone", "rawphone", "primaryphone",
     )),
     AliasSpec("EMAIL", (
-        "邮箱", "电子邮箱", "邮件", "email", "emailaddress", "e-mail", "rawemail", "primaryemail",
+        "邮箱", "更多邮箱", "电子邮箱", "邮件", "email", "emailaddress", "e-mail", "rawemail", "primaryemail",
     )),
     AliasSpec("WEBSITE", (
         "官网网址", "官网", "网址", "网站", "website", "web", "url", "webpage", "rawwebsite",
@@ -181,8 +181,9 @@ def detect_profile(headers: list[str], mappings: list[FieldMapping]) -> tuple[st
     normalized_headers = {normalize_header(header) for header in headers if clean_text(header)}
     canonical = {mapping.canonical_field for mapping in mappings}
     qcc_markers = {
-        normalize_header("企业名称"), normalize_header("统一社会信用代码"),
-        normalize_header("法定代表人"), normalize_header("有效手机号"),
+        normalize_header("企业名称"), normalize_header("系统匹配企业名称"),
+        normalize_header("统一社会信用代码"), normalize_header("法定代表人"),
+        normalize_header("有效手机号"),
     }
     qcc_hits = len(qcc_markers & normalized_headers)
     if qcc_hits >= 3 and "ENTITY_NAME" in canonical:
