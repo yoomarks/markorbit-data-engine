@@ -92,6 +92,18 @@ def test_contact_admin_routes_and_page_are_registered() -> None:
     assert "/api/admin/contacts/scan" in markup
     assert "/api/admin/contacts/tasks/" in markup
 
+    main_markup = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    assert 'href="/contacts"' in main_markup
+    assert "Contacts 联系人" in main_markup
+
+
+def test_background_discovery_never_auto_applies_contact_data() -> None:
+    source = (ROOT / "app" / "contact_ingest" / "task_queue.py").read_text(encoding="utf-8")
+    scanner = source[source.index("def _scanner_loop") : source.index("def start_contact_task_scanner")]
+    assert "scan_contact_incoming()" in scanner
+    assert "apply_contact_task(" not in scanner
+    assert "apply_plan(" not in scanner
+
 
 def test_contact_task_bootstrap_sql_matches_runtime_version() -> None:
     sql = (ROOT / "database" / "postgres" / "init" / "006_contact_task_control.sql").read_text(
