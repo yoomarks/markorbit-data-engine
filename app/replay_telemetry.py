@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 import json
 from typing import Any, Mapping, Sequence
 
-from app.component_versions import component_versions
+from app.component_versions import REPLAY_TELEMETRY_VERSION, component_versions
 from app.db import clickhouse_client, postgres_conn
 
 
-TELEMETRY_VERSION = "DATA_ENGINE_REPLAY_TELEMETRY_V1"
+TELEMETRY_VERSION = REPLAY_TELEMETRY_VERSION
 VALID_JURISDICTIONS = {"CN", "US", "US_ASSIGNMENT", "US_TTAB"}
 
 _PACKAGE_COUNTS_SQL = """
