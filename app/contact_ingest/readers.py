@@ -18,6 +18,7 @@ from app.contact_ingest.normalization import clean_text
 
 SUPPORTED_EXTENSIONS = {
     ".xlsx",
+    ".xls",
     ".csv",
     ".tsv",
     ".json",
@@ -136,6 +137,42 @@ def read_xlsx_bytes(data: bytes, *, source_member: str) -> list[TableData]:
             return _parse_xlsx_zip(zf, source_member=source_member)
     except BadZipFile as exc:
         raise ValueError(f"Invalid XLSX file: {source_member}") from exc
+
+
+def read_xls_bytes(data: bytes, *, source_member: str) -> list[TableData]:
+    """Read historical BIFF .xls workbooks without converting them to OOXML."""
+    try:
+        import xlrd
+    except ImportError as exc:  # pragma: no cover - deployment dependency contract
+        raise ValueError("Legacy .xls support requires the xlrd runtime dependency") from exc
+
+    try:
+        book = xlrd.open_workbook(file_contents=data, on_demand=True)
+    except Exception as exc:
+        raise ValueError(f"Invalid or unreadable XLS file: {source_member}: {exc}") from exc
+
+    tables: list[TableData] = []
+    try:
+        for sheet in book.sheets():
+            rows: list[list[str]] = []
+            for row_idx in range(sheet.nrows):
+                values: list[str] = []
+                for col_idx in range(sheet.ncols):
+                    value = sheet.cell_value(row_idx, col_idx)
+                    if isinstance(value, float) and value.is_integer():
+                        value = int(value)
+                    values.append(clean_text(value))
+                while values and not values[-1]:
+                    values.pop()
+                rows.append(values)
+            tables.append(TableData(
+                source_member=source_member,
+                sheet_name=clean_text(sheet.name) or "Sheet",
+                rows=rows,
+            ))
+    finally:
+        book.release_resources()
+    return tables
 
 
 def _decode_text(data: bytes) -> tuple[str, str]:
@@ -481,6 +518,8 @@ def _read_member(data: bytes, *, name: str) -> list[TableData]:
     ext = Path(name).suffix.lower()
     if ext == ".xlsx":
         return read_xlsx_bytes(data, source_member=name)
+    if ext == ".xls":
+        return read_xls_bytes(data, source_member=name)
     if ext in {".csv", ".tsv"}:
         return read_delimited_bytes(data, source_member=name, delimiter="\t" if ext == ".tsv" else None)
     if ext in {".json", ".jsonl", ".ndjson"}:
