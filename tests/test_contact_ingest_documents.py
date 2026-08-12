@@ -77,7 +77,7 @@ def _docx_bytes(rows: list[list[str]]) -> bytes:
 
 def _assert_single_entity(path: Path, expected_name: str, expected_email: str) -> None:
     plan = build_plan(path)
-    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.4"
+    assert plan.version == CONTACT_INGEST_VERSION == "CONTACT_INGEST_V1.5"
     entity = plan.tables[0].entities[0]
     assert entity.canonical_name == expected_name
     channels = entity.channels + [channel for person in entity.people for channel in person.channels]
