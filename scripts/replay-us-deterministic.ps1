@@ -27,6 +27,16 @@ foreach ($service in @("postgres", "clickhouse")) {
     }
 }
 
+if ($Apply) {
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $PSScriptRoot "assert-domain-apply-gate.ps1") `
+        -TargetDomain "US_APPLICATION" `
+        -ExpectedApplicationHistoryParts $ExpectedHistoryParts
+    if ($LASTEXITCODE -ne 0) {
+        throw "US Application apply gate failed; replay was not started."
+    }
+}
+
 $args = @(
     "run", "--build", "--rm", "--no-deps", "worker",
     "python", "-m", "app.us.replay_executor",
