@@ -7,7 +7,7 @@ from typing import Any
 from app.cn.ingest_m16 import ingest_cn_package
 from app.cn.run_guard import cn_ingestion_guard, recover_interrupted_cn_ingestions
 from app.config import get_settings
-from app.db import clickhouse_execution_settings
+from app.db import clickhouse_execution_settings, postgres_execution_settings
 from app.repository import (
     create_job_run,
     finish_job_run,
@@ -21,6 +21,7 @@ from app.scanner import discover_packages
 CN_JOIN_ALGORITHM = "grace_hash"
 CN_GRACE_HASH_JOIN_INITIAL_BUCKETS = 32
 CN_CLICKHOUSE_SEND_RECEIVE_TIMEOUT = 3600
+CN_POSTGRES_LOCK_TIMEOUT = "0"
 
 
 def ensure_raw_directories() -> None:
@@ -173,23 +174,27 @@ def ingest_pending_cn(
 
             result["attempted"] += 1
             try:
-                # CN real-corpus replay already proved this ClickHouse 24.8
-                # resource profile on packages that exceed the in-memory hash
-                # JOIN ceiling. Keep it attached to CN ingestion itself so Admin,
-                # API retry, scheduled worker and PowerShell all behave the same.
-                with clickhouse_execution_settings(
-                    join_algorithm=CN_JOIN_ALGORITHM,
-                    grace_hash_join_initial_buckets=CN_GRACE_HASH_JOIN_INITIAL_BUCKETS,
-                    send_receive_timeout=CN_CLICKHOUSE_SEND_RECEIVE_TIMEOUT,
+                # CN package ingestion is intentionally long-running. The
+                # ClickHouse profile spills large joins to disk; the Postgres
+                # profile waits for concurrent Entity Hub writers instead of
+                # treating the normal 15-second lock guard as a package failure.
+                # PostgreSQL's deadlock detector still terminates real deadlocks.
+                with postgres_execution_settings(
+                    lock_timeout=CN_POSTGRES_LOCK_TIMEOUT,
                 ):
-                    metrics = ingest_cn_package(
-                        str(package["package_id"]),
-                        path,
-                        settings.raw_data_root,
-                        trigger_type=trigger_type,
-                        retrying=package["status"]
-                        in {"INTERRUPTED", "FAILED", "MISSING_FILE"},
-                    )
+                    with clickhouse_execution_settings(
+                        join_algorithm=CN_JOIN_ALGORITHM,
+                        grace_hash_join_initial_buckets=CN_GRACE_HASH_JOIN_INITIAL_BUCKETS,
+                        send_receive_timeout=CN_CLICKHOUSE_SEND_RECEIVE_TIMEOUT,
+                    ):
+                        metrics = ingest_cn_package(
+                            str(package["package_id"]),
+                            path,
+                            settings.raw_data_root,
+                            trigger_type=trigger_type,
+                            retrying=package["status"]
+                            in {"INTERRUPTED", "FAILED", "MISSING_FILE"},
+                        )
                 result["success"] += 1
                 result["packages"].append(
                     {

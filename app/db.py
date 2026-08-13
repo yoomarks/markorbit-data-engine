@@ -13,10 +13,24 @@ POSTGRES_SESSION_OPTIONS = (
     "-c lock_timeout=15s "
     "-c idle_in_transaction_session_timeout=60s"
 )
+_POSTGRES_LOCK_TIMEOUT_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "markorbit_postgres_lock_timeout_override",
+    default=None,
+)
 _CLICKHOUSE_EXECUTION_OVERRIDES: ContextVar[dict[str, int | str]] = ContextVar(
     "markorbit_clickhouse_execution_overrides",
     default={},
 )
+
+
+def _postgres_session_options() -> str:
+    lock_timeout = _POSTGRES_LOCK_TIMEOUT_OVERRIDE.get()
+    if lock_timeout is None:
+        return POSTGRES_SESSION_OPTIONS
+    return (
+        f"-c lock_timeout={lock_timeout} "
+        "-c idle_in_transaction_session_timeout=60s"
+    )
 
 
 @contextmanager
@@ -25,9 +39,31 @@ def postgres_conn():
     with psycopg.connect(
         settings.postgres_dsn,
         row_factory=dict_row,
-        options=POSTGRES_SESSION_OPTIONS,
+        options=_postgres_session_options(),
     ) as conn:
         yield conn
+
+
+@contextmanager
+def postgres_execution_settings(*, lock_timeout: str = "") -> Iterator[None]:
+    """Apply transaction-wait policy to Postgres connections in this execution context.
+
+    Normal API/contact work keeps the 15-second lock timeout. Long-running CN
+    package ingestion can opt into PostgreSQL's ``lock_timeout=0`` so a concurrent
+    Entity Hub writer is queued instead of invalidating an otherwise deterministic
+    package replay. PostgreSQL deadlock detection remains active independently.
+    """
+    if not lock_timeout:
+        yield
+        return
+    if any(character.isspace() for character in lock_timeout):
+        raise ValueError("lock_timeout must be a single PostgreSQL duration token")
+
+    token = _POSTGRES_LOCK_TIMEOUT_OVERRIDE.set(lock_timeout)
+    try:
+        yield
+    finally:
+        _POSTGRES_LOCK_TIMEOUT_OVERRIDE.reset(token)
 
 
 @contextmanager
