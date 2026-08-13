@@ -63,12 +63,19 @@ mention_stats AS (
 ),
 source_stats AS (
     SELECT
-        entity_id,
-        bool_or(source_profile = 'AGENT_CONTACT_LIST') AS has_agent_source,
-        bool_or(source_profile = 'QCC_COMPANY_EXPORT') AS has_direct_source
-    FROM contact.raw_record
-    WHERE entity_id IS NOT NULL
-    GROUP BY entity_id
+        rr.entity_id,
+        bool_or(
+            rr.source_profile = 'AGENT_CONTACT_LIST'
+            OR s.source_segment = 'AGENT'
+        ) AS has_agent_source,
+        bool_or(
+            rr.source_profile = 'QCC_COMPANY_EXPORT'
+            OR s.source_segment = 'DIRECT'
+        ) AS has_direct_source
+    FROM contact.raw_record AS rr
+    LEFT JOIN contact.source AS s ON s.source_id = rr.source_id
+    WHERE rr.entity_id IS NOT NULL
+    GROUP BY rr.entity_id
 ),
 relation_stats AS (
     SELECT
@@ -178,9 +185,14 @@ channels AS (
 sources AS (
     SELECT
         rr.entity_id,
-        array_agg(DISTINCT rr.source_profile ORDER BY rr.source_profile) AS source_profiles
+        array_agg(DISTINCT rr.source_profile ORDER BY rr.source_profile) AS source_profiles,
+        array_agg(DISTINCT s.source_segment ORDER BY s.source_segment)
+            FILTER (WHERE s.source_segment <> 'UNKNOWN') AS source_segments,
+        array_agg(DISTINCT s.source_scope ORDER BY s.source_scope)
+            FILTER (WHERE s.source_scope <> '') AS source_scopes
     FROM contact.raw_record AS rr
     JOIN requested AS q ON q.entity_id = rr.entity_id
+    LEFT JOIN contact.source AS s ON s.source_id = rr.source_id
     GROUP BY rr.entity_id
 )
 SELECT
@@ -190,7 +202,9 @@ SELECT
     COALESCE(ch.emails, ARRAY[]::text[]) AS emails,
     COALESCE(ch.websites, ARRAY[]::text[]) AS websites,
     COALESCE(ch.whatsapps, ARRAY[]::text[]) AS whatsapps,
-    COALESCE(s.source_profiles, ARRAY[]::text[]) AS source_profiles
+    COALESCE(s.source_profiles, ARRAY[]::text[]) AS source_profiles,
+    COALESCE(s.source_segments, ARRAY[]::text[]) AS source_segments,
+    COALESCE(s.source_scopes, ARRAY[]::text[]) AS source_scopes
 FROM requested AS q
 LEFT JOIN people AS p ON p.entity_id = q.entity_id
 LEFT JOIN channels AS ch ON ch.entity_id = q.entity_id
@@ -280,8 +294,8 @@ ORDER BY GROUPING(country_code) DESC, entities DESC, country_code NULLS LAST
         "totals": total,
         "countries": countries,
         "classification": {
-            "agent": "代理角色商标记录、AGENT_CONTACT_LIST 来源或 ATTORNEY/AGENT/CORRESPONDENT 关系",
-            "direct_client": "OWNER/CO_OWNER/APPLICANT 商标记录或 QCC_COMPANY_EXPORT 来源",
+            "agent": "代理角色商标记录、来源清单标注 AGENT、AGENT_CONTACT_LIST 来源或 ATTORNEY/AGENT/CORRESPONDENT 关系",
+            "direct_client": "OWNER/CO_OWNER/APPLICANT 商标记录、来源清单标注 DIRECT 或 QCC_COMPANY_EXPORT 来源",
             "both": "同时满足代理和直客条件",
             "unknown": "已有联系人数据，但现有证据不足以归类",
         },
@@ -417,6 +431,8 @@ LIMIT %s OFFSET %s
             "websites",
             "whatsapps",
             "source_profiles",
+            "source_segments",
+            "source_scopes",
         ):
             row[key] = list(details.get(key) or [])
         row["country_code"] = str(row.get("country_code") or "")

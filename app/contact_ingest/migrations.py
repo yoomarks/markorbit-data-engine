@@ -32,10 +32,20 @@ CREATE TABLE IF NOT EXISTS contact.source (
     source_name text NOT NULL,
     file_type text NOT NULL,
     source_profile text NOT NULL,
+    source_segment text NOT NULL DEFAULT 'UNKNOWN',
+    source_scope text NOT NULL DEFAULT '',
+    default_country_code char(2),
     ingest_version text NOT NULL,
     first_seen_at timestamptz NOT NULL DEFAULT now(),
     last_seen_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE contact.source
+    ADD COLUMN IF NOT EXISTS source_segment text NOT NULL DEFAULT 'UNKNOWN';
+ALTER TABLE contact.source
+    ADD COLUMN IF NOT EXISTS source_scope text NOT NULL DEFAULT '';
+ALTER TABLE contact.source
+    ADD COLUMN IF NOT EXISTS default_country_code char(2);
+
 CREATE TABLE IF NOT EXISTS contact.import_run (
     run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source_id uuid NOT NULL REFERENCES contact.source(source_id),
