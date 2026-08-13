@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import threading
+import time
 from typing import Any
 
 from app.db import postgres_conn
 
 
+_ANALYTICS_CACHE_TTL_SECONDS = 30.0
+_analytics_cache_lock = threading.Lock()
+_analytics_cache_at = 0.0
+_analytics_cache_value: dict[str, Any] | None = None
+
+
+# Keep the common rollup deliberately narrow. The old implementation aggregated
+# every person's name and every channel value into arrays before it could count
+# or page entities. With a large Contacts corpus that made even the overview do
+# full-corpus array aggregation twice. Arrays are now hydrated only for the
+# requested page below.
 _CONTACT_ROLLUP_CTE = r"""
 WITH person_owner AS (
     SELECT DISTINCT ON (person_id)
@@ -19,8 +33,7 @@ channel_entity AS (
         COALESCE(c.entity_id, po.entity_id) AS entity_id,
         c.person_id,
         c.channel_type,
-        c.channel_value,
-        c.normalized_value
+        c.channel_value
     FROM contact.channel AS c
     LEFT JOIN person_owner AS po ON po.person_id = c.person_id
     WHERE COALESCE(c.entity_id, po.entity_id) IS NOT NULL
@@ -52,8 +65,7 @@ source_stats AS (
     SELECT
         entity_id,
         bool_or(source_profile = 'AGENT_CONTACT_LIST') AS has_agent_source,
-        bool_or(source_profile = 'QCC_COMPANY_EXPORT') AS has_direct_source,
-        array_agg(DISTINCT source_profile ORDER BY source_profile) AS source_profiles
+        bool_or(source_profile = 'QCC_COMPANY_EXPORT') AS has_direct_source
     FROM contact.raw_record
     WHERE entity_id IS NOT NULL
     GROUP BY entity_id
@@ -66,29 +78,13 @@ relation_stats AS (
     FROM contact.entity_person_relation
     GROUP BY entity_id
 ),
-people AS (
-    SELECT
-        r.entity_id,
-        array_agg(DISTINCT p.canonical_name ORDER BY p.canonical_name) AS people
-    FROM contact.entity_person_relation AS r
-    JOIN contact.person AS p ON p.person_id = r.person_id
-    GROUP BY r.entity_id
-),
-channels AS (
+channel_stats AS (
     SELECT
         entity_id,
         count(*) FILTER (WHERE channel_type IN ('PHONE', 'MOBILE')) AS phone_count,
         count(*) FILTER (WHERE channel_type = 'EMAIL') AS email_count,
         count(*) FILTER (WHERE channel_type = 'WEBSITE') AS website_count,
-        count(*) FILTER (WHERE channel_type = 'WHATSAPP') AS whatsapp_count,
-        array_agg(DISTINCT channel_value ORDER BY channel_value)
-            FILTER (WHERE channel_type IN ('PHONE', 'MOBILE')) AS phones,
-        array_agg(DISTINCT channel_value ORDER BY channel_value)
-            FILTER (WHERE channel_type = 'EMAIL') AS emails,
-        array_agg(DISTINCT channel_value ORDER BY channel_value)
-            FILTER (WHERE channel_type = 'WEBSITE') AS websites,
-        array_agg(DISTINCT channel_value ORDER BY channel_value)
-            FILTER (WHERE channel_type = 'WHATSAPP') AS whatsapps
+        count(*) FILTER (WHERE channel_type = 'WHATSAPP') AS whatsapp_count
     FROM channel_entity
     GROUP BY entity_id
 ),
@@ -105,12 +101,6 @@ rollup AS (
         COALESCE(ch.email_count, 0) AS email_count,
         COALESCE(ch.website_count, 0) AS website_count,
         COALESCE(ch.whatsapp_count, 0) AS whatsapp_count,
-        COALESCE(ch.phones, ARRAY[]::text[]) AS phones,
-        COALESCE(ch.emails, ARRAY[]::text[]) AS emails,
-        COALESCE(ch.websites, ARRAY[]::text[]) AS websites,
-        COALESCE(ch.whatsapps, ARRAY[]::text[]) AS whatsapps,
-        COALESCE(p.people, ARRAY[]::text[]) AS people,
-        COALESCE(ss.source_profiles, ARRAY[]::text[]) AS source_profiles,
         COALESCE(ms.applicant_mentions, 0) AS applicant_mentions,
         COALESCE(ms.agent_mentions, 0) AS agent_mentions,
         (
@@ -128,9 +118,83 @@ rollup AS (
     LEFT JOIN mention_stats AS ms ON ms.entity_id = e.entity_id
     LEFT JOIN source_stats AS ss ON ss.entity_id = e.entity_id
     LEFT JOIN relation_stats AS rs ON rs.entity_id = e.entity_id
-    LEFT JOIN people AS p ON p.entity_id = e.entity_id
-    LEFT JOIN channels AS ch ON ch.entity_id = e.entity_id
+    LEFT JOIN channel_stats AS ch ON ch.entity_id = e.entity_id
 )
+"""
+
+
+_PAGE_HYDRATION_SQL = r"""
+WITH requested AS (
+    SELECT unnest(%s::uuid[]) AS entity_id
+),
+target_people AS (
+    SELECT DISTINCT r.person_id
+    FROM contact.entity_person_relation AS r
+    JOIN requested AS q ON q.entity_id = r.entity_id
+),
+person_owner AS (
+    SELECT DISTINCT ON (r.person_id)
+        r.person_id,
+        r.entity_id
+    FROM contact.entity_person_relation AS r
+    JOIN target_people AS tp ON tp.person_id = r.person_id
+    ORDER BY r.person_id, r.last_seen_at DESC, r.relation_id
+),
+people AS (
+    SELECT
+        r.entity_id,
+        array_agg(DISTINCT p.canonical_name ORDER BY p.canonical_name) AS people
+    FROM contact.entity_person_relation AS r
+    JOIN requested AS q ON q.entity_id = r.entity_id
+    JOIN contact.person AS p ON p.person_id = r.person_id
+    GROUP BY r.entity_id
+),
+channel_entity AS (
+    SELECT c.entity_id, c.channel_type, c.channel_value
+    FROM contact.channel AS c
+    JOIN requested AS q ON q.entity_id = c.entity_id
+    WHERE c.entity_id IS NOT NULL
+    UNION ALL
+    SELECT po.entity_id, c.channel_type, c.channel_value
+    FROM contact.channel AS c
+    JOIN person_owner AS po ON po.person_id = c.person_id
+    JOIN requested AS q ON q.entity_id = po.entity_id
+    WHERE c.person_id IS NOT NULL
+),
+channels AS (
+    SELECT
+        entity_id,
+        array_agg(DISTINCT channel_value ORDER BY channel_value)
+            FILTER (WHERE channel_type IN ('PHONE', 'MOBILE')) AS phones,
+        array_agg(DISTINCT channel_value ORDER BY channel_value)
+            FILTER (WHERE channel_type = 'EMAIL') AS emails,
+        array_agg(DISTINCT channel_value ORDER BY channel_value)
+            FILTER (WHERE channel_type = 'WEBSITE') AS websites,
+        array_agg(DISTINCT channel_value ORDER BY channel_value)
+            FILTER (WHERE channel_type = 'WHATSAPP') AS whatsapps
+    FROM channel_entity
+    GROUP BY entity_id
+),
+sources AS (
+    SELECT
+        rr.entity_id,
+        array_agg(DISTINCT rr.source_profile ORDER BY rr.source_profile) AS source_profiles
+    FROM contact.raw_record AS rr
+    JOIN requested AS q ON q.entity_id = rr.entity_id
+    GROUP BY rr.entity_id
+)
+SELECT
+    q.entity_id,
+    COALESCE(p.people, ARRAY[]::text[]) AS people,
+    COALESCE(ch.phones, ARRAY[]::text[]) AS phones,
+    COALESCE(ch.emails, ARRAY[]::text[]) AS emails,
+    COALESCE(ch.websites, ARRAY[]::text[]) AS websites,
+    COALESCE(ch.whatsapps, ARRAY[]::text[]) AS whatsapps,
+    COALESCE(s.source_profiles, ARRAY[]::text[]) AS source_profiles
+FROM requested AS q
+LEFT JOIN people AS p ON p.entity_id = q.entity_id
+LEFT JOIN channels AS ch ON ch.entity_id = q.entity_id
+LEFT JOIN sources AS s ON s.entity_id = q.entity_id
 """
 
 
@@ -149,10 +213,41 @@ def _summary_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def invalidate_contact_directory_cache() -> None:
+    global _analytics_cache_at, _analytics_cache_value
+    with _analytics_cache_lock:
+        _analytics_cache_at = 0.0
+        _analytics_cache_value = None
+
+
+def _cached_analytics() -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _analytics_cache_lock:
+        if (
+            _analytics_cache_value is not None
+            and now - _analytics_cache_at < _ANALYTICS_CACHE_TTL_SECONDS
+        ):
+            return deepcopy(_analytics_cache_value)
+    return None
+
+
+def _store_analytics(value: dict[str, Any]) -> None:
+    global _analytics_cache_at, _analytics_cache_value
+    with _analytics_cache_lock:
+        _analytics_cache_at = time.monotonic()
+        _analytics_cache_value = deepcopy(value)
+
+
 def contact_directory_analytics() -> dict[str, Any]:
-    """Return contact-side business segmentation and country/channel coverage."""
-    total_sql = _CONTACT_ROLLUP_CTE + r"""
+    """Return country/type/channel coverage using one lightweight corpus pass."""
+    cached = _cached_analytics()
+    if cached is not None:
+        return cached
+
+    sql = _CONTACT_ROLLUP_CTE + r"""
 SELECT
+    CASE WHEN GROUPING(country_code) = 1 THEN '__TOTAL__'
+         ELSE COALESCE(country_code, '') END AS bucket,
     count(*) AS entities,
     count(*) FILTER (WHERE is_agent) AS agents,
     count(*) FILTER (WHERE is_direct) AS direct_clients,
@@ -165,40 +260,25 @@ SELECT
     sum(whatsapp_count) AS whatsapps,
     count(DISTINCT country_code) FILTER (WHERE country_code IS NOT NULL) AS countries
 FROM rollup
+GROUP BY GROUPING SETS ((), (country_code))
+ORDER BY GROUPING(country_code) DESC, entities DESC, country_code NULLS LAST
 """
-    country_sql = _CONTACT_ROLLUP_CTE + r"""
-SELECT
-    COALESCE(country_code, '') AS country_code,
-    count(*) AS entities,
-    count(*) FILTER (WHERE is_agent) AS agents,
-    count(*) FILTER (WHERE is_direct) AS direct_clients,
-    count(*) FILTER (WHERE is_agent AND is_direct) AS both,
-    count(*) FILTER (WHERE NOT is_agent AND NOT is_direct) AS unknown,
-    sum(person_count) AS people,
-    sum(phone_count) AS phones,
-    sum(email_count) AS emails,
-    sum(website_count) AS websites,
-    sum(whatsapp_count) AS whatsapps
-FROM rollup
-GROUP BY country_code
-ORDER BY country_code IS NULL, entities DESC, country_code
-"""
-
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(total_sql)
-            total_raw = dict(cur.fetchone())
-            cur.execute(country_sql)
-            country_rows = [dict(row) for row in cur.fetchall()]
+            cur.execute(sql)
+            raw_rows = [dict(row) for row in cur.fetchall()]
 
+    total_raw = next((row for row in raw_rows if row.get("bucket") == "__TOTAL__"), {})
     total = _summary_row(total_raw)
     total["countries"] = int(total_raw.get("countries") or 0)
-    return {
+    countries = [
+        {"country_code": str(row.get("bucket") or ""), **_summary_row(row)}
+        for row in raw_rows
+        if row.get("bucket") != "__TOTAL__"
+    ]
+    result = {
         "totals": total,
-        "countries": [
-            {"country_code": str(row.get("country_code") or ""), **_summary_row(row)}
-            for row in country_rows
-        ],
+        "countries": countries,
         "classification": {
             "agent": "代理角色商标记录、AGENT_CONTACT_LIST 来源或 ATTORNEY/AGENT/CORRESPONDENT 关系",
             "direct_client": "OWNER/CO_OWNER/APPLICANT 商标记录或 QCC_COMPANY_EXPORT 来源",
@@ -206,6 +286,8 @@ ORDER BY country_code IS NULL, entities DESC, country_code
             "unknown": "已有联系人数据，但现有证据不足以归类",
         },
     }
+    _store_analytics(result)
+    return result
 
 
 def contact_directory_list(
@@ -217,7 +299,7 @@ def contact_directory_list(
     limit: int = 100,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """List one row per contact entity with filterable people and channels."""
+    """Page lightweight entity rows first, then hydrate details only for that page."""
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -254,16 +336,22 @@ def contact_directory_list(
         clauses.append(
             "("
             "entity_name ILIKE %s OR COALESCE(city, '') ILIKE %s OR "
-            "array_to_string(people, ' ') ILIKE %s OR "
-            "array_to_string(phones, ' ') ILIKE %s OR "
-            "array_to_string(emails, ' ') ILIKE %s OR "
-            "array_to_string(websites, ' ') ILIKE %s"
+            "EXISTS ("
+            "  SELECT 1 FROM contact.entity_person_relation AS qr "
+            "  JOIN contact.person AS qp ON qp.person_id = qr.person_id "
+            "  WHERE qr.entity_id = rollup.entity_id AND qp.canonical_name ILIKE %s"
+            ") OR EXISTS ("
+            "  SELECT 1 FROM channel_entity AS qc "
+            "  WHERE qc.entity_id = rollup.entity_id AND qc.channel_value ILIKE %s"
+            ")"
             ")"
         )
         pattern = f"%{query}%"
-        params.extend([pattern] * 6)
+        params.extend([pattern] * 4)
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    page_limit = max(1, min(int(limit), 500))
+    page_offset = max(0, int(offset))
     sql = _CONTACT_ROLLUP_CTE + f"""
 SELECT
     entity_id,
@@ -285,12 +373,6 @@ SELECT
     email_count,
     website_count,
     whatsapp_count,
-    people,
-    phones,
-    emails,
-    websites,
-    whatsapps,
-    source_profiles,
     applicant_mentions,
     agent_mentions,
     count(*) OVER() AS filtered_total
@@ -299,16 +381,25 @@ FROM rollup
 ORDER BY country_code NULLS LAST, lower(entity_name), entity_id
 LIMIT %s OFFSET %s
 """
-    params.extend([max(1, min(int(limit), 500)), max(0, int(offset))])
+    params.extend([page_limit, page_offset])
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             rows = [dict(row) for row in cur.fetchall()]
+            entity_ids = [str(row["entity_id"]) for row in rows]
+            hydrated: dict[str, dict[str, Any]] = {}
+            if entity_ids:
+                cur.execute(_PAGE_HYDRATION_SQL, (entity_ids,))
+                hydrated = {
+                    str(item["entity_id"]): dict(item)
+                    for item in cur.fetchall()
+                }
 
     total = int(rows[0].pop("filtered_total")) if rows else 0
     for row in rows:
         row.pop("filtered_total", None)
+        details = hydrated.get(str(row["entity_id"]), {})
         for key in (
             "person_count",
             "phone_count",
@@ -327,12 +418,12 @@ LIMIT %s OFFSET %s
             "whatsapps",
             "source_profiles",
         ):
-            row[key] = list(row.get(key) or [])
+            row[key] = list(details.get(key) or [])
         row["country_code"] = str(row.get("country_code") or "")
 
     return {
         "total": total,
-        "limit": max(1, min(int(limit), 500)),
-        "offset": max(0, int(offset)),
+        "limit": page_limit,
+        "offset": page_offset,
         "rows": rows,
     }

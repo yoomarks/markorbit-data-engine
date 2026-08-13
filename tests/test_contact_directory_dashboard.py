@@ -46,8 +46,10 @@ class _FakeConn:
 
 
 def test_directory_analytics_returns_country_agent_direct_and_channel_counts(monkeypatch) -> None:
-    cursor = _FakeCursor([
+    directory_api.invalidate_contact_directory_cache()
+    cursor = _FakeCursor([[
         {
+            "bucket": "__TOTAL__",
             "entities": 12,
             "agents": 7,
             "direct_clients": 6,
@@ -60,35 +62,35 @@ def test_directory_analytics_returns_country_agent_direct_and_channel_counts(mon
             "whatsapps": 2,
             "countries": 2,
         },
-        [
-            {
-                "country_code": "US",
-                "entities": 8,
-                "agents": 5,
-                "direct_clients": 4,
-                "both": 1,
-                "unknown": 0,
-                "people": 10,
-                "phones": 7,
-                "emails": 7,
-                "websites": 5,
-                "whatsapps": 1,
-            },
-            {
-                "country_code": "CN",
-                "entities": 4,
-                "agents": 2,
-                "direct_clients": 2,
-                "both": 0,
-                "unknown": 0,
-                "people": 5,
-                "phones": 2,
-                "emails": 3,
-                "websites": 3,
-                "whatsapps": 1,
-            },
-        ],
-    ])
+        {
+            "bucket": "US",
+            "entities": 8,
+            "agents": 5,
+            "direct_clients": 4,
+            "both": 1,
+            "unknown": 0,
+            "people": 10,
+            "phones": 7,
+            "emails": 7,
+            "websites": 5,
+            "whatsapps": 1,
+            "countries": 1,
+        },
+        {
+            "bucket": "CN",
+            "entities": 4,
+            "agents": 2,
+            "direct_clients": 2,
+            "both": 0,
+            "unknown": 0,
+            "people": 5,
+            "phones": 2,
+            "emails": 3,
+            "websites": 3,
+            "whatsapps": 1,
+            "countries": 1,
+        },
+    ]])
     monkeypatch.setattr(directory_api, "postgres_conn", lambda: _FakeConn(cursor))
 
     result = directory_api.contact_directory_analytics()
@@ -103,36 +105,74 @@ def test_directory_analytics_returns_country_agent_direct_and_channel_counts(mon
     assert result["countries"][0]["country_code"] == "US"
     assert "AGENT_CONTACT_LIST" in result["classification"]["agent"]
     assert "QCC_COMPANY_EXPORT" in result["classification"]["direct_client"]
+    assert len(cursor.executions) == 1
+    assert "GROUPING SETS" in cursor.executions[0][0]
+    assert "array_agg" not in cursor.executions[0][0]
+
+
+def test_directory_analytics_uses_short_ttl_cache(monkeypatch) -> None:
+    directory_api.invalidate_contact_directory_cache()
+    cursor = _FakeCursor([[
+        {
+            "bucket": "__TOTAL__",
+            "entities": 1,
+            "agents": 1,
+            "direct_clients": 0,
+            "both": 0,
+            "unknown": 0,
+            "people": 1,
+            "phones": 1,
+            "emails": 1,
+            "websites": 0,
+            "whatsapps": 0,
+            "countries": 1,
+        }
+    ]])
+    monkeypatch.setattr(directory_api, "postgres_conn", lambda: _FakeConn(cursor))
+
+    first = directory_api.contact_directory_analytics()
+    second = directory_api.contact_directory_analytics()
+
+    assert first == second
+    assert len(cursor.executions) == 1
+    directory_api.invalidate_contact_directory_cache()
 
 
 def test_directory_list_supports_country_segment_channel_search_and_paging(monkeypatch) -> None:
-    cursor = _FakeCursor([[
-        {
-            "entity_id": "e1",
-            "entity_name": "Example IP LLC",
-            "entity_type": "ORGANIZATION",
-            "country_code": "US",
-            "region_code": "CA",
-            "city": "Los Angeles",
-            "segment": "AGENT",
-            "is_agent": True,
-            "is_direct": False,
-            "person_count": 1,
-            "phone_count": 1,
-            "email_count": 1,
-            "website_count": 1,
-            "whatsapp_count": 0,
-            "people": ["Jane Example"],
-            "phones": ["+1 202 555 0100"],
-            "emails": ["jane@example.test"],
-            "websites": ["https://example.test"],
-            "whatsapps": [],
-            "source_profiles": ["AGENT_CONTACT_LIST"],
-            "applicant_mentions": 0,
-            "agent_mentions": 5,
-            "filtered_total": 23,
-        }
-    ]])
+    cursor = _FakeCursor([
+        [
+            {
+                "entity_id": "e1",
+                "entity_name": "Example IP LLC",
+                "entity_type": "ORGANIZATION",
+                "country_code": "US",
+                "region_code": "CA",
+                "city": "Los Angeles",
+                "segment": "AGENT",
+                "is_agent": True,
+                "is_direct": False,
+                "person_count": 1,
+                "phone_count": 1,
+                "email_count": 1,
+                "website_count": 1,
+                "whatsapp_count": 0,
+                "applicant_mentions": 0,
+                "agent_mentions": 5,
+                "filtered_total": 23,
+            }
+        ],
+        [
+            {
+                "entity_id": "e1",
+                "people": ["Jane Example"],
+                "phones": ["+1 202 555 0100"],
+                "emails": ["jane@example.test"],
+                "websites": ["https://example.test"],
+                "whatsapps": [],
+                "source_profiles": ["AGENT_CONTACT_LIST"],
+            }
+        ],
+    ])
     monkeypatch.setattr(directory_api, "postgres_conn", lambda: _FakeConn(cursor))
 
     result = directory_api.contact_directory_list(
@@ -149,7 +189,11 @@ def test_directory_list_supports_country_segment_channel_search_and_paging(monke
     assert "is_agent" in sql
     assert "email_count > 0" in sql
     assert "entity_name ILIKE %s" in sql
-    assert params == ["US", "%Jane%", "%Jane%", "%Jane%", "%Jane%", "%Jane%", "%Jane%", 50, 10]
+    assert "EXISTS" in sql
+    assert "array_agg" not in sql
+    assert params == ["US", "%Jane%", "%Jane%", "%Jane%", "%Jane%", 50, 10]
+    assert len(cursor.executions) == 2
+    assert "array_agg" in cursor.executions[1][0]
     assert result["total"] == 23
     assert result["rows"][0]["segment"] == "AGENT"
     assert result["rows"][0]["people"] == ["Jane Example"]
