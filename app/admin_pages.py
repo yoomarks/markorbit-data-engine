@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -32,11 +33,20 @@ def _web_file(name: str) -> Path:
     raise HTTPException(status_code=404, detail=f"Admin asset not found: {name}")
 
 
-for route_path, file_name in _PAGE_FILES.items():
-    def _page(name: str = file_name):
-        return FileResponse(_web_file(name))
+def _page_handler(file_name: str) -> Callable[[], FileResponse]:
+    def page() -> FileResponse:
+        return FileResponse(_web_file(file_name))
 
-    router.add_api_route(route_path, _page, methods=["GET"], include_in_schema=False)
+    return page
+
+
+for route_path, file_name in _PAGE_FILES.items():
+    router.add_api_route(
+        route_path,
+        _page_handler(file_name),
+        methods=["GET"],
+        include_in_schema=False,
+    )
 
 
 @router.get("/admin/domains/{domain}", include_in_schema=False)
