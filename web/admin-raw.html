@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Raw 数据 · MarkOrbit</title><link rel="stylesheet" href="/admin/assets/admin.css"></head><body>
+<div id="page-content">
+  <section class="kpi-grid">
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">全部 Raw 文件</span><span class="kpi-icon">RW</span></div><div class="kpi-value" id="raw-total">—</div><div class="kpi-meta" id="raw-bytes">—</div></div>
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">当前筛选结果</span><span class="kpi-icon">FL</span></div><div class="kpi-value" id="raw-filtered">—</div><div class="kpi-meta">服务端分页视图</div></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><div class="card-title">Raw 数据库存</div><div class="card-note">只展示文件库存信息，不计算 SHA、不解析源内容。</div></div><div class="toolbar"><input id="q" class="field search" placeholder="搜索文件名 / 路径 / 分类"><select id="domain" class="field"><option value="">全部数据域</option><option value="CN">中国 CN</option><option value="US_APPLICATION">US Application</option><option value="US_ASSIGNMENT">Assignment</option><option value="US_TTAB">TTAB</option></select><select id="area" class="field"><option value="">全部区域</option><option>incoming</option><option>archive</option><option>quarantine</option></select><select id="page-size" class="field"><option>25</option><option selected>50</option><option>100</option></select><button id="apply" class="btn btn-primary">筛选</button></div></div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>数据域</th><th>区域</th><th>Raw 分类</th><th>文件</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="rows"></tbody></table></div><div id="pager"></div>
+  </section>
+</div>
+<script src="/admin/assets/admin.js"></script><script>
+MOAdmin.shell({active:'raw',title:'Raw 数据',subtitle:'源文件库存 · 独立筛选与分页'});
+const P=MOAdmin.query();['q','domain','area'].forEach(id=>document.getElementById(id).value=P.get(id)||'');document.getElementById('page-size').value=P.get('page_size')||'50';
+function apply(page=1){MOAdmin.setQuery({q:document.getElementById('q').value,domain:document.getElementById('domain').value,area:document.getElementById('area').value,page,page_size:document.getElementById('page-size').value},{replace:true});load()}
+document.getElementById('apply').onclick=()=>apply(1);document.getElementById('q').onkeydown=e=>{if(e.key==='Enter')apply(1)};document.getElementById('page-size').onchange=()=>apply(1);
+async function load(){const p=MOAdmin.query(),url=new URL('/api/admin/v2/raw',location.origin);['q','domain','area'].forEach(k=>{if(p.get(k))url.searchParams.set(k,p.get(k))});url.searchParams.set('page',p.get('page')||'1');url.searchParams.set('page_size',p.get('page_size')||'50');try{const d=await MOAdmin.api(url);document.getElementById('raw-total').textContent=MOAdmin.num(d.total_files_all);document.getElementById('raw-bytes').textContent=MOAdmin.bytes(d.total_bytes_all);document.getElementById('raw-filtered').textContent=MOAdmin.num(d.total);document.getElementById('rows').innerHTML=d.items.length?d.items.map(x=>`<tr><td><span class="badge blue">${MOAdmin.esc(x.domain)}</span></td><td>${MOAdmin.esc(x.area)}</td><td>${MOAdmin.esc(x.raw_class)}</td><td><div class="cell-title">${MOAdmin.esc(x.file_name)}</div><div class="cell-sub mono truncate">${MOAdmin.esc(x.relative_path)}</div></td><td class="nowrap">${MOAdmin.bytes(x.file_size)}</td><td class="nowrap">${MOAdmin.time(x.modified_at)}</td></tr>`).join(''):`<tr><td colspan="6">${MOAdmin.empty('没有符合筛选条件的 Raw 文件')}</td></tr>`;document.getElementById('pager').innerHTML=MOAdmin.pageButtons(d,pn=>apply(pn))}catch(e){MOAdmin.error('#rows',e)}}load();
+</script></body></html>
