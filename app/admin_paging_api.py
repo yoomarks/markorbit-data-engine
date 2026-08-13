@@ -17,7 +17,9 @@ from app.db import postgres_conn
 router = APIRouter(prefix="/api/admin/v2", tags=["admin-v2"])
 
 
-def _page_result(items: list[dict[str, Any]], *, page: int, page_size: int, total: int) -> dict[str, Any]:
+def _page_result(
+    items: list[dict[str, Any]], *, page: int, page_size: int, total: int
+) -> dict[str, Any]:
     pages = max(1, math.ceil(total / page_size)) if total else 0
     return {
         "items": items,
@@ -100,10 +102,14 @@ def admin_packages_page(
 
 _JOB_DOMAIN_SQL = """
 CASE
-    WHEN upper(job_type) LIKE '%ASSIGNMENT%' THEN 'US_ASSIGNMENT'
-    WHEN upper(job_type) LIKE '%TTAB%' THEN 'US_TTAB'
-    WHEN upper(job_type) LIKE 'US_%' OR upper(job_type) LIKE '%US_APPLICATION%' THEN 'US_APPLICATION'
-    WHEN upper(job_type) LIKE 'CN_%' OR upper(job_type) LIKE '%_CN_%' THEN 'CN'
+    WHEN position('ASSIGNMENT' in upper(job_type)) > 0 THEN 'US_ASSIGNMENT'
+    WHEN position('TTAB' in upper(job_type)) > 0 THEN 'US_TTAB'
+    WHEN left(upper(job_type), 3) = 'US_'
+         OR position('US_APPLICATION' in upper(job_type)) > 0
+    THEN 'US_APPLICATION'
+    WHEN left(upper(job_type), 3) = 'CN_'
+         OR position('_CN_' in upper(job_type)) > 0
+    THEN 'CN'
     ELSE 'SYSTEM'
 END
 """
@@ -128,7 +134,10 @@ def admin_jobs_page(
         params.append(status.strip().upper())
     if q.strip():
         pattern = f"%{q.strip()}%"
-        clauses.append("(job_type ILIKE %s OR trigger_type ILIKE %s OR COALESCE(error_message, '') ILIKE %s)")
+        clauses.append(
+            "(job_type ILIKE %s OR trigger_type ILIKE %s OR "
+            "COALESCE(error_message, '') ILIKE %s)"
+        )
         params.extend([pattern] * 3)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     base = f"""
@@ -158,7 +167,6 @@ def admin_jobs_page(
             items = [dict(row) for row in cur.fetchall()]
     for item in items:
         item["duration_seconds"] = float(item.get("duration_seconds") or 0)
-        # Keep a single Python authority for edge-case classification semantics.
         item["domain"] = _job_domain(str(item.get("job_type") or ""))
     return _page_result(items, page=page, page_size=page_size, total=total)
 
@@ -172,16 +180,16 @@ def admin_raw_page(
     page_size: int = Query(default=50, ge=10, le=200),
 ):
     page, page_size, offset = _normalize_page(page, page_size)
-    # The inventory scanner already walks the complete raw tree to compute totals;
-    # this read-only page simply requests its full in-memory file list, filters it,
-    # then returns a stable paginated slice.
     inventory = _raw_inventory(limit=1_000_000)
     normalized_domain = domain.strip().upper()
     normalized_area = area.strip().lower()
     query = q.strip().casefold()
     items = []
     for item in inventory["files"]:
-        if normalized_domain and str(item.get("domain") or "").upper() != normalized_domain:
+        if (
+            normalized_domain
+            and str(item.get("domain") or "").upper() != normalized_domain
+        ):
             continue
         if normalized_area and str(item.get("area") or "").lower() != normalized_area:
             continue
@@ -221,7 +229,10 @@ def admin_contact_tasks_page(
         params.append(status.strip().upper())
     if q.strip():
         pattern = f"%{q.strip()}%"
-        clauses.append("(file_name ILIKE %s OR detected_profile ILIKE %s OR COALESCE(error_message, '') ILIKE %s)")
+        clauses.append(
+            "(file_name ILIKE %s OR detected_profile ILIKE %s OR "
+            "COALESCE(error_message, '') ILIKE %s)"
+        )
         params.extend([pattern] * 3)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     count_sql = f"SELECT count(*) AS total FROM contact.ingest_task {where}"
