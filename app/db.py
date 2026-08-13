@@ -1,4 +1,6 @@
 from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator
 
 import clickhouse_connect
 import psycopg
@@ -10,6 +12,10 @@ from app.config import get_settings
 POSTGRES_SESSION_OPTIONS = (
     "-c lock_timeout=15s "
     "-c idle_in_transaction_session_timeout=60s"
+)
+_CLICKHOUSE_EXECUTION_OVERRIDES: ContextVar[dict[str, int | str]] = ContextVar(
+    "markorbit_clickhouse_execution_overrides",
+    default={},
 )
 
 
@@ -24,6 +30,35 @@ def postgres_conn():
         yield conn
 
 
+@contextmanager
+def clickhouse_execution_settings(
+    *,
+    join_algorithm: str = "",
+    grace_hash_join_initial_buckets: int = 0,
+    send_receive_timeout: int = 0,
+) -> Iterator[None]:
+    """Apply resource-only ClickHouse settings to the current execution context.
+
+    This lets CN ingestion use its proven disk-spilling JOIN profile regardless
+    of whether it was started by PowerShell, Admin, API retry, or the persistent
+    worker, without leaking that profile into US domains or unrelated requests.
+    """
+    overrides = dict(_CLICKHOUSE_EXECUTION_OVERRIDES.get())
+    if join_algorithm:
+        overrides["join_algorithm"] = join_algorithm
+    if grace_hash_join_initial_buckets > 0:
+        overrides["grace_hash_join_initial_buckets"] = int(
+            grace_hash_join_initial_buckets
+        )
+    if send_receive_timeout > 0:
+        overrides["send_receive_timeout"] = int(send_receive_timeout)
+    token = _CLICKHOUSE_EXECUTION_OVERRIDES.set(overrides)
+    try:
+        yield
+    finally:
+        _CLICKHOUSE_EXECUTION_OVERRIDES.reset(token)
+
+
 def clickhouse_client():
     settings = get_settings()
     query_settings = {
@@ -35,16 +70,28 @@ def clickhouse_client():
         ),
         "max_bytes_before_external_sort": settings.clickhouse_external_sort_bytes,
     }
+
+    overrides = _CLICKHOUSE_EXECUTION_OVERRIDES.get()
+    join_algorithm = str(
+        overrides.get("join_algorithm") or settings.clickhouse_join_algorithm
+    )
+    grace_buckets = int(
+        overrides.get("grace_hash_join_initial_buckets")
+        or settings.clickhouse_grace_hash_join_initial_buckets
+    )
+    send_receive_timeout = int(
+        overrides.get("send_receive_timeout")
+        or settings.clickhouse_send_receive_timeout
+    )
+
     # ClickHouse 24.8 does not support grace_hash for every JOIN
     # strictness/storage combination used by all Data Engine domains. Keep the
-    # normal client on ClickHouse's default algorithm and opt in only for the
-    # CN full-corpus replay worker through its container environment.
-    if settings.clickhouse_join_algorithm:
-        query_settings["join_algorithm"] = settings.clickhouse_join_algorithm
-        if settings.clickhouse_join_algorithm == "grace_hash":
-            query_settings["grace_hash_join_initial_buckets"] = (
-                settings.clickhouse_grace_hash_join_initial_buckets
-            )
+    # normal client on ClickHouse's default algorithm and opt in only through a
+    # scoped execution profile (CN ingestion) or an explicit environment value.
+    if join_algorithm:
+        query_settings["join_algorithm"] = join_algorithm
+        if join_algorithm == "grace_hash":
+            query_settings["grace_hash_join_initial_buckets"] = grace_buckets
 
     return clickhouse_connect.get_client(
         host=settings.clickhouse_host,
@@ -52,6 +99,6 @@ def clickhouse_client():
         username=settings.clickhouse_user,
         password=settings.clickhouse_password,
         database=settings.clickhouse_db,
-        send_receive_timeout=settings.clickhouse_send_receive_timeout,
+        send_receive_timeout=send_receive_timeout,
         settings=query_settings,
     )
