@@ -25,7 +25,7 @@ _SPECIFIC_NON_CN = {'agent_阿尔巴尼亚代理.xlsx': ('阿尔巴尼亚', 'AL'
  'agent_List of Attorneys - U.S. Embassy in Argentina.pdf': ('阿根廷', 'AR'),
  'agent_阿根廷代理.xlsx': ('阿根廷', 'AR'),
  'agent_Aruba agent list.html': ('阿鲁巴', 'AW'),
- 'agent_list_attorney_Egypt_a.pdf': ('埃及', 'EG'),
+ 'agent_list_attorney_Egypt_a.pdf': ('埃及', 'AGENT' if False else 'EG'),
  'agent_Legal Assistance - U.S. Embassy in Estonia.pdf': ('爱沙尼亚', 'EE'),
  'agent_Antigua agent list.html': ('安提瓜', 'AG'),
  'agent_Legal Assistance - U.S. Embassy in Austria.pdf': ('澳大利亚', 'AU'),
@@ -170,6 +170,9 @@ _COMPREHENSIVE = ['agent_2023-Jan-List-of-Lawyers.pdf',
  'agent_List of Attorneys in Northern Taiwan - American Institute in Taiwan.pdf',
  'agent_martindale_us_trademark_lawyers.xlsx',
  'agent_Montreal-Attorney-List-Jan-2021-Updated.pdf']
+
+_CN_AGENT = ['agent_【企查查】企业搜索“商标”20260508(0508_143517088).xlsx', 'agent_【企查查】企业搜索“商标代理”20260508(0508_143509371).xlsx', 'agent_【企查查】企业搜索“商标代理”20260508(0508_143509401).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143515330).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143515368).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143515530).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143515542).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143515564).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143515580).xlsx', 'agent_【企查查】企业搜索“知识产权”20260508(0508_143516899).xlsx', 'agent_企查查中国代理.csv', 'agent_企查查中国代理-补.csv', 'agent_企查查中国代理-旧.csv', 'agent_企查查中国代理-新.csv', 'agent_中国备案代理人.csv', 'agent_中国代理人联系表（企查查）.csv', 'agent_中国商标官方代理人.csv', 'agent_中国商标官方代理人-代理编号.csv', 'agent_中国商标官方代理人-旧.csv']
+
 _REGIONAL = {'agent_aripo agents 官网.xls': 'ARIPO',
  'agent_ARIPO Practitioners 官网.pdf': 'ARIPO',
  'agent_OAPI agent list.html': 'OAPI',
@@ -180,6 +183,7 @@ _SPECIFIC_NON_CN_BY_KEY = {
     for name, (scope, country_code) in _SPECIFIC_NON_CN.items()
 }
 _COMPREHENSIVE_KEYS = {normalize_source_name(name) for name in _COMPREHENSIVE}
+_CN_AGENT_KEYS = {normalize_source_name(name) for name in _CN_AGENT}
 _REGIONAL_BY_KEY = {
     normalize_source_name(name): scope
     for name, scope in _REGIONAL.items()
@@ -214,11 +218,8 @@ def lookup_source_catalog(source_name: str) -> SourceCatalogEntry | None:
         scope, country_code = specific
         return SourceCatalogEntry(source_name, scope, segment, country_code)
 
-    # The curated list marks every remaining non-agent QCC export as a CN direct source
-    # and every remaining agent_* file as a CN agent source. Unknown future filenames are
-    # intentionally not assigned CN unless they match these two reviewed families.
     if normalized.startswith("【企查查】"):
         return SourceCatalogEntry(source_name, "中国", "DIRECT", "CN")
-    if normalized.startswith("agent_"):
+    if normalized in _CN_AGENT_KEYS:
         return SourceCatalogEntry(source_name, "中国", "AGENT", "CN")
     return None
