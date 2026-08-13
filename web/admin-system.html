@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>系统状态 · MarkOrbit</title><link rel="stylesheet" href="/admin/assets/admin.css"></head><body>
+<div id="page-content">
+  <section class="kpi-grid">
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">API</span><span class="kpi-icon">API</span></div><div class="kpi-value" id="k-api">—</div><div class="kpi-meta">FastAPI runtime</div></div>
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">PostgreSQL</span><span class="kpi-icon">PG</span></div><div class="kpi-value" id="k-pg">—</div><div class="kpi-meta">Control / Entity / Contacts</div></div>
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">ClickHouse</span><span class="kpi-icon">CH</span></div><div class="kpi-value" id="k-ch">—</div><div class="kpi-meta">Trademark facts</div></div>
+    <div class="kpi"><div class="kpi-top"><span class="kpi-label">Engine Version</span><span class="kpi-icon">V</span></div><div class="kpi-value" id="k-version">—</div><div class="kpi-meta">Root release marker</div></div>
+  </section>
+  <section class="grid-2">
+    <div class="card"><div class="card-head"><div><div class="card-title">组件版本</div><div class="card-note">独立组件版本，不从 root VERSION 推断。</div></div><button id="refresh" class="btn btn-soft">刷新</button></div><div class="table-wrap"><table class="data-table"><thead><tr><th>组件</th><th>版本 / Contract</th></tr></thead><tbody id="components"></tbody></table></div></div>
+    <div class="card"><div class="card-head"><div><div class="card-title">运行说明</div><div class="card-note">Admin V1 只提供既有安全边界内的可视化与操作。</div></div></div><div class="card-pad"><div class="notice-box">US mutation 顺序、CN replay checkpoint、Storage V2 gate 和既有 guarded API 均未改变。</div><div class="quick-list"><div class="quick-item"><div class="quick-left"><div class="quick-title">Admin UI</div><div class="quick-sub">Blue / White Admin V1</div></div><span class="badge blue">READ + GUARDED</span></div><div class="quick-item"><div class="quick-left"><div class="quick-title">Contacts</div><div class="quick-sub">总览 / 联系人库 / 导入任务拆页</div></div><span class="badge cyan">PAGED</span></div><div class="quick-item"><div class="quick-left"><div class="quick-title">Raw / Packages / Jobs</div><div class="quick-sub">统一筛选与分页</div></div><span class="badge green">V2 UI</span></div></div></div></div>
+  </section>
+</div>
+<script src="/admin/assets/admin.js"></script><script>
+MOAdmin.shell({active:'system',title:'系统状态',subtitle:'Health · component versions · admin contract',crumb:'系统'});
+function flatten(obj,prefix=''){const rows=[];for(const [k,v] of Object.entries(obj||{})){const key=prefix?prefix+' / '+k:k;if(v&&typeof v==='object'&&!Array.isArray(v))rows.push(...flatten(v,key));else rows.push([key,v])}return rows}
+async function load(){try{const [h,c]=await Promise.all([MOAdmin.api('/api/health'),MOAdmin.api('/api/admin/v2/system/components')]);document.getElementById('k-api').textContent=h.api||'—';document.getElementById('k-pg').textContent=String(h.postgres||'—').startsWith('ok')?'OK':'ERROR';document.getElementById('k-ch').textContent=String(h.clickhouse||'—').startsWith('ok')?'OK':'ERROR';document.getElementById('k-version').textContent=h.version||c.engine_version||'—';const rows=flatten(c.components||c).filter(([k])=>!k.endsWith('engine_version'));document.getElementById('components').innerHTML=rows.map(([k,v])=>`<tr><td>${MOAdmin.esc(k)}</td><td class="mono">${MOAdmin.esc(Array.isArray(v)?v.join(', '):v)}</td></tr>`).join('')}catch(e){MOAdmin.error('#components',e)}}document.getElementById('refresh').onclick=load;load();
+</script></body></html>

@@ -87,6 +87,9 @@ def test_contact_admin_routes_and_page_are_registered() -> None:
 
     routes = {route.path for route in main.app.routes}
     assert "/contacts" in routes
+    assert "/admin/contacts" in routes
+    assert "/admin/contacts/directory" in routes
+    assert "/admin/contacts/imports" in routes
     assert "/api/admin/contacts/summary" in routes
     assert "/api/admin/contacts/tasks" in routes
     assert "/api/admin/contacts/tasks/{task_id}" in routes
@@ -104,7 +107,7 @@ def test_contact_admin_routes_and_page_are_registered() -> None:
     assert "/api/admin/contacts/tasks/" in markup
 
     main_markup = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    assert 'href="/contacts"' in main_markup
+    assert 'href="/admin/contacts"' in main_markup
     assert "Contacts 联系人" in main_markup
 
 
