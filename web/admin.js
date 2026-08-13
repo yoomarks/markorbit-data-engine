@@ -21,7 +21,7 @@ function num(v){return Number(v||0).toLocaleString()}
 function bytes(v){v=Number(v||0);if(!v)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0;while(v>=1024&&i<u.length-1){v/=1024;i++}return`${v.toFixed(i?1:0)} ${u[i]}`}
 function time(v){if(!v)return'—';try{return new Date(v).toLocaleString()}catch{return String(v)}}
 function duration(v){const s=Math.max(0,Number(v||0));if(s<60)return`${s.toFixed(1)}s`;if(s<3600)return`${Math.floor(s/60)}m ${Math.floor(s%60)}s`;return`${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`}
-function status(v){const x=String(v||'UNKNOWN').toUpperCase();const c={SUCCESS:'green',READY:'amber',PROCESSING:'amber',RUNNING:'amber',FAILED:'red',INVALID:'red',MISSING_FILE:'red',INTERRUPTED:'amber',REGISTERED:'blue'}[x]||'';return`<span class="badge ${c}">${esc(x)}</span>`}
+function status(v){const x=String(v||'UNKNOWN').toUpperCase();const c={SUCCESS:'green',QUEUED:'blue',READY:'amber',PROCESSING:'amber',RUNNING:'amber',FAILED:'red',BLOCKED:'red',INVALID:'red',MISSING_FILE:'red',INTERRUPTED:'amber',REGISTERED:'blue'}[x]||'';return`<span class="badge ${c}">${esc(x)}</span>`}
 function segment(v){const x=String(v||'UNKNOWN').toUpperCase();const map={AGENT:['代理','blue'],DIRECT:['直客','cyan'],BOTH:['混合','green'],UNKNOWN:['未分类','']};const [label,c]=map[x]||map.UNKNOWN;return`<span class="badge ${c}">${label}</span>`}
 function query(){return new URLSearchParams(location.search)}
 function setQuery(values,{replace=false}={}){const p=query();Object.entries(values).forEach(([k,v])=>{if(v===undefined||v===null||v==='')p.delete(k);else p.set(k,String(v))});const url=`${location.pathname}${p.toString()?`?${p}`:''}`;(replace?history.replaceState:history.pushState).call(history,{},'',url)}
