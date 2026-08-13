@@ -13,6 +13,7 @@ from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
 )
+from app.cn.resource_client import cn_resource_client
 from app.cn.storage_v2_goods import GoodsObservationDeltaClient
 from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
 
@@ -134,15 +135,32 @@ def ingest_cn_package(
     makes recovery behavior identical for every source role.
     """
     with _LOCK:
-        goods.ensure_m16_goods_schema()
-        goods.ensure_m16_goods_replay_boundary()
-        party.ensure_party_publish_schema()
+        # The Admin/worker path already opts into grace_hash for JOINs. Apply the
+        # complementary low-parallelism/early-spill aggregation profile at the
+        # client-operation layer so staging, M1.6 goods/party materialization,
+        # legacy case aggregation, cleanup and metrics all inherit it. This is
+        # scoped to this serialized CN package and restored before returning.
+        original_legacy_clickhouse_client = legacy.clickhouse_client
+        original_goods_clickhouse_client = goods.clickhouse_client
+        original_party_clickhouse_client = party.clickhouse_client
+        legacy.clickhouse_client = lambda: cn_resource_client(
+            original_legacy_clickhouse_client
+        )
+        goods.clickhouse_client = lambda: cn_resource_client(
+            original_goods_clickhouse_client
+        )
+        party.clickhouse_client = lambda: cn_resource_client(
+            original_party_clickhouse_client
+        )
 
         original_publish = legacy._publish
         original_cleanup_partial = legacy._cleanup_partial_outputs
         legacy._publish = _publish_m16
         legacy._cleanup_partial_outputs = _cleanup_partial_outputs_m16
         try:
+            goods.ensure_m16_goods_schema()
+            goods.ensure_m16_goods_replay_boundary()
+            party.ensure_party_publish_schema()
             return legacy.ingest_cn_package(
                 package_id,
                 path,
@@ -153,3 +171,6 @@ def ingest_cn_package(
         finally:
             legacy._publish = original_publish
             legacy._cleanup_partial_outputs = original_cleanup_partial
+            legacy.clickhouse_client = original_legacy_clickhouse_client
+            goods.clickhouse_client = original_goods_clickhouse_client
+            party.clickhouse_client = original_party_clickhouse_client
