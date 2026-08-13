@@ -5,26 +5,27 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MarkOrbit Contacts Control Center</title>
   <style>
-    :root{font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;color:#172033;background:#f3f5f9;--line:#e3e7ef;--muted:#667085;--green:#067647;--red:#b42318;--amber:#b54708;--blue:#175cd3}
-    *{box-sizing:border-box}body{margin:0;background:#f3f5f9}button,select{font:inherit}
+    :root{font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;color:#172033;background:#f3f5f9;--line:#e3e7ef;--muted:#667085;--green:#067647;--red:#b42318;--amber:#b54708;--blue:#175cd3;--purple:#6941c6}
+    *{box-sizing:border-box}body{margin:0;background:#f3f5f9}button,select,input{font:inherit}
     header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:16px 28px;display:flex;justify-content:space-between;align-items:center;gap:16px}
     h1{margin:0;font-size:21px}.subtitle{color:var(--muted);font-size:12px;margin-top:3px}.header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    main{max-width:1500px;margin:20px auto;padding:0 20px 40px}.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;overflow:auto}.kpi-label{color:var(--muted);font-size:12px}.kpi-value{font-size:24px;font-weight:700;margin-top:7px}.tiny{font-size:11px;color:var(--muted)}
+    main{max-width:1600px;margin:20px auto;padding:0 20px 40px}.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.contact-kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;overflow:auto}.kpi-label{color:var(--muted);font-size:12px}.kpi-value{font-size:24px;font-weight:700;margin-top:7px}.contact-kpis .kpi-value{font-size:22px}.tiny{font-size:11px;color:var(--muted)}
     .section{margin-top:14px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h2{font-size:16px;margin:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-    select{border:1px solid #d0d5dd;border-radius:8px;padding:9px 10px;background:#fff;color:#172033}.btn{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;background:#172033;color:#fff;text-decoration:none;display:inline-block}.btn.secondary{background:#667085}.btn.light{background:#eef2f7;color:#344054}.btn:disabled{opacity:.45;cursor:not-allowed}
-    table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:9px 7px;vertical-align:top}th{color:#475467;font-weight:600;background:#fafbfc;position:sticky;top:0}tbody tr:hover{background:#fafcff}.nowrap{white-space:nowrap}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.muted{color:var(--muted)}
+    select,input{border:1px solid #d0d5dd;border-radius:8px;padding:9px 10px;background:#fff;color:#172033}input.search{min-width:260px}.btn{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;background:#172033;color:#fff;text-decoration:none;display:inline-block}.btn.secondary{background:#667085}.btn.light{background:#eef2f7;color:#344054}.btn:disabled{opacity:.45;cursor:not-allowed}
+    table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;border-bottom:1px solid #edf0f5;padding:9px 7px;vertical-align:top}th{color:#475467;font-weight:600;background:#fafbfc;position:sticky;top:0;z-index:1}tbody tr:hover{background:#fafcff}.nowrap{white-space:nowrap}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px}.muted{color:var(--muted)}
     .status{font-weight:700}.status-SUCCESS{color:var(--green)}.status-FAILED,.status-INVALID,.status-MISSING_FILE{color:var(--red)}.status-PROCESSING{color:var(--amber)}.status-READY{color:var(--blue)}
     .split{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,.8fr);gap:12px}.path{padding:10px 12px;border:1px dashed #d0d5dd;border-radius:9px;background:#fafbfc;word-break:break-all}.profile{display:inline-block;background:#eef4ff;color:#3538cd;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:700}
     .metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric{border:1px solid var(--line);border-radius:9px;padding:10px;background:#fafbfc}.metric b{display:block;margin-top:4px;font-size:17px}.detail-empty{color:var(--muted);padding:50px 10px;text-align:center}.detail-block{margin-top:14px}.detail-block h3{font-size:13px;margin:0 0 8px}.error-box{color:var(--red);background:#fff1f0;border:1px solid #fecdca;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-word}pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#101828;color:#eaecf0;border-radius:10px;padding:12px;max-height:430px;overflow:auto;font-size:11px}
     .notice{margin-top:12px;padding:11px 13px;border-radius:9px;background:#fffaeb;border:1px solid #fedf89;color:#93370d;font-size:12px}.okbox{margin-top:12px;padding:11px 13px;border-radius:9px;background:#ecfdf3;border:1px solid #abefc6;color:#067647;font-size:12px}
-    @media(max-width:1100px){.kpis{grid-template-columns:repeat(3,1fr)}.split{grid-template-columns:1fr}}@media(max-width:700px){header{padding:14px 16px;align-items:flex-start;flex-direction:column}.kpis,.metric-grid{grid-template-columns:1fr}main{padding:0 10px}}
+    .directory-grid{display:grid;grid-template-columns:minmax(420px,.72fr) minmax(0,1.28fr);gap:12px}.table-scroll{max-height:560px;overflow:auto}.directory-scroll{max-height:720px;overflow:auto}.clickable{cursor:pointer}.segment{display:inline-block;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:700;white-space:nowrap}.segment-AGENT{background:#eef4ff;color:#3538cd}.segment-DIRECT{background:#ecfdf3;color:#067647}.segment-BOTH{background:#f4ebff;color:#6941c6}.segment-UNKNOWN{background:#f2f4f7;color:#475467}.channel-list{min-width:150px;max-width:300px;word-break:break-word}.channel-item{margin-bottom:3px}.entity-name{font-weight:700;min-width:150px}.country-link{border:0;background:none;padding:0;color:var(--blue);cursor:pointer;font:inherit;text-align:left}.pager{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px}.legend{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.divider-title{font-size:12px;color:#344054;font-weight:700;margin-bottom:8px}.subtle{background:#fafbfc;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+    @media(max-width:1250px){.contact-kpis{grid-template-columns:repeat(4,1fr)}.directory-grid{grid-template-columns:1fr}}@media(max-width:1100px){.kpis{grid-template-columns:repeat(3,1fr)}.split{grid-template-columns:1fr}}@media(max-width:700px){header{padding:14px 16px;align-items:flex-start;flex-direction:column}.kpis,.contact-kpis,.metric-grid{grid-template-columns:1fr}main{padding:0 10px}input.search{min-width:100%;width:100%}}
   </style>
 </head>
 <body>
 <header>
   <div>
     <h1>Contacts</h1>
-    <div class="subtitle">Universal Contact Ingestion · 自动发现 / 识别 / 审核 / 导入</div>
+    <div class="subtitle">联系人资产 · 国家分布 · 代理 / 直客分类 · 电话 / 邮箱 / 网站 · Ingest Control</div>
   </div>
   <div class="header-actions">
     <a class="btn light" href="/">返回 Data Engine</a>
@@ -43,9 +44,82 @@
   </section>
 
   <section class="card section">
+    <div class="section-head">
+      <div><h2>联系人数据总览</h2><div class="tiny">以下统计只针对已进入 Contacts 的主体，不是整个商标主体库。</div></div>
+      <button class="btn light" onclick="loadDirectoryAnalytics()">刷新统计</button>
+    </div>
+    <div class="contact-kpis">
+      <div class="subtle"><div class="kpi-label">联系人主体</div><div class="kpi-value" id="d-entities">—</div></div>
+      <div class="subtle"><div class="kpi-label">代理人 / 机构</div><div class="kpi-value" id="d-agents">—</div><div class="tiny">含同时为直客的主体</div></div>
+      <div class="subtle"><div class="kpi-label">直客主体</div><div class="kpi-value" id="d-direct">—</div><div class="tiny">含同时为代理的主体</div></div>
+      <div class="subtle"><div class="kpi-label">国家 / 地区</div><div class="kpi-value" id="d-countries">—</div></div>
+      <div class="subtle"><div class="kpi-label">电话</div><div class="kpi-value" id="d-phones">—</div></div>
+      <div class="subtle"><div class="kpi-label">邮箱</div><div class="kpi-value" id="d-emails">—</div></div>
+      <div class="subtle"><div class="kpi-label">网站</div><div class="kpi-value" id="d-websites">—</div></div>
+    </div>
+    <div class="notice" id="classification-note">代理 / 直客分类基于已有来源与商标角色证据；证据不足的主体会保留为“未分类”，不会强行猜测。</div>
+  </section>
+
+  <section class="section directory-grid">
+    <div class="card">
+      <div class="section-head">
+        <div><h2>各国联系人分布</h2><div class="tiny">点击国家可直接筛选右侧明细。</div></div>
+        <span class="tiny" id="country-count">—</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>国家 / 地区</th><th>主体</th><th>代理</th><th>直客</th><th>混合</th><th>联系人</th><th>电话</th><th>邮箱</th><th>网站</th></tr></thead>
+          <tbody id="country-table"><tr><td colspan="9" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-head">
+        <div><h2>联系人明细</h2><div class="tiny" id="directory-result-count">—</div></div>
+        <button class="btn light" onclick="resetDirectoryFilters()">清除筛选</button>
+      </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <input class="search" id="directory-q" placeholder="搜索公司 / 人名 / 电话 / 邮箱 / 网站" onkeydown="if(event.key==='Enter')loadDirectory(true)">
+        <select id="directory-country" onchange="loadDirectory(true)"><option value="">全部国家</option></select>
+        <select id="directory-segment" onchange="loadDirectory(true)">
+          <option value="">全部类型</option>
+          <option value="AGENT">代理（含混合）</option>
+          <option value="DIRECT">直客（含混合）</option>
+          <option value="BOTH">同时为代理和直客</option>
+          <option value="UNKNOWN">未分类</option>
+        </select>
+        <select id="directory-channel" onchange="loadDirectory(true)">
+          <option value="">全部联系方式</option>
+          <option value="PHONE">有电话</option>
+          <option value="EMAIL">有邮箱</option>
+          <option value="WEBSITE">有网站</option>
+          <option value="WHATSAPP">有 WhatsApp</option>
+        </select>
+        <select id="directory-limit" onchange="loadDirectory(true)">
+          <option value="50">50 / 页</option><option value="100" selected>100 / 页</option><option value="200">200 / 页</option>
+        </select>
+        <button class="btn" onclick="loadDirectory(true)">搜索</button>
+      </div>
+      <div class="legend tiny" style="margin-bottom:8px"><span class="segment segment-AGENT">代理</span><span class="segment segment-DIRECT">直客</span><span class="segment segment-BOTH">混合</span><span class="segment segment-UNKNOWN">未分类</span><span>电话统计包含 PHONE + MOBILE。</span></div>
+      <div class="directory-scroll">
+        <table>
+          <thead><tr><th>国家</th><th>类型</th><th>主体</th><th>联系人</th><th>电话</th><th>邮箱</th><th>网站</th><th>来源 / 商标角色</th></tr></thead>
+          <tbody id="directory-table"><tr><td colspan="8" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button class="btn light" id="directory-prev" onclick="directoryPage(-1)">上一页</button>
+        <span class="tiny" id="directory-page">—</span>
+        <button class="btn light" id="directory-next" onclick="directoryPage(1)">下一页</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card section">
     <div class="section-head"><h2>Incoming 监听目录</h2><span class="tiny" id="scan-interval">—</span></div>
     <div class="path mono" id="incoming-path">—</div>
-    <div class="tiny" style="margin-top:8px">支持 XLSX / CSV / TSV / JSON / JSONL / NDJSON / ZIP。后台只自动发现并生成任务，不会自动导入联系人数据。</div>
+    <div class="tiny" style="margin-top:8px">支持 XLSX / XLS / CSV / TSV / JSON / JOSN / JSONL / NDJSON / TXT / HTML / PDF / DOCX / DOC / ZIP。后台只自动发现并生成任务，不会自动导入联系人数据。</div>
     <div id="scan-result"></div>
   </section>
 
@@ -79,6 +153,11 @@
 <script>
 let selectedTaskId=null;
 let readyTaskCount=0;
+let directoryOffset=0;
+let directoryTotal=0;
+let lastAnalytics=null;
+let regionNames=null;
+try{regionNames=new Intl.DisplayNames(['zh-CN'],{type:'region'})}catch{}
 async function api(url,options){const r=await fetch(url,options);const text=await r.text();let body;try{body=JSON.parse(text)}catch{body=text}if(!r.ok)throw new Error(typeof body==="string"?body:JSON.stringify(body));return body}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
 function fmtNum(v){return Number(v||0).toLocaleString()}
@@ -86,6 +165,9 @@ function fmtBytes(v){v=Number(v||0);if(!v)return"0 B";const u=["B","KB","MB","GB
 function fmtTime(v){if(!v)return"—";try{return new Date(v).toLocaleString()}catch{return String(v)}}
 function statusHtml(v){const x=esc(v||"UNKNOWN");return`<span class="status status-${x}">${x}</span>`}
 function summaryMetric(plan,key){return Number((plan||{})[key]||0)}
+function countryName(code){if(!code)return'国家未识别';try{const n=regionNames?regionNames.of(code):code;return n&&n!==code?`${n} (${code})`:code}catch{return code}}
+function segmentHtml(v){const labels={AGENT:'代理',DIRECT:'直客',BOTH:'混合',UNKNOWN:'未分类'};const x=labels[v]||v||'未分类';return`<span class="segment segment-${esc(v||'UNKNOWN')}">${esc(x)}</span>`}
+function channelHtml(values){const xs=Array.isArray(values)?values:[];return xs.length?`<div class="channel-list">${xs.map(v=>`<div class="channel-item">${esc(v)}</div>`).join('')}</div>`:'—'}
 
 async function loadSummary(){
   const d=await api('/api/admin/contacts/summary');
@@ -105,6 +187,50 @@ async function loadSummary(){
   batch.textContent=`批量执行导入 (${fmtNum(readyTaskCount)})`;
   batch.disabled=readyTaskCount===0;
 }
+
+async function loadDirectoryAnalytics(){
+  const d=await api('/api/admin/contacts/directory/analytics');lastAnalytics=d;
+  const t=d.totals||{};
+  document.getElementById('d-entities').textContent=fmtNum(t.entities);
+  document.getElementById('d-agents').textContent=fmtNum(t.agents);
+  document.getElementById('d-direct').textContent=fmtNum(t.direct_clients);
+  document.getElementById('d-countries').textContent=fmtNum(t.countries);
+  document.getElementById('d-phones').textContent=fmtNum(t.phones);
+  document.getElementById('d-emails').textContent=fmtNum(t.emails);
+  document.getElementById('d-websites').textContent=fmtNum(t.websites);
+  document.getElementById('classification-note').textContent=`分类依据：代理 = ${d.classification?.agent||'已有代理证据'}；直客 = ${d.classification?.direct_client||'已有申请人/权利人证据'}。同时满足会标为“混合”；证据不足保持“未分类”。`;
+  const countries=d.countries||[];
+  document.getElementById('country-count').textContent=`${fmtNum(countries.length)} 个分组`;
+  document.getElementById('country-table').innerHTML=countries.length?countries.map(x=>`<tr class="clickable" onclick="filterCountry('${esc(x.country_code||'__UNKNOWN__')}')"><td><button class="country-link">${esc(countryName(x.country_code))}</button></td><td>${fmtNum(x.entities)}</td><td>${fmtNum(x.agents)}</td><td>${fmtNum(x.direct_clients)}</td><td>${fmtNum(x.both)}</td><td>${fmtNum(x.people)}</td><td>${fmtNum(x.phones)}</td><td>${fmtNum(x.emails)}</td><td>${fmtNum(x.websites)}</td></tr>`).join(''):'<tr><td colspan="9" class="muted">暂无已导入联系人数据</td></tr>';
+  const select=document.getElementById('directory-country');const current=select.value;
+  select.innerHTML='<option value="">全部国家</option>'+countries.map(x=>`<option value="${esc(x.country_code||'__UNKNOWN__')}">${esc(countryName(x.country_code))} · ${fmtNum(x.entities)}</option>`).join('');
+  if([...select.options].some(o=>o.value===current))select.value=current;
+}
+
+function filterCountry(code){document.getElementById('directory-country').value=code;loadDirectory(true)}
+function resetDirectoryFilters(){document.getElementById('directory-q').value='';document.getElementById('directory-country').value='';document.getElementById('directory-segment').value='';document.getElementById('directory-channel').value='';loadDirectory(true)}
+
+async function loadDirectory(reset=false){
+  if(reset)directoryOffset=0;
+  const limit=Number(document.getElementById('directory-limit').value||100);
+  const p=new URLSearchParams({limit:String(limit),offset:String(directoryOffset)});
+  const q=document.getElementById('directory-q').value.trim();const country=document.getElementById('directory-country').value;const segment=document.getElementById('directory-segment').value;const channel=document.getElementById('directory-channel').value;
+  if(q)p.set('q',q);if(country)p.set('country',country);if(segment)p.set('segment',segment);if(channel)p.set('channel',channel);
+  const d=await api('/api/admin/contacts/directory?'+p.toString());directoryTotal=Number(d.total||0);
+  const rows=d.rows||[];const body=document.getElementById('directory-table');
+  document.getElementById('directory-result-count').textContent=`筛选结果 ${fmtNum(directoryTotal)} 个主体`;
+  if(!rows.length){body.innerHTML='<tr><td colspan="8" class="muted">没有符合条件的联系人。</td></tr>'}else body.innerHTML=rows.map(x=>{
+    const source=(x.source_profiles||[]).map(v=>`<span class="profile">${esc(v)}</span>`).join(' ')||'<span class="muted">—</span>';
+    const roles=`<div class="tiny" style="margin-top:5px">申请人/权利人记录 ${fmtNum(x.applicant_mentions)} · 代理记录 ${fmtNum(x.agent_mentions)}</div>`;
+    const place=[x.region_code,x.city].filter(Boolean).join(' / ');
+    return `<tr><td class="nowrap"><b>${esc(countryName(x.country_code))}</b>${place?`<div class="tiny">${esc(place)}</div>`:''}</td><td>${segmentHtml(x.segment)}</td><td><div class="entity-name">${esc(x.entity_name)}</div><div class="tiny">${esc(x.entity_type||'')}</div></td><td>${channelHtml(x.people)}</td><td>${channelHtml(x.phones)}<div class="tiny">${fmtNum(x.phone_count)} 条</div></td><td>${channelHtml(x.emails)}<div class="tiny">${fmtNum(x.email_count)} 条</div></td><td>${channelHtml(x.websites)}<div class="tiny">${fmtNum(x.website_count)} 条</div></td><td>${source}${roles}</td></tr>`
+  }).join('');
+  const start=directoryTotal?directoryOffset+1:0;const end=Math.min(directoryOffset+limit,directoryTotal);const page=Math.floor(directoryOffset/limit)+1;const pages=Math.max(1,Math.ceil(directoryTotal/limit));
+  document.getElementById('directory-page').textContent=`${fmtNum(start)}–${fmtNum(end)} / ${fmtNum(directoryTotal)} · 第 ${page}/${pages} 页`;
+  document.getElementById('directory-prev').disabled=directoryOffset===0;
+  document.getElementById('directory-next').disabled=directoryOffset+limit>=directoryTotal;
+}
+function directoryPage(delta){const limit=Number(document.getElementById('directory-limit').value||100);directoryOffset=Math.max(0,directoryOffset+delta*limit);loadDirectory(false)}
 
 async function loadTasks(){
   const status=document.getElementById('status-filter').value;
@@ -164,10 +290,10 @@ async function runTask(id,event){
 }
 
 async function refreshAll(){
-  try{await Promise.all([loadSummary(),loadTasks()]);if(selectedTaskId)await showTask(selectedTaskId)}catch(e){document.getElementById('scan-result').innerHTML=`<div class="error-box">后台连接失败：${esc(e.message)}</div>`}
+  try{await Promise.all([loadSummary(),loadDirectoryAnalytics(),loadDirectory(false),loadTasks()]);if(selectedTaskId)await showTask(selectedTaskId)}catch(e){document.getElementById('scan-result').innerHTML=`<div class="error-box">后台连接失败：${esc(e.message)}</div>`}
 }
 refreshAll();
-setInterval(refreshAll,15000);
+setInterval(async()=>{try{await Promise.all([loadSummary(),loadTasks()])}catch{}},15000);
 </script>
 </body>
 </html>
