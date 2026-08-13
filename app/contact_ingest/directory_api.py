@@ -38,8 +38,10 @@ mention_stats AS (
         count(*) FILTER (WHERE role IN ('OWNER', 'CO_OWNER', 'APPLICANT')) AS applicant_mentions,
         count(*) FILTER (WHERE role IN ('AGENT', 'ATTORNEY', 'CORRESPONDENT')) AS agent_mentions,
         CASE
-            WHEN count(DISTINCT country_code) FILTER (WHERE country_code IS NOT NULL) = 1
-            THEN max(country_code)
+            WHEN count(DISTINCT jurisdiction)
+                 FILTER (WHERE jurisdiction ~ '^[A-Z]{2}$') = 1
+            THEN max(jurisdiction)
+                 FILTER (WHERE jurisdiction ~ '^[A-Z]{2}$')
             ELSE NULL
         END AS single_mention_country
     FROM entity.entity_mention
@@ -250,7 +252,7 @@ def contact_directory_list(
 
     if query:
         clauses.append(
-            "(" 
+            "("
             "entity_name ILIKE %s OR COALESCE(city, '') ILIKE %s OR "
             "array_to_string(people, ' ') ILIKE %s OR "
             "array_to_string(phones, ' ') ILIKE %s OR "
@@ -317,7 +319,14 @@ LIMIT %s OFFSET %s
             "agent_mentions",
         ):
             row[key] = int(row.get(key) or 0)
-        for key in ("people", "phones", "emails", "websites", "whatsapps", "source_profiles"):
+        for key in (
+            "people",
+            "phones",
+            "emails",
+            "websites",
+            "whatsapps",
+            "source_profiles",
+        ):
             row[key] = list(row.get(key) or [])
         row["country_code"] = str(row.get("country_code") or "")
 
