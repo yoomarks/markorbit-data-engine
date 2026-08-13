@@ -7,8 +7,9 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app.contact_ingest.directory_api import (
-    contact_directory_analytics,
+from app.contact_ingest.directory_api import contact_directory_analytics
+from app.contact_ingest.directory_runtime import (
+    contact_directory_countries,
     contact_directory_list,
 )
 from app.contact_ingest.task_queue import (
@@ -58,6 +59,11 @@ def admin_contact_summary():
 @router.get("/api/admin/contacts/directory/analytics")
 def admin_contact_directory_analytics():
     return contact_directory_analytics()
+
+
+@router.get("/api/admin/contacts/directory/countries")
+def admin_contact_directory_countries():
+    return contact_directory_countries()
 
 
 @router.get("/api/admin/contacts/directory")
