@@ -6,6 +6,8 @@ def test_clickhouse_client_has_large_package_spill_controls():
     db = Path("app/db.py").read_text(encoding="utf-8")
     jobs = Path("app/jobs.py").read_text(encoding="utf-8")
     replay = Path("scripts/replay-cn-full.ps1").read_text(encoding="utf-8")
+    cn_resource = Path("app/cn/resource_client.py").read_text(encoding="utf-8")
+    m16 = Path("app/cn/ingest_m16.py").read_text(encoding="utf-8")
 
     assert "clickhouse_max_threads: int = 4" in config
     assert "clickhouse_external_group_by_bytes: int = 536_870_912" in config
@@ -35,3 +37,16 @@ def test_clickhouse_client_has_large_package_spill_controls():
     assert "CN_GRACE_HASH_JOIN_INITIAL_BUCKETS = 32" in jobs
     assert "CN_CLICKHOUSE_SEND_RECEIVE_TIMEOUT = 3600" in jobs
     assert "with clickhouse_execution_settings(" in jobs
+
+    # CN aggregation uses a stricter per-operation profile. This complements
+    # grace_hash: AggregatingTransform can spill early and uses one processing
+    # lane without changing the repository-wide defaults used by other domains.
+    assert "CN_MAX_THREADS = 1" in cn_resource
+    assert "CN_EXTERNAL_GROUP_BY_BYTES = 134_217_728" in cn_resource
+    assert "CN_EXTERNAL_SORT_BYTES = 134_217_728" in cn_resource
+    assert '"max_bytes_before_external_group_by": CN_EXTERNAL_GROUP_BY_BYTES' in cn_resource
+    assert '"max_bytes_before_external_sort": CN_EXTERNAL_SORT_BYTES' in cn_resource
+    assert "cn_resource_client" in m16
+    assert "legacy.clickhouse_client = lambda: cn_resource_client(" in m16
+    assert "goods.clickhouse_client = lambda: cn_resource_client(" in m16
+    assert "party.clickhouse_client = lambda: cn_resource_client(" in m16
