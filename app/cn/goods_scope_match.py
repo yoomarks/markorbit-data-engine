@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+import re
+
+
+_TOUCHED_JOIN = re.compile(
+    r"FROM markorbit_facts\.cn_goods_item_current AS item FINAL\s+"
+    r"INNER JOIN \((?P<touched>.*?)\) AS touched\s+"
+    r"ON touched\.application_number = item\.application_number\s+"
+    r"AND touched\.class_no = item\.class_no\s+"
+    r"WHERE item\.is_deleted = 0",
+    re.DOTALL,
+)
+
+
+def _canonical_sql(sql: str) -> str:
+    return " ".join(sql.split())
+
 
 def exact_touched_scope_sql(sql: str, touched_sql: str) -> str:
     """Rewrite one durable-goods scope aggregate to use exact touched keys.
@@ -17,18 +33,22 @@ def exact_touched_scope_sql(sql: str, touched_sql: str) -> str:
     existing range predicate and aggregate SQL unchanged as a secondary guard.
     The rewrite is fail-closed if the expected M1.6 SQL shape changes.
     """
-    old = f"""FROM markorbit_facts.cn_goods_item_current AS item FINAL
-            INNER JOIN ({touched_sql}) AS touched
-              ON touched.application_number = item.application_number
-             AND touched.class_no = item.class_no
-            WHERE item.is_deleted = 0"""
-    new = f"""FROM markorbit_facts.cn_goods_item_current AS item FINAL
-            PREWHERE (item.application_number, item.class_no) IN (
-                {touched_sql}
-            )
-            WHERE item.is_deleted = 0"""
-    if sql.count(old) != 1:
+    matches = list(_TOUCHED_JOIN.finditer(sql))
+    if len(matches) != 1:
         raise RuntimeError(
             "M1.6 durable goods scope SQL shape changed; expected one touched-scope JOIN."
         )
-    return sql.replace(old, new, 1)
+
+    match = matches[0]
+    actual_touched = match.group("touched")
+    if _canonical_sql(actual_touched) != _canonical_sql(touched_sql):
+        raise RuntimeError(
+            "M1.6 durable goods scope SQL used an unexpected touched-scope selector."
+        )
+
+    replacement = f"""FROM markorbit_facts.cn_goods_item_current AS item FINAL
+            PREWHERE (item.application_number, item.class_no) IN (
+                {actual_touched}
+            )
+            WHERE item.is_deleted = 0"""
+    return sql[: match.start()] + replacement + sql[match.end() :]
