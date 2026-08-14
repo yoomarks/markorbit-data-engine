@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import threading
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from app.cn import case_publish as case
 from app.cn import goods_lifecycle as goods
@@ -26,19 +26,65 @@ _LEGACY_CLEANUP_PARTIAL = legacy._cleanup_partial_outputs
 _LEGACY_CASE_AGG = legacy._case_aggregate_sql
 _LEGACY_PARTY_AGG = legacy._party_aggregate_sql
 
+# The original M1.6 chunk targets were sized for CI fixtures and smaller replay
+# packages. Real CN monthly patches can contain enough goods/basic rows that a
+# 1M-row goods chunk or 250k-row case/party chunk exhausts a ~14 GiB ClickHouse
+# container even with external aggregation enabled. Keep the semantic unit as a
+# whole application, but cap every publish family to a conservative row budget.
+CN_GOODS_CHUNK_ROWS = 100_000
+CN_CASE_CHUNK_ROWS = 100_000
+CN_PARTY_CHUNK_ROWS = 100_000
+
+
+def _run_phase(name: str, operation: Callable[[], Any]) -> Any:
+    try:
+        return operation()
+    except Exception as exc:
+        raise RuntimeError(f"CN_M1.6 phase={name} failed: {exc}") from exc
+
 
 def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[str, Any]:
     original_goods_client = goods.clickhouse_client
+    original_goods_range_planner = goods._plan_goods_application_ranges
     goods_delta_client = GoodsObservationDeltaClient(original_goods_client())
     goods.clickhouse_client = lambda: goods_delta_client
+
+    def bounded_goods_ranges(package, *, client=None, target_rows=CN_GOODS_CHUNK_ROWS):
+        return original_goods_range_planner(
+            package,
+            client=client,
+            target_rows=min(int(target_rows), CN_GOODS_CHUNK_ROWS),
+        )
+
+    goods._plan_goods_application_ranges = bounded_goods_ranges
     try:
-        lifecycle_metrics = goods.publish_goods_lifecycle(package_uuid, package_meta)
-        goods_delta_client.assert_rewrite_count(int(lifecycle_metrics["goods_publish_chunk_count"]))
+        lifecycle_metrics = _run_phase(
+            "GOODS_LIFECYCLE",
+            lambda: goods.publish_goods_lifecycle(package_uuid, package_meta),
+        )
+        goods_delta_client.assert_rewrite_count(
+            int(lifecycle_metrics["goods_publish_chunk_count"])
+        )
     finally:
+        goods._plan_goods_application_ranges = original_goods_range_planner
         goods.clickhouse_client = original_goods_client
 
-    case_metrics = case.materialize_case_publish_stage(package_uuid, _LEGACY_CASE_AGG)
-    party_metrics = party.materialize_party_publish_stage(package_uuid, _LEGACY_PARTY_AGG)
+    case_metrics = _run_phase(
+        "CASE_MATERIALIZE",
+        lambda: case.materialize_case_publish_stage(
+            package_uuid,
+            _LEGACY_CASE_AGG,
+            target_rows=CN_CASE_CHUNK_ROWS,
+        ),
+    )
+    party_metrics = _run_phase(
+        "PARTY_MATERIALIZE",
+        lambda: party.materialize_party_publish_stage(
+            package_uuid,
+            _LEGACY_PARTY_AGG,
+            target_rows=CN_PARTY_CHUNK_ROWS,
+        ),
+    )
 
     original_case = legacy._case_aggregate_sql
     original_scope = legacy._scope_aggregate_sql
@@ -54,7 +100,10 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     event_delta_client = events.EventBaselineDeltaClient(party_history_client)
     legacy.clickhouse_client = lambda: event_delta_client
     try:
-        metrics = _LEGACY_PUBLISH(package_uuid, package_meta)
+        metrics = _run_phase(
+            "LEGACY_SNAPSHOT_PERSIST",
+            lambda: _LEGACY_PUBLISH(package_uuid, package_meta),
+        )
         party_history_client.assert_suppression_complete()
         event_delta_client.assert_rewrite_counts()
     finally:
@@ -77,6 +126,9 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     metrics["goods_observation_history_policy"] = "TRUE_DELTA_ONLY_V2"
     metrics["observed_event_history_policy"] = "TRUE_DELTA_PLUS_PARTY_V2"
     metrics["party_history_policy"] = "CANONICAL_IN_OBSERVED_EVENT_V2"
+    metrics["cn_goods_chunk_rows"] = CN_GOODS_CHUNK_ROWS
+    metrics["cn_case_chunk_rows"] = CN_CASE_CHUNK_ROWS
+    metrics["cn_party_chunk_rows"] = CN_PARTY_CHUNK_ROWS
     return metrics
 
 
