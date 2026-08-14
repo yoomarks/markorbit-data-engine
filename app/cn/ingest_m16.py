@@ -10,6 +10,7 @@ from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
 from app.cn import party_publish as party
 from app.cn import storage_v2_events as events
+from app.cn.goods_current_match import bounded_current_items_sql
 from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
@@ -46,6 +47,7 @@ def _run_phase(name: str, operation: Callable[[], Any]) -> Any:
 def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[str, Any]:
     original_goods_client = goods.clickhouse_client
     original_goods_range_planner = goods._plan_goods_application_ranges
+    original_current_items_builder = goods._current_items_for_range_sql
     goods_delta_client = GoodsObservationDeltaClient(original_goods_client())
     goods.clickhouse_client = lambda: goods_delta_client
 
@@ -56,7 +58,11 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
             target_rows=min(int(target_rows), CN_GOODS_CHUNK_ROWS),
         )
 
+    def bounded_current_items(application_range):
+        return bounded_current_items_sql(package_uuid, application_range)
+
     goods._plan_goods_application_ranges = bounded_goods_ranges
+    goods._current_items_for_range_sql = bounded_current_items
     try:
         lifecycle_metrics = _run_phase(
             "GOODS_LIFECYCLE",
@@ -66,6 +72,7 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
             int(lifecycle_metrics["goods_publish_chunk_count"])
         )
     finally:
+        goods._current_items_for_range_sql = original_current_items_builder
         goods._plan_goods_application_ranges = original_goods_range_planner
         goods.clickhouse_client = original_goods_client
 
