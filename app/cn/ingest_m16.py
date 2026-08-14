@@ -27,12 +27,13 @@ _LEGACY_CLEANUP_PARTIAL = legacy._cleanup_partial_outputs
 _LEGACY_CASE_AGG = legacy._case_aggregate_sql
 _LEGACY_PARTY_AGG = legacy._party_aggregate_sql
 
-# The original M1.6 chunk targets were sized for CI fixtures and smaller replay
-# packages. Real CN monthly patches can contain enough goods/basic rows that a
-# 1M-row goods chunk or 250k-row case/party chunk exhausts a ~14 GiB ClickHouse
-# container even with external aggregation enabled. Keep the semantic unit as a
-# whole application, but cap every publish family to a conservative row budget.
-CN_GOODS_CHUNK_ROWS = 100_000
+# Real CN monthly patches have a much wider durable-goods amplification than the
+# stage row count alone suggests. 2022_3 still reached the 8 GiB per-query guard
+# in AggregatingTransform with 100k whole-application goods chunks even after the
+# current-item JOIN side was bounded. Keep CASE/PARTY at the proven 100k budget,
+# but give GOODS aggregation a 10x smaller unit so its groupArray/argMax states
+# stay comfortably below the hard query envelope without raising memory limits.
+CN_GOODS_CHUNK_ROWS = 10_000
 CN_CASE_CHUNK_ROWS = 100_000
 CN_PARTY_CHUNK_ROWS = 100_000
 
