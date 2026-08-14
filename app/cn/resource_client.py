@@ -4,11 +4,13 @@ from typing import Any
 
 
 CN_MAX_THREADS = 1
-CN_EXTERNAL_GROUP_BY_BYTES = 134_217_728
-CN_EXTERNAL_SORT_BYTES = 134_217_728
+CN_MAX_MEMORY_USAGE = 8_589_934_592
+CN_EXTERNAL_GROUP_BY_BYTES = 67_108_864
+CN_EXTERNAL_SORT_BYTES = 67_108_864
 
 _CN_QUERY_SETTINGS = {
     "max_threads": CN_MAX_THREADS,
+    "max_memory_usage": CN_MAX_MEMORY_USAGE,
     "max_bytes_before_external_group_by": CN_EXTERNAL_GROUP_BY_BYTES,
     "max_bytes_before_external_sort": CN_EXTERNAL_SORT_BYTES,
 }
