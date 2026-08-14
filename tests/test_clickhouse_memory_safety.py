@@ -38,15 +38,26 @@ def test_clickhouse_client_has_large_package_spill_controls():
     assert "CN_CLICKHOUSE_SEND_RECEIVE_TIMEOUT = 3600" in jobs
     assert "with clickhouse_execution_settings(" in jobs
 
-    # CN aggregation uses a stricter per-operation profile. This complements
-    # grace_hash: AggregatingTransform can spill early and uses one processing
-    # lane without changing the repository-wide defaults used by other domains.
+    # CN aggregation has a hard per-query envelope below the container's observed
+    # ~14 GiB ceiling, spills earlier, and uses one processing lane.
     assert "CN_MAX_THREADS = 1" in cn_resource
-    assert "CN_EXTERNAL_GROUP_BY_BYTES = 134_217_728" in cn_resource
-    assert "CN_EXTERNAL_SORT_BYTES = 134_217_728" in cn_resource
+    assert "CN_MAX_MEMORY_USAGE = 8_589_934_592" in cn_resource
+    assert "CN_EXTERNAL_GROUP_BY_BYTES = 67_108_864" in cn_resource
+    assert "CN_EXTERNAL_SORT_BYTES = 67_108_864" in cn_resource
+    assert '"max_memory_usage": CN_MAX_MEMORY_USAGE' in cn_resource
     assert '"max_bytes_before_external_group_by": CN_EXTERNAL_GROUP_BY_BYTES' in cn_resource
     assert '"max_bytes_before_external_sort": CN_EXTERNAL_SORT_BYTES' in cn_resource
     assert "cn_resource_client" in m16
     assert "legacy.clickhouse_client = lambda: cn_resource_client(" in m16
     assert "goods.clickhouse_client = lambda: cn_resource_client(" in m16
     assert "party.clickhouse_client = lambda: cn_resource_client(" in m16
+
+    # All three high-cardinality publish families are bounded by the same
+    # conservative whole-application row budget for real monthly packages.
+    assert "CN_GOODS_CHUNK_ROWS = 100_000" in m16
+    assert "CN_CASE_CHUNK_ROWS = 100_000" in m16
+    assert "CN_PARTY_CHUNK_ROWS = 100_000" in m16
+    assert '"GOODS_LIFECYCLE"' in m16
+    assert '"CASE_MATERIALIZE"' in m16
+    assert '"PARTY_MATERIALIZE"' in m16
+    assert '"LEGACY_SNAPSHOT_PERSIST"' in m16
