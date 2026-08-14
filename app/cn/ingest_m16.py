@@ -15,6 +15,7 @@ from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
 )
+from app.cn.goods_scope_match import exact_touched_scope_sql
 from app.cn.resource_client import cn_resource_client
 from app.cn.storage_v2_goods import GoodsObservationDeltaClient
 from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
@@ -49,6 +50,8 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     original_goods_client = goods.clickhouse_client
     original_goods_range_planner = goods._plan_goods_application_ranges
     original_current_items_builder = goods._current_items_for_range_sql
+    original_scope_builder = goods.scope_from_current_items_sql
+    original_lifecycle_scope_builder = goods._lifecycle_scope_sql
     goods_delta_client = GoodsObservationDeltaClient(original_goods_client())
     goods.clickhouse_client = lambda: goods_delta_client
 
@@ -62,8 +65,32 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     def bounded_current_items(application_range):
         return bounded_current_items_sql(package_uuid, application_range)
 
+    def exact_scope_from_current_items(
+        package,
+        application_lower=None,
+        application_upper=None,
+    ):
+        touched = goods.touched_scope_sql(package, application_lower, application_upper)
+        sql = original_scope_builder(package, application_lower, application_upper)
+        return exact_touched_scope_sql(sql, touched)
+
+    def exact_lifecycle_scope(
+        package,
+        application_lower=None,
+        application_upper=None,
+    ):
+        touched = goods.touched_scope_sql(package, application_lower, application_upper)
+        sql = original_lifecycle_scope_builder(
+            package,
+            application_lower,
+            application_upper,
+        )
+        return exact_touched_scope_sql(sql, touched)
+
     goods._plan_goods_application_ranges = bounded_goods_ranges
     goods._current_items_for_range_sql = bounded_current_items
+    goods.scope_from_current_items_sql = exact_scope_from_current_items
+    goods._lifecycle_scope_sql = exact_lifecycle_scope
     try:
         lifecycle_metrics = _run_phase(
             "GOODS_LIFECYCLE",
@@ -73,6 +100,8 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
             int(lifecycle_metrics["goods_publish_chunk_count"])
         )
     finally:
+        goods._lifecycle_scope_sql = original_lifecycle_scope_builder
+        goods.scope_from_current_items_sql = original_scope_builder
         goods._current_items_for_range_sql = original_current_items_builder
         goods._plan_goods_application_ranges = original_goods_range_planner
         goods.clickhouse_client = original_goods_client
@@ -137,6 +166,7 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     metrics["cn_goods_chunk_rows"] = CN_GOODS_CHUNK_ROWS
     metrics["cn_case_chunk_rows"] = CN_CASE_CHUNK_ROWS
     metrics["cn_party_chunk_rows"] = CN_PARTY_CHUNK_ROWS
+    metrics["cn_goods_durable_scope_filter"] = "EXACT_TOUCHED_KEY_PREWHERE_V1"
     return metrics
 
 
