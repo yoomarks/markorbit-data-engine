@@ -14,17 +14,15 @@ def test_current_match_is_bounded_by_actual_incoming_goods_keys():
     )
 
     assert "FROM markorbit_facts.cn_goods_item_current AS cur FINAL" in sql
-    assert "ANY INNER JOIN" in sql
+    assert "PREWHERE (cur.application_number, cur.class_no, cur.goods_item_key) IN" in sql
+    assert "ANY INNER JOIN" not in sql
     assert "SELECT application_number, class_no, goods_item_key" in sql
     assert "FROM markorbit_facts.cn_stage_goods" in sql
     assert f"package_id = toUUID('{PACKAGE}')" in sql
     assert "application_number >= '2007001000'" in sql
     assert "application_number < '2008001000'" in sql
-    assert "cur.application_number >= '2007001000'" in sql
-    assert "cur.application_number < '2008001000'" in sql
-    assert "incoming_keys.application_number = cur.application_number" in sql
-    assert "incoming_keys.class_no = cur.class_no" in sql
-    assert "incoming_keys.goods_item_key = cur.goods_item_key" in sql
+    assert "cur.application_number >= '2007001000'" not in sql
+    assert "cur.application_number < '2008001000'" not in sql
 
 
 def test_m16_wrapper_installs_and_restores_bounded_current_match_builder():
