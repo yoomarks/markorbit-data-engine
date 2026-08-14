@@ -52,9 +52,9 @@ def test_clickhouse_client_has_large_package_spill_controls():
     assert "goods.clickhouse_client = lambda: cn_resource_client(" in m16
     assert "party.clickhouse_client = lambda: cn_resource_client(" in m16
 
-    # All three high-cardinality publish families are bounded by the same
-    # conservative whole-application row budget for real monthly packages.
-    assert "CN_GOODS_CHUNK_ROWS = 100_000" in m16
+    # GOODS uses the tighter budget proven necessary by the 8 GiB aggregation
+    # failure; CASE/PARTY retain the existing 100k whole-application budget.
+    assert "CN_GOODS_CHUNK_ROWS = 10_000" in m16
     assert "CN_CASE_CHUNK_ROWS = 100_000" in m16
     assert "CN_PARTY_CHUNK_ROWS = 100_000" in m16
     assert '"GOODS_LIFECYCLE"' in m16
