@@ -10,7 +10,10 @@ from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
 from app.cn import party_publish as party
 from app.cn import storage_v2_events as events
-from app.cn.goods_lifecycle_sql import INTRA_PACKAGE_STATUS_RESOLUTION_VERSION, incoming_goods_sql
+from app.cn.goods_lifecycle_sql import (
+    INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
+    incoming_goods_sql,
+)
 from app.cn.resource_client import cn_resource_client
 from app.cn.storage_v2_goods import GoodsObservationDeltaClient
 from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
