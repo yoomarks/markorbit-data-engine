@@ -14,18 +14,17 @@ def bounded_current_items_sql(
 
     The M1.6 publisher historically put every durable current item inside the
     chunk's lexical application-number range on the right side of two LEFT
-    JOINs.  As the durable corpus grows, that right side is no longer bounded by
+    JOINs. As the durable corpus grows, that right side is no longer bounded by
     the staged package chunk and can consume multiple GiB even when only 100k
     staged rows are being processed.
 
     Keep the existing item identity/status semantics by deriving the match keys
-    from the authoritative ``incoming_goods_sql`` builder.  ClickHouse therefore
+    from the authoritative ``incoming_goods_sql`` builder. ClickHouse therefore
     builds the inner ANY JOIN from at most the current chunk's incoming keys;
-    the result fed to the outer LEFT JOIN is also bounded by those keys.  The
+    the result fed to the outer LEFT JOIN is also bounded by those keys. The
     durable table's ORDER BY starts with the same application/class/item key, so
     the range predicate still gives ClickHouse a physical pruning boundary.
     """
-    package = str(package_uuid)
     incoming = incoming_goods_sql(
         package_uuid,
         application_range.lower,
