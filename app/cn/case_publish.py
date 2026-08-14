@@ -88,17 +88,14 @@ def _plan_case_application_ranges(
 ) -> list[ApplicationRange]:
     if target_rows < 1:
         raise ValueError("target_rows must be positive")
-
     client = client or clickhouse_client()
     package = str(package_uuid)
     ranges: list[ApplicationRange] = []
     lower: str | None = None
-
     while True:
         lower_sql = ""
         if lower is not None:
             lower_sql = f" AND application_number >= {_sql_string(lower)}"
-
         rows = client.query(
             f"""
             SELECT application_number
@@ -108,11 +105,9 @@ def _plan_case_application_ranges(
             LIMIT 1 OFFSET {int(target_rows)}
             """
         ).result_rows
-
         if not rows:
             ranges.append(ApplicationRange(lower=lower, upper=None))
             break
-
         boundary = str(rows[0][0])
         if lower is not None and boundary <= lower:
             next_rows = client.query(
@@ -129,10 +124,8 @@ def _plan_case_application_ranges(
                 ranges.append(ApplicationRange(lower=lower, upper=None))
                 break
             boundary = str(next_rows[0][0])
-
         ranges.append(ApplicationRange(lower=lower, upper=boundary))
         lower = boundary
-
     return ranges
 
 
@@ -141,34 +134,26 @@ def bounded_case_aggregate_sql(
     application_range: ApplicationRange,
     aggregate_builder: Callable[[str], str],
 ) -> str:
-    """Keep legacy CASE semantics while limiting one aggregate to a row range."""
     package = str(package_uuid)
     sql = aggregate_builder(package)
-    source_range = application_range.and_predicate("application_number")
-
-    old_source = "FROM markorbit_facts.cn_stage_basic\n            ) AS stage_basic"
-    new_source = (
-        "FROM markorbit_facts.cn_stage_basic\n"
-        f"                WHERE package_id = toUUID('{package}'){source_range}\n"
-        "            ) AS stage_basic"
-    )
-    if sql.count(old_source) != 1:
-        raise RuntimeError(
-            "Legacy case aggregate SQL shape changed; expected one cn_stage_basic source."
-        )
-    sql = sql.replace(old_source, new_source, 1)
-
     outer_guard = f"WHERE package_id = toUUID('{package}')"
     if sql.count(outer_guard) != 1:
-        raise RuntimeError(
-            "Legacy case aggregate SQL shape changed; expected one package guard."
-        )
+        raise RuntimeError("Legacy case aggregate SQL shape changed; expected one package guard.")
     sql = sql.replace(
         outer_guard,
         f"{outer_guard}{application_range.and_predicate('application_number')}",
         1,
     )
-    return sql
+    old_source = "FROM markorbit_facts.cn_stage_basic\n            ) AS stage_basic"
+    new_source = (
+        "FROM markorbit_facts.cn_stage_basic\n"
+        f"                WHERE package_id = toUUID('{package}')"
+        f"{application_range.and_predicate('application_number')}\n"
+        "            ) AS stage_basic"
+    )
+    if sql.count(old_source) != 1:
+        raise RuntimeError("Legacy case aggregate SQL shape changed; expected one cn_stage_basic source.")
+    return sql.replace(old_source, new_source, 1)
 
 
 def case_publish_stage_sql(package_uuid: uuid.UUID | str) -> str:
@@ -198,23 +183,16 @@ def materialize_case_publish_stage(
     client: Any | None = None,
     target_rows: int = CASE_PUBLISH_TARGET_BASIC_ROWS,
 ) -> dict[str, int]:
-    """Aggregate CASE facts once, in bounded whole-application chunks."""
     client = client or clickhouse_client()
     package = str(package_uuid)
     ensure_case_publish_schema(client=client)
     cleanup_case_publish_stage(package_uuid, client=client)
-
     application_ranges = _plan_case_application_ranges(
-        package_uuid,
-        client=client,
-        target_rows=target_rows,
+        package_uuid, client=client, target_rows=target_rows
     )
-
     for application_range in application_ranges:
         case_sql = bounded_case_aggregate_sql(
-            package_uuid,
-            application_range,
-            aggregate_builder,
+            package_uuid, application_range, aggregate_builder
         )
         client.command(f"""
             INSERT INTO markorbit_facts.cn_stage_case_publish
@@ -251,7 +229,6 @@ def materialize_case_publish_stage(
                 incoming.source_row_hash, incoming.record_hash
             FROM ({case_sql}) AS incoming
         """)
-
     row_count = int(
         client.query(
             "SELECT count() FROM markorbit_facts.cn_stage_case_publish "
