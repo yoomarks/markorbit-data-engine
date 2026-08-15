@@ -4,7 +4,11 @@ from pathlib import Path
 def test_admin_api_exposes_lightweight_cn_stage_resume_candidates():
     source = Path("app/admin_paging_api.py").read_text(encoding="utf-8")
 
-    assert "from app.cn.stage_resume import CHECKPOINT_MAX_AGE, CHECKPOINT_VERSION" in source
+    assert "from app.cn.stage_resume import (" in source
+    assert "CHECKPOINT_MAX_AGE" in source
+    assert "CHECKPOINT_VERSION" in source
+    assert "ensure_stage_checkpoint_schema" in source
+    assert source.count("ensure_stage_checkpoint_schema()") >= 2
     assert '@router.get("/cn-recovery")' in source
     assert "cn_stage_resume_candidate" in source
     assert "control.cn_package_stage_checkpoint" in source
