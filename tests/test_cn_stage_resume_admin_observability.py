@@ -8,7 +8,9 @@ def test_admin_api_exposes_lightweight_cn_stage_resume_candidates():
     assert "CHECKPOINT_MAX_AGE" in source
     assert "CHECKPOINT_VERSION" in source
     assert "ensure_stage_checkpoint_schema" in source
-    assert source.count("ensure_stage_checkpoint_schema()") >= 2
+    assert "@cache" in source
+    assert "def _ensure_stage_checkpoint_schema_once()" in source
+    assert source.count("_ensure_stage_checkpoint_schema_once()") >= 3
     assert '@router.get("/cn-recovery")' in source
     assert "cn_stage_resume_candidate" in source
     assert "control.cn_package_stage_checkpoint" in source
