@@ -18,8 +18,18 @@ from app.cn.goods_lifecycle_sql import (
 from app.cn.goods_scope_match import exact_touched_scope_sql
 from app.cn.quality_subtasks import collect_stage_quality_issues_bounded
 from app.cn.resource_client import cn_resource_client
+from app.cn.stage_resume import (
+    CHECKPOINT_VERSION,
+    clear_stage_checkpoint,
+    ensure_stage_checkpoint_schema,
+    load_stage_checkpoint,
+    resume_staged_package,
+    save_stage_checkpoint,
+    stage_checkpoint_is_usable,
+)
 from app.cn.storage_v2_goods import GoodsObservationDeltaClient
 from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
+from app.repository import get_package
 
 
 goods.incoming_goods_sql = incoming_goods_sql
@@ -197,10 +207,23 @@ def ingest_cn_package(
 
         original_publish = legacy._publish
         original_cleanup = legacy._cleanup_partial_outputs
+        original_stage_cleanup = legacy._cleanup_stage
         original_quality = legacy._collect_stage_quality_issues
         quality_metrics: dict[str, Any] = {}
 
         def bounded_quality(package_uuid: uuid.UUID, run_id: uuid.UUID):
+            # This hook runs only after every ZIP member has been parsed and all
+            # StageBatchWriter buffers have been flushed. Persist the exact stage
+            # boundary before any expensive quality/publish work so a later OOM,
+            # timeout, worker restart, or host restart can resume without reading
+            # a multi-GB raw package again.
+            checkpoint = load_stage_checkpoint(str(package_uuid))
+            if checkpoint is None:
+                save_stage_checkpoint(
+                    package_uuid,
+                    client=legacy.clickhouse_client(),
+                )
+
             result = collect_stage_quality_issues_bounded(
                 package_uuid,
                 run_id,
@@ -215,14 +238,65 @@ def ingest_cn_package(
             )
             return result.issues
 
+        def checkpoint_aware_stage_cleanup(package_uuid: uuid.UUID) -> None:
+            # Legacy cleanup runs before package status is changed to FAILED, so
+            # PROCESSING + a valid checkpoint means a post-stage failure and the
+            # raw stage is intentionally retained. On SUCCESS we remove it just
+            # as before and delete the checkpoint. Early-stage failures have no
+            # checkpoint and still clean partial rows before a full reparse.
+            package = get_package(str(package_uuid))
+            checkpoint = load_stage_checkpoint(str(package_uuid))
+            if str(package.get("status")) == "SUCCESS":
+                original_stage_cleanup(package_uuid)
+                clear_stage_checkpoint(str(package_uuid))
+                return
+            if checkpoint is not None:
+                return
+            original_stage_cleanup(package_uuid)
+
         legacy._publish = _publish_m16
         legacy._cleanup_partial_outputs = _cleanup_partial_outputs_m16
+        legacy._cleanup_stage = checkpoint_aware_stage_cleanup
         legacy._collect_stage_quality_issues = bounded_quality
         try:
+            ensure_stage_checkpoint_schema()
             case.ensure_case_publish_schema()
             goods.ensure_m16_goods_schema()
             goods.ensure_m16_goods_replay_boundary()
             party.ensure_party_publish_schema()
+
+            checkpoint = load_stage_checkpoint(package_id) if retrying else None
+            if checkpoint is not None:
+                package_uuid = uuid.UUID(str(package_id))
+                if stage_checkpoint_is_usable(
+                    package_uuid,
+                    checkpoint,
+                    client=legacy.clickhouse_client(),
+                ):
+                    totals = resume_staged_package(
+                        legacy,
+                        package_id,
+                        path,
+                        raw_root,
+                        checkpoint,
+                        trigger_type=trigger_type,
+                        cleanup_stage=original_stage_cleanup,
+                    )
+                    publish = totals.get("publish")
+                    if isinstance(publish, dict):
+                        publish["recovery_mode"] = "STAGE_CHECKPOINT_RESUME"
+                    totals["stage_quality_subtasks"] = quality_metrics
+                    return totals
+                clear_stage_checkpoint(package_id)
+            elif retrying:
+                # load_stage_checkpoint fails closed for source SHA/version/age
+                # mismatches. Remove any stale row so the legacy retry cleanup is
+                # not accidentally treated as a resumable stage.
+                clear_stage_checkpoint(package_id)
+            else:
+                # A normal REGISTERED package is always a fresh package replay.
+                clear_stage_checkpoint(package_id)
+
             totals = legacy.ingest_cn_package(
                 package_id,
                 path,
@@ -230,10 +304,13 @@ def ingest_cn_package(
                 trigger_type=trigger_type,
                 retrying=retrying,
             )
+            totals["cn_stage_resume_used"] = False
+            totals["cn_stage_checkpoint_version"] = CHECKPOINT_VERSION
             totals["stage_quality_subtasks"] = quality_metrics
             return totals
         finally:
             legacy._collect_stage_quality_issues = original_quality
+            legacy._cleanup_stage = original_stage_cleanup
             legacy._publish = original_publish
             legacy._cleanup_partial_outputs = original_cleanup
             legacy.clickhouse_client = original_legacy_client
