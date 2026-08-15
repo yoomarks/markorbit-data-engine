@@ -16,6 +16,10 @@ from app.cn.goods_lifecycle_sql import (
     incoming_goods_sql,
 )
 from app.cn.goods_scope_match import exact_touched_scope_sql
+from app.cn.legacy_snapshot_persist import (
+    LegacySnapshotPersistClient,
+    plan_agent_code_batches,
+)
 from app.cn.quality_subtasks import collect_stage_quality_issues_bounded
 from app.cn.resource_client import cn_resource_client
 from app.cn.stage_resume import (
@@ -144,7 +148,17 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     legacy._party_aggregate_sql = lambda package: party.party_publish_stage_sql(package)
     legacy._insert_case_events = events.insert_case_delta_events
 
-    party_history_client = PartyHistorySuppressionClient(original_clickhouse_client())
+    base_snapshot_client = original_clickhouse_client()
+    agent_batches = _run_phase(
+        "LEGACY_AGENT_PLAN",
+        lambda: plan_agent_code_batches(package_uuid, client=base_snapshot_client),
+    )
+    snapshot_client = LegacySnapshotPersistClient(
+        base_snapshot_client,
+        package_uuid=package_uuid,
+        agent_batches=agent_batches,
+    )
+    party_history_client = PartyHistorySuppressionClient(snapshot_client)
     event_delta_client = events.EventBaselineDeltaClient(party_history_client)
     legacy.clickhouse_client = lambda: event_delta_client
     try:
@@ -152,6 +166,7 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
             "LEGACY_SNAPSHOT_PERSIST",
             lambda: _LEGACY_PUBLISH(package_uuid, package_meta),
         )
+        snapshot_client.assert_agent_persist_complete()
         party_history_client.assert_suppression_complete()
         event_delta_client.assert_rewrite_counts()
     finally:
@@ -178,6 +193,9 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     metrics["cn_case_chunk_rows"] = CN_CASE_CHUNK_ROWS
     metrics["cn_party_chunk_rows"] = CN_PARTY_CHUNK_ROWS
     metrics["cn_goods_durable_scope_filter"] = "EXACT_TOUCHED_KEY_PREWHERE_V1"
+    metrics["cn_agent_persist_chunk_count"] = snapshot_client.agent_chunk_count
+    metrics["cn_agent_persist_agent_code_count"] = snapshot_client.agent_code_count
+    metrics["cn_agent_persist_policy"] = "WHOLE_AGENT_CODE_BATCHES_V1"
     return metrics
 
 
