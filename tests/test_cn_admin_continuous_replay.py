@@ -97,8 +97,8 @@ def test_cn_admin_continue_rechecks_storage_and_requires_final_checkpoint(monkey
     monkeypatch.setattr(admin_domain_tasks, "_assert_storage_headroom", fake_storage)
     monkeypatch.setattr(
         admin_domain_tasks,
-        "_assert_cn_continuation_not_stopped",
-        lambda _run_id: None,
+        "_assert_continuation_not_stopped",
+        lambda _run_id, _domain: None,
     )
     monkeypatch.setattr(admin_domain_tasks.full_replay, "run_full_replay", fake_full_replay)
     monkeypatch.setattr(
@@ -144,8 +144,8 @@ def test_cn_admin_continue_blocks_when_final_checkpoint_fails(monkeypatch) -> No
     monkeypatch.setattr(admin_domain_tasks, "_assert_storage_headroom", lambda: {})
     monkeypatch.setattr(
         admin_domain_tasks,
-        "_assert_cn_continuation_not_stopped",
-        lambda _run_id: None,
+        "_assert_continuation_not_stopped",
+        lambda _run_id, _domain: None,
     )
     monkeypatch.setattr(
         admin_domain_tasks.full_replay,
