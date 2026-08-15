@@ -41,6 +41,10 @@ class DomainTaskBlocked(RuntimeError):
     pass
 
 
+class DomainTaskInterrupted(RuntimeError):
+    pass
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
@@ -110,10 +114,89 @@ def queue_admin_domain_task(
     return {"accepted": True, "task": task}
 
 
-def recover_interrupted_admin_domain_tasks() -> int:
-    """Requeue only Admin UI wrapper tasks left RUNNING by a worker restart."""
+def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
+    """Request a safe package-boundary stop for the active CN continuous replay."""
+    domain = domain.strip().upper()
+    if domain != "CN":
+        raise ValueError("STOP is only supported for CN continuous replay")
+
     with postgres_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (_QUEUE_LOCK_NAME,))
+            cur.execute(
+                """
+                SELECT run_id, job_type, status, started_at, payload
+                FROM control.job_run
+                WHERE trigger_type = %s
+                  AND payload->>'task_kind' = %s
+                  AND payload->>'domain' = 'CN'
+                  AND payload->>'action' = 'CONTINUE'
+                  AND status IN ('QUEUED', 'RUNNING')
+                ORDER BY started_at
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (ADMIN_TRIGGER, ADMIN_TASK_KIND),
+            )
+            task = cur.fetchone()
+            if not task:
+                conn.commit()
+                return {"accepted": False, "task": None}
+
+            if str(task["status"]).upper() == "QUEUED":
+                cur.execute(
+                    """
+                    UPDATE control.job_run
+                    SET status = 'INTERRUPTED',
+                        finished_at = now(),
+                        payload = payload || jsonb_build_object(
+                            'stop_requested', true,
+                            'stop_requested_at', now()
+                        ),
+                        error_message = 'Stopped before continuous CN replay started.'
+                    WHERE run_id = %s
+                    RETURNING run_id, job_type, trigger_type, status,
+                              started_at, finished_at, payload, error_message
+                    """,
+                    (task["run_id"],),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE control.job_run
+                    SET payload = payload || jsonb_build_object(
+                            'stop_requested', true,
+                            'stop_requested_at', now()
+                        ),
+                        error_message = 'Stop requested; waiting for the current CN package boundary.'
+                    WHERE run_id = %s
+                    RETURNING run_id, job_type, trigger_type, status,
+                              started_at, finished_at, payload, error_message
+                    """,
+                    (task["run_id"],),
+                )
+            updated = dict(cur.fetchone())
+        conn.commit()
+    return {"accepted": True, "task": updated}
+
+
+def recover_interrupted_admin_domain_tasks() -> int:
+    """Requeue interrupted wrappers unless a cooperative stop was already requested."""
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE control.job_run
+                SET status = 'INTERRUPTED',
+                    finished_at = now(),
+                    error_message = 'Worker restarted after stop was requested; task not requeued.'
+                WHERE trigger_type = %s
+                  AND payload->>'task_kind' = %s
+                  AND status = 'RUNNING'
+                  AND payload->>'stop_requested' = 'true'
+                """,
+                (ADMIN_TRIGGER, ADMIN_TASK_KIND),
+            )
             cur.execute(
                 """
                 UPDATE control.job_run
@@ -276,12 +359,31 @@ def _check_ingest_result(result: dict[str, Any]) -> None:
         raise RuntimeError(f"Domain retry could not locate its source package: {result}")
 
 
-def _run_cn_continuation() -> dict[str, Any]:
+def _assert_cn_continuation_not_stopped(run_id: str) -> None:
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload->>'stop_requested' AS stop_requested "
+                "FROM control.job_run WHERE run_id = %s",
+                (run_id,),
+            )
+            row = cur.fetchone()
+    if row and str(row.get("stop_requested") or "").lower() == "true":
+        raise DomainTaskInterrupted(
+            "CN continuous replay stopped by Admin request at a package boundary."
+        )
+
+
+def _run_cn_continuation(run_id: str) -> dict[str, Any]:
+    def before_package(_phase: str) -> None:
+        _assert_cn_continuation_not_stopped(run_id)
+        _assert_storage_headroom()
+
     code, summary = full_replay.run_full_replay(
         resume_failed=True,
         trigger_type="ADMIN_UI_CN_CONTINUE",
         emit=lambda _event: None,
-        before_package=lambda _phase: _assert_storage_headroom(),
+        before_package=before_package,
         allow_clean_start=False,
     )
     if code in {3, 4}:
@@ -317,7 +419,7 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
             )
         elif action == "CONTINUE":
             gate = {"status": "REGISTERED_REPLAY_ONLY_CLEAN_START_DISABLED"}
-            result = _run_cn_continuation()
+            result = _run_cn_continuation(str(task["run_id"]))
         else:
             raise ValueError(f"Unsupported CN action: {action}")
     elif domain == "US_APPLICATION":
@@ -359,6 +461,8 @@ def finish_admin_domain_task(task: dict[str, Any]) -> None:
     run_id = str(task["run_id"])
     try:
         metrics = execute_admin_domain_task(task)
+    except DomainTaskInterrupted as exc:
+        finish_job_run(run_id, "INTERRUPTED", error_message=str(exc))
     except DomainTaskBlocked as exc:
         finish_job_run(run_id, "BLOCKED", error_message=str(exc))
     except Exception as exc:
