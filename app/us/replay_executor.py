@@ -4,7 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.config import get_settings
 from app.domain import DiscoveredPackage
@@ -301,6 +301,7 @@ def execute_replay(
     deep_source_test: bool = False,
     max_packages: int | None = 1,
     trigger_type: str = "MANUAL_US_DETERMINISTIC_REPLAY",
+    before_package: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if expected_history_parts < 1:
         raise ValueError("expected_history_parts must be at least 1")
@@ -387,6 +388,8 @@ def execute_replay(
                     break
 
                 step = dict(plan["next_step"])
+                if before_package is not None:
+                    before_package(step)
                 package_id = step.get("registry_package_id")
                 retrying = step["registry_status"] in RETRYABLE_STATUSES
                 source = _discovered_package(step)
