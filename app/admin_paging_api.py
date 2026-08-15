@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import cache
 import math
 from typing import Any
 
@@ -11,10 +12,33 @@ from app.admin_api import (
     _job_domain,
     _raw_inventory,
 )
+from app.cn.stage_resume import (
+    CHECKPOINT_MAX_AGE,
+    CHECKPOINT_VERSION,
+    ensure_stage_checkpoint_schema,
+)
 from app.db import postgres_conn
 
 
 router = APIRouter(prefix="/api/admin/v2", tags=["admin-v2"])
+
+CN_STAGE_CHECKPOINT_MAX_AGE_HOURS = int(CHECKPOINT_MAX_AGE.total_seconds() // 3600)
+_CN_STAGE_RESUME_CANDIDATE_SQL = f"""
+(
+    sp.jurisdiction = 'CN'
+    AND sp.status IN ('FAILED', 'INTERRUPTED')
+    AND csc.package_id IS NOT NULL
+    AND csc.checkpoint_version = '{CHECKPOINT_VERSION}'
+    AND csc.source_sha256 = sp.sha256
+    AND csc.staged_at >= now() - interval '{CN_STAGE_CHECKPOINT_MAX_AGE_HOURS} hours'
+)
+"""
+
+
+@cache
+def _ensure_stage_checkpoint_schema_once() -> None:
+    """Upgrade an existing API Postgres volume once, not on every admin poll."""
+    ensure_stage_checkpoint_schema()
 
 
 def _page_result(
@@ -44,6 +68,9 @@ def admin_packages_page(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=200),
 ):
+    # Existing Postgres volumes do not replay docker init scripts after an upgrade.
+    # Ensure #125's checkpoint table exists before the inventory attempts to join it.
+    _ensure_stage_checkpoint_schema_once()
     page, page_size, offset = _normalize_page(page, page_size)
     clauses: list[str] = []
     params: list[Any] = []
@@ -76,7 +103,12 @@ def admin_packages_page(
                sp.error_message,
                coalesce(pf.internal_file_count, 0) AS internal_file_count,
                coalesce(pf.logical_rows, 0) AS internal_logical_rows,
-               coalesce(pf.failed_rows, 0) AS internal_failed_rows
+               coalesce(pf.failed_rows, 0) AS internal_failed_rows,
+               csc.checkpoint_version AS cn_stage_checkpoint_version,
+               csc.staged_at AS cn_stage_checkpoint_at,
+               csc.updated_at AS cn_stage_checkpoint_updated_at,
+               csc.snapshot -> 'stage_counts' AS cn_stage_checkpoint_stage_counts,
+               {_CN_STAGE_RESUME_CANDIDATE_SQL} AS cn_stage_resume_candidate
         FROM control.source_package AS sp
         LEFT JOIN (
             SELECT package_id, count(*) AS internal_file_count,
@@ -85,6 +117,8 @@ def admin_packages_page(
             FROM control.source_package_file
             GROUP BY package_id
         ) AS pf USING (package_id)
+        LEFT JOIN control.cn_package_stage_checkpoint AS csc
+          ON csc.package_id = sp.package_id
         {where}
         ORDER BY sp.source_rank DESC, sp.package_sequence DESC
         LIMIT %s OFFSET %s
@@ -97,7 +131,51 @@ def admin_packages_page(
             items = [dict(row) for row in cur.fetchall()]
     for item in items:
         item["domain"] = _domain_for_jurisdiction(item.get("jurisdiction"))
+        item["cn_stage_resume_candidate"] = bool(item.get("cn_stage_resume_candidate"))
     return _page_result(items, page=page, page_size=page_size, total=total)
+
+
+@router.get("/cn-recovery")
+def admin_cn_recovery():
+    """Return the next CN retry and lightweight Stage checkpoint observability.
+
+    This endpoint intentionally does not scan ClickHouse stage tables. A candidate
+    means the durable checkpoint metadata is current and source-bound; the retry
+    path still performs exact seven-table row-count validation before it skips raw
+    ZIP parsing.
+    """
+    _ensure_stage_checkpoint_schema_once()
+    sql = f"""
+        SELECT sp.package_id, sp.file_name, sp.status, sp.file_size, sp.source_rank,
+               sp.package_sequence, sp.error_message,
+               csc.checkpoint_version AS cn_stage_checkpoint_version,
+               csc.staged_at AS cn_stage_checkpoint_at,
+               csc.updated_at AS cn_stage_checkpoint_updated_at,
+               csc.snapshot -> 'stage_counts' AS cn_stage_checkpoint_stage_counts,
+               {_CN_STAGE_RESUME_CANDIDATE_SQL} AS cn_stage_resume_candidate
+        FROM control.source_package AS sp
+        LEFT JOIN control.cn_package_stage_checkpoint AS csc
+          ON csc.package_id = sp.package_id
+        WHERE sp.jurisdiction = 'CN'
+          AND sp.status IN ('INTERRUPTED', 'FAILED', 'MISSING_FILE')
+        ORDER BY sp.source_rank, sp.package_sequence
+    """
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = [dict(row) for row in cur.fetchall()]
+
+    for row in rows:
+        row["cn_stage_resume_candidate"] = bool(row.get("cn_stage_resume_candidate"))
+    candidates = [row for row in rows if row["cn_stage_resume_candidate"]]
+    return {
+        "pending_recovery": len(rows),
+        "stage_resume_candidates": len(candidates),
+        "checkpoint_version": CHECKPOINT_VERSION,
+        "checkpoint_max_age_hours": CN_STAGE_CHECKPOINT_MAX_AGE_HOURS,
+        "validation_semantics": "POSTGRES_CANDIDATE_ONLY_CLICKHOUSE_EXACT_COUNTS_ON_RETRY",
+        "next_recovery": rows[0] if rows else None,
+    }
 
 
 _JOB_DOMAIN_SQL = """
