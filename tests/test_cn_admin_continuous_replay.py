@@ -95,15 +95,21 @@ def test_cn_admin_continue_rechecks_storage_for_each_package(monkeypatch) -> Non
         return 0, {"status": "COMPLETE", "processed_total": 2}
 
     monkeypatch.setattr(admin_domain_tasks, "_assert_storage_headroom", fake_storage)
+    monkeypatch.setattr(
+        admin_domain_tasks,
+        "_assert_cn_continuation_not_stopped",
+        lambda _run_id: None,
+    )
     monkeypatch.setattr(admin_domain_tasks.full_replay, "run_full_replay", fake_full_replay)
 
     result = admin_domain_tasks.execute_admin_domain_task(
         {
+            "run_id": "11111111-1111-1111-1111-111111111111",
             "payload": {
                 "domain": "CN",
                 "action": "CONTINUE",
                 "expected_history_parts": 0,
-            }
+            },
         }
     )
 

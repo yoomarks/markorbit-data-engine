@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.admin_domain_tasks import queue_admin_domain_task
+from app.admin_domain_tasks import queue_admin_domain_task, request_admin_domain_stop
 
 
 router = APIRouter(prefix="/api/admin/v2/domain-tasks", tags=["admin-domain-tasks"])
@@ -15,6 +15,8 @@ def admin_domain_task(
     expected_history_parts: int = Query(default=0, ge=0, le=9999),
 ):
     try:
+        if action.strip().upper() == "STOP":
+            return request_admin_domain_stop(domain=domain)
         return queue_admin_domain_task(
             domain=domain,
             action=action,
