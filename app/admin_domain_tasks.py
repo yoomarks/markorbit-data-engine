@@ -19,8 +19,10 @@ from app.storage_headroom import (
     GIB,
     build_headroom_report,
 )
+from app.us.application_transition_gate import build_transition_gate as build_application_gate
 from app.us.jobs import ingest_pending_us, scan_and_ingest_us
 from app.us.migrations import ensure_us_m1_schema
+from app.us.replay_executor import execute_replay as execute_us_replay
 from app.us_assignment.jobs import run_assignment_once
 from app.us_assignment.migrations import ensure_assignment_schema
 from app.us_assignment.transition_gate import build_transition_gate as build_assignment_gate
@@ -65,8 +67,8 @@ def queue_admin_domain_task(
         raise ValueError(f"Unsupported domain: {domain}")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported action: {action}")
-    if action == "CONTINUE" and domain != "CN":
-        raise ValueError("CONTINUE is only supported for CN full-corpus replay continuation")
+    if action == "CONTINUE" and domain not in {"CN", "US_APPLICATION"}:
+        raise ValueError("CONTINUE is only supported for CN and US Application replay")
     if domain != "CN" and expected_history_parts < 1:
         raise ValueError("expected_history_parts is required for US domain tasks")
     if expected_history_parts > 9999:
@@ -323,6 +325,45 @@ def _assert_cn_accepted() -> dict[str, Any]:
     return checkpoint
 
 
+def _build_us_application_gate(
+    raw_root, expected_history_parts: int, *, verify_source_files: bool = False
+) -> dict[str, Any]:
+    return build_application_gate(
+        raw_root,
+        expected_history_parts=expected_history_parts,
+        verify_source_files=verify_source_files,
+        persistent_worker_running=False,
+    )
+
+
+def _assert_us_application_replay_unlocked(
+    raw_root, expected_history_parts: int
+) -> dict[str, Any]:
+    report = _build_us_application_gate(raw_root, expected_history_parts)
+    if report.get("status") == "US_APPLICATION_ALREADY_ACCEPTED":
+        return report
+    if not report.get("safe_to_start_us_replay"):
+        raise DomainTaskBlocked(
+            f"US Application replay transition gate blocked mutation: {report.get('status')}"
+        )
+    return report
+
+
+def _assert_us_application_accepted(raw_root, expected_history_parts: int) -> dict[str, Any]:
+    report = _build_us_application_gate(
+        raw_root,
+        expected_history_parts,
+        verify_source_files=True,
+    )
+    if report.get("status") != "US_APPLICATION_ALREADY_ACCEPTED" or not report.get(
+        "ready_for_us_application"
+    ):
+        raise DomainTaskBlocked(
+            f"US Application acceptance gate did not pass: {report.get('status')}"
+        )
+    return report
+
+
 def _assert_assignment_unlocked(raw_root, expected_history_parts: int) -> dict[str, Any]:
     report = build_assignment_gate(
         raw_root,
@@ -406,6 +447,37 @@ def _checkpoint_result(checkpoint: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _us_application_gate_result(report: dict[str, Any]) -> dict[str, Any]:
+    pipeline = report.get("us_pipeline") if isinstance(report.get("us_pipeline"), dict) else {}
+    return {
+        "status": str(report.get("status") or "UNKNOWN"),
+        "ready_for_us_application": bool(report.get("ready_for_us_application")),
+        "safe_to_start_us_replay": bool(report.get("safe_to_start_us_replay")),
+        "reason_codes": list(report.get("reason_codes") or []),
+        "us_pipeline_state": str(report.get("us_pipeline_state") or pipeline.get("state") or ""),
+    }
+
+
+def _run_us_application_continuation(raw_root, expected_history_parts: int) -> dict[str, Any]:
+    result = execute_us_replay(
+        raw_root,
+        expected_history_parts=expected_history_parts,
+        max_packages=None,
+        trigger_type="ADMIN_UI_US_CONTINUE",
+    )
+    status = str(result.get("status") or "UNKNOWN")
+    if status == "BUSY":
+        raise DomainTaskBlocked("US Application deterministic replay is already busy")
+    if status == "BLOCKED":
+        blockers = (result.get("final_plan") or {}).get("blockers") or []
+        raise DomainTaskBlocked(f"US Application deterministic replay blocked: {blockers}")
+    if status == "FAILED":
+        raise RuntimeError(f"US Application deterministic replay failed: {result.get('error')}")
+    if status != "COMPLETE":
+        raise RuntimeError(f"Unexpected US Application replay status: {status}")
+    return result
+
+
 def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
     domain = str(payload.get("domain") or "").upper()
@@ -437,16 +509,39 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
         else:
             raise ValueError(f"Unsupported CN action: {action}")
     elif domain == "US_APPLICATION":
-        gate = _assert_cn_accepted()
+        _assert_cn_accepted()
         ensure_us_m1_schema()
         if action == "RUN":
+            gate = _build_us_application_gate(raw_root, expected_history_parts)
             result = scan_and_ingest_us(trigger_type="ADMIN_UI_US")
-        else:
+        elif action == "RETRY":
+            gate = _build_us_application_gate(raw_root, expected_history_parts)
             result = ingest_pending_us(
                 trigger_type="ADMIN_UI_US_RETRY",
                 include_failed=True,
                 limit=1,
             )
+        elif action == "CONTINUE":
+            start_gate = _assert_us_application_replay_unlocked(
+                raw_root, expected_history_parts
+            )
+            if start_gate.get("status") == "US_APPLICATION_ALREADY_ACCEPTED":
+                result = {
+                    "status": "COMPLETE",
+                    "processed_count": 0,
+                    "already_accepted": True,
+                }
+            else:
+                result = _run_us_application_continuation(
+                    raw_root, expected_history_parts
+                )
+            final_gate = _assert_us_application_accepted(
+                raw_root, expected_history_parts
+            )
+            result["final_application_gate"] = _us_application_gate_result(final_gate)
+            gate = final_gate
+        else:
+            raise ValueError(f"Unsupported US Application action: {action}")
     elif domain == "US_ASSIGNMENT":
         gate = _assert_assignment_unlocked(raw_root, expected_history_parts)
         ensure_assignment_schema()
