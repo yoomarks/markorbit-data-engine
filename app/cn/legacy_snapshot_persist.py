@@ -6,11 +6,34 @@ import uuid
 
 CN_AGENT_PERSIST_TARGET_ROWS = 100_000
 CN_AGENT_PERSIST_MAX_CODES = 1_000
+CN_AUX_PERSIST_TARGET_ROWS = 100_000
 _AGENT_INSERT = "INSERT INTO markorbit_facts.cn_agent_current"
+_PRIORITY_INSERT = "INSERT INTO markorbit_facts.cn_priority_current"
+_MADRID_INSERT = "INSERT INTO markorbit_facts.cn_madrid_current"
+_ALLOWED_APPLICATION_STAGE_TABLES = {
+    "cn_stage_priority",
+    "cn_stage_madrid",
+}
 
 
 def _sql_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _application_predicate(
+    lower: str | None,
+    upper: str | None,
+    *,
+    column: str = "application_number",
+) -> str:
+    parts: list[str] = []
+    if lower is not None:
+        parts.append(f"{column} >= {_sql_string(lower)}")
+    if upper is not None:
+        parts.append(f"{column} < {_sql_string(upper)}")
+    if not parts:
+        return ""
+    return " AND " + " AND ".join(parts)
 
 
 def plan_agent_code_batches(
@@ -66,6 +89,70 @@ def plan_agent_code_batches(
     return batches
 
 
+def plan_application_ranges(
+    package_uuid: uuid.UUID | str,
+    *,
+    client: Any,
+    stage_table: str,
+    target_rows: int = CN_AUX_PERSIST_TARGET_ROWS,
+) -> list[tuple[str | None, str | None]]:
+    """Plan half-open application-number ranges without splitting an application.
+
+    PRIORITY and MADRID legacy snapshots group by keys rooted at
+    ``application_number`` and retain ``groupArray(row_hash)`` state. The old
+    publisher ran each aggregate across the entire staged package. These ranges
+    use the same whole-application boundary pattern as the bounded CASE/PARTY
+    materializers: a boundary that lands inside a repeated application number is
+    moved to the next distinct application so one semantic unit is never split.
+    """
+    if target_rows < 1:
+        raise ValueError("target_rows must be positive")
+    if stage_table not in _ALLOWED_APPLICATION_STAGE_TABLES:
+        raise ValueError(f"unsupported application stage table: {stage_table}")
+
+    package = str(package_uuid)
+    table = f"markorbit_facts.{stage_table}"
+    ranges: list[tuple[str | None, str | None]] = []
+    lower: str | None = None
+    while True:
+        lower_sql = ""
+        if lower is not None:
+            lower_sql = f" AND application_number >= {_sql_string(lower)}"
+        rows = client.query(
+            f"""
+            SELECT application_number
+            FROM {table}
+            WHERE package_id = toUUID('{package}'){lower_sql}
+            ORDER BY application_number
+            LIMIT 1 OFFSET {int(target_rows)}
+            """
+        ).result_rows
+        if not rows:
+            ranges.append((lower, None))
+            break
+
+        boundary = str(rows[0][0])
+        if lower is not None and boundary <= lower:
+            next_rows = client.query(
+                f"""
+                SELECT application_number
+                FROM {table}
+                WHERE package_id = toUUID('{package}')
+                  AND application_number > {_sql_string(lower)}
+                ORDER BY application_number
+                LIMIT 1
+                """
+            ).result_rows
+            if not next_rows:
+                ranges.append((lower, None))
+                break
+            boundary = str(next_rows[0][0])
+
+        ranges.append((lower, boundary))
+        lower = boundary
+    return ranges
+
+
 def _command_label(sql: str) -> str:
     markers = (
         ("cn_agent_current", "AGENT_CURRENT"),
@@ -85,18 +172,20 @@ def _command_label(sql: str) -> str:
 
 
 class LegacySnapshotPersistClient:
-    """Bound the remaining whole-package agent aggregate in legacy persistence.
+    """Bound high-amplification legacy snapshot aggregates used by M1.6.
 
     M1.6 intentionally reuses the mature legacy snapshot writer after CASE,
-    PARTY and GOODS have been materialized in bounded stages. The one remaining
-    high-amplification aggregate is ``cn_agent_current``: it groups all BASIC
-    rows for the whole package and builds a sorted ``groupArray(row_hash)``.
+    PARTY and GOODS have been materialized in bounded stages. The original
+    remaining high-amplification aggregate was ``cn_agent_current``; once that
+    is bounded, PRIORITY and MADRID are the next whole-package ``groupArray``
+    statements in publisher order.
 
-    This adapter splits exactly that INSERT by complete ``agent_code`` groups.
-    Every agent is emitted once and still sees all of its package rows, so the
-    legacy lineage hash and current-row semantics stay unchanged. Other legacy
-    snapshot statements pass through untouched, but failures receive a precise
-    subphase label for the next real-corpus diagnosis.
+    Agent persistence is split by complete ``agent_code`` groups. PRIORITY and
+    MADRID persistence are split by half-open application-number ranges, never
+    splitting one application. Existing lineage hashes and current-row semantics
+    therefore stay unchanged while individual aggregate queries remain bounded.
+    Other legacy snapshot statements pass through untouched, with precise
+    subphase labels preserved for the next real-corpus diagnosis.
     """
 
     def __init__(
@@ -105,12 +194,20 @@ class LegacySnapshotPersistClient:
         *,
         package_uuid: uuid.UUID | str,
         agent_batches: list[tuple[str, ...]],
+        priority_ranges: list[tuple[str | None, str | None]] | None = None,
+        madrid_ranges: list[tuple[str | None, str | None]] | None = None,
     ) -> None:
         self._delegate = delegate
         self._package = str(package_uuid)
         self._agent_batches = list(agent_batches)
+        self._priority_ranges = list(priority_ranges or [(None, None)])
+        self._madrid_ranges = list(madrid_ranges or [(None, None)])
         self._agent_insert_seen = 0
+        self._priority_insert_seen = 0
+        self._madrid_insert_seen = 0
         self._physical_agent_commands = 0
+        self._physical_priority_commands = 0
+        self._physical_madrid_commands = 0
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._delegate, name)
@@ -124,12 +221,50 @@ class LegacySnapshotPersistClient:
         return sum(len(batch) for batch in self._agent_batches)
 
     @property
+    def priority_chunk_count(self) -> int:
+        return len(self._priority_ranges)
+
+    @property
+    def madrid_chunk_count(self) -> int:
+        return len(self._madrid_ranges)
+
+    @property
     def physical_agent_commands(self) -> int:
         return self._physical_agent_commands
+
+    @property
+    def physical_priority_commands(self) -> int:
+        return self._physical_priority_commands
+
+    @property
+    def physical_madrid_commands(self) -> int:
+        return self._physical_madrid_commands
 
     def command(self, sql: str, *args: Any, **kwargs: Any) -> Any:
         if _AGENT_INSERT in sql:
             return self._command_agent_current(sql, *args, **kwargs)
+        if _PRIORITY_INSERT in sql:
+            return self._command_application_current(
+                sql,
+                label="PRIORITY_CURRENT",
+                stage_table="cn_stage_priority",
+                ranges=self._priority_ranges,
+                seen_attr="_priority_insert_seen",
+                physical_attr="_physical_priority_commands",
+                *args,
+                **kwargs,
+            )
+        if _MADRID_INSERT in sql:
+            return self._command_application_current(
+                sql,
+                label="MADRID_CURRENT",
+                stage_table="cn_stage_madrid",
+                ranges=self._madrid_ranges,
+                seen_attr="_madrid_insert_seen",
+                physical_attr="_physical_madrid_commands",
+                *args,
+                **kwargs,
+            )
         try:
             return self._delegate.command(sql, *args, **kwargs)
         except Exception as exc:
@@ -154,6 +289,33 @@ class LegacySnapshotPersistClient:
                 "Bounded cn_agent_current command count mismatch: expected "
                 f"{len(self._agent_batches)}, ran {self._physical_agent_commands}."
             )
+
+    def assert_aux_persist_complete(self) -> None:
+        checks = (
+            (
+                "cn_priority_current",
+                self._priority_insert_seen,
+                self._physical_priority_commands,
+                len(self._priority_ranges),
+            ),
+            (
+                "cn_madrid_current",
+                self._madrid_insert_seen,
+                self._physical_madrid_commands,
+                len(self._madrid_ranges),
+            ),
+        )
+        for table, seen, physical, expected in checks:
+            if seen != 1:
+                raise RuntimeError(
+                    f"Expected exactly one legacy {table} INSERT, saw {seen}. "
+                    "Legacy publisher shape changed."
+                )
+            if physical != expected:
+                raise RuntimeError(
+                    f"Bounded {table} command count mismatch: expected "
+                    f"{expected}, ran {physical}."
+                )
 
     def _command_agent_current(self, sql: str, *args: Any, **kwargs: Any) -> Any:
         if self._agent_insert_seen != 0:
@@ -180,6 +342,44 @@ class LegacySnapshotPersistClient:
                     f"chunk={index}/{total} agent_codes={len(batch)} failed: {exc}"
                 ) from exc
             self._physical_agent_commands += 1
+        return result
+
+    def _command_application_current(
+        self,
+        sql: str,
+        *args: Any,
+        label: str,
+        stage_table: str,
+        ranges: list[tuple[str | None, str | None]],
+        seen_attr: str,
+        physical_attr: str,
+        **kwargs: Any,
+    ) -> Any:
+        seen = int(getattr(self, seen_attr))
+        if seen != 0:
+            raise RuntimeError(
+                f"Legacy snapshot emitted {stage_table} target more than once; refusing "
+                "ambiguous bounded persistence."
+            )
+        setattr(self, seen_attr, seen + 1)
+
+        result: Any = None
+        total = len(ranges)
+        for index, application_range in enumerate(ranges, start=1):
+            rewritten = self._rewrite_application_insert(
+                sql,
+                stage_table=stage_table,
+                application_range=application_range,
+            )
+            try:
+                result = self._delegate.command(rewritten, *args, **kwargs)
+            except Exception as exc:
+                lower, upper = application_range
+                raise RuntimeError(
+                    f"legacy_snapshot_subphase={label} chunk={index}/{total} "
+                    f"range=[{lower or '-inf'},{upper or '+inf'}) failed: {exc}"
+                ) from exc
+            setattr(self, physical_attr, int(getattr(self, physical_attr)) + 1)
         return result
 
     def _rewrite_agent_insert(self, sql: str, batch: tuple[str, ...]) -> str:
@@ -212,3 +412,28 @@ class LegacySnapshotPersistClient:
         return sql.replace(basic_source, bounded_basic, 1).replace(
             agent_join, bounded_agent, 1
         )
+
+    def _rewrite_application_insert(
+        self,
+        sql: str,
+        *,
+        stage_table: str,
+        application_range: tuple[str | None, str | None],
+    ) -> str:
+        if stage_table not in _ALLOWED_APPLICATION_STAGE_TABLES:
+            raise RuntimeError(f"Unsupported bounded stage table: {stage_table}")
+        source = f"FROM markorbit_facts.{stage_table}"
+        if sql.count(source) != 1:
+            raise RuntimeError(
+                f"Legacy snapshot SQL shape changed; expected one {stage_table} source."
+            )
+
+        lower, upper = application_range
+        predicate = _application_predicate(lower, upper)
+        alias = stage_table.removeprefix("cn_stage_") + "_bounded"
+        bounded_source = f"""FROM (
+            SELECT *
+            FROM markorbit_facts.{stage_table}
+            WHERE package_id = toUUID('{self._package}'){predicate}
+        ) AS {alias}"""
+        return sql.replace(source, bounded_source, 1)
