@@ -397,6 +397,15 @@ def _run_cn_continuation(run_id: str) -> dict[str, Any]:
     }
 
 
+def _checkpoint_result(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": str(checkpoint.get("status") or "UNKNOWN"),
+        "ready_for_next_domain": bool(checkpoint.get("ready_for_next_domain")),
+        "reasons": list(checkpoint.get("reasons") or []),
+        "summary": dict(checkpoint.get("summary") or {}),
+    }
+
+
 def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
     domain = str(payload.get("domain") or "").upper()
@@ -418,8 +427,13 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
                 limit=1,
             )
         elif action == "CONTINUE":
-            gate = {"status": "REGISTERED_REPLAY_ONLY_CLEAN_START_DISABLED"}
             result = _run_cn_continuation(str(task["run_id"]))
+            checkpoint = _assert_cn_accepted()
+            result["final_checkpoint"] = _checkpoint_result(checkpoint)
+            gate = {
+                "status": checkpoint.get("status") or "UNKNOWN",
+                "ready_for_next_domain": bool(checkpoint.get("ready_for_next_domain")),
+            }
         else:
             raise ValueError(f"Unsupported CN action: {action}")
     elif domain == "US_APPLICATION":
