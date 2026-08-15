@@ -96,7 +96,7 @@ def plan_application_ranges(
     stage_table: str,
     target_rows: int = CN_AUX_PERSIST_TARGET_ROWS,
 ) -> list[tuple[str | None, str | None]]:
-    """Plan half-open application-number ranges without splitting an application.
+    """Plan half-open application ranges without splitting an application.
 
     PRIORITY and MADRID legacy snapshots group by keys rooted at
     ``application_number`` and retain ``groupArray(row_hash)`` state. The old
@@ -200,8 +200,8 @@ class LegacySnapshotPersistClient:
         self._delegate = delegate
         self._package = str(package_uuid)
         self._agent_batches = list(agent_batches)
-        self._priority_ranges = list(priority_ranges or [(None, None)])
-        self._madrid_ranges = list(madrid_ranges or [(None, None)])
+        self._priority_ranges = None if priority_ranges is None else list(priority_ranges)
+        self._madrid_ranges = None if madrid_ranges is None else list(madrid_ranges)
         self._agent_insert_seen = 0
         self._priority_insert_seen = 0
         self._madrid_insert_seen = 0
@@ -222,11 +222,11 @@ class LegacySnapshotPersistClient:
 
     @property
     def priority_chunk_count(self) -> int:
-        return len(self._priority_ranges)
+        return len(self._priority_ranges or [])
 
     @property
     def madrid_chunk_count(self) -> int:
-        return len(self._madrid_ranges)
+        return len(self._madrid_ranges or [])
 
     @property
     def physical_agent_commands(self) -> int:
@@ -246,23 +246,29 @@ class LegacySnapshotPersistClient:
         if _PRIORITY_INSERT in sql:
             return self._command_application_current(
                 sql,
+                *args,
                 label="PRIORITY_CURRENT",
                 stage_table="cn_stage_priority",
-                ranges=self._priority_ranges,
+                ranges=self._application_ranges(
+                    label="PRIORITY_CURRENT",
+                    stage_table="cn_stage_priority",
+                ),
                 seen_attr="_priority_insert_seen",
                 physical_attr="_physical_priority_commands",
-                *args,
                 **kwargs,
             )
         if _MADRID_INSERT in sql:
             return self._command_application_current(
                 sql,
+                *args,
                 label="MADRID_CURRENT",
                 stage_table="cn_stage_madrid",
-                ranges=self._madrid_ranges,
+                ranges=self._application_ranges(
+                    label="MADRID_CURRENT",
+                    stage_table="cn_stage_madrid",
+                ),
                 seen_attr="_madrid_insert_seen",
                 physical_attr="_physical_madrid_commands",
-                *args,
                 **kwargs,
             )
         try:
@@ -289,6 +295,8 @@ class LegacySnapshotPersistClient:
                 "Bounded cn_agent_current command count mismatch: expected "
                 f"{len(self._agent_batches)}, ran {self._physical_agent_commands}."
             )
+        # Keep the existing call site as the publisher-shape assertion point.
+        self.assert_aux_persist_complete()
 
     def assert_aux_persist_complete(self) -> None:
         checks = (
@@ -296,13 +304,13 @@ class LegacySnapshotPersistClient:
                 "cn_priority_current",
                 self._priority_insert_seen,
                 self._physical_priority_commands,
-                len(self._priority_ranges),
+                len(self._priority_ranges or []),
             ),
             (
                 "cn_madrid_current",
                 self._madrid_insert_seen,
                 self._physical_madrid_commands,
-                len(self._madrid_ranges),
+                len(self._madrid_ranges or []),
             ),
         )
         for table, seen, physical, expected in checks:
@@ -316,6 +324,29 @@ class LegacySnapshotPersistClient:
                     f"Bounded {table} command count mismatch: expected "
                     f"{expected}, ran {physical}."
                 )
+
+    def _application_ranges(
+        self,
+        *,
+        label: str,
+        stage_table: str,
+    ) -> list[tuple[str | None, str | None]]:
+        attr = "_priority_ranges" if stage_table == "cn_stage_priority" else "_madrid_ranges"
+        existing = getattr(self, attr)
+        if existing is not None:
+            return existing
+        try:
+            planned = plan_application_ranges(
+                self._package,
+                client=self._delegate,
+                stage_table=stage_table,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"legacy_snapshot_subphase={label}_PLAN failed: {exc}"
+            ) from exc
+        setattr(self, attr, planned)
+        return planned
 
     def _command_agent_current(self, sql: str, *args: Any, **kwargs: Any) -> Any:
         if self._agent_insert_seen != 0:
