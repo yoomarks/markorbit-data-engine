@@ -7,6 +7,7 @@ import pytest
 from app.cn.legacy_snapshot_persist import (
     LegacySnapshotPersistClient,
     plan_agent_code_batches,
+    plan_application_ranges,
 )
 
 
@@ -30,6 +31,17 @@ class _FakeClient:
         return len(self.commands)
 
 
+class _SequencedClient(_FakeClient):
+    def __init__(self, query_results):
+        super().__init__()
+        self.query_results = [list(rows) for rows in query_results]
+
+    def query(self, sql: str, *args, **kwargs):
+        self.queries.append(sql)
+        rows = self.query_results.pop(0) if self.query_results else []
+        return _QueryResult(rows)
+
+
 def _agent_insert(package: str) -> str:
     return f"""
         INSERT INTO markorbit_facts.cn_agent_current
@@ -42,6 +54,38 @@ def _agent_insert(package: str) -> str:
         WHERE b.package_id = toUUID('{package}') AND b.agent_code != ''
         GROUP BY b.agent_code
     """
+
+
+def _priority_insert(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_priority_current
+        SELECT
+            application_number,
+            class_no,
+            priority_number,
+            groupArray(toString(row_hash))
+        FROM markorbit_facts.cn_stage_priority
+        WHERE package_id = toUUID('{package}')
+        GROUP BY application_number, class_no, priority_number
+    """
+
+
+def _madrid_insert(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_madrid_current
+        SELECT
+            application_number,
+            international_registration_number,
+            groupArray(toString(row_hash))
+        FROM markorbit_facts.cn_stage_madrid
+        WHERE package_id = toUUID('{package}')
+        GROUP BY application_number, international_registration_number
+    """
+
+
+def _mark_aux_complete(client: LegacySnapshotPersistClient, package: str) -> None:
+    client.command(_priority_insert(package))
+    client.command(_madrid_insert(package))
 
 
 def test_agent_batch_plan_keeps_each_agent_whole() -> None:
@@ -82,6 +126,40 @@ def test_agent_batch_plan_caps_code_count_even_when_rows_are_sparse() -> None:
     assert batches == [("A0", "A1"), ("A2", "A3"), ("A4",)]
 
 
+def test_application_range_plan_uses_half_open_whole_application_boundaries() -> None:
+    package = uuid.uuid4()
+    client = _SequencedClient(
+        [
+            [("200",)],
+            [("200",)],
+            [("300",)],
+            [],
+        ]
+    )
+
+    ranges = plan_application_ranges(
+        package,
+        client=client,
+        stage_table="cn_stage_priority",
+        target_rows=2,
+    )
+
+    assert ranges == [(None, "200"), ("200", "300"), ("300", None)]
+    assert "LIMIT 1 OFFSET 2" in client.queries[0]
+    assert "application_number >= '200'" in client.queries[1]
+    assert "application_number > '200'" in client.queries[2]
+    assert "application_number >= '300'" in client.queries[3]
+
+
+def test_application_range_plan_rejects_unapproved_stage_table() -> None:
+    with pytest.raises(ValueError, match="unsupported application stage table"):
+        plan_application_ranges(
+            uuid.uuid4(),
+            client=_FakeClient(),
+            stage_table="cn_stage_basic",
+        )
+
+
 def test_agent_current_insert_is_split_with_both_stage_sides_bounded() -> None:
     package = uuid.uuid4()
     delegate = _FakeClient()
@@ -89,9 +167,12 @@ def test_agent_current_insert_is_split_with_both_stage_sides_bounded() -> None:
         delegate,
         package_uuid=package,
         agent_batches=[("A", "B"), ("C",)],
+        priority_ranges=[],
+        madrid_ranges=[],
     )
 
     result = client.command(_agent_insert(str(package)))
+    _mark_aux_complete(client, str(package))
     client.assert_agent_persist_complete()
 
     assert result == 2
@@ -114,11 +195,96 @@ def test_no_agent_rows_skip_the_whole_stage_agent_insert() -> None:
         delegate,
         package_uuid=package,
         agent_batches=[],
+        priority_ranges=[],
+        madrid_ranges=[],
     )
 
     assert client.command(_agent_insert(str(package))) is None
+    _mark_aux_complete(client, str(package))
     client.assert_agent_persist_complete()
     assert delegate.commands == []
+
+
+def test_priority_insert_is_split_by_application_range() -> None:
+    package = uuid.uuid4()
+    delegate = _FakeClient()
+    client = LegacySnapshotPersistClient(
+        delegate,
+        package_uuid=package,
+        agent_batches=[],
+        priority_ranges=[(None, "200"), ("200", None)],
+        madrid_ranges=[],
+    )
+
+    result = client.command(_priority_insert(str(package)))
+
+    assert result == 2
+    assert client.priority_chunk_count == 2
+    assert client.physical_priority_commands == 2
+    assert "application_number < '200'" in delegate.commands[0]
+    assert "application_number >= '200'" in delegate.commands[1]
+    for sql in delegate.commands:
+        assert "FROM (\n            SELECT *\n            FROM markorbit_facts.cn_stage_priority" in sql
+        assert sql.count(f"package_id = toUUID('{package}')") >= 2
+
+
+def test_madrid_insert_is_split_by_application_range() -> None:
+    package = uuid.uuid4()
+    delegate = _FakeClient()
+    client = LegacySnapshotPersistClient(
+        delegate,
+        package_uuid=package,
+        agent_batches=[],
+        priority_ranges=[],
+        madrid_ranges=[(None, "G200"), ("G200", None)],
+    )
+
+    result = client.command(_madrid_insert(str(package)))
+
+    assert result == 2
+    assert client.madrid_chunk_count == 2
+    assert client.physical_madrid_commands == 2
+    assert "application_number < 'G200'" in delegate.commands[0]
+    assert "application_number >= 'G200'" in delegate.commands[1]
+    for sql in delegate.commands:
+        assert "FROM (\n            SELECT *\n            FROM markorbit_facts.cn_stage_madrid" in sql
+
+
+def test_priority_ranges_are_planned_lazily_at_the_priority_command() -> None:
+    package = uuid.uuid4()
+    delegate = _SequencedClient(
+        [
+            [("200",)],
+            [],
+        ]
+    )
+    client = LegacySnapshotPersistClient(
+        delegate,
+        package_uuid=package,
+        agent_batches=[],
+        madrid_ranges=[],
+    )
+
+    assert client.priority_chunk_count == 0
+    result = client.command(_priority_insert(str(package)))
+
+    assert result == 2
+    assert client.priority_chunk_count == 2
+    assert len(delegate.queries) == 2
+    assert "FROM markorbit_facts.cn_stage_priority" in delegate.queries[0]
+
+
+def test_auxiliary_persistence_assertion_detects_missing_legacy_insert() -> None:
+    client = LegacySnapshotPersistClient(
+        _FakeClient(),
+        package_uuid=uuid.uuid4(),
+        agent_batches=[],
+        priority_ranges=[],
+        madrid_ranges=[],
+    )
+
+    with pytest.raises(RuntimeError, match="cn_priority_current"):
+        client.assert_aux_persist_complete()
 
 
 def test_non_agent_snapshot_failure_gets_precise_subphase() -> None:
@@ -132,6 +298,8 @@ def test_non_agent_snapshot_failure_gets_precise_subphase() -> None:
         _FailingClient(),
         package_uuid=package,
         agent_batches=[],
+        priority_ranges=[],
+        madrid_ranges=[],
     )
 
     with pytest.raises(RuntimeError, match="legacy_snapshot_subphase=CASE_SCOPE_CURRENT"):
