@@ -72,7 +72,7 @@ class _FakeConn:
         self.commits += 1
 
 
-@pytest.mark.parametrize("domain", ["CN", "US_APPLICATION", "US_ASSIGNMENT"])
+@pytest.mark.parametrize("domain", ["CN", "US_APPLICATION", "US_ASSIGNMENT", "US_TTAB"])
 @pytest.mark.parametrize(
     ("task_status", "expected_status"),
     [("QUEUED", "INTERRUPTED"), ("RUNNING", "RUNNING")],
@@ -102,9 +102,9 @@ def test_stop_request_is_cooperative_and_preserves_current_package(
         assert "waiting for the current package boundary" in update_sql
 
 
-def test_stop_is_limited_to_continuous_domains() -> None:
-    with pytest.raises(ValueError, match="CN, US Application, and US Assignment"):
-        admin_domain_tasks.request_admin_domain_stop(domain="US_TTAB")
+def test_stop_rejects_unknown_domain() -> None:
+    with pytest.raises(ValueError, match="trademark continuous replay domains"):
+        admin_domain_tasks.request_admin_domain_stop(domain="EU")
 
 
 def test_cn_continuation_checks_stop_and_storage_before_next_package(monkeypatch) -> None:
@@ -168,5 +168,6 @@ def test_task_api_and_ui_expose_safe_stop_for_continuous_domains() -> None:
     assert "queueTask('CN','STOP')" in markup
     assert "queueTask('US_APPLICATION','STOP')" in markup
     assert "queueTask('US_ASSIGNMENT','STOP')" in markup
+    assert "queueTask('US_TTAB','STOP')" in markup
     assert "停止连续推进" in markup
     assert "安全边界停止" in markup

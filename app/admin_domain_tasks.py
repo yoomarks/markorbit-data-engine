@@ -28,6 +28,7 @@ from app.us_assignment.corpus_replay import execute_replay as execute_assignment
 from app.us_assignment.jobs import run_assignment_once
 from app.us_assignment.migrations import ensure_assignment_schema
 from app.us_assignment.transition_gate import build_transition_gate as build_assignment_gate
+from app.us_ttab.corpus_replay import execute_replay as execute_ttab_replay
 from app.us_ttab.jobs import run_ttab_once
 from app.us_ttab.migrations import ensure_ttab_schema
 from app.us_ttab.transition_gate import build_transition_gate as build_ttab_gate
@@ -37,7 +38,7 @@ ADMIN_TASK_KIND = "DOMAIN_CONTROL"
 ADMIN_TRIGGER = "ADMIN_UI"
 SUPPORTED_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT", "US_TTAB"}
 SUPPORTED_ACTIONS = {"RUN", "RETRY", "CONTINUE"}
-_CONTINUOUS_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT"}
+_CONTINUOUS_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT", "US_TTAB"}
 _MUTATION_LOCK_NAME = "markorbit:admin-domain-mutation"
 _QUEUE_LOCK_NAME = "markorbit:admin-domain-task-queue"
 
@@ -71,9 +72,7 @@ def queue_admin_domain_task(
     if action not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported action: {action}")
     if action == "CONTINUE" and domain not in _CONTINUOUS_DOMAINS:
-        raise ValueError(
-            "CONTINUE is only supported for CN, US Application, and US Assignment replay"
-        )
+        raise ValueError("CONTINUE is only supported for trademark replay domains")
     if domain != "CN" and expected_history_parts < 1:
         raise ValueError("expected_history_parts is required for US domain tasks")
     if expected_history_parts > 9999:
@@ -125,9 +124,7 @@ def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
     """Request a safe package-boundary stop for an active continuous replay."""
     domain = domain.strip().upper()
     if domain not in _CONTINUOUS_DOMAINS:
-        raise ValueError(
-            "STOP is only supported for CN, US Application, and US Assignment continuous replay"
-        )
+        raise ValueError("STOP is only supported for trademark continuous replay domains")
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -414,15 +411,48 @@ def _assert_assignment_accepted(raw_root, expected_history_parts: int) -> dict[s
     return report
 
 
-def _assert_ttab_unlocked(raw_root, expected_history_parts: int) -> dict[str, Any]:
-    report = build_ttab_gate(
+def _build_ttab_gate(
+    raw_root,
+    expected_history_parts: int,
+    *,
+    verify_us_source_files: bool = False,
+    verify_assignment_sources: bool = False,
+    verify_ttab_sources: bool = False,
+) -> dict[str, Any]:
+    return build_ttab_gate(
         raw_root,
         expected_history_parts=expected_history_parts,
+        verify_us_source_files=verify_us_source_files,
+        verify_assignment_sources=verify_assignment_sources,
+        verify_ttab_sources=verify_ttab_sources,
         persistent_worker_running=False,
     )
+
+
+def _assert_ttab_unlocked(raw_root, expected_history_parts: int) -> dict[str, Any]:
+    report = _build_ttab_gate(raw_root, expected_history_parts)
     if not report.get("ready_for_ttab_phase"):
         raise DomainTaskBlocked(
             f"US TTAB transition gate blocked mutation: {report.get('status')}"
+        )
+    return report
+
+
+def _assert_ttab_accepted(raw_root, expected_history_parts: int) -> dict[str, Any]:
+    report = _build_ttab_gate(
+        raw_root,
+        expected_history_parts,
+        verify_us_source_files=True,
+        verify_assignment_sources=True,
+        verify_ttab_sources=True,
+    )
+    if (
+        report.get("status") != "TTAB_ACCEPTED"
+        or not report.get("ready_for_ttab_phase")
+        or not report.get("ttab_ready")
+    ):
+        raise DomainTaskBlocked(
+            f"US TTAB acceptance gate did not pass: {report.get('status')}"
         )
     return report
 
@@ -510,8 +540,25 @@ def _assignment_gate_result(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ttab_gate_result(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": str(report.get("status") or "UNKNOWN"),
+        "ready_for_ttab_phase": bool(report.get("ready_for_ttab_phase")),
+        "ttab_ready": bool(report.get("ttab_ready")),
+        "ttab_state": str(report.get("ttab_state") or ""),
+        "reason_codes": list(report.get("reason_codes") or []),
+        "deadline_validity_inference": False,
+        "legal_outcome_conclusion": False,
+        "substantive_rights_conclusion": False,
+    }
+
+
 def _assignment_manifest_path(raw_root) -> Path:
     return Path(raw_root) / "manifests" / "us_assignment" / "corpus.json"
+
+
+def _ttab_manifest_path(raw_root) -> Path:
+    return Path(raw_root) / "manifests" / "us_ttab" / "corpus.json"
 
 
 def _run_us_application_continuation(
@@ -579,6 +626,42 @@ def _run_assignment_continuation(
         "remaining_count": int(final_plan.get("remaining_count") or 0),
         "source_preflight_runs": int(replay.get("source_preflight_runs") or 0),
         "legal_ownership_conclusion": False,
+    }
+
+
+def _run_ttab_continuation(
+    raw_root, expected_history_parts: int, run_id: str
+) -> dict[str, Any]:
+    def before_package(_action: dict[str, Any]) -> None:
+        _assert_continuation_not_stopped(run_id, "US_TTAB")
+        _assert_storage_headroom()
+
+    replay = execute_ttab_replay(
+        _ttab_manifest_path(raw_root),
+        Path(raw_root),
+        apply=True,
+        all_packages=True,
+        resume_failed=True,
+        before_package=before_package,
+    )
+    status = str(replay.get("status") or "UNKNOWN")
+    if status in {"BUSY", "BLOCKED", "RETRY_REQUIRED"}:
+        blockers = (replay.get("final_plan") or {}).get("blockers") or replay.get("blockers") or []
+        raise DomainTaskBlocked(f"US TTAB deterministic replay blocked: {status}: {blockers}")
+    if status == "FAILED":
+        raise RuntimeError(f"US TTAB deterministic replay failed: {replay.get('error')}")
+    if status != "COMPLETE":
+        raise RuntimeError(f"Unexpected US TTAB replay status: {status}")
+    final_plan = replay.get("final_plan") if isinstance(replay.get("final_plan"), dict) else {}
+    return {
+        "status": status,
+        "replay_version": replay.get("replay_version"),
+        "processed_count": int(replay.get("processed_count") or 0),
+        "remaining_count": int(final_plan.get("remaining_count") or 0),
+        "source_preflight_runs": int(replay.get("source_preflight_runs") or 0),
+        "deadline_validity_inference": False,
+        "legal_outcome_conclusion": False,
+        "substantive_rights_conclusion": False,
     }
 
 
@@ -677,7 +760,32 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
     elif domain == "US_TTAB":
         gate = _assert_ttab_unlocked(raw_root, expected_history_parts)
         ensure_ttab_schema()
-        result = run_ttab_once(raw_root, retry=action == "RETRY")
+        if action == "RUN":
+            result = run_ttab_once(raw_root, retry=False)
+        elif action == "RETRY":
+            result = run_ttab_once(raw_root, retry=True)
+        elif action == "CONTINUE":
+            if gate.get("status") == "TTAB_ACCEPTED" and gate.get("ttab_ready"):
+                result = {
+                    "status": "COMPLETE",
+                    "processed_count": 0,
+                    "remaining_count": 0,
+                    "already_accepted": True,
+                    "deadline_validity_inference": False,
+                    "legal_outcome_conclusion": False,
+                    "substantive_rights_conclusion": False,
+                }
+            else:
+                result = _run_ttab_continuation(
+                    raw_root,
+                    expected_history_parts,
+                    str(task.get("run_id") or ""),
+                )
+            final_gate = _assert_ttab_accepted(raw_root, expected_history_parts)
+            result["final_ttab_gate"] = _ttab_gate_result(final_gate)
+            gate = final_gate
+        else:
+            raise ValueError(f"Unsupported US TTAB action: {action}")
     else:
         raise ValueError(f"Unsupported queued domain: {domain}")
 

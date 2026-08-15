@@ -4,7 +4,7 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.config import get_settings
 from app.us_ttab import TTAB_SCHEMA_VERSION
@@ -211,6 +211,7 @@ def execute_replay(
     all_packages: bool = False,
     max_packages: int = 1,
     resume_failed: bool = False,
+    before_package: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if max_packages < 1:
         raise ValueError("max_packages must be positive")
@@ -255,6 +256,9 @@ def execute_replay(
                 "processed": processed,
                 "final_plan": current,
             }
+
+        if before_package is not None:
+            before_package(dict(next_action))
 
         source_path = Path(str(next_action["path"]))
         if next_action["action"] in {"REGISTER_AND_INGEST", "RETRY_FULL_PACKAGE"}:
