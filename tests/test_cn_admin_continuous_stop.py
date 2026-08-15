@@ -72,7 +72,7 @@ class _FakeConn:
         self.commits += 1
 
 
-@pytest.mark.parametrize("domain", ["CN", "US_APPLICATION"])
+@pytest.mark.parametrize("domain", ["CN", "US_APPLICATION", "US_ASSIGNMENT"])
 @pytest.mark.parametrize(
     ("task_status", "expected_status"),
     [("QUEUED", "INTERRUPTED"), ("RUNNING", "RUNNING")],
@@ -103,8 +103,8 @@ def test_stop_request_is_cooperative_and_preserves_current_package(
 
 
 def test_stop_is_limited_to_continuous_domains() -> None:
-    with pytest.raises(ValueError, match="CN and US Application"):
-        admin_domain_tasks.request_admin_domain_stop(domain="US_ASSIGNMENT")
+    with pytest.raises(ValueError, match="CN, US Application, and US Assignment"):
+        admin_domain_tasks.request_admin_domain_stop(domain="US_TTAB")
 
 
 def test_cn_continuation_checks_stop_and_storage_before_next_package(monkeypatch) -> None:
@@ -160,12 +160,13 @@ def test_worker_restart_does_not_requeue_stop_requested_task() -> None:
     assert "Worker restarted after stop was requested; task not requeued." in source
 
 
-def test_task_api_and_ui_expose_safe_stop_for_both_continuous_domains() -> None:
+def test_task_api_and_ui_expose_safe_stop_for_continuous_domains() -> None:
     api = (ROOT / "app" / "admin_task_api.py").read_text(encoding="utf-8")
     markup = (ROOT / "web" / "admin-jobs.html").read_text(encoding="utf-8")
     assert 'action.strip().upper() == "STOP"' in api
     assert "request_admin_domain_stop" in api
     assert "queueTask('CN','STOP')" in markup
     assert "queueTask('US_APPLICATION','STOP')" in markup
+    assert "queueTask('US_ASSIGNMENT','STOP')" in markup
     assert "停止连续推进" in markup
     assert "安全边界停止" in markup
