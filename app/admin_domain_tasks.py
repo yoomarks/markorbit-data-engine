@@ -35,6 +35,7 @@ ADMIN_TASK_KIND = "DOMAIN_CONTROL"
 ADMIN_TRIGGER = "ADMIN_UI"
 SUPPORTED_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT", "US_TTAB"}
 SUPPORTED_ACTIONS = {"RUN", "RETRY", "CONTINUE"}
+_CONTINUOUS_DOMAINS = {"CN", "US_APPLICATION"}
 _MUTATION_LOCK_NAME = "markorbit:admin-domain-mutation"
 _QUEUE_LOCK_NAME = "markorbit:admin-domain-task-queue"
 
@@ -67,7 +68,7 @@ def queue_admin_domain_task(
         raise ValueError(f"Unsupported domain: {domain}")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported action: {action}")
-    if action == "CONTINUE" and domain not in {"CN", "US_APPLICATION"}:
+    if action == "CONTINUE" and domain not in _CONTINUOUS_DOMAINS:
         raise ValueError("CONTINUE is only supported for CN and US Application replay")
     if domain != "CN" and expected_history_parts < 1:
         raise ValueError("expected_history_parts is required for US domain tasks")
@@ -117,10 +118,10 @@ def queue_admin_domain_task(
 
 
 def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
-    """Request a safe package-boundary stop for the active CN continuous replay."""
+    """Request a safe package-boundary stop for an active continuous replay."""
     domain = domain.strip().upper()
-    if domain != "CN":
-        raise ValueError("STOP is only supported for CN continuous replay")
+    if domain not in _CONTINUOUS_DOMAINS:
+        raise ValueError("STOP is only supported for CN and US Application continuous replay")
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -131,14 +132,14 @@ def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
                 FROM control.job_run
                 WHERE trigger_type = %s
                   AND payload->>'task_kind' = %s
-                  AND payload->>'domain' = 'CN'
+                  AND payload->>'domain' = %s
                   AND payload->>'action' = 'CONTINUE'
                   AND status IN ('QUEUED', 'RUNNING')
                 ORDER BY started_at
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (ADMIN_TRIGGER, ADMIN_TASK_KIND),
+                (ADMIN_TRIGGER, ADMIN_TASK_KIND, domain),
             )
             task = cur.fetchone()
             if not task:
@@ -155,7 +156,7 @@ def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
                             'stop_requested', true,
                             'stop_requested_at', now()
                         ),
-                        error_message = 'Stopped before continuous CN replay started.'
+                        error_message = 'Stopped before continuous replay started.'
                     WHERE run_id = %s
                     RETURNING run_id, job_type, trigger_type, status,
                               started_at, finished_at, payload, error_message
@@ -170,7 +171,7 @@ def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
                             'stop_requested', true,
                             'stop_requested_at', now()
                         ),
-                        error_message = 'Stop requested; waiting for the current CN package boundary.'
+                        error_message = 'Stop requested; waiting for the current package boundary.'
                     WHERE run_id = %s
                     RETURNING run_id, job_type, trigger_type, status,
                               started_at, finished_at, payload, error_message
@@ -400,7 +401,7 @@ def _check_ingest_result(result: dict[str, Any]) -> None:
         raise RuntimeError(f"Domain retry could not locate its source package: {result}")
 
 
-def _assert_cn_continuation_not_stopped(run_id: str) -> None:
+def _continuation_stop_requested(run_id: str) -> bool:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -409,15 +410,19 @@ def _assert_cn_continuation_not_stopped(run_id: str) -> None:
                 (run_id,),
             )
             row = cur.fetchone()
-    if row and str(row.get("stop_requested") or "").lower() == "true":
+    return bool(row and str(row.get("stop_requested") or "").lower() == "true")
+
+
+def _assert_continuation_not_stopped(run_id: str, domain: str) -> None:
+    if _continuation_stop_requested(run_id):
         raise DomainTaskInterrupted(
-            "CN continuous replay stopped by Admin request at a package boundary."
+            f"{domain} continuous replay stopped by Admin request at a package boundary."
         )
 
 
 def _run_cn_continuation(run_id: str) -> dict[str, Any]:
     def before_package(_phase: str) -> None:
-        _assert_cn_continuation_not_stopped(run_id)
+        _assert_continuation_not_stopped(run_id, "CN")
         _assert_storage_headroom()
 
     code, summary = full_replay.run_full_replay(
@@ -458,12 +463,19 @@ def _us_application_gate_result(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_us_application_continuation(raw_root, expected_history_parts: int) -> dict[str, Any]:
+def _run_us_application_continuation(
+    raw_root, expected_history_parts: int, run_id: str
+) -> dict[str, Any]:
+    def before_package(_step: dict[str, Any]) -> None:
+        _assert_continuation_not_stopped(run_id, "US_APPLICATION")
+        _assert_storage_headroom()
+
     replay = execute_us_replay(
         raw_root,
         expected_history_parts=expected_history_parts,
         max_packages=None,
         trigger_type="ADMIN_UI_US_CONTINUE",
+        before_package=before_package,
     )
     status = str(replay.get("status") or "UNKNOWN")
     if status == "BUSY":
@@ -539,7 +551,9 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
                 }
             else:
                 result = _run_us_application_continuation(
-                    raw_root, expected_history_parts
+                    raw_root,
+                    expected_history_parts,
+                    str(task.get("run_id") or ""),
                 )
             final_gate = _assert_us_application_accepted(
                 raw_root, expected_history_parts
