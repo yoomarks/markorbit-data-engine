@@ -11,7 +11,11 @@ from app.admin_api import (
     _job_domain,
     _raw_inventory,
 )
-from app.cn.stage_resume import CHECKPOINT_MAX_AGE, CHECKPOINT_VERSION
+from app.cn.stage_resume import (
+    CHECKPOINT_MAX_AGE,
+    CHECKPOINT_VERSION,
+    ensure_stage_checkpoint_schema,
+)
 from app.db import postgres_conn
 
 
@@ -57,6 +61,9 @@ def admin_packages_page(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=200),
 ):
+    # Existing Postgres volumes do not replay docker init scripts after an upgrade.
+    # Ensure #125's checkpoint table exists before the inventory attempts to join it.
+    ensure_stage_checkpoint_schema()
     page, page_size, offset = _normalize_page(page, page_size)
     clauses: list[str] = []
     params: list[Any] = []
@@ -130,6 +137,7 @@ def admin_cn_recovery():
     path still performs exact seven-table row-count validation before it skips raw
     ZIP parsing.
     """
+    ensure_stage_checkpoint_schema()
     sql = f"""
         SELECT sp.package_id, sp.file_name, sp.status, sp.file_size, sp.source_rank,
                sp.package_sequence, sp.error_message,
