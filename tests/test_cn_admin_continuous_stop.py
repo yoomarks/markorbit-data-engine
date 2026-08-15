@@ -11,8 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FakeCursor:
-    def __init__(self, task_status: str):
+    def __init__(self, task_status: str, domain: str):
         self.task_status = task_status
+        self.domain = domain
         self.current = None
         self.executions: list[tuple[str, object]] = []
 
@@ -27,12 +28,12 @@ class _FakeCursor:
         if "SELECT run_id, job_type, status, started_at, payload" in sql:
             self.current = {
                 "run_id": "11111111-1111-1111-1111-111111111111",
-                "job_type": "CN_ADMIN_CONTINUE",
+                "job_type": f"{self.domain}_ADMIN_CONTINUE",
                 "status": self.task_status,
                 "started_at": None,
                 "payload": {
                     "task_kind": "DOMAIN_CONTROL",
-                    "domain": "CN",
+                    "domain": self.domain,
                     "action": "CONTINUE",
                 },
             }
@@ -40,7 +41,7 @@ class _FakeCursor:
             status = "INTERRUPTED" if self.task_status == "QUEUED" else "RUNNING"
             self.current = {
                 "run_id": "11111111-1111-1111-1111-111111111111",
-                "job_type": "CN_ADMIN_CONTINUE",
+                "job_type": f"{self.domain}_ADMIN_CONTINUE",
                 "trigger_type": "ADMIN_UI",
                 "status": status,
                 "started_at": None,
@@ -71,35 +72,42 @@ class _FakeConn:
         self.commits += 1
 
 
+@pytest.mark.parametrize("domain", ["CN", "US_APPLICATION"])
 @pytest.mark.parametrize(
     ("task_status", "expected_status"),
     [("QUEUED", "INTERRUPTED"), ("RUNNING", "RUNNING")],
 )
 def test_stop_request_is_cooperative_and_preserves_current_package(
-    monkeypatch, task_status: str, expected_status: str
+    monkeypatch, domain: str, task_status: str, expected_status: str
 ) -> None:
-    cursor = _FakeCursor(task_status)
+    cursor = _FakeCursor(task_status, domain)
     conn = _FakeConn(cursor)
     monkeypatch.setattr(admin_domain_tasks, "postgres_conn", lambda: conn)
 
-    result = admin_domain_tasks.request_admin_domain_stop(domain="CN")
+    result = admin_domain_tasks.request_admin_domain_stop(domain=domain)
 
     assert result["accepted"] is True
     assert result["task"]["status"] == expected_status
+    select_params = next(
+        params
+        for sql, params in cursor.executions
+        if "SELECT run_id, job_type, status, started_at, payload" in sql
+    )
+    assert domain in select_params
     update_sql = next(sql for sql, _ in cursor.executions if "UPDATE control.job_run" in sql)
     assert "stop_requested" in update_sql
     if task_status == "QUEUED":
         assert "status = 'INTERRUPTED'" in update_sql
     else:
-        assert "waiting for the current CN package boundary" in update_sql
+        assert "waiting for the current package boundary" in update_sql
 
 
-def test_stop_is_cn_continuation_only() -> None:
-    with pytest.raises(ValueError, match="only supported for CN"):
-        admin_domain_tasks.request_admin_domain_stop(domain="US_APPLICATION")
+def test_stop_is_limited_to_continuous_domains() -> None:
+    with pytest.raises(ValueError, match="CN and US Application"):
+        admin_domain_tasks.request_admin_domain_stop(domain="US_ASSIGNMENT")
 
 
-def test_continuation_checks_stop_before_next_package(monkeypatch) -> None:
+def test_cn_continuation_checks_stop_and_storage_before_next_package(monkeypatch) -> None:
     calls: list[str] = []
 
     def fake_runner(**kwargs):
@@ -109,8 +117,8 @@ def test_continuation_checks_stop_before_next_package(monkeypatch) -> None:
     monkeypatch.setattr(admin_domain_tasks.full_replay, "run_full_replay", fake_runner)
     monkeypatch.setattr(
         admin_domain_tasks,
-        "_assert_cn_continuation_not_stopped",
-        lambda run_id: calls.append(f"stop:{run_id}"),
+        "_assert_continuation_not_stopped",
+        lambda run_id, domain: calls.append(f"stop:{domain}:{run_id}"),
     )
     monkeypatch.setattr(
         admin_domain_tasks,
@@ -120,7 +128,7 @@ def test_continuation_checks_stop_before_next_package(monkeypatch) -> None:
 
     result = admin_domain_tasks._run_cn_continuation("run-123")
 
-    assert calls == ["stop:run-123", "storage"]
+    assert calls == ["stop:CN:run-123", "storage"]
     assert result["summary"]["processed_total"] == 1
 
 
@@ -152,11 +160,12 @@ def test_worker_restart_does_not_requeue_stop_requested_task() -> None:
     assert "Worker restarted after stop was requested; task not requeued." in source
 
 
-def test_task_api_and_ui_expose_safe_stop() -> None:
+def test_task_api_and_ui_expose_safe_stop_for_both_continuous_domains() -> None:
     api = (ROOT / "app" / "admin_task_api.py").read_text(encoding="utf-8")
     markup = (ROOT / "web" / "admin-jobs.html").read_text(encoding="utf-8")
     assert 'action.strip().upper() == "STOP"' in api
     assert "request_admin_domain_stop" in api
     assert "queueTask('CN','STOP')" in markup
+    assert "queueTask('US_APPLICATION','STOP')" in markup
     assert "停止连续推进" in markup
     assert "安全边界停止" in markup

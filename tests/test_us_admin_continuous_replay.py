@@ -33,6 +33,11 @@ def test_us_application_continue_runs_deterministic_full_replay_then_acceptance(
     )
     monkeypatch.setattr(
         admin_domain_tasks,
+        "_assert_continuation_not_stopped",
+        lambda run_id, domain: calls.append(("stop", run_id, domain)),
+    )
+    monkeypatch.setattr(
+        admin_domain_tasks,
         "_assert_cn_accepted",
         lambda: calls.append("cn") or {"status": "PASS"},
     )
@@ -56,6 +61,9 @@ def test_us_application_continue_runs_deterministic_full_replay_then_acceptance(
     def fake_replay(raw_root, **kwargs):
         captured["raw_root"] = raw_root
         captured.update(kwargs)
+        before_package = kwargs["before_package"]
+        before_package({"sequence": 1, "file_name": "history.zip"})
+        before_package({"sequence": 2, "file_name": "daily.zip"})
         return {
             "status": "COMPLETE",
             "executor_version": "US_DETERMINISTIC_REPLAY_V1",
@@ -77,18 +85,22 @@ def test_us_application_continue_runs_deterministic_full_replay_then_acceptance(
 
     result = admin_domain_tasks.execute_admin_domain_task(
         {
+            "run_id": "run-us-123",
             "payload": {
                 "domain": "US_APPLICATION",
                 "action": "CONTINUE",
                 "expected_history_parts": 91,
-            }
+            },
         }
     )
 
     assert calls[:3] == ["storage", "cn", "schema"]
+    assert calls.count("storage") == 3
+    assert ("stop", "run-us-123", "US_APPLICATION") in calls
     assert captured["expected_history_parts"] == 91
     assert captured["max_packages"] is None
     assert captured["trigger_type"] == "ADMIN_UI_US_CONTINUE"
+    assert callable(captured["before_package"])
     assert result["gate_status"] == "US_APPLICATION_ALREADY_ACCEPTED"
     assert result["result"]["processed_count"] == 7
     assert result["result"]["remaining_count"] == 0
@@ -168,6 +180,7 @@ def test_us_application_continue_stops_on_transition_gate_block(monkeypatch) -> 
 
 def test_us_application_continue_requires_source_backed_acceptance(monkeypatch) -> None:
     monkeypatch.setattr(admin_domain_tasks, "_assert_storage_headroom", lambda: {})
+    monkeypatch.setattr(admin_domain_tasks, "_assert_continuation_not_stopped", lambda *_: None)
     monkeypatch.setattr(admin_domain_tasks, "_assert_cn_accepted", lambda: {"status": "PASS"})
     monkeypatch.setattr(admin_domain_tasks, "ensure_us_m1_schema", lambda: None)
     monkeypatch.setattr(
@@ -178,16 +191,17 @@ def test_us_application_continue_requires_source_backed_acceptance(monkeypatch) 
             "safe_to_start_us_replay": True,
         },
     )
-    monkeypatch.setattr(
-        admin_domain_tasks,
-        "execute_us_replay",
-        lambda *args, **kwargs: {
+
+    def fake_replay(*args, **kwargs):
+        kwargs["before_package"]({"sequence": 1})
+        return {
             "status": "COMPLETE",
             "processed_count": 1,
             "source_preflight_runs": 1,
             "final_plan": {"remaining_count": 0},
-        },
-    )
+        }
+
+    monkeypatch.setattr(admin_domain_tasks, "execute_us_replay", fake_replay)
     monkeypatch.setattr(
         admin_domain_tasks,
         "_assert_us_application_accepted",
@@ -204,11 +218,58 @@ def test_us_application_continue_requires_source_backed_acceptance(monkeypatch) 
     ):
         admin_domain_tasks.execute_admin_domain_task(
             {
+                "run_id": "run-us-acceptance",
                 "payload": {
                     "domain": "US_APPLICATION",
                     "action": "CONTINUE",
                     "expected_history_parts": 91,
-                }
+                },
+            }
+        )
+
+
+def test_us_application_continue_stops_at_package_boundary(monkeypatch) -> None:
+    monkeypatch.setattr(admin_domain_tasks, "_assert_storage_headroom", lambda: {})
+    monkeypatch.setattr(admin_domain_tasks, "_assert_cn_accepted", lambda: {"status": "PASS"})
+    monkeypatch.setattr(admin_domain_tasks, "ensure_us_m1_schema", lambda: None)
+    monkeypatch.setattr(
+        admin_domain_tasks,
+        "_assert_us_application_replay_unlocked",
+        lambda raw_root, expected_history_parts: {
+            "status": "READY_FOR_US_APPLICATION_REPLAY",
+            "safe_to_start_us_replay": True,
+        },
+    )
+    monkeypatch.setattr(
+        admin_domain_tasks,
+        "_assert_continuation_not_stopped",
+        lambda run_id, domain: (_ for _ in ()).throw(
+            admin_domain_tasks.DomainTaskInterrupted(
+                f"{domain} continuous replay stopped at boundary"
+            )
+        ),
+    )
+
+    def fake_replay(*args, **kwargs):
+        kwargs["before_package"]({"sequence": 2, "file_name": "next.zip"})
+        pytest.fail("boundary stop must escape before next package")
+
+    monkeypatch.setattr(admin_domain_tasks, "execute_us_replay", fake_replay)
+    monkeypatch.setattr(
+        admin_domain_tasks,
+        "_assert_us_application_accepted",
+        lambda *args, **kwargs: pytest.fail("stopped replay must not run final acceptance"),
+    )
+
+    with pytest.raises(admin_domain_tasks.DomainTaskInterrupted, match="stopped at boundary"):
+        admin_domain_tasks.execute_admin_domain_task(
+            {
+                "run_id": "run-us-stop",
+                "payload": {
+                    "domain": "US_APPLICATION",
+                    "action": "CONTINUE",
+                    "expected_history_parts": 91,
+                },
             }
         )
 
@@ -216,5 +277,7 @@ def test_us_application_continue_requires_source_backed_acceptance(monkeypatch) 
 def test_task_center_exposes_us_application_continuous_replay() -> None:
     markup = (ROOT / "web" / "admin-jobs.html").read_text(encoding="utf-8")
     assert "queueTask('US_APPLICATION','CONTINUE')" in markup
+    assert "queueTask('US_APPLICATION','STOP')" in markup
     assert "deterministic replay" in markup
     assert "source-backed acceptance" in markup
+    assert "每包前重新检查存储空间" in markup
