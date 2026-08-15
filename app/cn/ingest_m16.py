@@ -16,6 +16,7 @@ from app.cn.goods_lifecycle_sql import (
     incoming_goods_sql,
 )
 from app.cn.goods_scope_match import exact_touched_scope_sql
+from app.cn.quality_subtasks import collect_stage_quality_issues_bounded
 from app.cn.resource_client import cn_resource_client
 from app.cn.storage_v2_goods import GoodsObservationDeltaClient
 from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
@@ -196,21 +197,43 @@ def ingest_cn_package(
 
         original_publish = legacy._publish
         original_cleanup = legacy._cleanup_partial_outputs
+        original_quality = legacy._collect_stage_quality_issues
+        quality_metrics: dict[str, Any] = {}
+
+        def bounded_quality(package_uuid: uuid.UUID, run_id: uuid.UUID):
+            result = collect_stage_quality_issues_bounded(
+                package_uuid,
+                run_id,
+                client=legacy.clickhouse_client(),
+            )
+            quality_metrics.update(
+                {
+                    "mode": "BOUNDED_APPLICATION_SUBTASKS_V1",
+                    "subtask_count": result.subtask_count,
+                    "range_counts": result.range_counts,
+                }
+            )
+            return result.issues
+
         legacy._publish = _publish_m16
         legacy._cleanup_partial_outputs = _cleanup_partial_outputs_m16
+        legacy._collect_stage_quality_issues = bounded_quality
         try:
             case.ensure_case_publish_schema()
             goods.ensure_m16_goods_schema()
             goods.ensure_m16_goods_replay_boundary()
             party.ensure_party_publish_schema()
-            return legacy.ingest_cn_package(
+            totals = legacy.ingest_cn_package(
                 package_id,
                 path,
                 raw_root,
                 trigger_type=trigger_type,
                 retrying=retrying,
             )
+            totals["stage_quality_subtasks"] = quality_metrics
+            return totals
         finally:
+            legacy._collect_stage_quality_issues = original_quality
             legacy._publish = original_publish
             legacy._cleanup_partial_outputs = original_cleanup
             legacy.clickhouse_client = original_legacy_client
