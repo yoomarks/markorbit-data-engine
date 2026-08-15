@@ -459,23 +459,30 @@ def _us_application_gate_result(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_us_application_continuation(raw_root, expected_history_parts: int) -> dict[str, Any]:
-    result = execute_us_replay(
+    replay = execute_us_replay(
         raw_root,
         expected_history_parts=expected_history_parts,
         max_packages=None,
         trigger_type="ADMIN_UI_US_CONTINUE",
     )
-    status = str(result.get("status") or "UNKNOWN")
+    status = str(replay.get("status") or "UNKNOWN")
     if status == "BUSY":
         raise DomainTaskBlocked("US Application deterministic replay is already busy")
     if status == "BLOCKED":
-        blockers = (result.get("final_plan") or {}).get("blockers") or []
+        blockers = (replay.get("final_plan") or {}).get("blockers") or []
         raise DomainTaskBlocked(f"US Application deterministic replay blocked: {blockers}")
     if status == "FAILED":
-        raise RuntimeError(f"US Application deterministic replay failed: {result.get('error')}")
+        raise RuntimeError(f"US Application deterministic replay failed: {replay.get('error')}")
     if status != "COMPLETE":
         raise RuntimeError(f"Unexpected US Application replay status: {status}")
-    return result
+    final_plan = replay.get("final_plan") if isinstance(replay.get("final_plan"), dict) else {}
+    return {
+        "status": status,
+        "executor_version": replay.get("executor_version"),
+        "processed_count": int(replay.get("processed_count") or 0),
+        "remaining_count": int(final_plan.get("remaining_count") or 0),
+        "source_preflight_runs": int(replay.get("source_preflight_runs") or 0),
+    }
 
 
 def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -509,13 +516,11 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
         else:
             raise ValueError(f"Unsupported CN action: {action}")
     elif domain == "US_APPLICATION":
-        _assert_cn_accepted()
+        gate = _assert_cn_accepted()
         ensure_us_m1_schema()
         if action == "RUN":
-            gate = _build_us_application_gate(raw_root, expected_history_parts)
             result = scan_and_ingest_us(trigger_type="ADMIN_UI_US")
         elif action == "RETRY":
-            gate = _build_us_application_gate(raw_root, expected_history_parts)
             result = ingest_pending_us(
                 trigger_type="ADMIN_UI_US_RETRY",
                 include_failed=True,
@@ -529,6 +534,7 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
                 result = {
                     "status": "COMPLETE",
                     "processed_count": 0,
+                    "remaining_count": 0,
                     "already_accepted": True,
                 }
             else:
