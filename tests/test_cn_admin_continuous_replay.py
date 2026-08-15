@@ -175,13 +175,8 @@ def test_cn_admin_continue_blocks_when_final_checkpoint_fails(monkeypatch) -> No
         )
 
 
-def test_continue_action_is_limited_to_full_replay_domains() -> None:
-    with pytest.raises(ValueError, match="CN, US Application, and US Assignment"):
-        admin_domain_tasks.queue_admin_domain_task(
-            domain="US_TTAB",
-            action="CONTINUE",
-            expected_history_parts=91,
-        )
+def test_all_supported_domains_have_continuous_replay() -> None:
+    assert admin_domain_tasks._CONTINUOUS_DOMAINS == admin_domain_tasks.SUPPORTED_DOMAINS
 
 
 def test_task_center_exposes_continuous_cn_replay_control() -> None:
