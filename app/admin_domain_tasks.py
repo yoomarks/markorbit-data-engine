@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+from pathlib import Path
 import shutil
 from typing import Any, Iterator
 
@@ -23,6 +24,7 @@ from app.us.application_transition_gate import build_transition_gate as build_ap
 from app.us.jobs import ingest_pending_us, scan_and_ingest_us
 from app.us.migrations import ensure_us_m1_schema
 from app.us.replay_executor import execute_replay as execute_us_replay
+from app.us_assignment.corpus_replay import execute_replay as execute_assignment_replay
 from app.us_assignment.jobs import run_assignment_once
 from app.us_assignment.migrations import ensure_assignment_schema
 from app.us_assignment.transition_gate import build_transition_gate as build_assignment_gate
@@ -35,7 +37,7 @@ ADMIN_TASK_KIND = "DOMAIN_CONTROL"
 ADMIN_TRIGGER = "ADMIN_UI"
 SUPPORTED_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT", "US_TTAB"}
 SUPPORTED_ACTIONS = {"RUN", "RETRY", "CONTINUE"}
-_CONTINUOUS_DOMAINS = {"CN", "US_APPLICATION"}
+_CONTINUOUS_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT"}
 _MUTATION_LOCK_NAME = "markorbit:admin-domain-mutation"
 _QUEUE_LOCK_NAME = "markorbit:admin-domain-task-queue"
 
@@ -69,7 +71,9 @@ def queue_admin_domain_task(
     if action not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported action: {action}")
     if action == "CONTINUE" and domain not in _CONTINUOUS_DOMAINS:
-        raise ValueError("CONTINUE is only supported for CN and US Application replay")
+        raise ValueError(
+            "CONTINUE is only supported for CN, US Application, and US Assignment replay"
+        )
     if domain != "CN" and expected_history_parts < 1:
         raise ValueError("expected_history_parts is required for US domain tasks")
     if expected_history_parts > 9999:
@@ -121,7 +125,9 @@ def request_admin_domain_stop(*, domain: str) -> dict[str, Any]:
     """Request a safe package-boundary stop for an active continuous replay."""
     domain = domain.strip().upper()
     if domain not in _CONTINUOUS_DOMAINS:
-        raise ValueError("STOP is only supported for CN and US Application continuous replay")
+        raise ValueError(
+            "STOP is only supported for CN, US Application, and US Assignment continuous replay"
+        )
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -365,15 +371,45 @@ def _assert_us_application_accepted(raw_root, expected_history_parts: int) -> di
     return report
 
 
-def _assert_assignment_unlocked(raw_root, expected_history_parts: int) -> dict[str, Any]:
-    report = build_assignment_gate(
+def _build_assignment_gate(
+    raw_root,
+    expected_history_parts: int,
+    *,
+    verify_us_source_files: bool = False,
+    verify_assignment_sources: bool = False,
+) -> dict[str, Any]:
+    return build_assignment_gate(
         raw_root,
         expected_history_parts=expected_history_parts,
+        verify_us_source_files=verify_us_source_files,
+        verify_assignment_sources=verify_assignment_sources,
         persistent_worker_running=False,
     )
+
+
+def _assert_assignment_unlocked(raw_root, expected_history_parts: int) -> dict[str, Any]:
+    report = _build_assignment_gate(raw_root, expected_history_parts)
     if not report.get("ready_for_assignment_phase"):
         raise DomainTaskBlocked(
             f"US Assignment transition gate blocked mutation: {report.get('status')}"
+        )
+    return report
+
+
+def _assert_assignment_accepted(raw_root, expected_history_parts: int) -> dict[str, Any]:
+    report = _build_assignment_gate(
+        raw_root,
+        expected_history_parts,
+        verify_us_source_files=True,
+        verify_assignment_sources=True,
+    )
+    if (
+        report.get("status") != "ASSIGNMENT_ACCEPTED"
+        or not report.get("ready_for_assignment_phase")
+        or not report.get("assignment_ready")
+    ):
+        raise DomainTaskBlocked(
+            f"US Assignment acceptance gate did not pass: {report.get('status')}"
         )
     return report
 
@@ -463,6 +499,21 @@ def _us_application_gate_result(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _assignment_gate_result(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": str(report.get("status") or "UNKNOWN"),
+        "ready_for_assignment_phase": bool(report.get("ready_for_assignment_phase")),
+        "assignment_ready": bool(report.get("assignment_ready")),
+        "assignment_state": str(report.get("assignment_state") or ""),
+        "reason_codes": list(report.get("reason_codes") or []),
+        "legal_ownership_conclusion": False,
+    }
+
+
+def _assignment_manifest_path(raw_root) -> Path:
+    return Path(raw_root) / "manifests" / "us_assignment" / "corpus.json"
+
+
 def _run_us_application_continuation(
     raw_root, expected_history_parts: int, run_id: str
 ) -> dict[str, Any]:
@@ -494,6 +545,40 @@ def _run_us_application_continuation(
         "processed_count": int(replay.get("processed_count") or 0),
         "remaining_count": int(final_plan.get("remaining_count") or 0),
         "source_preflight_runs": int(replay.get("source_preflight_runs") or 0),
+    }
+
+
+def _run_assignment_continuation(
+    raw_root, expected_history_parts: int, run_id: str
+) -> dict[str, Any]:
+    def before_package(_action: dict[str, Any]) -> None:
+        _assert_continuation_not_stopped(run_id, "US_ASSIGNMENT")
+        _assert_storage_headroom()
+
+    replay = execute_assignment_replay(
+        _assignment_manifest_path(raw_root),
+        Path(raw_root),
+        apply=True,
+        all_packages=True,
+        resume_failed=True,
+        before_package=before_package,
+    )
+    status = str(replay.get("status") or "UNKNOWN")
+    if status in {"BUSY", "BLOCKED", "RETRY_REQUIRED"}:
+        blockers = (replay.get("final_plan") or {}).get("blockers") or replay.get("blockers") or []
+        raise DomainTaskBlocked(f"US Assignment deterministic replay blocked: {status}: {blockers}")
+    if status == "FAILED":
+        raise RuntimeError(f"US Assignment deterministic replay failed: {replay.get('error')}")
+    if status != "COMPLETE":
+        raise RuntimeError(f"Unexpected US Assignment replay status: {status}")
+    final_plan = replay.get("final_plan") if isinstance(replay.get("final_plan"), dict) else {}
+    return {
+        "status": status,
+        "replay_version": replay.get("replay_version"),
+        "processed_count": int(replay.get("processed_count") or 0),
+        "remaining_count": int(final_plan.get("remaining_count") or 0),
+        "source_preflight_runs": int(replay.get("source_preflight_runs") or 0),
+        "legal_ownership_conclusion": False,
     }
 
 
@@ -565,7 +650,30 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
     elif domain == "US_ASSIGNMENT":
         gate = _assert_assignment_unlocked(raw_root, expected_history_parts)
         ensure_assignment_schema()
-        result = run_assignment_once(raw_root, retry=action == "RETRY")
+        if action == "RUN":
+            result = run_assignment_once(raw_root, retry=False)
+        elif action == "RETRY":
+            result = run_assignment_once(raw_root, retry=True)
+        elif action == "CONTINUE":
+            if gate.get("status") == "ASSIGNMENT_ACCEPTED" and gate.get("assignment_ready"):
+                result = {
+                    "status": "COMPLETE",
+                    "processed_count": 0,
+                    "remaining_count": 0,
+                    "already_accepted": True,
+                    "legal_ownership_conclusion": False,
+                }
+            else:
+                result = _run_assignment_continuation(
+                    raw_root,
+                    expected_history_parts,
+                    str(task.get("run_id") or ""),
+                )
+            final_gate = _assert_assignment_accepted(raw_root, expected_history_parts)
+            result["final_assignment_gate"] = _assignment_gate_result(final_gate)
+            gate = final_gate
+        else:
+            raise ValueError(f"Unsupported US Assignment action: {action}")
     elif domain == "US_TTAB":
         gate = _assert_ttab_unlocked(raw_root, expected_history_parts)
         ensure_ttab_schema()
