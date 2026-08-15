@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import cache
 import math
 from typing import Any
 
@@ -34,6 +35,12 @@ _CN_STAGE_RESUME_CANDIDATE_SQL = f"""
 """
 
 
+@cache
+def _ensure_stage_checkpoint_schema_once() -> None:
+    """Upgrade an existing API Postgres volume once, not on every admin poll."""
+    ensure_stage_checkpoint_schema()
+
+
 def _page_result(
     items: list[dict[str, Any]], *, page: int, page_size: int, total: int
 ) -> dict[str, Any]:
@@ -63,7 +70,7 @@ def admin_packages_page(
 ):
     # Existing Postgres volumes do not replay docker init scripts after an upgrade.
     # Ensure #125's checkpoint table exists before the inventory attempts to join it.
-    ensure_stage_checkpoint_schema()
+    _ensure_stage_checkpoint_schema_once()
     page, page_size, offset = _normalize_page(page, page_size)
     clauses: list[str] = []
     params: list[Any] = []
@@ -137,7 +144,7 @@ def admin_cn_recovery():
     path still performs exact seven-table row-count validation before it skips raw
     ZIP parsing.
     """
-    ensure_stage_checkpoint_schema()
+    _ensure_stage_checkpoint_schema_once()
     sql = f"""
         SELECT sp.package_id, sp.file_name, sp.status, sp.file_size, sp.source_rank,
                sp.package_sequence, sp.error_message,
