@@ -5,6 +5,7 @@ import json
 import shutil
 from typing import Any, Iterator
 
+from app.cn import full_replay
 from app.cn.final_checkpoint import build_final_checkpoint
 from app.cn.guarded_run_once import build_execution_guard
 from app.config import get_settings
@@ -31,7 +32,7 @@ from app.us_ttab.transition_gate import build_transition_gate as build_ttab_gate
 ADMIN_TASK_KIND = "DOMAIN_CONTROL"
 ADMIN_TRIGGER = "ADMIN_UI"
 SUPPORTED_DOMAINS = {"CN", "US_APPLICATION", "US_ASSIGNMENT", "US_TTAB"}
-SUPPORTED_ACTIONS = {"RUN", "RETRY"}
+SUPPORTED_ACTIONS = {"RUN", "RETRY", "CONTINUE"}
 _MUTATION_LOCK_NAME = "markorbit:admin-domain-mutation"
 _QUEUE_LOCK_NAME = "markorbit:admin-domain-task-queue"
 
@@ -60,6 +61,8 @@ def queue_admin_domain_task(
         raise ValueError(f"Unsupported domain: {domain}")
     if action not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported action: {action}")
+    if action == "CONTINUE" and domain != "CN":
+        raise ValueError("CONTINUE is only supported for CN full-corpus replay continuation")
     if domain != "CN" and expected_history_parts < 1:
         raise ValueError("expected_history_parts is required for US domain tasks")
     if expected_history_parts > 9999:
@@ -273,6 +276,25 @@ def _check_ingest_result(result: dict[str, Any]) -> None:
         raise RuntimeError(f"Domain retry could not locate its source package: {result}")
 
 
+def _run_cn_continuation() -> dict[str, Any]:
+    code, summary = full_replay.run_full_replay(
+        resume_failed=True,
+        trigger_type="ADMIN_UI_CN_CONTINUE",
+        emit=lambda _event: None,
+        before_package=lambda _phase: _assert_storage_headroom(),
+        allow_clean_start=False,
+    )
+    if code in {3, 4}:
+        raise DomainTaskBlocked(f"CN continuous replay stopped safely: {summary}")
+    if code != 0:
+        raise RuntimeError(f"CN continuous replay failed: {summary}")
+    return {
+        "runner_code": code,
+        "runner_version": full_replay.RUNNER_VERSION,
+        "summary": summary,
+    }
+
+
 def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
     payload = dict(task.get("payload") or {})
     domain = str(payload.get("domain") or "").upper()
@@ -287,12 +309,17 @@ def execute_admin_domain_task(task: dict[str, Any]) -> dict[str, Any]:
         if action == "RUN":
             gate = _assert_cn_run_gate()
             result = scan_and_ingest_cn(trigger_type="ADMIN_UI_GUARDED")
-        else:
+        elif action == "RETRY":
             result = ingest_pending_cn(
                 trigger_type="ADMIN_UI_RETRY",
                 include_failed=True,
                 limit=1,
             )
+        elif action == "CONTINUE":
+            gate = {"status": "REGISTERED_REPLAY_ONLY_CLEAN_START_DISABLED"}
+            result = _run_cn_continuation()
+        else:
+            raise ValueError(f"Unsupported CN action: {action}")
     elif domain == "US_APPLICATION":
         gate = _assert_cn_accepted()
         ensure_us_m1_schema()

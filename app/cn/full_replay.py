@@ -10,6 +10,7 @@ from app.jobs import ingest_pending_cn, scan_cn_incoming
 
 RUNNER_VERSION = "CN_M16_FULL_REPLAY_V1"
 Emit = Callable[[dict[str, Any]], None]
+BeforePackage = Callable[[str], None]
 
 
 def _default_emit(payload: dict[str, Any]) -> None:
@@ -41,6 +42,8 @@ def run_full_replay(
     max_packages: int | None = None,
     trigger_type: str = "MANUAL_FULL_CORPUS",
     emit: Emit = _default_emit,
+    before_package: BeforePackage | None = None,
+    allow_clean_start: bool = True,
 ) -> tuple[int, dict[str, Any]]:
     """Run a deterministic CN corpus replay without rescanning raw files per package.
 
@@ -48,6 +51,11 @@ def run_full_replay(
     incoming sources once, then drains the registered queue by source_rank. A prior
     FAILED/MISSING_FILE package is a hard barrier unless ``resume_failed`` is explicitly
     enabled; when enabled, the runner repairs the failed package before advancing.
+
+    ``before_package`` is an optional execution guard invoked immediately before each
+    package attempt. Admin continuous replay uses it to re-check storage headroom for
+    every package instead of trusting a single long-running preflight. ``allow_clean_start``
+    lets Admin reuse this runner while keeping the first clean replay manual-only.
     """
 
     processed_total = 0
@@ -55,6 +63,15 @@ def run_full_replay(
     emit({"event": "CN_FULL_REPLAY_GUARD", "runner_version": RUNNER_VERSION, **guard})
 
     if guard.get("mode") == "CLEAN_RESET_FIRST_RUN":
+        if not allow_clean_start:
+            summary = {
+                "status": "BLOCKED",
+                "reason": "CLEAN_START_DISABLED",
+                "processed_total": processed_total,
+                "guard": guard,
+            }
+            emit({"event": "CN_FULL_REPLAY_COMPLETE", **summary})
+            return 4, summary
         if not guard.get("allowed"):
             summary = {
                 "status": "BLOCKED",
@@ -96,6 +113,8 @@ def run_full_replay(
             emit({"event": "CN_FULL_REPLAY_COMPLETE", **summary})
             return 4, summary
 
+        if before_package is not None:
+            before_package("RETRY")
         repair = ingest_pending_cn(
             trigger_type=f"{trigger_type}_RETRY",
             include_failed=True,
@@ -145,6 +164,8 @@ def run_full_replay(
         return 4, summary
 
     while True:
+        if before_package is not None:
+            before_package("NORMAL")
         result = ingest_pending_cn(
             trigger_type=trigger_type,
             include_failed=False,
