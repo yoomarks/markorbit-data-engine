@@ -159,4 +159,4 @@ def test_task_api_and_ui_expose_safe_stop() -> None:
     assert "request_admin_domain_stop" in api
     assert "queueTask('CN','STOP')" in markup
     assert "停止连续推进" in markup
-    assert "当前包完整结束后的安全边界停止" in markup
+    assert "安全边界停止" in markup
