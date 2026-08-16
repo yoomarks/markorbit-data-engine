@@ -132,7 +132,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "APPLICATION_RANGE",
             dependencies=("PARTY_OBSERVED_EVENT",),
             stage_table="cn_stage_party_publish",
-            audit_policy="CURRENT_COVERAGE_EQUAL_OR_NEWER_SOURCE_RANK",
+            audit_policy="NATIVE_DURABLE_RANGE_CURRENT_REPLACEMENT_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
         WorkDagNode(
             "CASE_CURRENT",
