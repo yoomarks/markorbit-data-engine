@@ -183,6 +183,15 @@ def _seed_target_scope_stage(client: Any, package: str) -> None:
     )
 
 
+def _case_scope_placeholder(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_case_scope_current
+        SELECT incoming.case_id
+        FROM markorbit_facts.cn_stage_scope_publish AS incoming
+        WHERE incoming.package_id = toUUID('{package}')
+    """
+
+
 def _scope_placeholder(package: str) -> str:
     return f"""
         INSERT INTO markorbit_facts.cn_scope_carve_out_current
@@ -233,6 +242,7 @@ def main() -> None:
             allow_new_cutover=True,
             target_rows=1,
         )
+        first.command(_case_scope_placeholder(package))
         try:
             first.command(_scope_placeholder(package))
         except RuntimeError as exc:
@@ -265,6 +275,7 @@ def main() -> None:
         )
         if not resumed.native_scope_carve_out_enabled:
             raise AssertionError("persisted scope-carve-out cutover marker was not reused")
+        resumed.command(_case_scope_placeholder(package))
         result = resumed.command(_scope_placeholder(package))
         resumed.assert_final_publish_complete()
         if result.range_count != 2 or result.skipped != 1 or result.executed != 1:

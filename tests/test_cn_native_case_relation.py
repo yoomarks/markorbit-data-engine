@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import date
 import uuid
 
 import pytest
 
-from app.cn import native_case_relation
+from app.cn import native_case_relation, native_case_scope_current
 from app.cn.native_case_relation import (
     NativeCaseRelationCutoverClient,
     NativeCaseRelationExecutor,
@@ -79,6 +80,15 @@ class _Store:
     def mark_failed(self, task_key, error):
         self.rows[task_key]["status"] = "FAILED"
         self.rows[task_key]["error"] = error
+
+
+def _case_scope_placeholder(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_case_scope_current
+        SELECT incoming.case_id
+        FROM markorbit_facts.cn_stage_scope_publish AS incoming
+        WHERE incoming.package_id = toUUID('{package}')
+    """
 
 
 def _relation_placeholder(package: str) -> str:
@@ -162,15 +172,23 @@ def test_native_relation_resumes_only_failed_application_range() -> None:
     assert "incoming.application_number >= 'R300'" in retry_client.commands[0]
 
 
-def test_fresh_relation_cutover_bypasses_compatibility_delegate(monkeypatch) -> None:
+def test_fresh_relation_stack_runs_case_scope_relation_then_carve_out(monkeypatch) -> None:
     package = uuid.uuid4()
     store = _Store()
     delegate = _Delegate()
-    execution = _ExecutionClient(query_results=[[], []])
+    execution = _ExecutionClient(query_results=[[], [], []])
     monkeypatch.setattr(
         native_case_relation,
         "get_package",
         lambda package_id: {"package_kind": "MONTHLY_PATCH"},
+    )
+    monkeypatch.setattr(
+        native_case_scope_current,
+        "get_package",
+        lambda package_id: {
+            "package_kind": "MONTHLY_PATCH",
+            "source_period_end": date(2026, 1, 31),
+        },
     )
     client = NativeCaseRelationCutoverClient(
         delegate,
@@ -182,18 +200,19 @@ def test_fresh_relation_cutover_bypasses_compatibility_delegate(monkeypatch) -> 
         target_rows=2,
     )
 
-    assert client.native_case_relation_enabled is True
+    client.command(_case_scope_placeholder(str(package)))
     client.command(_relation_placeholder(str(package)))
     client.command(_scope_placeholder(str(package)))
     summary = client.assert_final_publish_complete()
 
     assert delegate.commands == []
-    assert len(execution.commands) == 2
-    assert "FROM markorbit_facts.cn_stage_case_publish AS incoming" in execution.commands[0]
-    assert "FROM markorbit_facts.cn_stage_scope_publish" in execution.commands[1]
+    assert len(execution.commands) == 3
+    assert "INSERT INTO markorbit_facts.cn_case_scope_current" in execution.commands[0]
+    assert "FROM markorbit_facts.cn_stage_case_publish AS incoming" in execution.commands[1]
+    assert "INSERT INTO markorbit_facts.cn_scope_carve_out_current" in execution.commands[2]
     assert delegate.final_assertions == 1
     assert summary["FAILED"] == 0
-    assert client.final_tasks_executed == 7
+    assert client.final_tasks_executed == 8
     assert client.final_tasks_skipped == 2
 
 

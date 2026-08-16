@@ -220,6 +220,15 @@ def _stage_fixture_rows(client: Any, package: str) -> None:
     )
 
 
+def _case_scope_placeholder(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_case_scope_current
+        SELECT incoming.case_id
+        FROM markorbit_facts.cn_stage_scope_publish AS incoming
+        WHERE incoming.package_id = toUUID('{package}')
+    """
+
+
 def _relation_placeholder(package: str) -> str:
     return f"""
         INSERT INTO markorbit_facts.cn_case_relation_current
@@ -267,6 +276,7 @@ def main() -> None:
             allow_new_cutover=True,
             target_rows=2,
         )
+        first.command(_case_scope_placeholder(package))
         try:
             first.command(_relation_placeholder(package))
         except RuntimeError as exc:
@@ -299,6 +309,7 @@ def main() -> None:
         )
         if not resumed.native_case_relation_enabled:
             raise AssertionError("persisted relation cutover marker was not reused")
+        resumed.command(_case_scope_placeholder(package))
         result = resumed.command(_relation_placeholder(package))
         resumed.command(_scope_placeholder(package))
         resumed.assert_final_publish_complete()
