@@ -15,6 +15,11 @@ _PUBLISH_STAGE_TABLES = (
     "cn_stage_party_publish",
     "cn_stage_scope_publish",
 )
+_CURRENT_JOIN_TABLES = (
+    "cn_case_current",
+    "cn_case_scope_current",
+    "cn_case_party_current",
+)
 
 
 def _sql_string(value: str) -> str:
@@ -203,20 +208,29 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
         for stage_table, (current_table, join_condition) in checks.items():
             total_violations = 0
             for lower, upper in self._ranges(stage_table):
-                predicate = _range_predicate(
+                incoming_predicate = _range_predicate(
                     lower,
                     upper,
                     column="incoming.application_number",
                 )
-                range_filter = f" AND {predicate}" if predicate else ""
+                incoming_filter = (
+                    f" AND {incoming_predicate}" if incoming_predicate else ""
+                )
+                current_source = self._bounded_current_source(
+                    current_table,
+                    "cur",
+                    stage_table=stage_table,
+                    lower=lower,
+                    upper=upper,
+                )
                 rows = self._delegate.query(
                     f"""
                     SELECT count()
                     FROM markorbit_facts.{stage_table} AS incoming
-                    LEFT JOIN markorbit_facts.{current_table} AS cur FINAL
+                    LEFT JOIN {current_source}
                       ON {join_condition}
                     WHERE incoming.package_id = toUUID('{self._final_package}')
-                      {range_filter}
+                      {incoming_filter}
                       AND (cur.application_number = '' OR cur.source_rank < {int(source_rank)})
                     """.replace("\n                       AND", "\n                      AND")
                 ).result_rows
@@ -298,6 +312,74 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
             self._final_tasks_executed += 1
         return result
 
+    def _stage_application_filter(
+        self,
+        stage_table: str,
+        *,
+        lower: str | None,
+        upper: str | None,
+    ) -> str:
+        predicate = _range_predicate(lower, upper)
+        range_filter = f" AND {predicate}" if predicate else ""
+        return f"""
+            application_number IN
+            (
+                SELECT DISTINCT application_number
+                FROM markorbit_facts.{stage_table}
+                WHERE package_id = toUUID('{self._final_package}'){range_filter}
+            )
+        """.strip()
+
+    def _bounded_current_source(
+        self,
+        current_table: str,
+        alias: str,
+        *,
+        stage_table: str,
+        lower: str | None,
+        upper: str | None,
+    ) -> str:
+        application_filter = self._stage_application_filter(
+            stage_table,
+            lower=lower,
+            upper=upper,
+        )
+        return f"""(
+            SELECT *
+            FROM markorbit_facts.{current_table} FINAL
+            WHERE {application_filter}
+        ) AS {alias}"""
+
+    def _bound_current_join_sources(
+        self,
+        sql: str,
+        *,
+        stage_table: str,
+        lower: str | None,
+        upper: str | None,
+    ) -> str:
+        current_tables = "|".join(re.escape(table) for table in _CURRENT_JOIN_TABLES)
+        pattern = re.compile(
+            rf"(?P<join>(?:LEFT|INNER)\s+JOIN)\s+markorbit_facts\."
+            rf"(?P<table>{current_tables})\s+AS\s+"
+            rf"(?P<alias>cur|case_current)\s+FINAL",
+            flags=re.IGNORECASE,
+        )
+
+        def replace(match: re.Match[str]) -> str:
+            table = match.group("table")
+            alias = match.group("alias")
+            bounded = self._bounded_current_source(
+                table,
+                alias,
+                stage_table=stage_table,
+                lower=lower,
+                upper=upper,
+            )
+            return f"{match.group('join')} {bounded}"
+
+        return pattern.sub(replace, sql)
+
     def _rewrite_publish_stage(
         self,
         sql: str,
@@ -307,9 +389,6 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
         upper: str | None,
     ) -> str:
         predicate = _range_predicate(lower, upper)
-        if not predicate:
-            return sql
-
         table_pattern = re.escape(f"markorbit_facts.{stage_table}")
         package_pattern = re.escape(self._final_package)
         pattern = re.compile(
@@ -318,7 +397,7 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
             flags=re.IGNORECASE,
         )
         rewritten, count = pattern.subn(
-            lambda match: match.group(1) + f" AND {predicate}",
+            lambda match: match.group(1) + (f" AND {predicate}" if predicate else ""),
             sql,
         )
         source_count = sql.count(f"markorbit_facts.{stage_table}")
@@ -327,4 +406,9 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
                 f"Legacy final publish SQL shape changed for {stage_table}: "
                 f"sources={source_count}, bounded_sources={count}."
             )
-        return rewritten
+        return self._bound_current_join_sources(
+            rewritten,
+            stage_table=stage_table,
+            lower=lower,
+            upper=upper,
+        )
