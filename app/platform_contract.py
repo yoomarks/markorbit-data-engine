@@ -18,7 +18,7 @@ PLATFORMIZATION_VERSION = "MARKORBIT_PLATFORMIZATION_M1.7"
 def platform_contract() -> dict[str, Any]:
     return {
         "version": PLATFORMIZATION_VERSION,
-        "status": "IN_PROGRESS",
+        "status": "CODE_READY_PENDING_RUNTIME_ACCEPTANCE",
         "goal": "GLOBAL_SOURCE_FACT_PLATFORM_BEFORE_NEXT_JURISDICTION",
         "work_engine": work_engine_contract(),
         "work_dag": work_dag_contract(),
@@ -32,7 +32,14 @@ def platform_contract() -> dict[str, Any]:
         "operations": operations_contract(),
         "planned_contracts": [],
         "foundation_contracts_complete": True,
-        "next_platformization_focus": "FREEZE_AND_ACCEPT_CN_NATIVE_FINAL_PUBLISH",
+        "runtime_acceptance_boundary": {
+            "required": True,
+            "evaluated_by_platform_contract": False,
+            "authoritative_checkpoint": "CN_M16_FINAL_CHECKPOINT_V1",
+            "real_corpus_success_claimed": False,
+            "release_promotion_allowed_without_runtime_acceptance": False,
+        },
+        "next_platformization_focus": "RUN_REAL_CN_RUNTIME_ACCEPTANCE_SEPARATELY",
         "compatibility": {
             "cn_inflight_checkpoint_schema_preserved": True,
             "cn_source_rank_semantics_unchanged": True,
