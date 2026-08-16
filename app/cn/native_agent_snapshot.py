@@ -11,6 +11,9 @@ from app.cn.native_case_relation import NativeCaseRelationCutoverClient
 from app.cn.native_preliminary_publication_event import (
     NativePreliminaryPublicationEventCutoverClient,
 )
+from app.cn.native_registration_publication_event import (
+    NativeRegistrationPublicationEventCutoverClient,
+)
 from app.cn.publish_dag import resolve_legacy_publish_command
 from app.cn.publish_subtasks import PublishSubtaskStore
 
@@ -214,8 +217,16 @@ class NativeAgentCutoverClient:
             subtask_store=subtask_store,
             allow_new_cutover=allow_new_cutover,
         )
-        self._delegate = NativePreliminaryPublicationEventCutoverClient(
+        preliminary_client = NativePreliminaryPublicationEventCutoverClient(
             case_facts_client,
+            execution_client=execution_client,
+            package_uuid=package_uuid,
+            source_rank=source_rank,
+            subtask_store=subtask_store,
+            allow_new_cutover=allow_new_cutover,
+        )
+        self._delegate = NativeRegistrationPublicationEventCutoverClient(
+            preliminary_client,
             execution_client=execution_client,
             package_uuid=package_uuid,
             source_rank=source_rank,
