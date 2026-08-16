@@ -14,7 +14,9 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
         == "MARKORBIT_FACT_EVENT_ENVELOPE_V1"
     )
     assert contract["fact_event_envelope"]["legal_conclusion"] is False
-    assert "GLOBAL_FACT_EVENT_ENVELOPE_V1" not in contract["planned_contracts"]
+    assert contract["data_trust"]["version"] == "MARKORBIT_DATA_TRUST_FRESHNESS_V1"
+    assert contract["data_trust"]["legal_conclusion"] is False
+    assert contract["planned_contracts"] == ["OPERATIONS_V2"]
 
     cn_dag = contract["active_publish_dags"]["cn_final_publish"]
     assert cn_dag["dag_version"] == "CN_FINAL_PUBLISH_DAG_V1"
@@ -25,3 +27,4 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     assert contract["compatibility"]["storage_v2_semantics_unchanged"] is True
     assert contract["compatibility"]["cn_publish_sql_execution_unchanged"] is True
     assert contract["compatibility"]["existing_consumer_payloads_unchanged"] is True
+    assert contract["compatibility"]["existing_acceptance_reports_unchanged"] is True
