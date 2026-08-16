@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.cn.publish_dag import cn_final_publish_dag_contract
+from app.data_trust import data_trust_contract
 from app.domain_adapter import domain_adapter_contract
 from app.fact_event_envelope import fact_event_envelope_contract
 from app.work_dag import work_dag_contract
@@ -24,10 +25,8 @@ def platform_contract() -> dict[str, Any]:
         },
         "domain_adapter": domain_adapter_contract(),
         "fact_event_envelope": fact_event_envelope_contract(),
-        "planned_contracts": [
-            "DATA_TRUST_FRESHNESS_V1",
-            "OPERATIONS_V2",
-        ],
+        "data_trust": data_trust_contract(),
+        "planned_contracts": ["OPERATIONS_V2"],
         "compatibility": {
             "cn_inflight_checkpoint_schema_preserved": True,
             "cn_source_rank_semantics_unchanged": True,
@@ -35,5 +34,6 @@ def platform_contract() -> dict[str, Any]:
             "integration_v1_read_only_boundary_unchanged": True,
             "cn_publish_sql_execution_unchanged": True,
             "existing_consumer_payloads_unchanged": True,
+            "existing_acceptance_reports_unchanged": True,
         },
     }
