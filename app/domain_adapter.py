@@ -72,6 +72,7 @@ def domain_adapter_contract() -> dict[str, Any]:
             "durable_resume_for_large_work": True,
             "provenance_preserved": True,
             "history_does_not_invent_legal_event_time": True,
+            "global_envelope_does_not_replace_source_payload": True,
             "publish_before_audit": True,
             "audit_before_accept": True,
             "acceptance_fails_closed": True,
@@ -93,6 +94,7 @@ def domain_adapter_contract() -> dict[str, Any]:
             "bounded_execution",
             "progress_and_failure_telemetry",
             "provenance_contract",
+            "global_fact_event_envelope_contract",
             "consumer_service_boundary",
         ],
     }
