@@ -11,7 +11,15 @@ from app.platformization_checkpoint import (
 def _platform(**overrides):
     value = {
         "version": "MARKORBIT_PLATFORMIZATION_M1.7",
+        "status": "CODE_READY_PENDING_RUNTIME_ACCEPTANCE",
         "foundation_contracts_complete": True,
+        "runtime_acceptance_boundary": {
+            "required": True,
+            "evaluated_by_platform_contract": False,
+            "authoritative_checkpoint": "CN_M16_FINAL_CHECKPOINT_V1",
+            "real_corpus_success_claimed": False,
+            "release_promotion_allowed_without_runtime_acceptance": False,
+        },
     }
     value.update(overrides)
     return value
@@ -50,6 +58,7 @@ def test_static_checkpoint_is_code_ready_without_claiming_runtime_acceptance() -
     assert checkpoint["real_corpus_success_claimed"] is False
     assert checkpoint["release_promotion_allowed"] is False
     assert checkpoint["engine_release"] == "M1.6"
+    assert checkpoint["platform_status"] == "CODE_READY_PENDING_RUNTIME_ACCEPTANCE"
     assert checkpoint["next_action"] == "RUN_REAL_CN_RUNTIME_ACCEPTANCE_SEPARATELY"
     assert checkpoint["reasons"] == []
 
@@ -95,6 +104,30 @@ def test_static_checkpoint_blocks_foundation_or_node_count_drift() -> None:
     assert "FOUNDATION_CONTRACTS_INCOMPLETE" in codes
     assert "CN_NATIVE_BUSINESS_NODE_COUNT_DRIFT" in codes
     assert "CN_INTENTIONAL_COMPATIBILITY_NODE_COUNT_DRIFT" in codes
+
+
+def test_static_checkpoint_blocks_runtime_boundary_overclaim() -> None:
+    platform = _platform()
+    platform["runtime_acceptance_boundary"] = {
+        "required": False,
+        "evaluated_by_platform_contract": True,
+        "authoritative_checkpoint": "SOME_OTHER_GATE",
+        "real_corpus_success_claimed": True,
+        "release_promotion_allowed_without_runtime_acceptance": True,
+    }
+    checkpoint = build_platformization_checkpoint(
+        platform_builder=lambda: platform,
+        version_builder=_versions,
+        native_cutover_builder=_native,
+    )
+
+    codes = {reason["code"] for reason in checkpoint["reasons"]}
+    assert checkpoint["code_ready"] is False
+    assert "RUNTIME_ACCEPTANCE_BOUNDARY_NOT_REQUIRED" in codes
+    assert "PLATFORM_CONTRACT_MUST_NOT_EVALUATE_REAL_RUNTIME" in codes
+    assert "RUNTIME_ACCEPTANCE_AUTHORITY_DRIFT" in codes
+    assert "STATIC_PLATFORM_CONTRACT_CLAIMS_REAL_CORPUS_SUCCESS" in codes
+    assert "EARLY_RELEASE_PROMOTION_POLICY_ENABLED" in codes
 
 
 def test_repository_state_passes_static_checkpoint() -> None:
