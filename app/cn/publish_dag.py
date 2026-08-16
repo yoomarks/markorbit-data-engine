@@ -43,7 +43,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "APPLICATION_RANGE",
             dependencies=("CASE_FACTS_EVENT",),
             stage_table="cn_stage_case_publish",
-            audit_policy="EVENT_DELTA_ADAPTER_V2",
+            audit_policy="NATIVE_DURABLE_RANGE_DELTA_EVENT_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
         WorkDagNode(
             "REGISTRATION_PUBLICATION_EVENT",
