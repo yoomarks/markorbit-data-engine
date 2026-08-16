@@ -27,14 +27,14 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     cn_dag = contract["active_publish_dags"]["cn_final_publish"]
     assert cn_dag["dag_version"] == "CN_FINAL_PUBLISH_DAG_V1"
     assert cn_dag["execution_mode"] == "HYBRID_NATIVE_WITH_INFLIGHT_LEGACY_COMPATIBILITY"
-    assert cn_dag["native_node_count"] == 6
+    assert cn_dag["native_node_count"] == 7
     assert contract["compatibility"]["cn_inflight_checkpoint_schema_preserved"] is True
     assert contract["compatibility"]["cn_source_rank_semantics_unchanged"] is True
     assert contract["compatibility"]["storage_v2_semantics_unchanged"] is True
     assert contract["compatibility"]["cn_legacy_case_party_event_execution_unchanged"] is True
     assert (
         contract["compatibility"][
-            "cn_agent_priority_madrid_case_scope_relation_scope_carve_out_native_execution"
+            "cn_agent_priority_madrid_case_current_case_scope_relation_scope_carve_out_native_execution"
         ]
         is True
     )
@@ -47,6 +47,12 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     assert (
         contract["compatibility"][
             "cn_preexisting_final_publish_checkpoint_agent_fallback_preserved"
+        ]
+        is True
+    )
+    assert (
+        contract["compatibility"][
+            "cn_preexisting_final_publish_checkpoint_case_current_fallback_preserved"
         ]
         is True
     )

@@ -19,6 +19,7 @@ from app.cn.goods_lifecycle_sql import (
 from app.cn.goods_scope_match import exact_touched_scope_sql
 from app.cn.legacy_snapshot_persist import plan_agent_code_batches
 from app.cn.native_agent_snapshot import NativeAgentCutoverClient
+from app.cn.native_case_current import NativeCaseCurrentCutoverClient
 from app.cn.publish_subtasks import (
     PublishSubtaskStore,
     capture_publish_stage_counts,
@@ -201,8 +202,16 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
         agent_batches=agent_batches,
         subtask_store=subtask_store,
     )
-    snapshot_client = NativeAgentCutoverClient(
+    case_current_client = NativeCaseCurrentCutoverClient(
         bounded_snapshot_client,
+        execution_client=base_snapshot_client,
+        package_uuid=package_uuid,
+        source_rank=int(package_meta["source_rank"]),
+        subtask_store=subtask_store,
+        allow_new_cutover=not final_publish_resume,
+    )
+    snapshot_client = NativeAgentCutoverClient(
+        case_current_client,
         execution_client=base_snapshot_client,
         package_uuid=package_uuid,
         source_rank=int(package_meta["source_rank"]),
@@ -254,6 +263,7 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     metrics["cn_case_chunk_rows"] = CN_CASE_CHUNK_ROWS
     metrics["cn_party_chunk_rows"] = CN_PARTY_CHUNK_ROWS
     metrics["cn_goods_durable_scope_filter"] = "EXACT_TOUCHED_KEY_PREWHERE_V1"
+    metrics["cn_case_current_native_execution"] = case_current_client.native_case_current_enabled
     metrics["cn_agent_persist_chunk_count"] = snapshot_client.agent_chunk_count
     metrics["cn_agent_persist_agent_code_count"] = snapshot_client.agent_code_count
     metrics["cn_agent_persist_policy"] = "WHOLE_AGENT_CODE_BATCHES_V1"
