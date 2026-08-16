@@ -21,12 +21,17 @@ def _sql_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-def _range_predicate(lower: str | None, upper: str | None) -> str:
+def _range_predicate(
+    lower: str | None,
+    upper: str | None,
+    *,
+    column: str = "application_number",
+) -> str:
     parts: list[str] = []
     if lower is not None:
-        parts.append(f"application_number >= {_sql_string(lower)}")
+        parts.append(f"{column} >= {_sql_string(lower)}")
     if upper is not None:
-        parts.append(f"application_number < {_sql_string(upper)}")
+        parts.append(f"{column} < {_sql_string(upper)}")
     return " AND ".join(parts)
 
 
@@ -198,7 +203,11 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
         for stage_table, (current_table, join_condition) in checks.items():
             total_violations = 0
             for lower, upper in self._ranges(stage_table):
-                predicate = _range_predicate(lower, upper)
+                predicate = _range_predicate(
+                    lower,
+                    upper,
+                    column="incoming.application_number",
+                )
                 range_filter = f" AND {predicate}" if predicate else ""
                 rows = self._delegate.query(
                     f"""
