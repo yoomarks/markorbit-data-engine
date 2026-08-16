@@ -9,6 +9,7 @@ from app.component_versions import component_versions
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
 from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, health, us_case
+from app.platform_contract import platform_contract
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
 from app.us_assignment.api import us_assignments_for_serial
@@ -63,6 +64,7 @@ def integration_contract() -> dict[str, Any]:
         "contract_version": CONTRACT_VERSION,
         "engine_version": engine_version(),
         "component_versions": component_versions(),
+        "platformization": platform_contract(),
         "source_owner": SOURCE_OWNER,
         "service_role": SERVICE_ROLE,
         "consumer_policy": {
