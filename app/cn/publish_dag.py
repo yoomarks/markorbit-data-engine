@@ -177,7 +177,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "APPLICATION_RANGE",
             dependencies=("AGENT_CURRENT",),
             stage_table="cn_stage_priority",
-            audit_policy="PUBLISHER_SHAPE_AND_CHUNK_COUNT",
+            audit_policy="NATIVE_DURABLE_RANGE_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
         WorkDagNode(
             "MADRID_CURRENT",
@@ -186,7 +187,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "APPLICATION_RANGE",
             dependencies=("PRIORITY_CURRENT",),
             stage_table="cn_stage_madrid",
-            audit_policy="PUBLISHER_SHAPE_AND_CHUNK_COUNT",
+            audit_policy="NATIVE_DURABLE_RANGE_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
         WorkDagNode(
             "CASE_RELATION_CURRENT",
@@ -219,9 +221,10 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
 )
 
 
-# The graph above is the semantic authority. These rules are only the temporary
-# compatibility bridge that proves each old SQL command implements one explicit
-# node until that node receives a native executor.
+# The graph above is the semantic authority. These rules identify the legacy
+# publisher's sequencing placeholders. Native nodes still resolve through this
+# map so order drift fails closed, but their legacy SQL is not executed for new
+# final-publish checkpoints.
 LEGACY_PUBLISH_RULES = (
     LegacyPublishRule(
         "CASE_FACTS_EVENT",
@@ -373,12 +376,12 @@ def resolve_legacy_publish_command(sql: str) -> WorkDagNode | None:
 
 def cn_final_publish_dag_contract() -> dict:
     contract = CN_FINAL_PUBLISH_DAG.contract()
-    contract["execution_mode"] = "LEGACY_PUBLISHER_MAPPED_TO_EXPLICIT_DAG"
-    contract["native_node_count"] = sum(
-        1 for node in CN_FINAL_PUBLISH_DAG.nodes if node.native_execution
-    )
-    contract["compatibility_node_count"] = sum(
-        1 for node in CN_FINAL_PUBLISH_DAG.nodes if not node.native_execution
-    )
+    native_count = sum(1 for node in CN_FINAL_PUBLISH_DAG.nodes if node.native_execution)
+    contract["execution_mode"] = "HYBRID_NATIVE_WITH_INFLIGHT_LEGACY_COMPATIBILITY"
+    contract["native_node_count"] = native_count
+    contract["compatibility_node_count"] = len(CN_FINAL_PUBLISH_DAG.nodes) - native_count
     contract["legacy_rule_count"] = len(LEGACY_PUBLISH_RULES)
+    contract["inflight_compatibility_policy"] = (
+        "CHECKPOINTS_WITH_PREEXISTING_WORK_UNITS_KEEP_LEGACY_AUX_EXECUTION"
+    )
     return contract

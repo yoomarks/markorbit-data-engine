@@ -6,7 +6,10 @@ from typing import Any
 import uuid
 
 from app.cn.legacy_snapshot_persist import LegacySnapshotPersistClient
+from app.cn.native_aux_snapshot import NativeAuxSnapshotExecutor
+from app.cn.publish_dag import resolve_legacy_publish_command
 from app.cn.publish_subtasks import PublishSubtaskStore
+from app.repository import get_package
 
 
 CN_FINAL_PERSIST_TARGET_ROWS = 25_000
@@ -20,6 +23,13 @@ _CURRENT_JOIN_TABLES = (
     "cn_case_scope_current",
     "cn_case_party_current",
 )
+_NATIVE_AUX_TARGETS = {
+    "INSERT INTO markorbit_facts.cn_priority_current": "PRIORITY_CURRENT",
+    "INSERT INTO markorbit_facts.cn_madrid_current": "MADRID_CURRENT",
+}
+_NATIVE_AUX_CUTOVER_VERSION = "CN_NATIVE_AUX_CUTOVER_V1"
+_NATIVE_AUX_CUTOVER_STAGE = "__native_aux_cutover_v1__"
+_NATIVE_AUX_CUTOVER_HASH = sha256(_NATIVE_AUX_CUTOVER_VERSION.encode("utf-8")).hexdigest()
 
 
 def _sql_string(value: str) -> str:
@@ -123,13 +133,19 @@ def _command_label(sql: str) -> str:
 
 
 class ResumableFinalPublishClient(LegacySnapshotPersistClient):
-    """Turn legacy publish-stage commands into durable resumable subtasks.
+    """Bound final persistence and incrementally replace legacy nodes with native work.
 
-    CASE, PARTY and SCOPE are already materialized into bounded temporary
-    ClickHouse tables by M1.6. The legacy publisher used to read each complete
-    table back into one large JOIN/INSERT, recreating whole-package memory
-    pressure. This wrapper executes every such statement over small disjoint
-    application ranges and persists SUCCESS after each range in Postgres.
+    CASE, PARTY and SCOPE are materialized into bounded temporary ClickHouse tables
+    and persisted as durable application-range subtasks. PRIORITY_CURRENT and
+    MADRID_CURRENT are the first native DAG cutover: the legacy publisher still
+    provides their sequencing position, but its SQL text is never rewritten or
+    executed for new final-publish checkpoints. Native SQL builders own those
+    queries and use the same durable work-unit ledger.
+
+    Existing in-flight checkpoints created before the native cutover keep the old
+    bounded compatibility path. A durable cutover marker is written only when the
+    subtask ledger is empty, so a package that already committed compatibility work
+    is never silently switched mid-run.
     """
 
     def __init__(
@@ -151,6 +167,8 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
         self._stage_commands_seen = {table: 0 for table in _PUBLISH_STAGE_TABLES}
         self._final_tasks_executed = 0
         self._final_tasks_skipped = 0
+        self._native_aux_executor: NativeAuxSnapshotExecutor | None = None
+        self._native_aux_enabled = self._initialize_native_aux_cutover()
 
     @property
     def final_tasks_executed(self) -> int:
@@ -164,7 +182,15 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
     def final_task_count(self) -> int:
         return self._final_tasks_executed + self._final_tasks_skipped
 
+    @property
+    def native_aux_enabled(self) -> bool:
+        return self._native_aux_enabled
+
     def command(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        for marker, node_id in _NATIVE_AUX_TARGETS.items():
+            if marker in sql and self._native_aux_enabled:
+                return self._command_native_aux(sql, node_id=node_id)
+
         stage_table = _detect_publish_stage(sql)
         if stage_table is not None:
             return self._command_publish_stage(
@@ -174,6 +200,14 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
                 **kwargs,
             )
         return super().command(sql, *args, **kwargs)
+
+    def assert_aux_persist_complete(self) -> None:
+        if not self._native_aux_enabled:
+            super().assert_aux_persist_complete()
+            return
+        if self._native_aux_executor is None:
+            raise RuntimeError("native auxiliary publisher was enabled but never executed")
+        self._native_aux_executor.assert_complete()
 
     def assert_final_publish_complete(self) -> dict[str, int]:
         missing = [
@@ -240,6 +274,62 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
         if failed:
             raise RuntimeError(f"CN final publish current-coverage audit failed: {failed}")
         return violations
+
+    def _initialize_native_aux_cutover(self) -> bool:
+        marker_key = self._subtask_store.task_key(
+            sql_hash=_NATIVE_AUX_CUTOVER_HASH,
+            stage_table=_NATIVE_AUX_CUTOVER_STAGE,
+            lower=None,
+            upper=None,
+        )
+        if self._subtask_store.is_success(marker_key, _NATIVE_AUX_CUTOVER_HASH):
+            return True
+
+        summary_method = getattr(self._subtask_store, "summary", None)
+        if not callable(summary_method):
+            # Lightweight test stores do not necessarily implement summary(). They
+            # have no persisted in-flight compatibility state, so native execution
+            # is safe without a durable migration marker.
+            return True
+
+        summary = dict(summary_method() or {})
+        if sum(int(value or 0) for value in summary.values()) != 0:
+            return False
+
+        self._subtask_store.mark_running(
+            task_key=marker_key,
+            task_group="NATIVE_AUX_CUTOVER",
+            task_index=1,
+            task_total=1,
+            stage_table=_NATIVE_AUX_CUTOVER_STAGE,
+            lower=None,
+            upper=None,
+            sql_hash=_NATIVE_AUX_CUTOVER_HASH,
+        )
+        self._subtask_store.mark_success(marker_key)
+        return True
+
+    def _command_native_aux(self, sql: str, *, node_id: str) -> Any:
+        node = resolve_legacy_publish_command(sql)
+        if node is None or node.task_id != node_id:
+            resolved = node.task_id if node is not None else "NONE"
+            raise RuntimeError(
+                "native auxiliary cutover received unexpected legacy sequencing shape: "
+                f"expected={node_id}, resolved={resolved}"
+            )
+
+        if self._native_aux_executor is None:
+            package = get_package(self._final_package)
+            self._native_aux_executor = NativeAuxSnapshotExecutor(
+                client=self._delegate,
+                package_uuid=self._final_package,
+                source_rank=int(package["source_rank"]),
+                subtask_store=self._subtask_store,
+            )
+        execution = self._native_aux_executor.execute(node_id)
+        self._final_tasks_executed += execution.executed
+        self._final_tasks_skipped += execution.skipped
+        return execution
 
     def _ranges(self, stage_table: str) -> list[tuple[str | None, str | None]]:
         existing = self._final_ranges.get(stage_table)
