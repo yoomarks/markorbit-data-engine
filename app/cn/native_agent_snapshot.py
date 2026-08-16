@@ -5,6 +5,7 @@ from hashlib import sha256
 from typing import Any
 import uuid
 
+from app.cn.native_case_party_close import NativeCasePartyCloseCutoverClient
 from app.cn.native_case_relation import NativeCaseRelationCutoverClient
 from app.cn.publish_dag import resolve_legacy_publish_command
 from app.cn.publish_subtasks import PublishSubtaskStore
@@ -185,8 +186,16 @@ class NativeAgentCutoverClient:
         subtask_store: PublishSubtaskStore,
         allow_new_cutover: bool,
     ) -> None:
-        self._delegate = NativeCaseRelationCutoverClient(
+        relation_client = NativeCaseRelationCutoverClient(
             delegate,
+            execution_client=execution_client,
+            package_uuid=package_uuid,
+            source_rank=source_rank,
+            subtask_store=subtask_store,
+            allow_new_cutover=allow_new_cutover,
+        )
+        self._delegate = NativeCasePartyCloseCutoverClient(
+            relation_client,
             execution_client=execution_client,
             package_uuid=package_uuid,
             source_rank=source_rank,
