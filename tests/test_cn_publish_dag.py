@@ -100,13 +100,13 @@ def test_resolver_rejects_mixed_stage_shape() -> None:
         resolve_legacy_publish_command(sql)
 
 
-def test_cn_publish_dag_contract_marks_thirteen_native_nodes() -> None:
+def test_cn_publish_dag_contract_marks_fourteen_native_nodes() -> None:
     contract = cn_final_publish_dag_contract()
 
     assert contract["dag_version"] == CN_FINAL_PUBLISH_DAG_VERSION
     assert contract["execution_mode"] == "HYBRID_NATIVE_WITH_INFLIGHT_LEGACY_COMPATIBILITY"
-    assert contract["native_node_count"] == 13
-    assert contract["compatibility_node_count"] == len(CN_FINAL_PUBLISH_DAG.nodes) - 13
+    assert contract["native_node_count"] == 14
+    assert contract["compatibility_node_count"] == len(CN_FINAL_PUBLISH_DAG.nodes) - 14
     assert contract["legacy_rule_count"] == len(CN_FINAL_PUBLISH_DAG.nodes)
 
     nodes = {node["task_id"]: node for node in contract["nodes"]}
@@ -114,6 +114,7 @@ def test_cn_publish_dag_contract_marks_thirteen_native_nodes() -> None:
     assert nodes["PRELIMINARY_PUBLICATION_EVENT"]["native_execution"] is True
     assert nodes["REGISTRATION_PUBLICATION_EVENT"]["native_execution"] is True
     assert nodes["EXCLUSIVE_TERM_EVENT"]["native_execution"] is True
+    assert nodes["MARK_NAME_EVENT"]["native_execution"] is True
     assert nodes["CASE_CURRENT"]["native_execution"] is True
     assert nodes["CASE_PARTY_CURRENT"]["native_execution"] is True
     assert nodes["CASE_PARTY_CURRENT_CLOSE"]["native_execution"] is True
