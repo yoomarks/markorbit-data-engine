@@ -174,6 +174,9 @@ jobs:
       - name: Run CN M1.6 bounded priority/Madrid snapshot fixture
         run: docker compose run --rm --no-deps worker python -m app.cn.validate_bounded_aux_snapshot_fixture
 
+      - name: Run CN M1.6 resumable final snapshot fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_final_publish_subtask_fixture
+
       - name: Run Storage V2 deep audit against ClickHouse schema
         run: docker compose run --rm --no-deps worker python -m app.storage_audit --deep --compact
 
