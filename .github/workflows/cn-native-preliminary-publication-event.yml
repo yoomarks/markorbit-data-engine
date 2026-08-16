@@ -1,0 +1,57 @@
+name: CN Native Preliminary Publication Event
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  real-db-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare CI Compose environment
+        run: |
+          cp .env.example .env
+          sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
+          mkdir -p raw_data
+
+      - name: Start PostgreSQL and ClickHouse
+        run: docker compose up -d --wait postgres clickhouse
+
+      - name: Run CN native preliminary publication interruption-resume fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_preliminary_publication_event_fixture
+
+      - name: Run CN native CASE_FACTS_EVENT regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_case_facts_event_fixture
+
+      - name: Run CN native CASE_PARTY_CURRENT_CLOSE regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_case_party_close_fixture
+
+      - name: Run CN native CASE_PARTY_CURRENT regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_case_party_current_fixture
+
+      - name: Run CN native CASE_CURRENT regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_case_current_fixture
+
+      - name: Run CN native CASE_SCOPE_CURRENT regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_case_scope_current_fixture
+
+      - name: Run CN native scope carve-out regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_scope_carve_out_fixture
+
+      - name: Run CN native CASE_RELATION regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_case_relation_fixture
+
+      - name: Run CN resumable final snapshot regression fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_final_publish_subtask_fixture
+
+      - name: Tear down fixture databases
+        if: always()
+        run: docker compose down -v --remove-orphans
