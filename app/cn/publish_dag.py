@@ -217,7 +217,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "APPLICATION_RANGE",
             dependencies=("CASE_RELATION_CURRENT", "CASE_SCOPE_CURRENT"),
             stage_table="cn_stage_scope_publish",
-            audit_policy="SOURCE_PACKAGE_SCOPE_RELATION_COVERAGE",
+            audit_policy="NATIVE_DURABLE_RANGE_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
     ),
 )

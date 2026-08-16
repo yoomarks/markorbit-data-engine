@@ -4,11 +4,10 @@ import uuid
 
 import pytest
 
-from app.cn import native_case_relation
-from app.cn.native_case_relation import (
-    NativeCaseRelationCutoverClient,
-    NativeCaseRelationExecutor,
-    case_relation_current_sql,
+from app.cn.native_scope_carve_out import (
+    NativeScopeCarveOutCutoverClient,
+    NativeScopeCarveOutExecutor,
+    scope_carve_out_current_sql,
 )
 
 
@@ -32,7 +31,7 @@ class _ExecutionClient:
     def command(self, sql: str, *args, **kwargs):
         self.commands.append(sql)
         if self.fail_command is not None and len(self.commands) == self.fail_command:
-            raise RuntimeError("synthetic native relation failure")
+            raise RuntimeError("synthetic native scope carve-out failure")
         return len(self.commands)
 
 
@@ -81,16 +80,6 @@ class _Store:
         self.rows[task_key]["error"] = error
 
 
-def _relation_placeholder(package: str) -> str:
-    return f"""
-        INSERT INTO markorbit_facts.cn_case_relation_current
-        SELECT incoming.relation_id
-        FROM markorbit_facts.cn_stage_case_publish AS incoming
-        WHERE incoming.package_id = toUUID('{package}')
-          AND incoming.is_derived_case = 1
-    """
-
-
 def _scope_placeholder(package: str) -> str:
     return f"""
         INSERT INTO markorbit_facts.cn_scope_carve_out_current
@@ -100,43 +89,46 @@ def _scope_placeholder(package: str) -> str:
     """
 
 
-def test_native_relation_sql_preserves_structural_semantics_and_bounds_range() -> None:
+def test_native_scope_sql_preserves_semantics_and_bounds_all_three_sources() -> None:
     package = uuid.uuid4()
-    sql = case_relation_current_sql(
+    sql = scope_carve_out_current_sql(
         package,
-        package_kind="MONTHLY_PATCH",
         source_rank=777,
         lower="R100",
         upper="R200",
     )
 
-    assert "INSERT INTO markorbit_facts.cn_case_relation_current" in sql
-    assert "FROM markorbit_facts.cn_stage_case_publish AS incoming" in sql
-    assert "incoming.is_derived_case = 1" in sql
-    assert "incoming.application_number >= 'R100'" in sql
-    assert "incoming.application_number < 'R200'" in sql
-    assert "'DERIVED_CASE', 'UNKNOWN', incoming.filing_route" in sql
-    assert "'SUFFIX_AND_ROOT_NUMBER_OBSERVED'" in sql
-    assert "'|DERIVED_CASE|'" in sql
-    assert f"toUUID('{package}')" in sql
-    assert "'MONTHLY_PATCH'" in sql
+    assert "INSERT INTO markorbit_facts.cn_scope_carve_out_current" in sql
+    assert "FROM markorbit_facts.cn_case_relation_current FINAL" in sql
+    assert f"source_package_id = toUUID('{package}')" in sql
+    assert "target_application_number >= 'R100'" in sql
+    assert "target_application_number < 'R200'" in sql
+    assert "FROM markorbit_facts.cn_stage_scope_publish" in sql
+    assert f"package_id = toUUID('{package}')" in sql
+    assert "application_number >= 'R100'" in sql
+    assert "application_number < 'R200'" in sql
+    assert "FROM markorbit_facts.cn_case_scope_current FINAL" in sql
+    assert "SELECT DISTINCT source_application_number" in sql
+    assert "'TARGET_SCOPE_ONLY'" in sql
+    assert "'ROOT_AND_TARGET_SCOPE_OBSERVED'" in sql
+    assert "0.55, 0.75" in sql
+    assert "ifNull(source.scope_hash, '')" in sql
     assert "777, now64(3), 0" in sql
 
 
-def test_native_relation_resumes_only_failed_application_range() -> None:
+def test_native_scope_resumes_only_failed_target_application_range() -> None:
     package = uuid.uuid4()
     store = _Store()
     first_client = _ExecutionClient(query_results=[[("R300",)], []], fail_command=2)
-    first = NativeCaseRelationExecutor(
+    first = NativeScopeCarveOutExecutor(
         client=first_client,
         package_uuid=package,
-        package_kind="MONTHLY_PATCH",
         source_rank=11,
         subtask_store=store,
         target_rows=2,
     )
 
-    with pytest.raises(RuntimeError, match=r"task=2/2.*synthetic native relation failure"):
+    with pytest.raises(RuntimeError, match=r"task=2/2.*synthetic native scope carve-out failure"):
         first.execute()
 
     assert len(first_client.commands) == 2
@@ -145,10 +137,9 @@ def test_native_relation_resumes_only_failed_application_range() -> None:
     assert statuses.count("FAILED") == 1
 
     retry_client = _ExecutionClient(query_results=[[("R300",)], []])
-    retry = NativeCaseRelationExecutor(
+    retry = NativeScopeCarveOutExecutor(
         client=retry_client,
         package_uuid=package,
-        package_kind="MONTHLY_PATCH",
         source_rank=11,
         subtask_store=store,
         target_rows=2,
@@ -159,20 +150,16 @@ def test_native_relation_resumes_only_failed_application_range() -> None:
     assert result.skipped == 1
     assert result.executed == 1
     assert len(retry_client.commands) == 1
-    assert "incoming.application_number >= 'R300'" in retry_client.commands[0]
+    assert "target_application_number >= 'R300'" in retry_client.commands[0]
+    assert "application_number >= 'R300'" in retry_client.commands[0]
 
 
-def test_fresh_relation_cutover_bypasses_compatibility_delegate(monkeypatch) -> None:
+def test_fresh_scope_cutover_bypasses_compatibility_delegate() -> None:
     package = uuid.uuid4()
     store = _Store()
     delegate = _Delegate()
-    execution = _ExecutionClient(query_results=[[], []])
-    monkeypatch.setattr(
-        native_case_relation,
-        "get_package",
-        lambda package_id: {"package_kind": "MONTHLY_PATCH"},
-    )
-    client = NativeCaseRelationCutoverClient(
+    execution = _ExecutionClient(query_results=[[]])
+    client = NativeScopeCarveOutCutoverClient(
         delegate,
         execution_client=execution,
         package_uuid=package,
@@ -182,26 +169,24 @@ def test_fresh_relation_cutover_bypasses_compatibility_delegate(monkeypatch) -> 
         target_rows=2,
     )
 
-    assert client.native_case_relation_enabled is True
-    client.command(_relation_placeholder(str(package)))
+    assert client.native_scope_carve_out_enabled is True
     client.command(_scope_placeholder(str(package)))
     summary = client.assert_final_publish_complete()
 
     assert delegate.commands == []
-    assert len(execution.commands) == 2
-    assert "FROM markorbit_facts.cn_stage_case_publish AS incoming" in execution.commands[0]
-    assert "FROM markorbit_facts.cn_stage_scope_publish" in execution.commands[1]
+    assert len(execution.commands) == 1
+    assert "FROM markorbit_facts.cn_stage_scope_publish" in execution.commands[0]
     assert delegate.final_assertions == 1
     assert summary["FAILED"] == 0
-    assert client.final_tasks_executed == 7
+    assert client.final_tasks_executed == 6
     assert client.final_tasks_skipped == 2
 
 
-def test_preexisting_checkpoint_without_relation_marker_keeps_legacy_relation() -> None:
+def test_preexisting_checkpoint_without_scope_marker_keeps_legacy_scope() -> None:
     package = uuid.uuid4()
     delegate = _Delegate()
     execution = _ExecutionClient()
-    client = NativeCaseRelationCutoverClient(
+    client = NativeScopeCarveOutCutoverClient(
         delegate,
         execution_client=execution,
         package_uuid=package,
@@ -210,8 +195,8 @@ def test_preexisting_checkpoint_without_relation_marker_keeps_legacy_relation() 
         allow_new_cutover=False,
     )
 
-    assert client.native_case_relation_enabled is False
-    client.command(_relation_placeholder(str(package)))
+    assert client.native_scope_carve_out_enabled is False
+    client.command(_scope_placeholder(str(package)))
     client.assert_final_publish_complete()
 
     assert len(delegate.commands) == 1
@@ -219,9 +204,9 @@ def test_preexisting_checkpoint_without_relation_marker_keeps_legacy_relation() 
     assert delegate.final_assertions == 1
 
 
-def test_native_relation_final_assertion_fails_closed_if_placeholder_missing() -> None:
+def test_native_scope_final_assertion_fails_closed_if_placeholder_missing() -> None:
     package = uuid.uuid4()
-    client = NativeCaseRelationCutoverClient(
+    client = NativeScopeCarveOutCutoverClient(
         _Delegate(),
         execution_client=_ExecutionClient(),
         package_uuid=package,
