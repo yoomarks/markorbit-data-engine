@@ -8,6 +8,27 @@ from app.cn.publish_dag import CN_FINAL_PUBLISH_DAG
 
 CN_NATIVE_CUTOVER_COMPLETION_VERSION = "CN_NATIVE_CUTOVER_COMPLETION_V1"
 
+_EXPECTED_NATIVE_BUSINESS_NODES = (
+    "CASE_FACTS_EVENT",
+    "PRELIMINARY_PUBLICATION_EVENT",
+    "REGISTRATION_PUBLICATION_EVENT",
+    "EXCLUSIVE_TERM_EVENT",
+    "MARK_NAME_EVENT",
+    "AGENT_CODE_EVENT",
+    "GOODS_SCOPE_EVENT",
+    "PARTY_SUPERSEDED_EVENT",
+    "PARTY_OBSERVED_EVENT",
+    "CASE_PARTY_CURRENT_CLOSE",
+    "CASE_CURRENT",
+    "CASE_SCOPE_CURRENT",
+    "CASE_PARTY_CURRENT",
+    "AGENT_CURRENT",
+    "PRIORITY_CURRENT",
+    "MADRID_CURRENT",
+    "CASE_RELATION_CURRENT",
+    "SCOPE_CARVE_OUT_CURRENT",
+)
+
 _INTENTIONAL_COMPATIBILITY = {
     "PARTY_HISTORY_SUPERSEDED": {
         "operation_kind": "PUBLISH_HISTORY_COMPAT",
@@ -36,11 +57,19 @@ def cn_native_cutover_completion_contract() -> dict[str, Any]:
     compatibility_ids = tuple(
         node.task_id for node in CN_FINAL_PUBLISH_DAG.nodes if not node.native_execution
     )
+    expected_native = _EXPECTED_NATIVE_BUSINESS_NODES
     expected_compatibility = tuple(_INTENTIONAL_COMPATIBILITY)
 
     reasons: list[dict[str, Any]] = []
+    unexpected_native = sorted(set(native_ids) - set(expected_native))
+    missing_native = sorted(set(expected_native) - set(native_ids))
     unexpected_compatibility = sorted(set(compatibility_ids) - set(expected_compatibility))
     missing_compatibility = sorted(set(expected_compatibility) - set(compatibility_ids))
+
+    if unexpected_native:
+        reasons.append({"code": "UNEXPECTED_NATIVE_NODE", "nodes": unexpected_native})
+    if missing_native:
+        reasons.append({"code": "EXPECTED_NATIVE_NODE_MISSING", "nodes": missing_native})
     if unexpected_compatibility:
         reasons.append(
             {
@@ -88,6 +117,11 @@ def cn_native_cutover_completion_contract() -> dict[str, Any]:
             }
         )
 
+    native_set_frozen = not unexpected_native and not missing_native
+    suppression_set_frozen = not unexpected_compatibility and not missing_compatibility
+    suppression_contract_frozen = suppression_set_frozen and not any(
+        reason["code"] == "SUPPRESSION_BOUNDARY_CONTRACT_DRIFT" for reason in reasons
+    )
     status = "COMPLETE" if not reasons else "INCOMPLETE"
     return {
         "version": CN_NATIVE_CUTOVER_COMPLETION_VERSION,
@@ -97,12 +131,14 @@ def cn_native_cutover_completion_contract() -> dict[str, Any]:
         "total_node_count": len(CN_FINAL_PUBLISH_DAG.nodes),
         "native_business_node_count": len(native_ids),
         "native_business_nodes": list(native_ids),
+        "expected_native_business_nodes": list(expected_native),
         "intentional_compatibility_node_count": len(compatibility_ids),
         "intentional_compatibility_nodes": list(compatibility_ids),
         "suppression_boundaries": suppression_boundaries,
-        "no_executable_legacy_business_nodes_remaining": not unexpected_compatibility,
-        "storage_v2_suppression_boundaries_frozen": not missing_compatibility
-        and not any(reason["code"] == "SUPPRESSION_BOUNDARY_CONTRACT_DRIFT" for reason in reasons),
+        "native_business_node_set_frozen": native_set_frozen,
+        "no_executable_legacy_business_nodes_remaining": native_set_frozen
+        and suppression_set_frozen,
+        "storage_v2_suppression_boundaries_frozen": suppression_contract_frozen,
         "reasons": reasons,
     }
 
