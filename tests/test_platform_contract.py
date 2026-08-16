@@ -5,6 +5,7 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     contract = platform_contract()
 
     assert contract["version"] == "MARKORBIT_PLATFORMIZATION_M1.7"
+    assert contract["status"] == "CODE_READY_PENDING_RUNTIME_ACCEPTANCE"
     assert contract["goal"] == "GLOBAL_SOURCE_FACT_PLATFORM_BEFORE_NEXT_JURISDICTION"
     assert contract["work_engine"]["version"] == "MARKORBIT_WORK_ENGINE_V1"
     assert contract["work_dag"]["version"] == "MARKORBIT_WORK_DAG_V1"
@@ -21,8 +22,15 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     assert contract["planned_contracts"] == []
     assert (
         contract["next_platformization_focus"]
-        == "FREEZE_AND_ACCEPT_CN_NATIVE_FINAL_PUBLISH"
+        == "RUN_REAL_CN_RUNTIME_ACCEPTANCE_SEPARATELY"
     )
+
+    runtime = contract["runtime_acceptance_boundary"]
+    assert runtime["required"] is True
+    assert runtime["evaluated_by_platform_contract"] is False
+    assert runtime["authoritative_checkpoint"] == "CN_M16_FINAL_CHECKPOINT_V1"
+    assert runtime["real_corpus_success_claimed"] is False
+    assert runtime["release_promotion_allowed_without_runtime_acceptance"] is False
 
     cn_dag = contract["active_publish_dags"]["cn_final_publish"]
     assert cn_dag["dag_version"] == "CN_FINAL_PUBLISH_DAG_V1"
