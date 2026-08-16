@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.cn.publish_dag import cn_final_publish_dag_contract
 from app.domain_adapter import domain_adapter_contract
+from app.work_dag import work_dag_contract
 from app.work_engine import work_engine_contract
 
 
@@ -15,6 +17,10 @@ def platform_contract() -> dict[str, Any]:
         "status": "IN_PROGRESS",
         "goal": "GLOBAL_SOURCE_FACT_PLATFORM_BEFORE_NEXT_JURISDICTION",
         "work_engine": work_engine_contract(),
+        "work_dag": work_dag_contract(),
+        "active_publish_dags": {
+            "cn_final_publish": cn_final_publish_dag_contract(),
+        },
         "domain_adapter": domain_adapter_contract(),
         "planned_contracts": [
             "GLOBAL_FACT_EVENT_ENVELOPE_V1",
@@ -26,5 +32,6 @@ def platform_contract() -> dict[str, Any]:
             "cn_source_rank_semantics_unchanged": True,
             "storage_v2_semantics_unchanged": True,
             "integration_v1_read_only_boundary_unchanged": True,
+            "cn_publish_sql_execution_unchanged": True,
         },
     }
