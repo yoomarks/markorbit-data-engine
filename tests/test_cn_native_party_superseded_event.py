@@ -1,0 +1,217 @@
+from __future__ import annotations
+
+import uuid
+
+import pytest
+
+from app.cn import native_party_superseded_event
+from app.cn.native_party_superseded_event import (
+    NativePartySupersededEventCutoverClient,
+    NativePartySupersededEventExecutor,
+    party_superseded_event_sql,
+)
+from app.cn.storage_v2_party_history import PartyHistorySuppressionClient
+
+
+class _Result:
+    def __init__(self, rows):
+        self.result_rows = rows
+
+
+class _Client:
+    def __init__(self, query_results=None, *, fail_command: int | None = None):
+        self.query_results = [list(rows) for rows in (query_results or [])]
+        self.queries: list[str] = []
+        self.commands: list[str] = []
+        self.fail_command = fail_command
+
+    def query(self, sql, *args, **kwargs):
+        self.queries.append(sql)
+        rows = self.query_results.pop(0) if self.query_results else []
+        return _Result(rows)
+
+    def command(self, sql, *args, **kwargs):
+        self.commands.append(sql)
+        if self.fail_command is not None and len(self.commands) == self.fail_command:
+            raise RuntimeError("synthetic native party-superseded failure")
+        return len(self.commands)
+
+
+class _Delegate:
+    final_tasks_executed = 2
+    final_tasks_skipped = 1
+
+    def __init__(self):
+        self.commands: list[str] = []
+        self.final_assertions = 0
+
+    def command(self, sql, *args, **kwargs):
+        self.commands.append(sql)
+        return len(self.commands)
+
+    def assert_final_publish_complete(self):
+        self.final_assertions += 1
+        return {"SUCCESS": 1, "RUNNING": 0, "FAILED": 0}
+
+
+class _Store:
+    def __init__(self):
+        self.rows: dict[str, dict] = {}
+
+    @staticmethod
+    def task_key(*, sql_hash, stage_table, lower, upper):
+        return f"{sql_hash}:{stage_table}:{lower}:{upper}"
+
+    def is_success(self, task_key, sql_hash):
+        row = self.rows.get(task_key)
+        return bool(row and row["status"] == "SUCCESS" and row["sql_hash"] == sql_hash)
+
+    def task_status(self, task_key, sql_hash):
+        row = self.rows.get(task_key)
+        if not row or row["sql_hash"] != sql_hash:
+            return None
+        return row["status"]
+
+    def mark_running(self, *, task_key, sql_hash, **metadata):
+        self.rows[task_key] = {"status": "RUNNING", "sql_hash": sql_hash, **metadata}
+
+    def mark_success(self, task_key):
+        self.rows[task_key]["status"] = "SUCCESS"
+
+    def mark_failed(self, task_key, error):
+        self.rows[task_key]["status"] = "FAILED"
+        self.rows[task_key]["error"] = error
+
+
+def _event_placeholder(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_observed_event
+        SELECT concat(cur.role, '_RELATION_SUPERSEDED_OBSERVED')
+        FROM markorbit_facts.cn_stage_party_publish AS incoming
+        JOIN markorbit_facts.cn_case_party_current AS cur FINAL
+          ON cur.application_number = incoming.application_number
+        WHERE incoming.package_id = toUUID('{package}')
+    """
+
+
+def _history_placeholder(action: str, package: str) -> str:
+    marker = "'SUPERSEDED'" if action == "SUPERSEDED" else "'OBSERVED_CURRENT'"
+    return f"""
+        INSERT INTO markorbit_facts.cn_case_party_relation_history
+        SELECT {marker}
+        FROM markorbit_facts.cn_stage_party_publish
+        WHERE package_id = toUUID('{package}')
+    """
+
+
+def test_party_superseded_sql_preserves_touched_role_omission_semantics() -> None:
+    package = uuid.uuid4()
+    sql = party_superseded_event_sql(
+        package,
+        package_kind="MONTHLY_PATCH",
+        source_effective_date="2026-02-28",
+        source_rank=500,
+        lower="A100",
+        upper="A200",
+    )
+    assert "concat(cur.role, '_RELATION_SUPERSEDED_OBSERVED')" in sql
+    assert "toDate32('2026-02-28')" in sql
+    assert "'OFFICIAL_DATA_RELATION_REPLACEMENT'" in sql
+    assert "0.95" in sql
+    assert "GROUP BY application_number, role" in sql
+    assert "SELECT application_number, role, relation_key" in sql
+    assert "WHERE (application_number, role) IN" in sql
+    assert "cur.is_current = 1" in sql
+    assert "cur.source_rank < 500" in sql
+    assert "incoming.application_number = ''" in sql
+    assert "touched.touched_source_row_hash" in sql
+    assert "'|SUPERSEDED|'" in sql
+    assert "application_number >= 'A100'" in sql
+    assert "application_number < 'A200'" in sql
+
+
+def test_party_superseded_resume_skips_successful_range() -> None:
+    package = uuid.uuid4()
+    store = _Store()
+    first_client = _Client(query_results=[[("A300",)], []], fail_command=2)
+    first = NativePartySupersededEventExecutor(
+        client=first_client,
+        package_uuid=package,
+        package_kind="MONTHLY_PATCH",
+        source_effective_date="2026-02-28",
+        source_rank=100,
+        subtask_store=store,
+        target_rows=2,
+    )
+    with pytest.raises(RuntimeError, match=r"task=2/2.*synthetic native party-superseded failure"):
+        first.execute()
+
+    retry_client = _Client(query_results=[[("A300",)], []])
+    retry = NativePartySupersededEventExecutor(
+        client=retry_client,
+        package_uuid=package,
+        package_kind="MONTHLY_PATCH",
+        source_effective_date="2026-02-28",
+        source_rank=100,
+        subtask_store=store,
+        target_rows=2,
+    )
+    result = retry.execute()
+    assert result.range_count == 2
+    assert result.skipped == 1
+    assert result.executed == 1
+    assert len(retry_client.commands) == 1
+    assert "application_number >= 'A300'" in retry_client.commands[0]
+
+
+def test_party_history_suppression_remains_authoritative_around_native_event(monkeypatch) -> None:
+    package = uuid.uuid4()
+    store = _Store()
+    delegate = _Delegate()
+    execution = _Client(query_results=[[]])
+    monkeypatch.setattr(
+        native_party_superseded_event,
+        "get_package",
+        lambda package_id: {
+            "package_kind": "MONTHLY_PATCH",
+            "source_period_end": "2026-02-28",
+        },
+    )
+    native = NativePartySupersededEventCutoverClient(
+        delegate,
+        execution_client=execution,
+        package_uuid=package,
+        source_rank=100,
+        subtask_store=store,
+        allow_new_cutover=True,
+    )
+    outer = PartyHistorySuppressionClient(native)
+    result = outer.command(_event_placeholder(str(package)))
+    outer.command(_history_placeholder("SUPERSEDED", str(package)))
+    outer.command(_history_placeholder("OBSERVED", str(package)))
+    outer.assert_suppression_complete()
+    summary = native.assert_final_publish_complete()
+
+    assert native.native_party_superseded_event_enabled is True
+    assert result.range_count == 1
+    assert len(execution.commands) == 1
+    assert delegate.commands == []
+    assert delegate.final_assertions == 1
+    assert summary["FAILED"] == 0
+
+
+def test_old_checkpoint_without_marker_keeps_legacy_party_superseded_event() -> None:
+    package = uuid.uuid4()
+    delegate = _Delegate()
+    client = NativePartySupersededEventCutoverClient(
+        delegate,
+        execution_client=_Client(),
+        package_uuid=package,
+        source_rank=100,
+        subtask_store=_Store(),
+        allow_new_cutover=False,
+    )
+    assert client.native_party_superseded_event_enabled is False
+    client.command(_event_placeholder(str(package)))
+    client.assert_final_publish_complete()
+    assert len(delegate.commands) == 1
