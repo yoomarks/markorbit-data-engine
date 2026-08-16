@@ -7,9 +7,11 @@ from typing import Any
 import uuid
 
 from app.db import postgres_conn
+from app.work_engine import DurableWorkUnitStore, WorkUnitSpec
 
 
 CHECKPOINT_VERSION = "CN_FINAL_PUBLISH_V1"
+WORK_OWNER_SCOPE = "CN_FINAL_PUBLISH"
 PUBLISH_STAGE_TABLES = (
     "cn_stage_case_publish",
     "cn_stage_party_publish",
@@ -24,55 +26,65 @@ class PublishCheckpoint:
     stage_counts: dict[str, int]
 
 
-class PublishSubtaskStore:
-    """Durable progress ledger for bounded legacy snapshot persistence.
+def _legacy_task_key(
+    operation_hash: str,
+    partition_kind: str,
+    lower: str | None,
+    upper: str | None,
+) -> str:
+    """Preserve the exact #137 task identity for in-flight CN recovery state."""
+    payload = "|".join(
+        (
+            CHECKPOINT_VERSION,
+            operation_hash,
+            partition_kind,
+            lower or "-inf",
+            upper or "+inf",
+        )
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
 
-    ClickHouse publish-stage tables are the temporary data files. This Postgres
-    ledger records which application-range command has committed successfully.
-    A worker/container restart therefore resumes at the first unfinished range.
+
+class PublishSubtaskStore:
+    """CN persistence adapter over the jurisdiction-neutral Work Engine.
+
+    #137 established durable final-publish recovery using
+    ``control.cn_publish_subtask``. M1.7 keeps that table and its exact task-key
+    identity stable, but delegates resume/completion state-machine behavior to
+    :class:`DurableWorkUnitStore`. This is the compatibility bridge from the
+    proven CN implementation to the reusable platform primitive.
     """
 
     def __init__(self, package_uuid: uuid.UUID | str) -> None:
         self.package_id = str(package_uuid)
+        self._work_store = DurableWorkUnitStore(
+            owner_scope=WORK_OWNER_SCOPE,
+            checkpoint_version=CHECKPOINT_VERSION,
+            read_task=self._read_task,
+            upsert_running=self._upsert_running,
+            set_success=self._set_success,
+            set_failed=self._set_failed,
+            summarize=self._summarize,
+            task_key_factory=_legacy_task_key,
+        )
 
-    @staticmethod
     def task_key(
+        self,
         *,
         sql_hash: str,
         stage_table: str,
         lower: str | None,
         upper: str | None,
     ) -> str:
-        payload = "|".join(
-            (
-                CHECKPOINT_VERSION,
-                sql_hash,
-                stage_table,
-                lower or "-inf",
-                upper or "+inf",
-            )
+        return self._work_store.task_key(
+            operation_hash=sql_hash,
+            partition_kind=stage_table,
+            lower=lower,
+            upper=upper,
         )
-        return sha256(payload.encode("utf-8")).hexdigest()
 
     def is_success(self, task_key: str, sql_hash: str) -> bool:
-        with postgres_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT status, sql_hash
-                    FROM control.cn_publish_subtask
-                    WHERE package_id = %s
-                      AND checkpoint_version = %s
-                      AND task_key = %s
-                    """,
-                    (self.package_id, CHECKPOINT_VERSION, task_key),
-                )
-                row = cur.fetchone()
-        return bool(
-            row
-            and str(row["status"]) == "SUCCESS"
-            and str(row["sql_hash"]) == sql_hash
-        )
+        return self._work_store.is_success(task_key, sql_hash)
 
     def mark_running(
         self,
@@ -86,6 +98,54 @@ class PublishSubtaskStore:
         upper: str | None,
         sql_hash: str,
     ) -> None:
+        self._work_store.mark_running(
+            task_key=task_key,
+            task_group=task_group,
+            task_index=task_index,
+            task_total=task_total,
+            partition_kind=stage_table,
+            lower=lower,
+            upper=upper,
+            operation_hash=sql_hash,
+        )
+
+    def mark_success(self, task_key: str) -> None:
+        self._work_store.mark_success(task_key)
+
+    def mark_failed(self, task_key: str, error: str) -> None:
+        self._work_store.mark_failed(task_key, error)
+
+    def summary(self) -> dict[str, int]:
+        return self._work_store.summary()
+
+    def assert_complete(self) -> dict[str, int]:
+        summary = self._work_store.summary()
+        if summary.get("RUNNING", 0) or summary.get("FAILED", 0):
+            raise RuntimeError(f"CN final publish subtask ledger incomplete: {summary}")
+        return summary
+
+    def _read_task(self, task_key: str) -> dict[str, Any] | None:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, sql_hash
+                    FROM control.cn_publish_subtask
+                    WHERE package_id = %s
+                      AND checkpoint_version = %s
+                      AND task_key = %s
+                    """,
+                    (self.package_id, CHECKPOINT_VERSION, task_key),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "status": str(row["status"]),
+            "operation_hash": str(row["sql_hash"]),
+        }
+
+    def _upsert_running(self, spec: WorkUnitSpec) -> None:
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -119,18 +179,18 @@ class PublishSubtaskStore:
                     (
                         self.package_id,
                         CHECKPOINT_VERSION,
-                        task_key,
-                        task_group,
-                        int(task_index),
-                        int(task_total),
-                        stage_table,
-                        lower,
-                        upper,
-                        sql_hash,
+                        spec.task_key,
+                        spec.task_group,
+                        int(spec.task_index),
+                        int(spec.task_total),
+                        spec.partition_kind,
+                        spec.partition_lower,
+                        spec.partition_upper,
+                        spec.operation_hash,
                     ),
                 )
 
-    def mark_success(self, task_key: str) -> None:
+    def _set_success(self, task_key: str) -> None:
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -147,7 +207,7 @@ class PublishSubtaskStore:
                     (self.package_id, CHECKPOINT_VERSION, task_key),
                 )
 
-    def mark_failed(self, task_key: str, error: str) -> None:
+    def _set_failed(self, task_key: str, error: str) -> None:
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -169,7 +229,7 @@ class PublishSubtaskStore:
                     ),
                 )
 
-    def summary(self) -> dict[str, int]:
+    def _summarize(self) -> dict[str, int]:
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -182,16 +242,10 @@ class PublishSubtaskStore:
                     (self.package_id, CHECKPOINT_VERSION),
                 )
                 rows = cur.fetchall()
-        result = {"SUCCESS": 0, "RUNNING": 0, "FAILED": 0}
-        for row in rows:
-            result[str(row["status"])] = int(row["row_count"] or 0)
-        return result
-
-    def assert_complete(self) -> dict[str, int]:
-        summary = self.summary()
-        if summary.get("RUNNING", 0) or summary.get("FAILED", 0):
-            raise RuntimeError(f"CN final publish subtask ledger incomplete: {summary}")
-        return summary
+        return {
+            str(row["status"]): int(row["row_count"] or 0)
+            for row in rows
+        }
 
 
 def ensure_publish_subtask_schema() -> None:
