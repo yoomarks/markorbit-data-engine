@@ -68,6 +68,13 @@ def evaluate_platformization_runtime_gate(
                     "reasons": cn_checkpoint.get("reasons") or [],
                 }
             )
+        if cn_status not in _PASS_STATUSES:
+            reasons.append(
+                {
+                    "code": "CN_RUNTIME_STATUS_NOT_PASS",
+                    "status": cn_status,
+                }
+            )
         runtime_passed = (
             cn_checkpoint.get("checkpoint_version") == _REQUIRED_CN_CHECKPOINT
             and cn_checkpoint.get("read_only") is True
