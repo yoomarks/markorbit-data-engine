@@ -10,6 +10,7 @@ from app.platform_contract import platform_contract
 
 PLATFORMIZATION_CHECKPOINT_VERSION = "MARKORBIT_PLATFORMIZATION_CHECKPOINT_V1"
 _EXPECTED_PLATFORM_VERSION = "MARKORBIT_PLATFORMIZATION_M1.7"
+_EXPECTED_PLATFORM_STATUS = "CODE_READY_PENDING_RUNTIME_ACCEPTANCE"
 _PRE_ACCEPTANCE_ENGINE_RELEASE = "M1.6"
 _REQUIRED_RUNTIME_ACCEPTANCE = "CN_M16_FINAL_CHECKPOINT_V1"
 
@@ -32,6 +33,7 @@ def build_platformization_checkpoint(
     versions = version_builder()
     native_cutover = native_cutover_builder()
     engine_release = str(versions.get("engine_release") or "")
+    runtime_boundary = platform.get("runtime_acceptance_boundary") or {}
 
     reasons: list[dict[str, Any]] = []
     if platform.get("version") != _EXPECTED_PLATFORM_VERSION:
@@ -42,8 +44,32 @@ def build_platformization_checkpoint(
                 "actual": platform.get("version"),
             }
         )
+    if platform.get("status") != _EXPECTED_PLATFORM_STATUS:
+        reasons.append(
+            {
+                "code": "PLATFORM_STATUS_MISMATCH",
+                "expected": _EXPECTED_PLATFORM_STATUS,
+                "actual": platform.get("status"),
+            }
+        )
     if platform.get("foundation_contracts_complete") is not True:
         reasons.append({"code": "FOUNDATION_CONTRACTS_INCOMPLETE"})
+    if runtime_boundary.get("required") is not True:
+        reasons.append({"code": "RUNTIME_ACCEPTANCE_BOUNDARY_NOT_REQUIRED"})
+    if runtime_boundary.get("evaluated_by_platform_contract") is not False:
+        reasons.append({"code": "PLATFORM_CONTRACT_MUST_NOT_EVALUATE_REAL_RUNTIME"})
+    if runtime_boundary.get("authoritative_checkpoint") != _REQUIRED_RUNTIME_ACCEPTANCE:
+        reasons.append(
+            {
+                "code": "RUNTIME_ACCEPTANCE_AUTHORITY_DRIFT",
+                "expected": _REQUIRED_RUNTIME_ACCEPTANCE,
+                "actual": runtime_boundary.get("authoritative_checkpoint"),
+            }
+        )
+    if runtime_boundary.get("real_corpus_success_claimed") is not False:
+        reasons.append({"code": "STATIC_PLATFORM_CONTRACT_CLAIMS_REAL_CORPUS_SUCCESS"})
+    if runtime_boundary.get("release_promotion_allowed_without_runtime_acceptance") is not False:
+        reasons.append({"code": "EARLY_RELEASE_PROMOTION_POLICY_ENABLED"})
     if native_cutover.get("status") != "COMPLETE":
         reasons.append(
             {
@@ -93,6 +119,7 @@ def build_platformization_checkpoint(
         "engine_release": engine_release,
         "expected_pre_acceptance_engine_release": _PRE_ACCEPTANCE_ENGINE_RELEASE,
         "platform_version": platform.get("version"),
+        "platform_status": platform.get("status"),
         "cn_native_cutover_status": native_cutover.get("status"),
         "cn_native_business_node_count": native_cutover.get("native_business_node_count"),
         "cn_intentional_compatibility_node_count": native_cutover.get(
