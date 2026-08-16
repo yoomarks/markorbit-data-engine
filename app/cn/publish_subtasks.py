@@ -86,6 +86,13 @@ class PublishSubtaskStore:
     def is_success(self, task_key: str, sql_hash: str) -> bool:
         return self._work_store.is_success(task_key, sql_hash)
 
+    def task_status(self, task_key: str, sql_hash: str) -> str | None:
+        """Read exact persisted state without weakening Work Engine transitions."""
+        row = self._read_task(task_key)
+        if not row or row.get("operation_hash") != sql_hash:
+            return None
+        return str(row.get("status") or "") or None
+
     def mark_running(
         self,
         *,
@@ -322,52 +329,51 @@ def save_publish_checkpoint(
     *,
     stage_counts: dict[str, int],
 ) -> None:
-    ensure_publish_subtask_schema()
-    package = str(package_uuid)
     normalized = {
-        table: int(stage_counts.get(table, 0)) for table in PUBLISH_STAGE_TABLES
+        table: int(stage_counts.get(table, 0))
+        for table in PUBLISH_STAGE_TABLES
     }
-    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO control.cn_publish_checkpoint
-                    (package_id, checkpoint_version, stage_counts, created_at, updated_at)
+                (package_id, checkpoint_version, stage_counts, created_at, updated_at)
                 VALUES (%s, %s, %s::jsonb, now(), now())
                 ON CONFLICT (package_id)
-                DO UPDATE SET
-                    checkpoint_version = EXCLUDED.checkpoint_version,
-                    stage_counts = EXCLUDED.stage_counts,
-                    updated_at = now()
+                DO UPDATE SET checkpoint_version = EXCLUDED.checkpoint_version,
+                              stage_counts = EXCLUDED.stage_counts,
+                              updated_at = now()
                 """,
-                (package, CHECKPOINT_VERSION, payload),
+                (
+                    str(package_uuid),
+                    CHECKPOINT_VERSION,
+                    json.dumps(normalized, sort_keys=True),
+                ),
             )
 
 
 def load_publish_checkpoint(
     package_uuid: uuid.UUID | str,
 ) -> PublishCheckpoint | None:
-    ensure_publish_subtask_schema()
-    package = str(package_uuid)
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT package_id::text, checkpoint_version, stage_counts
+                SELECT package_id, checkpoint_version, stage_counts
                 FROM control.cn_publish_checkpoint
                 WHERE package_id = %s
                 """,
-                (package,),
+                (str(package_uuid),),
             )
             row = cur.fetchone()
     if not row:
         return None
-    raw_counts = dict(row["stage_counts"] or {})
+    counts = row["stage_counts"] or {}
     return PublishCheckpoint(
         package_id=str(row["package_id"]),
         checkpoint_version=str(row["checkpoint_version"]),
-        stage_counts={key: int(value or 0) for key, value in raw_counts.items()},
+        stage_counts={str(key): int(value or 0) for key, value in counts.items()},
     )
 
 
@@ -379,11 +385,11 @@ def publish_checkpoint_is_usable(
 ) -> bool:
     if checkpoint.checkpoint_version != CHECKPOINT_VERSION:
         return False
+    actual = capture_publish_stage_counts(package_uuid, client=client)
     expected = {
         table: int(checkpoint.stage_counts.get(table, 0))
         for table in PUBLISH_STAGE_TABLES
     }
-    actual = capture_publish_stage_counts(package_uuid, client=client)
     return actual == expected
 
 
@@ -392,15 +398,13 @@ def has_publish_checkpoint(package_uuid: uuid.UUID | str) -> bool:
 
 
 def clear_publish_checkpoint(package_uuid: uuid.UUID | str) -> None:
-    ensure_publish_subtask_schema()
-    package = str(package_uuid)
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM control.cn_publish_subtask WHERE package_id = %s",
-                (package,),
+                (str(package_uuid),),
             )
             cur.execute(
                 "DELETE FROM control.cn_publish_checkpoint WHERE package_id = %s",
-                (package,),
+                (str(package_uuid),),
             )

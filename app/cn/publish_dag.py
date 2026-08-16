@@ -168,7 +168,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "AGENT_CODE_BATCH",
             dependencies=("CASE_PARTY_CURRENT",),
             stage_table="cn_stage_basic",
-            audit_policy="PUBLISHER_SHAPE_AND_CHUNK_COUNT",
+            audit_policy="NATIVE_DURABLE_AGENT_BATCH_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
         WorkDagNode(
             "PRIORITY_CURRENT",
@@ -224,7 +225,7 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
 # The graph above is the semantic authority. These rules identify the legacy
 # publisher's sequencing placeholders. Native nodes still resolve through this
 # map so order drift fails closed, but their legacy SQL is not executed for new
-# final-publish checkpoints.
+# checkpoints carrying the node's cutover marker.
 LEGACY_PUBLISH_RULES = (
     LegacyPublishRule(
         "CASE_FACTS_EVENT",
@@ -382,6 +383,6 @@ def cn_final_publish_dag_contract() -> dict:
     contract["compatibility_node_count"] = len(CN_FINAL_PUBLISH_DAG.nodes) - native_count
     contract["legacy_rule_count"] = len(LEGACY_PUBLISH_RULES)
     contract["inflight_compatibility_policy"] = (
-        "CHECKPOINTS_WITH_PREEXISTING_WORK_UNITS_KEEP_LEGACY_AUX_EXECUTION"
+        "VERSIONED_PER_NODE_CUTOVER_MARKERS_PRESERVE_PREEXISTING_CHECKPOINT_EXECUTION"
     )
     return contract

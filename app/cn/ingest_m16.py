@@ -18,6 +18,7 @@ from app.cn.goods_lifecycle_sql import (
 )
 from app.cn.goods_scope_match import exact_touched_scope_sql
 from app.cn.legacy_snapshot_persist import plan_agent_code_batches
+from app.cn.native_agent_snapshot import NativeAgentCutoverClient
 from app.cn.publish_subtasks import (
     PublishSubtaskStore,
     capture_publish_stage_counts,
@@ -194,11 +195,20 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
         lambda: plan_agent_code_batches(package_uuid, client=base_snapshot_client),
     )
     subtask_store = PublishSubtaskStore(package_uuid)
-    snapshot_client = ResumableFinalPublishClient(
+    bounded_snapshot_client = ResumableFinalPublishClient(
         base_snapshot_client,
         package_uuid=package_uuid,
         agent_batches=agent_batches,
         subtask_store=subtask_store,
+    )
+    snapshot_client = NativeAgentCutoverClient(
+        bounded_snapshot_client,
+        execution_client=base_snapshot_client,
+        package_uuid=package_uuid,
+        source_rank=int(package_meta["source_rank"]),
+        agent_batches=agent_batches,
+        subtask_store=subtask_store,
+        allow_new_cutover=not final_publish_resume,
     )
     party_history_client = PartyHistorySuppressionClient(snapshot_client)
     event_delta_client = events.EventBaselineDeltaClient(party_history_client)
@@ -247,6 +257,7 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     metrics["cn_agent_persist_chunk_count"] = snapshot_client.agent_chunk_count
     metrics["cn_agent_persist_agent_code_count"] = snapshot_client.agent_code_count
     metrics["cn_agent_persist_policy"] = "WHOLE_AGENT_CODE_BATCHES_V1"
+    metrics["cn_agent_native_execution"] = snapshot_client.native_agent_enabled
     metrics["cn_final_publish_stage_counts"] = stage_counts
     metrics["cn_final_publish_tasks_executed"] = snapshot_client.final_tasks_executed
     metrics["cn_final_publish_tasks_skipped"] = snapshot_client.final_tasks_skipped
