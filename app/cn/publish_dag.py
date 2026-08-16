@@ -198,7 +198,8 @@ CN_FINAL_PUBLISH_DAG = WorkDagDefinition(
             "APPLICATION_RANGE",
             dependencies=("MADRID_CURRENT",),
             stage_table="cn_stage_case_publish",
-            audit_policy="SOURCE_PACKAGE_RELATION_COVERAGE",
+            audit_policy="NATIVE_DURABLE_RANGE_AND_REAL_DB_EQUIVALENCE",
+            native_execution=True,
         ),
         WorkDagNode(
             "DERIVED_CASE_EVENT",
