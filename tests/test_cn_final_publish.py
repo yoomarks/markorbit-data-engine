@@ -84,6 +84,20 @@ def _party_current_sql(package: str) -> str:
     """
 
 
+def _case_current_sql(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_case_current
+        SELECT incoming.application_number
+        FROM (
+            SELECT application_number
+            FROM markorbit_facts.cn_stage_case_publish
+            WHERE package_id = toUUID('{package}')
+        ) AS incoming
+        LEFT JOIN markorbit_facts.cn_case_current AS cur FINAL
+          ON cur.application_number = incoming.application_number
+    """
+
+
 def test_final_range_plan_keeps_boundary_application_whole() -> None:
     package = uuid.uuid4()
     client = _SequencedClient(
@@ -112,7 +126,7 @@ def test_final_publish_bounds_every_stage_source_and_resumes_successes() -> None
     store = _MemoryStore()
     sql = _party_current_sql(str(package))
 
-    first_delegate = _SequencedClient([[('200',)], []])
+    first_delegate = _SequencedClient([[("200",)], []])
     first = ResumableFinalPublishClient(
         first_delegate,
         package_uuid=package,
@@ -127,7 +141,7 @@ def test_final_publish_bounds_every_stage_source_and_resumes_successes() -> None
     assert first_delegate.commands[0].count("application_number < '200'") == 2
     assert first_delegate.commands[1].count("application_number >= '200'") == 2
 
-    second_delegate = _SequencedClient([[('200',)], []])
+    second_delegate = _SequencedClient([[("200",)], []])
     second = ResumableFinalPublishClient(
         second_delegate,
         package_uuid=package,
@@ -141,12 +155,32 @@ def test_final_publish_bounds_every_stage_source_and_resumes_successes() -> None
     assert second_delegate.commands == []
 
 
+def test_final_publish_bounds_current_join_even_for_single_range() -> None:
+    package = uuid.uuid4()
+    delegate = _SequencedClient([[]])
+    client = ResumableFinalPublishClient(
+        delegate,
+        package_uuid=package,
+        agent_batches=[],
+        subtask_store=_MemoryStore(),
+    )
+
+    client.command(_case_current_sql(str(package)))
+
+    assert len(delegate.commands) == 1
+    rewritten = delegate.commands[0]
+    assert "FROM markorbit_facts.cn_case_current FINAL" in rewritten
+    assert "SELECT DISTINCT application_number" in rewritten
+    assert "FROM markorbit_facts.cn_stage_case_publish" in rewritten
+    assert f"package_id = toUUID('{package}')" in rewritten
+
+
 def test_failed_range_is_the_only_range_retried_after_restart() -> None:
     package = uuid.uuid4()
     store = _MemoryStore()
     sql = _party_current_sql(str(package))
 
-    failing_delegate = _SequencedClient([[('200',)], []], fail_command=2)
+    failing_delegate = _SequencedClient([[("200",)], []], fail_command=2)
     first = ResumableFinalPublishClient(
         failing_delegate,
         package_uuid=package,
@@ -159,7 +193,7 @@ def test_failed_range_is_the_only_range_retried_after_restart() -> None:
     assert first.final_tasks_executed == 1
     assert len(store.failed) == 1
 
-    retry_delegate = _SequencedClient([[('200',)], []])
+    retry_delegate = _SequencedClient([[("200",)], []])
     retry = ResumableFinalPublishClient(
         retry_delegate,
         package_uuid=package,
@@ -177,7 +211,7 @@ def test_failed_range_is_the_only_range_retried_after_restart() -> None:
 def test_final_publish_fails_closed_when_stage_source_cannot_be_bounded() -> None:
     package = uuid.uuid4()
     store = _MemoryStore()
-    delegate = _SequencedClient([[('200',)], []])
+    delegate = _SequencedClient([[("200",)], []])
     client = ResumableFinalPublishClient(
         delegate,
         package_uuid=package,
