@@ -294,7 +294,7 @@ def main() -> None:
             f"""
             SELECT application_number, event_type, toString(event_date), affected_scope,
                    class_no, field_name, old_value_compact, new_value_compact,
-                   evidence_level, legal_effect, confidence_score,
+                   evidence_level, legal_effect, toString(confidence_score),
                    source_package_kind, source_file, source_first_line,
                    source_last_line, source_row_hash, source_rank, event_hash
             FROM markorbit_facts.cn_observed_event FINAL
@@ -314,7 +314,7 @@ def main() -> None:
         expected = [(
             f"{PREFIX}A100", "OWNER_RELATION_SUPERSEDED_OBSERVED", EFFECTIVE_DATE,
             "PARTY", None, "owner", old_value, "",
-            "OFFICIAL_DATA_RELATION_REPLACEMENT", "NOT_DETERMINED", 0.95,
+            "OFFICIAL_DATA_RELATION_REPLACEMENT", "NOT_DETERMINED", "0.95",
             "MONTHLY_PATCH", "stage-a100.xml", 100, 101,
             b"q" * 64, SOURCE_RANK, event_hash,
         )]
