@@ -230,6 +230,15 @@ def _relation_placeholder(package: str) -> str:
     """
 
 
+def _scope_placeholder(package: str) -> str:
+    return f"""
+        INSERT INTO markorbit_facts.cn_scope_carve_out_current
+        SELECT generateUUIDv4()
+        FROM markorbit_facts.cn_stage_scope_publish
+        WHERE package_id = toUUID('{package}')
+    """
+
+
 def _relation_hash(root: str, target: str, suffix: str) -> bytes:
     payload = f"{root}|{target}|DERIVED_CASE|{suffix}"
     return sha256(payload.encode("utf-8")).hexdigest().upper().encode("ascii")
@@ -291,6 +300,7 @@ def main() -> None:
         if not resumed.native_case_relation_enabled:
             raise AssertionError("persisted relation cutover marker was not reused")
         result = resumed.command(_relation_placeholder(package))
+        resumed.command(_scope_placeholder(package))
         resumed.assert_final_publish_complete()
         if result.range_count != 2 or result.skipped != 1 or result.executed != 1:
             raise AssertionError(result)
