@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 from typing import Any
 import uuid
 
@@ -27,9 +28,8 @@ class PublishSubtaskStore:
     """Durable progress ledger for bounded legacy snapshot persistence.
 
     ClickHouse publish-stage tables are the temporary data files. This Postgres
-    ledger is the durable manifest that records which application-range command
-    has committed successfully. A worker/container restart therefore resumes at
-    the first unfinished range instead of replaying already completed work.
+    ledger records which application-range command has committed successfully.
+    A worker/container restart therefore resumes at the first unfinished range.
     """
 
     def __init__(self, package_uuid: uuid.UUID | str) -> None:
@@ -61,7 +61,9 @@ class PublishSubtaskStore:
                     """
                     SELECT status, sql_hash
                     FROM control.cn_publish_subtask
-                    WHERE package_id = %s AND checkpoint_version = %s AND task_key = %s
+                    WHERE package_id = %s
+                      AND checkpoint_version = %s
+                      AND task_key = %s
                     """,
                     (self.package_id, CHECKPOINT_VERSION, task_key),
                 )
@@ -134,8 +136,13 @@ class PublishSubtaskStore:
                 cur.execute(
                     """
                     UPDATE control.cn_publish_subtask
-                    SET status = 'SUCCESS', completed_at = now(), last_error = '', updated_at = now()
-                    WHERE package_id = %s AND checkpoint_version = %s AND task_key = %s
+                    SET status = 'SUCCESS',
+                        completed_at = now(),
+                        last_error = '',
+                        updated_at = now()
+                    WHERE package_id = %s
+                      AND checkpoint_version = %s
+                      AND task_key = %s
                     """,
                     (self.package_id, CHECKPOINT_VERSION, task_key),
                 )
@@ -146,10 +153,20 @@ class PublishSubtaskStore:
                 cur.execute(
                     """
                     UPDATE control.cn_publish_subtask
-                    SET status = 'FAILED', completed_at = NULL, last_error = %s, updated_at = now()
-                    WHERE package_id = %s AND checkpoint_version = %s AND task_key = %s
+                    SET status = 'FAILED',
+                        completed_at = NULL,
+                        last_error = %s,
+                        updated_at = now()
+                    WHERE package_id = %s
+                      AND checkpoint_version = %s
+                      AND task_key = %s
                     """,
-                    (str(error)[-8000:], self.package_id, CHECKPOINT_VERSION, task_key),
+                    (
+                        str(error)[-8000:],
+                        self.package_id,
+                        CHECKPOINT_VERSION,
+                        task_key,
+                    ),
                 )
 
     def summary(self) -> dict[str, int]:
@@ -208,7 +225,8 @@ def ensure_publish_subtask_schema() -> None:
                     range_lower TEXT,
                     range_upper TEXT,
                     sql_hash CHAR(64) NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('RUNNING', 'SUCCESS', 'FAILED')),
+                    status TEXT NOT NULL
+                        CHECK (status IN ('RUNNING', 'SUCCESS', 'FAILED')),
                     attempts INTEGER NOT NULL DEFAULT 0,
                     started_at TIMESTAMPTZ,
                     completed_at TIMESTAMPTZ,
@@ -226,7 +244,11 @@ def ensure_publish_subtask_schema() -> None:
             )
 
 
-def capture_publish_stage_counts(package_uuid: uuid.UUID | str, *, client: Any) -> dict[str, int]:
+def capture_publish_stage_counts(
+    package_uuid: uuid.UUID | str,
+    *,
+    client: Any,
+) -> dict[str, int]:
     package = str(package_uuid)
     counts: dict[str, int] = {}
     for stage_table in PUBLISH_STAGE_TABLES:
@@ -248,25 +270,30 @@ def save_publish_checkpoint(
 ) -> None:
     ensure_publish_subtask_schema()
     package = str(package_uuid)
-    normalized = {table: int(stage_counts.get(table, 0)) for table in PUBLISH_STAGE_TABLES}
+    normalized = {
+        table: int(stage_counts.get(table, 0)) for table in PUBLISH_STAGE_TABLES
+    }
+    payload = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO control.cn_publish_checkpoint
                     (package_id, checkpoint_version, stage_counts, created_at, updated_at)
-                VALUES (%s, %s, %s, now(), now())
+                VALUES (%s, %s, %s::jsonb, now(), now())
                 ON CONFLICT (package_id)
                 DO UPDATE SET
                     checkpoint_version = EXCLUDED.checkpoint_version,
                     stage_counts = EXCLUDED.stage_counts,
                     updated_at = now()
                 """,
-                (package, CHECKPOINT_VERSION, normalized),
+                (package, CHECKPOINT_VERSION, payload),
             )
 
 
-def load_publish_checkpoint(package_uuid: uuid.UUID | str) -> PublishCheckpoint | None:
+def load_publish_checkpoint(
+    package_uuid: uuid.UUID | str,
+) -> PublishCheckpoint | None:
     ensure_publish_subtask_schema()
     package = str(package_uuid)
     with postgres_conn() as conn:
@@ -298,7 +325,10 @@ def publish_checkpoint_is_usable(
 ) -> bool:
     if checkpoint.checkpoint_version != CHECKPOINT_VERSION:
         return False
-    expected = {table: int(checkpoint.stage_counts.get(table, 0)) for table in PUBLISH_STAGE_TABLES}
+    expected = {
+        table: int(checkpoint.stage_counts.get(table, 0))
+        for table in PUBLISH_STAGE_TABLES
+    }
     actual = capture_publish_stage_counts(package_uuid, client=client)
     return actual == expected
 
