@@ -10,15 +10,23 @@ from app.cn import goods_lifecycle as goods
 from app.cn import ingest as legacy
 from app.cn import party_publish as party
 from app.cn import storage_v2_events as events
+from app.cn.final_publish import ResumableFinalPublishClient
 from app.cn.goods_current_match import bounded_current_items_sql
 from app.cn.goods_lifecycle_sql import (
     INTRA_PACKAGE_STATUS_RESOLUTION_VERSION,
     incoming_goods_sql,
 )
 from app.cn.goods_scope_match import exact_touched_scope_sql
-from app.cn.legacy_snapshot_persist import (
-    LegacySnapshotPersistClient,
-    plan_agent_code_batches,
+from app.cn.legacy_snapshot_persist import plan_agent_code_batches
+from app.cn.publish_subtasks import (
+    PublishSubtaskStore,
+    capture_publish_stage_counts,
+    clear_publish_checkpoint,
+    ensure_publish_subtask_schema,
+    has_publish_checkpoint,
+    load_publish_checkpoint,
+    publish_checkpoint_is_usable,
+    save_publish_checkpoint,
 )
 from app.cn.quality_subtasks import collect_stage_quality_issues_bounded
 from app.cn.resource_client import cn_resource_client
@@ -62,81 +70,113 @@ def _run_phase(name: str, operation: Callable[[], Any]) -> Any:
 
 
 def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[str, Any]:
-    original_goods_client = goods.clickhouse_client
-    original_goods_range_planner = goods._plan_goods_application_ranges
-    original_current_items_builder = goods._current_items_for_range_sql
-    original_scope_builder = goods.scope_from_current_items_sql
-    original_lifecycle_scope_builder = goods._lifecycle_scope_sql
-    goods_delta_client = GoodsObservationDeltaClient(original_goods_client())
-    goods.clickhouse_client = lambda: goods_delta_client
+    ensure_publish_subtask_schema()
+    checkpoint_client = legacy.clickhouse_client()
+    publish_checkpoint = load_publish_checkpoint(package_uuid)
+    final_publish_resume = publish_checkpoint is not None
 
-    def bounded_goods_ranges(package, *, client=None, target_rows=CN_GOODS_CHUNK_ROWS):
-        return original_goods_range_planner(
-            package,
-            client=client,
-            target_rows=min(int(target_rows), CN_GOODS_CHUNK_ROWS),
-        )
-
-    def bounded_current_items(application_range):
-        return bounded_current_items_sql(package_uuid, application_range)
-
-    def exact_scope_from_current_items(
-        package,
-        application_lower=None,
-        application_upper=None,
+    if publish_checkpoint is not None and not publish_checkpoint_is_usable(
+        package_uuid,
+        publish_checkpoint,
+        client=checkpoint_client,
     ):
-        touched = goods.touched_scope_sql(package, application_lower, application_upper)
-        sql = original_scope_builder(package, application_lower, application_upper)
-        return exact_touched_scope_sql(sql, touched)
+        raise RuntimeError(
+            "CN_FINAL_PUBLISH checkpoint exists but publish-stage counts no longer match. "
+            "Refusing to mix partial durable outputs with an incomplete/expired temporary "
+            "stage. Preserve the package for operator recovery instead of silently replaying."
+        )
 
-    def exact_lifecycle_scope(
-        package,
-        application_lower=None,
-        application_upper=None,
-    ):
-        touched = goods.touched_scope_sql(package, application_lower, application_upper)
-        sql = original_lifecycle_scope_builder(
+    lifecycle_metrics: dict[str, Any] = {}
+    case_metrics: dict[str, Any] = {}
+    party_metrics: dict[str, Any] = {}
+
+    if not final_publish_resume:
+        original_goods_client = goods.clickhouse_client
+        original_goods_range_planner = goods._plan_goods_application_ranges
+        original_current_items_builder = goods._current_items_for_range_sql
+        original_scope_builder = goods.scope_from_current_items_sql
+        original_lifecycle_scope_builder = goods._lifecycle_scope_sql
+        goods_delta_client = GoodsObservationDeltaClient(original_goods_client())
+        goods.clickhouse_client = lambda: goods_delta_client
+
+        def bounded_goods_ranges(package, *, client=None, target_rows=CN_GOODS_CHUNK_ROWS):
+            return original_goods_range_planner(
+                package,
+                client=client,
+                target_rows=min(int(target_rows), CN_GOODS_CHUNK_ROWS),
+            )
+
+        def bounded_current_items(application_range):
+            return bounded_current_items_sql(package_uuid, application_range)
+
+        def exact_scope_from_current_items(
             package,
-            application_lower,
-            application_upper,
-        )
-        return exact_touched_scope_sql(sql, touched)
+            application_lower=None,
+            application_upper=None,
+        ):
+            touched = goods.touched_scope_sql(package, application_lower, application_upper)
+            sql = original_scope_builder(package, application_lower, application_upper)
+            return exact_touched_scope_sql(sql, touched)
 
-    goods._plan_goods_application_ranges = bounded_goods_ranges
-    goods._current_items_for_range_sql = bounded_current_items
-    goods.scope_from_current_items_sql = exact_scope_from_current_items
-    goods._lifecycle_scope_sql = exact_lifecycle_scope
-    try:
-        lifecycle_metrics = _run_phase(
-            "GOODS_LIFECYCLE",
-            lambda: goods.publish_goods_lifecycle(package_uuid, package_meta),
-        )
-        goods_delta_client.assert_rewrite_count(
-            int(lifecycle_metrics["goods_publish_chunk_count"])
-        )
-    finally:
-        goods._lifecycle_scope_sql = original_lifecycle_scope_builder
-        goods.scope_from_current_items_sql = original_scope_builder
-        goods._current_items_for_range_sql = original_current_items_builder
-        goods._plan_goods_application_ranges = original_goods_range_planner
-        goods.clickhouse_client = original_goods_client
+        def exact_lifecycle_scope(
+            package,
+            application_lower=None,
+            application_upper=None,
+        ):
+            touched = goods.touched_scope_sql(package, application_lower, application_upper)
+            sql = original_lifecycle_scope_builder(
+                package,
+                application_lower,
+                application_upper,
+            )
+            return exact_touched_scope_sql(sql, touched)
 
-    case_metrics = _run_phase(
-        "CASE_MATERIALIZE",
-        lambda: case.materialize_case_publish_stage(
+        goods._plan_goods_application_ranges = bounded_goods_ranges
+        goods._current_items_for_range_sql = bounded_current_items
+        goods.scope_from_current_items_sql = exact_scope_from_current_items
+        goods._lifecycle_scope_sql = exact_lifecycle_scope
+        try:
+            lifecycle_metrics = _run_phase(
+                "GOODS_LIFECYCLE",
+                lambda: goods.publish_goods_lifecycle(package_uuid, package_meta),
+            )
+            goods_delta_client.assert_rewrite_count(
+                int(lifecycle_metrics["goods_publish_chunk_count"])
+            )
+        finally:
+            goods._lifecycle_scope_sql = original_lifecycle_scope_builder
+            goods.scope_from_current_items_sql = original_scope_builder
+            goods._current_items_for_range_sql = original_current_items_builder
+            goods._plan_goods_application_ranges = original_goods_range_planner
+            goods.clickhouse_client = original_goods_client
+
+        case_metrics = _run_phase(
+            "CASE_MATERIALIZE",
+            lambda: case.materialize_case_publish_stage(
+                package_uuid,
+                _LEGACY_CASE_AGG,
+                target_rows=CN_CASE_CHUNK_ROWS,
+            ),
+        )
+        party_metrics = _run_phase(
+            "PARTY_MATERIALIZE",
+            lambda: party.materialize_party_publish_stage(
+                package_uuid,
+                _LEGACY_PARTY_AGG,
+                target_rows=CN_PARTY_CHUNK_ROWS,
+            ),
+        )
+
+        # This is the durable hand-off boundary. The three ClickHouse publish-stage
+        # tables are the temporary data files; Postgres records their exact row
+        # counts before any final Current/Event/History subtask is allowed to run.
+        stage_counts = capture_publish_stage_counts(
             package_uuid,
-            _LEGACY_CASE_AGG,
-            target_rows=CN_CASE_CHUNK_ROWS,
-        ),
-    )
-    party_metrics = _run_phase(
-        "PARTY_MATERIALIZE",
-        lambda: party.materialize_party_publish_stage(
-            package_uuid,
-            _LEGACY_PARTY_AGG,
-            target_rows=CN_PARTY_CHUNK_ROWS,
-        ),
-    )
+            client=legacy.clickhouse_client(),
+        )
+        save_publish_checkpoint(package_uuid, stage_counts=stage_counts)
+    else:
+        stage_counts = dict(publish_checkpoint.stage_counts)
 
     original_case = legacy._case_aggregate_sql
     original_scope = legacy._scope_aggregate_sql
@@ -153,10 +193,12 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
         "LEGACY_AGENT_PLAN",
         lambda: plan_agent_code_batches(package_uuid, client=base_snapshot_client),
     )
-    snapshot_client = LegacySnapshotPersistClient(
+    subtask_store = PublishSubtaskStore(package_uuid)
+    snapshot_client = ResumableFinalPublishClient(
         base_snapshot_client,
         package_uuid=package_uuid,
         agent_batches=agent_batches,
+        subtask_store=subtask_store,
     )
     party_history_client = PartyHistorySuppressionClient(snapshot_client)
     event_delta_client = events.EventBaselineDeltaClient(party_history_client)
@@ -167,6 +209,13 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
             lambda: _LEGACY_PUBLISH(package_uuid, package_meta),
         )
         snapshot_client.assert_agent_persist_complete()
+        subtask_summary = snapshot_client.assert_final_publish_complete()
+        audit_summary = _run_phase(
+            "FINAL_PUBLISH_AUDIT",
+            lambda: snapshot_client.audit_current_coverage(
+                source_rank=int(package_meta["source_rank"])
+            ),
+        )
         party_history_client.assert_suppression_complete()
         event_delta_client.assert_rewrite_counts()
     finally:
@@ -176,16 +225,18 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
         legacy._party_aggregate_sql = original_party
         legacy._insert_case_events = original_case_events
 
-    case.cleanup_case_publish_stage(package_uuid)
-    goods.cleanup_scope_publish_stage(package_uuid)
-    party.cleanup_party_publish_stage(package_uuid)
+    # Do not delete the temporary publish stages here. The package-level SUCCESS
+    # cleanup owns deletion after final acceptance/archive succeeds. If anything
+    # later fails, the checkpoint + stages remain resumable and auditable.
     metrics.update(lifecycle_metrics)
     metrics.update(case_metrics)
     metrics.update(party_metrics)
     metrics["goods_status_model_version"] = "M1.6"
     metrics["goods_item_identity_version"] = goods.GOODS_ITEM_IDENTITY_VERSION
     metrics["intra_package_status_resolution_version"] = INTRA_PACKAGE_STATUS_RESOLUTION_VERSION
-    metrics["recovery_mode"] = "PACKAGE_REPLAY"
+    metrics["recovery_mode"] = (
+        "FINAL_PUBLISH_SUBTASK_RESUME" if final_publish_resume else "PACKAGE_REPLAY"
+    )
     metrics["goods_observation_history_policy"] = "TRUE_DELTA_ONLY_V2"
     metrics["observed_event_history_policy"] = "TRUE_DELTA_PLUS_PARTY_V2"
     metrics["party_history_policy"] = "CANONICAL_IN_OBSERVED_EVENT_V2"
@@ -196,14 +247,31 @@ def _publish_m16(package_uuid: uuid.UUID, package_meta: dict[str, Any]) -> dict[
     metrics["cn_agent_persist_chunk_count"] = snapshot_client.agent_chunk_count
     metrics["cn_agent_persist_agent_code_count"] = snapshot_client.agent_code_count
     metrics["cn_agent_persist_policy"] = "WHOLE_AGENT_CODE_BATCHES_V1"
+    metrics["cn_final_publish_stage_counts"] = stage_counts
+    metrics["cn_final_publish_tasks_executed"] = snapshot_client.final_tasks_executed
+    metrics["cn_final_publish_tasks_skipped"] = snapshot_client.final_tasks_skipped
+    metrics["cn_final_publish_subtask_summary"] = subtask_summary
+    metrics["cn_final_publish_audit"] = audit_summary
     return metrics
 
 
 def _cleanup_partial_outputs_m16(package_uuid: uuid.UUID) -> None:
+    # Once final-publish progress exists, completed range tasks are durable work.
+    # Preserve both their formal outputs and the three publish-stage temp tables;
+    # the next retry validates the checkpoint and continues only unfinished tasks.
+    if has_publish_checkpoint(package_uuid):
+        return
     _LEGACY_CLEANUP_PARTIAL(package_uuid)
     goods.cleanup_goods_outputs(package_uuid)
     case.cleanup_case_publish_stage(package_uuid)
     party.cleanup_party_publish_stage(package_uuid)
+
+
+def _cleanup_publish_checkpoint_success(package_uuid: uuid.UUID) -> None:
+    case.cleanup_case_publish_stage(package_uuid)
+    goods.cleanup_scope_publish_stage(package_uuid)
+    party.cleanup_party_publish_stage(package_uuid)
+    clear_publish_checkpoint(package_uuid)
 
 
 def ingest_cn_package(
@@ -259,13 +327,13 @@ def ingest_cn_package(
         def checkpoint_aware_stage_cleanup(package_uuid: uuid.UUID) -> None:
             # Legacy cleanup runs before package status is changed to FAILED, so
             # PROCESSING + a valid checkpoint means a post-stage failure and the
-            # raw stage is intentionally retained. On SUCCESS we remove it just
-            # as before and delete the checkpoint. Early-stage failures have no
-            # checkpoint and still clean partial rows before a full reparse.
+            # raw stage is intentionally retained. On SUCCESS, remove raw stage,
+            # publish-stage temp data and both durable checkpoint manifests.
             package = get_package(str(package_uuid))
             checkpoint = load_stage_checkpoint(str(package_uuid))
             if str(package.get("status")) == "SUCCESS":
                 original_stage_cleanup(package_uuid)
+                _cleanup_publish_checkpoint_success(package_uuid)
                 clear_stage_checkpoint(str(package_uuid))
                 return
             if checkpoint is not None:
@@ -278,6 +346,7 @@ def ingest_cn_package(
         legacy._collect_stage_quality_issues = bounded_quality
         try:
             ensure_stage_checkpoint_schema()
+            ensure_publish_subtask_schema()
             case.ensure_case_publish_schema()
             goods.ensure_m16_goods_schema()
             goods.ensure_m16_goods_replay_boundary()
@@ -298,10 +367,10 @@ def ingest_cn_package(
                         raw_root,
                         checkpoint,
                         trigger_type=trigger_type,
-                        cleanup_stage=original_stage_cleanup,
+                        cleanup_stage=checkpoint_aware_stage_cleanup,
                     )
                     publish = totals.get("publish")
-                    if isinstance(publish, dict):
+                    if isinstance(publish, dict) and not publish.get("recovery_mode"):
                         publish["recovery_mode"] = "STAGE_CHECKPOINT_RESUME"
                     totals["stage_quality_subtasks"] = quality_metrics
                     return totals
@@ -314,6 +383,7 @@ def ingest_cn_package(
             else:
                 # A normal REGISTERED package is always a fresh package replay.
                 clear_stage_checkpoint(package_id)
+                clear_publish_checkpoint(package_id)
 
             totals = legacy.ingest_cn_package(
                 package_id,
