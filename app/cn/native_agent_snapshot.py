@@ -5,6 +5,7 @@ from hashlib import sha256
 from typing import Any
 import uuid
 
+from app.cn.native_case_relation import NativeCaseRelationCutoverClient
 from app.cn.publish_dag import resolve_legacy_publish_command
 from app.cn.publish_subtasks import PublishSubtaskStore
 
@@ -171,16 +172,7 @@ class NativeAgentSnapshotExecutor:
 
 
 class NativeAgentCutoverClient:
-    """Cut AGENT_CURRENT to native execution without migrating old checkpoints.
-
-    ``allow_new_cutover`` is true only in the same invocation that created the
-    final-publish checkpoint. A resumed checkpoint created by an older build keeps
-    legacy bounded Agent execution unless it already carries this versioned marker.
-
-    Native SQL is sent to ``execution_client`` directly, not back through the
-    compatibility delegate. That prevents a native Agent statement from being
-    intercepted and rewritten again by ``LegacySnapshotPersistClient``.
-    """
+    """Native Agent cutover plus downstream per-node native compatibility stack."""
 
     def __init__(
         self,
@@ -193,7 +185,14 @@ class NativeAgentCutoverClient:
         subtask_store: PublishSubtaskStore,
         allow_new_cutover: bool,
     ) -> None:
-        self._delegate = delegate
+        self._delegate = NativeCaseRelationCutoverClient(
+            delegate,
+            execution_client=execution_client,
+            package_uuid=package_uuid,
+            source_rank=source_rank,
+            subtask_store=subtask_store,
+            allow_new_cutover=allow_new_cutover,
+        )
         self._execution_client = execution_client
         self._package_id = str(package_uuid)
         self._source_rank = int(source_rank)
@@ -254,8 +253,6 @@ class NativeAgentCutoverClient:
         if self._executor is None:
             raise RuntimeError("native AGENT_CURRENT was enabled but never observed")
         self._executor.assert_complete()
-        # Preserve the old call site's role as the combined Agent + auxiliary
-        # publisher-shape assertion point.
         self._delegate.assert_aux_persist_complete()
 
     def _initialize_cutover(self, *, allow_new_cutover: bool) -> bool:
@@ -272,8 +269,6 @@ class NativeAgentCutoverClient:
         if callable(task_status):
             status = task_status(marker_key, _NATIVE_AGENT_CUTOVER_HASH)
             if status in {"RUNNING", "FAILED"}:
-                # The marker is metadata-only. Retrying it cannot duplicate a
-                # ClickHouse mutation and repairs a crash between marker writes.
                 self._write_cutover_marker(marker_key)
                 return True
 
