@@ -1,0 +1,20 @@
+name: CN Native Cutover Completion
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify CN native cutover completion contract
+        run: python -m app.cn.native_cutover_completion
