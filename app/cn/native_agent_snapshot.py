@@ -5,6 +5,7 @@ from hashlib import sha256
 from typing import Any
 import uuid
 
+from app.cn.native_agent_code_event import NativeAgentCodeEventCutoverClient
 from app.cn.native_case_facts_event import NativeCaseFactsEventCutoverClient
 from app.cn.native_case_party_close import NativeCasePartyCloseCutoverClient
 from app.cn.native_case_relation import NativeCaseRelationCutoverClient
@@ -243,8 +244,16 @@ class NativeAgentCutoverClient:
             subtask_store=subtask_store,
             allow_new_cutover=allow_new_cutover,
         )
-        self._delegate = NativeMarkNameEventCutoverClient(
+        mark_name_client = NativeMarkNameEventCutoverClient(
             exclusive_client,
+            execution_client=execution_client,
+            package_uuid=package_uuid,
+            source_rank=source_rank,
+            subtask_store=subtask_store,
+            allow_new_cutover=allow_new_cutover,
+        )
+        self._delegate = NativeAgentCodeEventCutoverClient(
+            mark_name_client,
             execution_client=execution_client,
             package_uuid=package_uuid,
             source_rank=source_rank,
