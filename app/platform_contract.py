@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.cn.native_cutover_completion import cn_native_cutover_completion_contract
 from app.cn.publish_dag import cn_final_publish_dag_contract
 from app.data_trust import data_trust_contract
 from app.domain_adapter import domain_adapter_contract
@@ -24,13 +25,14 @@ def platform_contract() -> dict[str, Any]:
         "active_publish_dags": {
             "cn_final_publish": cn_final_publish_dag_contract(),
         },
+        "cn_native_cutover": cn_native_cutover_completion_contract(),
         "domain_adapter": domain_adapter_contract(),
         "fact_event_envelope": fact_event_envelope_contract(),
         "data_trust": data_trust_contract(),
         "operations": operations_contract(),
         "planned_contracts": [],
         "foundation_contracts_complete": True,
-        "next_platformization_focus": "MIGRATE_PUBLISH_DAG_NODES_TO_NATIVE_EXECUTION_INCREMENTALLY",
+        "next_platformization_focus": "FREEZE_AND_ACCEPT_CN_NATIVE_FINAL_PUBLISH",
         "compatibility": {
             "cn_inflight_checkpoint_schema_preserved": True,
             "cn_source_rank_semantics_unchanged": True,

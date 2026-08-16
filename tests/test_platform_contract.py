@@ -21,13 +21,23 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     assert contract["planned_contracts"] == []
     assert (
         contract["next_platformization_focus"]
-        == "MIGRATE_PUBLISH_DAG_NODES_TO_NATIVE_EXECUTION_INCREMENTALLY"
+        == "FREEZE_AND_ACCEPT_CN_NATIVE_FINAL_PUBLISH"
     )
 
     cn_dag = contract["active_publish_dags"]["cn_final_publish"]
     assert cn_dag["dag_version"] == "CN_FINAL_PUBLISH_DAG_V1"
     assert cn_dag["execution_mode"] == "HYBRID_NATIVE_WITH_INFLIGHT_LEGACY_COMPATIBILITY"
     assert cn_dag["native_node_count"] == 18
+
+    cutover = contract["cn_native_cutover"]
+    assert cutover["version"] == "CN_NATIVE_CUTOVER_COMPLETION_V1"
+    assert cutover["status"] == "COMPLETE"
+    assert cutover["native_business_node_count"] == 18
+    assert cutover["intentional_compatibility_node_count"] == 3
+    assert cutover["native_business_node_set_frozen"] is True
+    assert cutover["no_executable_legacy_business_nodes_remaining"] is True
+    assert cutover["storage_v2_suppression_boundaries_frozen"] is True
+
     assert contract["compatibility"]["cn_inflight_checkpoint_schema_preserved"] is True
     assert contract["compatibility"]["cn_source_rank_semantics_unchanged"] is True
     assert contract["compatibility"]["storage_v2_semantics_unchanged"] is True
