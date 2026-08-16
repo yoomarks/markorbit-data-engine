@@ -8,6 +8,7 @@ import uuid
 from app.cn.native_case_facts_event import NativeCaseFactsEventCutoverClient
 from app.cn.native_case_party_close import NativeCasePartyCloseCutoverClient
 from app.cn.native_case_relation import NativeCaseRelationCutoverClient
+from app.cn.native_exclusive_term_event import NativeExclusiveTermEventCutoverClient
 from app.cn.native_preliminary_publication_event import (
     NativePreliminaryPublicationEventCutoverClient,
 )
@@ -225,8 +226,16 @@ class NativeAgentCutoverClient:
             subtask_store=subtask_store,
             allow_new_cutover=allow_new_cutover,
         )
-        self._delegate = NativeRegistrationPublicationEventCutoverClient(
+        registration_client = NativeRegistrationPublicationEventCutoverClient(
             preliminary_client,
+            execution_client=execution_client,
+            package_uuid=package_uuid,
+            source_rank=source_rank,
+            subtask_store=subtask_store,
+            allow_new_cutover=allow_new_cutover,
+        )
+        self._delegate = NativeExclusiveTermEventCutoverClient(
+            registration_client,
             execution_client=execution_client,
             package_uuid=package_uuid,
             source_rank=source_rank,
