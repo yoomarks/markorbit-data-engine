@@ -3,13 +3,22 @@ from __future__ import annotations
 from datetime import date
 import os
 import uuid
+from typing import Any
 
 import clickhouse_connect
 
-from app.cn.legacy_snapshot_persist import (
-    LegacySnapshotPersistClient,
-    plan_application_ranges,
+from app.cn.native_aux_snapshot import NativeAuxSnapshotExecutor
+from app.cn.publish_subtasks import (
+    PublishSubtaskStore,
+    clear_publish_checkpoint,
+    ensure_publish_subtask_schema,
 )
+from app.db import postgres_conn
+
+
+PACKAGE_ID = uuid.UUID("00000000-0000-0000-0000-00000000a143")
+SOURCE_RANK = 987_654_321
+SOURCE_SHA = "143" + "a" * 61
 
 
 def _client():
@@ -22,56 +31,46 @@ def _client():
     )
 
 
-def _priority_insert(package: str, source_rank: int) -> str:
-    return f"""
-        INSERT INTO markorbit_facts.cn_priority_current
-        SELECT
-            application_number, class_no, priority_number,
-            argMax(priority_type, toUInt64(source_start_line)),
-            argMax(priority_date, toUInt64(source_start_line)),
-            argMax(priority_goods, toUInt64(source_start_line)),
-            argMax(priority_country_region, toUInt64(source_start_line)),
-            argMin(source_file, toUInt64(source_start_line)),
-            min(toUInt64(source_start_line)),
-            max(toUInt64(source_end_line)),
-            hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|'))),
-            hex(SHA256(concat(
-                application_number, '|', toString(class_no), '|', priority_number, '|',
-                argMax(priority_goods, toUInt64(source_start_line))
-            ))), toUUID('{package}'), {source_rank}, now64(3), 0
-        FROM markorbit_facts.cn_stage_priority
-        WHERE package_id = toUUID('{package}')
-        GROUP BY application_number, class_no, priority_number
-    """
+class _FailSecondPriorityInsert:
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+        self._priority_inserts = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def query(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        return self._delegate.query(sql, *args, **kwargs)
+
+    def command(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        if "INSERT INTO markorbit_facts.cn_priority_current" in sql:
+            self._priority_inserts += 1
+            if self._priority_inserts == 2:
+                raise RuntimeError("fixture native priority interruption")
+        return self._delegate.command(sql, *args, **kwargs)
 
 
-def _madrid_insert(package: str, source_rank: int) -> str:
-    return f"""
-        INSERT INTO markorbit_facts.cn_madrid_current
-        SELECT
-            application_number, international_registration_number,
-            argMax(international_registration_date, toUInt64(source_start_line)),
-            argMax(international_notification_date, toUInt64(source_start_line)),
-            argMax(application_language, toUInt64(source_start_line)),
-            argMax(application_type, toUInt64(source_start_line)),
-            argMax(international_pub_issue, toUInt64(source_start_line)),
-            argMax(international_pub_date, toUInt64(source_start_line)),
-            argMax(subsequent_designation_date, toUInt64(source_start_line)),
-            argMax(basic_registration_date, toUInt64(source_start_line)),
-            argMin(source_file, toUInt64(source_start_line)),
-            min(toUInt64(source_start_line)),
-            max(toUInt64(source_end_line)),
-            hex(SHA256(arrayStringConcat(arraySort(groupArray(toString(row_hash))), '|'))),
-            hex(SHA256(concat(
-                application_number, '|', international_registration_number, '|',
-                ifNull(toString(argMax(
-                    international_registration_date, toUInt64(source_start_line)
-                )), '')
-            ))), toUUID('{package}'), {source_rank}, now64(3), 0
-        FROM markorbit_facts.cn_stage_madrid
-        WHERE package_id = toUUID('{package}')
-        GROUP BY application_number, international_registration_number
-    """
+def _ensure_source_package() -> None:
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM control.source_package WHERE package_id = %s",
+                (str(PACKAGE_ID),),
+            )
+            cur.execute(
+                """
+                INSERT INTO control.source_package
+                (
+                    package_id, jurisdiction, file_name, file_path, file_size,
+                    sha256, package_kind, partition_dimension, partition_value,
+                    source_rank, status
+                )
+                VALUES (%s, 'CN', 'native-aux-fixture.zip', '/fixture/native-aux.zip', 0,
+                        %s, 'MONTHLY_PATCH', 'MONTH', 'native-aux', %s, 'REGISTERED')
+                """,
+                (str(PACKAGE_ID), SOURCE_SHA, SOURCE_RANK),
+            )
+        conn.commit()
 
 
 def _cleanup(client, package: str) -> None:
@@ -88,131 +87,142 @@ def _cleanup(client, package: str) -> None:
         )
 
 
-def main() -> None:
-    client = _client()
-    package = str(uuid.uuid4())
-    source_rank = 987_654_321
+def _stage_fixture_rows(client, package: str) -> None:
     hash_a = "a" * 64
     hash_b = "b" * 64
     hash_c = "c" * 64
     hash_d = "d" * 64
+    client.insert(
+        "cn_stage_priority",
+        [
+            [
+                package, "P100", 1, "US-1", "EARLY", date(2020, 1, 1),
+                "old goods", "US", "priority-a.xml", 10, 10, hash_a,
+            ],
+            [
+                package, "P100", 1, "US-1", "LATEST", date(2020, 1, 2),
+                "latest goods", "US", "priority-b.xml", 20, 20, hash_b,
+            ],
+            [
+                package, "P200", 2, "JP-2", "NORMAL", date(2021, 2, 3),
+                "goods 2", "JP", "priority-c.xml", 30, 30, hash_c,
+            ],
+            [
+                package, "P300", 3, "DE-3", "NORMAL", date(2022, 3, 4),
+                "goods 3", "DE", "priority-d.xml", 40, 40, hash_d,
+            ],
+        ],
+        column_names=[
+            "package_id",
+            "application_number",
+            "class_no",
+            "priority_number",
+            "priority_type",
+            "priority_date",
+            "priority_goods",
+            "priority_country_region",
+            "source_file",
+            "source_start_line",
+            "source_end_line",
+            "row_hash",
+        ],
+    )
+    client.insert(
+        "cn_stage_madrid",
+        [
+            [
+                package, "G100", "IR100", date(2019, 1, 1), date(2019, 1, 2),
+                "EN", "EARLY", "1", date(2019, 1, 3), date(2019, 1, 4),
+                date(2018, 12, 1), "madrid-a.xml", 10, 10, hash_a,
+            ],
+            [
+                package, "G100", "IR100", date(2019, 1, 5), date(2019, 1, 6),
+                "ZH", "LATEST", "2", date(2019, 1, 7), date(2019, 1, 8),
+                date(2018, 12, 2), "madrid-b.xml", 20, 20, hash_b,
+            ],
+            [
+                package, "G200", "IR200", date(2020, 2, 1), date(2020, 2, 2),
+                "EN", "NORMAL", "3", date(2020, 2, 3), date(2020, 2, 4),
+                date(2020, 1, 1), "madrid-c.xml", 30, 30, hash_c,
+            ],
+            [
+                package, "G300", "IR300", date(2021, 3, 1), date(2021, 3, 2),
+                "FR", "NORMAL", "4", date(2021, 3, 3), date(2021, 3, 4),
+                date(2021, 2, 1), "madrid-d.xml", 40, 40, hash_d,
+            ],
+        ],
+        column_names=[
+            "package_id",
+            "application_number",
+            "international_registration_number",
+            "international_registration_date",
+            "international_notification_date",
+            "application_language",
+            "application_type",
+            "international_pub_issue",
+            "international_pub_date",
+            "subsequent_designation_date",
+            "basic_registration_date",
+            "source_file",
+            "source_start_line",
+            "source_end_line",
+            "row_hash",
+        ],
+    )
+
+
+def main() -> None:
+    client = _client()
+    package = str(PACKAGE_ID)
+    ensure_publish_subtask_schema()
+    _ensure_source_package()
 
     try:
-        client.insert(
-            "cn_stage_priority",
-            [
-                [
-                    package, "P100", 1, "US-1", "EARLY", date(2020, 1, 1),
-                    "old goods", "US", "priority-a.xml", 10, 10, hash_a,
-                ],
-                [
-                    package, "P100", 1, "US-1", "LATEST", date(2020, 1, 2),
-                    "latest goods", "US", "priority-b.xml", 20, 20, hash_b,
-                ],
-                [
-                    package, "P200", 2, "JP-2", "NORMAL", date(2021, 2, 3),
-                    "goods 2", "JP", "priority-c.xml", 30, 30, hash_c,
-                ],
-                [
-                    package, "P300", 3, "DE-3", "NORMAL", date(2022, 3, 4),
-                    "goods 3", "DE", "priority-d.xml", 40, 40, hash_d,
-                ],
-            ],
-            column_names=[
-                "package_id",
-                "application_number",
-                "class_no",
-                "priority_number",
-                "priority_type",
-                "priority_date",
-                "priority_goods",
-                "priority_country_region",
-                "source_file",
-                "source_start_line",
-                "source_end_line",
-                "row_hash",
-            ],
-        )
-        client.insert(
-            "cn_stage_madrid",
-            [
-                [
-                    package, "G100", "IR100", date(2019, 1, 1), date(2019, 1, 2),
-                    "EN", "EARLY", "1", date(2019, 1, 3), date(2019, 1, 4),
-                    date(2018, 12, 1), "madrid-a.xml", 10, 10, hash_a,
-                ],
-                [
-                    package, "G100", "IR100", date(2019, 1, 5), date(2019, 1, 6),
-                    "ZH", "LATEST", "2", date(2019, 1, 7), date(2019, 1, 8),
-                    date(2018, 12, 2), "madrid-b.xml", 20, 20, hash_b,
-                ],
-                [
-                    package, "G200", "IR200", date(2020, 2, 1), date(2020, 2, 2),
-                    "EN", "NORMAL", "3", date(2020, 2, 3), date(2020, 2, 4),
-                    date(2020, 1, 1), "madrid-c.xml", 30, 30, hash_c,
-                ],
-                [
-                    package, "G300", "IR300", date(2021, 3, 1), date(2021, 3, 2),
-                    "FR", "NORMAL", "4", date(2021, 3, 3), date(2021, 3, 4),
-                    date(2021, 2, 1), "madrid-d.xml", 40, 40, hash_d,
-                ],
-            ],
-            column_names=[
-                "package_id",
-                "application_number",
-                "international_registration_number",
-                "international_registration_date",
-                "international_notification_date",
-                "application_language",
-                "application_type",
-                "international_pub_issue",
-                "international_pub_date",
-                "subsequent_designation_date",
-                "basic_registration_date",
-                "source_file",
-                "source_start_line",
-                "source_end_line",
-                "row_hash",
-            ],
-        )
+        clear_publish_checkpoint(PACKAGE_ID)
+        _cleanup(client, package)
+        _stage_fixture_rows(client, package)
+        store = PublishSubtaskStore(PACKAGE_ID)
 
-        priority_ranges = plan_application_ranges(
-            package,
-            client=client,
-            stage_table="cn_stage_priority",
+        interrupted = NativeAuxSnapshotExecutor(
+            client=_FailSecondPriorityInsert(client),
+            package_uuid=PACKAGE_ID,
+            source_rank=SOURCE_RANK,
+            subtask_store=store,
             target_rows=2,
         )
-        madrid_ranges = plan_application_ranges(
-            package,
+        try:
+            interrupted.execute("PRIORITY_CURRENT")
+        except RuntimeError as exc:
+            if "fixture native priority interruption" not in str(exc):
+                raise
+        else:
+            raise AssertionError("native priority interruption did not fire")
+
+        partial_priority = client.query(
+            f"""
+            SELECT count()
+            FROM markorbit_facts.cn_priority_current FINAL
+            WHERE last_source_package_id = toUUID('{package}')
+            """
+        ).result_rows[0][0]
+        if not 0 < int(partial_priority) < 3:
+            raise AssertionError(f"expected partial priority snapshot, got {partial_priority}")
+
+        resumed = NativeAuxSnapshotExecutor(
             client=client,
-            stage_table="cn_stage_madrid",
+            package_uuid=PACKAGE_ID,
+            source_rank=SOURCE_RANK,
+            subtask_store=store,
             target_rows=2,
         )
-        if priority_ranges != [(None, "P200"), ("P200", None)]:
-            raise AssertionError(f"unexpected priority ranges: {priority_ranges}")
-        if madrid_ranges != [(None, "G200"), ("G200", None)]:
-            raise AssertionError(f"unexpected Madrid ranges: {madrid_ranges}")
-
-        bounded = LegacySnapshotPersistClient(
-            client,
-            package_uuid=package,
-            agent_batches=[],
-            priority_ranges=priority_ranges,
-            madrid_ranges=madrid_ranges,
-        )
-        bounded.command(_priority_insert(package, source_rank))
-        bounded.command(_madrid_insert(package, source_rank))
-        bounded.assert_aux_persist_complete()
-
-        if bounded.physical_priority_commands != 2:
-            raise AssertionError(
-                "expected two priority commands, got "
-                f"{bounded.physical_priority_commands}"
-            )
-        if bounded.physical_madrid_commands != 2:
-            raise AssertionError(
-                f"expected two Madrid commands, got {bounded.physical_madrid_commands}"
-            )
+        priority_result = resumed.execute("PRIORITY_CURRENT")
+        madrid_result = resumed.execute("MADRID_CURRENT")
+        if priority_result.range_count != 2 or priority_result.skipped != 1:
+            raise AssertionError(priority_result)
+        if priority_result.executed != 1:
+            raise AssertionError(priority_result)
+        if madrid_result.range_count != 2 or madrid_result.executed != 2:
+            raise AssertionError(madrid_result)
 
         priority_rows = client.query(
             f"""
@@ -224,11 +234,11 @@ def main() -> None:
             """
         ).result_rows
         if priority_rows != [
-            ("P100", "LATEST", "latest goods", 10, 20, source_rank),
-            ("P200", "NORMAL", "goods 2", 30, 30, source_rank),
-            ("P300", "NORMAL", "goods 3", 40, 40, source_rank),
+            ("P100", "LATEST", "latest goods", 10, 20, SOURCE_RANK),
+            ("P200", "NORMAL", "goods 2", 30, 30, SOURCE_RANK),
+            ("P300", "NORMAL", "goods 3", 40, 40, SOURCE_RANK),
         ]:
-            raise AssertionError(f"unexpected priority current rows: {priority_rows}")
+            raise AssertionError(f"unexpected native priority current rows: {priority_rows}")
 
         madrid_rows = client.query(
             f"""
@@ -241,18 +251,34 @@ def main() -> None:
             """
         ).result_rows
         if madrid_rows != [
-            ("G100", "ZH", "LATEST", date(2019, 1, 5), 10, 20, source_rank),
-            ("G200", "EN", "NORMAL", date(2020, 2, 1), 30, 30, source_rank),
-            ("G300", "FR", "NORMAL", date(2021, 3, 1), 40, 40, source_rank),
+            ("G100", "ZH", "LATEST", date(2019, 1, 5), 10, 20, SOURCE_RANK),
+            ("G200", "EN", "NORMAL", date(2020, 2, 1), 30, 30, SOURCE_RANK),
+            ("G300", "FR", "NORMAL", date(2021, 3, 1), 40, 40, SOURCE_RANK),
         ]:
-            raise AssertionError(f"unexpected Madrid current rows: {madrid_rows}")
+            raise AssertionError(f"unexpected native Madrid current rows: {madrid_rows}")
+
+        summary = store.assert_complete()
+        if summary.get("FAILED", 0) or summary.get("RUNNING", 0):
+            raise AssertionError(summary)
 
         print(
-            "bounded auxiliary snapshot fixture passed: "
-            f"priority_chunks={len(priority_ranges)} madrid_chunks={len(madrid_ranges)}"
+            "native auxiliary snapshot fixture passed: "
+            f"priority_ranges={priority_result.range_count} "
+            f"priority_skipped={priority_result.skipped} "
+            f"madrid_ranges={madrid_result.range_count}"
         )
     finally:
-        _cleanup(client, package)
+        try:
+            clear_publish_checkpoint(PACKAGE_ID)
+        finally:
+            _cleanup(client, package)
+            with postgres_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM control.source_package WHERE package_id = %s",
+                        (str(PACKAGE_ID),),
+                    )
+                conn.commit()
 
 
 if __name__ == "__main__":

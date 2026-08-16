@@ -100,12 +100,21 @@ def test_resolver_rejects_mixed_stage_shape() -> None:
         resolve_legacy_publish_command(sql)
 
 
-def test_cn_publish_dag_contract_is_explicitly_compatibility_only() -> None:
+def test_cn_publish_dag_contract_marks_priority_and_madrid_native() -> None:
     contract = cn_final_publish_dag_contract()
 
     assert contract["dag_version"] == CN_FINAL_PUBLISH_DAG_VERSION
-    assert contract["execution_mode"] == "LEGACY_PUBLISHER_MAPPED_TO_EXPLICIT_DAG"
-    assert contract["native_node_count"] == 0
-    assert contract["compatibility_node_count"] == len(CN_FINAL_PUBLISH_DAG.nodes)
+    assert contract["execution_mode"] == "HYBRID_NATIVE_WITH_INFLIGHT_LEGACY_COMPATIBILITY"
+    assert contract["native_node_count"] == 2
+    assert contract["compatibility_node_count"] == len(CN_FINAL_PUBLISH_DAG.nodes) - 2
     assert contract["legacy_rule_count"] == len(CN_FINAL_PUBLISH_DAG.nodes)
-    assert all(node["native_execution"] is False for node in contract["nodes"])
+
+    nodes = {node["task_id"]: node for node in contract["nodes"]}
+    assert nodes["PRIORITY_CURRENT"]["native_execution"] is True
+    assert nodes["MADRID_CURRENT"]["native_execution"] is True
+    assert nodes["AGENT_CURRENT"]["native_execution"] is False
+    assert nodes["CASE_CURRENT"]["native_execution"] is False
+    assert (
+        contract["inflight_compatibility_policy"]
+        == "CHECKPOINTS_WITH_PREEXISTING_WORK_UNITS_KEEP_LEGACY_AUX_EXECUTION"
+    )
