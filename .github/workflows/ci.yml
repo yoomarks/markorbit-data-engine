@@ -171,6 +171,9 @@ jobs:
       - name: Run CN M1.6 bounded party publisher fixture
         run: docker compose run --rm --no-deps worker python -m app.cn.validate_bounded_party_fixture
 
+      - name: Run CN native Agent Current interruption-resume fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_native_agent_snapshot_fixture
+
       - name: Run CN M1.6 bounded priority/Madrid snapshot fixture
         run: docker compose run --rm --no-deps worker python -m app.cn.validate_bounded_aux_snapshot_fixture
 
