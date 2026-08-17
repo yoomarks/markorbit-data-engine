@@ -67,10 +67,10 @@ SELECT
     count(*) FILTER (WHERE m.role IN ('OWNER', 'CO_OWNER', 'APPLICANT')) AS applicant_mentions,
     count(*) FILTER (WHERE m.role IN ('AGENT', 'ATTORNEY', 'CORRESPONDENT')) AS agent_mentions,
     CASE
-        WHEN count(DISTINCT m.jurisdiction)
-             FILTER (WHERE m.jurisdiction ~ '^[A-Z]{2}$') = 1
-        THEN max(m.jurisdiction)
-             FILTER (WHERE m.jurisdiction ~ '^[A-Z]{2}$')
+        WHEN count(DISTINCT m.country_code)
+             FILTER (WHERE m.country_code ~ '^[A-Z]{2}$') = 1
+        THEN max(m.country_code)
+             FILTER (WHERE m.country_code ~ '^[A-Z]{2}$')
         ELSE NULL
     END AS single_mention_country
 FROM entity.entity_mention AS m
@@ -246,6 +246,9 @@ LIMIT %s OFFSET %s
         row["whatsapp_count"] = len(row["whatsapps"])
         row["applicant_mentions"] = int(proof.get("applicant_mentions") or 0)
         row["agent_mentions"] = int(proof.get("agent_mentions") or 0)
+        # A trademark office jurisdiction is not the contact's country. Only an
+        # explicit country_code on linked mention evidence may fill this read-only
+        # presentation fallback before durable country inference has run.
         if not row.get("country_code") and proof.get("single_mention_country"):
             row["country_code"] = str(proof["single_mention_country"])
 
