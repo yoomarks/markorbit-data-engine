@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
+from app.admin_progress import domain_progress_snapshot
 from app.component_versions import component_versions
 from app.operations_v2 import operations_snapshot
 from app.version import engine_version
@@ -26,3 +27,9 @@ def admin_operations_snapshot(
 ):
     """Read-only recovery view; existing domain gates remain mutation authority."""
     return operations_snapshot(package_limit=package_limit, task_limit=task_limit)
+
+
+@router.get("/domain-progress")
+def admin_domain_progress():
+    """Expose durable, read-only progress for long-running Admin domain tasks."""
+    return domain_progress_snapshot()
