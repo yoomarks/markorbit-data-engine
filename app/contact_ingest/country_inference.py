@@ -3,9 +3,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
-import math
 import re
 import time
 from typing import Any, Callable, Iterable
@@ -55,10 +53,35 @@ _FREE_EMAIL_DOMAINS = {
     "yahoo.com",
     "yandex.com",
 }
+# These are legitimate ISO country names, but as bare words inside an address they
+# are too ambiguous (US states, personal/place names, etc.) for a high-confidence
+# country inference. An explicit Country field may still resolve them.
+_AMBIGUOUS_FREE_TEXT_COUNTRY_NAMES = {
+    "chad",
+    "georgia",
+    "jordan",
+    "mali",
+    "niger",
+}
 
 # pycountry provides the ISO English names/codes. These aliases cover common
-# Chinese source material and a few business-data spellings not handled by ISO lookup.
+# Chinese source material and business-data spellings/abbreviations not reliably
+# handled by ISO lookup.
 _COUNTRY_ALIASES = {
+    "uk": "GB",
+    "great britain": "GB",
+    "uae": "AE",
+    "south korea": "KR",
+    "republic of korea": "KR",
+    "russia": "RU",
+    "vietnam": "VN",
+    "czech republic": "CZ",
+    "taiwan": "TW",
+    "macau": "MO",
+    "macao": "MO",
+    "ivory coast": "CI",
+    "tanzania": "TZ",
+    "moldova": "MD",
     "中国": "CN",
     "中国大陆": "CN",
     "中华人民共和国": "CN",
@@ -219,6 +242,10 @@ ON contact.entity_country_inference(status, confidence DESC);
 CREATE INDEX IF NOT EXISTS ix_contact_country_inference_country
 ON contact.entity_country_inference(country_code, confidence DESC)
 WHERE country_code IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ix_contact_country_inference_applied
+ON contact.entity_country_inference(applied_at DESC)
+WHERE applied_at IS NOT NULL;
 """
 
 
@@ -286,9 +313,12 @@ def _country_name_patterns() -> tuple[tuple[re.Pattern[str], str], ...]:
         code = str(country.alpha_2).upper()
         for attribute in ("name", "official_name", "common_name"):
             name = str(getattr(country, attribute, "") or "").strip()
-            if len(name) >= 4:
+            if len(name) >= 4 and name.casefold() not in _AMBIGUOUS_FREE_TEXT_COUNTRY_NAMES:
                 names[name.casefold()] = code
-    names.update({alias.casefold(): code for alias, code in _COUNTRY_ALIASES.items()})
+    for alias, code in _COUNTRY_ALIASES.items():
+        folded = alias.casefold()
+        if folded not in _AMBIGUOUS_FREE_TEXT_COUNTRY_NAMES:
+            names[folded] = code
     for name, code in sorted(names.items(), key=lambda item: len(item[0]), reverse=True):
         if re.search(r"[\u4e00-\u9fff]", name):
             pattern = re.compile(re.escape(name), re.I)
@@ -305,7 +335,16 @@ def _countries_in_text(value: Any) -> set[str]:
     text = str(value or "").strip()
     if not text:
         return set()
-    return {code for pattern, code in _COUNTRY_NAME_PATTERNS if pattern.search(text)}
+    result = {code for pattern, code in _COUNTRY_NAME_PATTERNS if pattern.search(text)}
+    # Avoid overlapping Chinese aliases turning “中国香港/澳门/台湾” into both the
+    # region and CN. These regions have distinct ISO country codes in contact data.
+    if "HK" in result and "香港" in text:
+        result.discard("CN")
+    if "MO" in result and "澳门" in text:
+        result.discard("CN")
+    if "TW" in result and "台湾" in text:
+        result.discard("CN")
+    return result
 
 
 def _host_from_channel(channel_type: str, value: Any) -> str:
@@ -336,10 +375,7 @@ def _cctld_country(host: str) -> tuple[str, float] | None:
         return "GB", 0.92
     if len(suffix) != 2:
         return None
-    try:
-        country = pycountry.countries.get(alpha_2=suffix.upper())
-    except LookupError:  # pragma: no cover - pycountry getter currently returns None
-        country = None
+    country = pycountry.countries.get(alpha_2=suffix.upper())
     if country is None:
         return None
     return str(country.alpha_2).upper(), 0.90
@@ -434,6 +470,11 @@ def infer_from_evidence(
 
 
 def ensure_country_inference_schema() -> None:
+    # Fresh/old volumes must have the additive contact/entity foundations before
+    # the inference audit tables and indexes are installed.
+    from app.contact_ingest.migrations import ensure_contact_schema
+
+    ensure_contact_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
@@ -441,10 +482,17 @@ def ensure_country_inference_schema() -> None:
 
 
 def _build_city_model() -> dict[str, tuple[str, float, int]]:
+    # Entity rows inferred by this engine are deliberately excluded from training,
+    # preventing later runs from amplifying their own previous guesses. Explicit
+    # entity_mention country/city pairs remain source-grounded training evidence.
     sql = """
-        SELECT city, country_code
-        FROM entity.entity
-        WHERE country_code IS NOT NULL AND city IS NOT NULL AND btrim(city) <> ''
+        SELECT e.city, e.country_code
+        FROM entity.entity AS e
+        LEFT JOIN contact.entity_country_inference AS ci
+          ON ci.entity_id = e.entity_id AND ci.applied_at IS NOT NULL
+        WHERE e.country_code IS NOT NULL
+          AND e.city IS NOT NULL AND btrim(e.city) <> ''
+          AND ci.entity_id IS NULL
         UNION ALL
         SELECT city, country_code
         FROM entity.entity_mention
@@ -470,6 +518,8 @@ def _build_city_model() -> dict[str, tuple[str, float, int]]:
 
 
 def _build_domain_model() -> dict[str, tuple[str, float, int]]:
+    # As with the city model, only pre-existing/source-grounded entity countries
+    # train domain mappings. Countries applied by this inference system are excluded.
     sql = """
         WITH channel_owner AS (
             SELECT c.channel_type, c.normalized_value, c.entity_id
@@ -490,7 +540,10 @@ def _build_domain_model() -> dict[str, tuple[str, float, int]]:
                 END AS domain
             FROM channel_owner AS co
             JOIN entity.entity AS e ON e.entity_id = co.entity_id
+            LEFT JOIN contact.entity_country_inference AS ci
+              ON ci.entity_id = e.entity_id AND ci.applied_at IS NOT NULL
             WHERE e.country_code IS NOT NULL
+              AND ci.entity_id IS NULL
               AND co.channel_type IN ('EMAIL', 'WEBSITE')
         )
         SELECT lower(domain) AS domain, country_code, count(*) AS row_count
@@ -591,7 +644,10 @@ def _load_context(entity_ids: list[str]) -> dict[str, dict[str, list[dict[str, A
                     WHERE c.person_id IS NOT NULL AND r.person_id = c.person_id
                 ) AS owner ON true
                 WHERE owner.entity_id = ANY(%s::uuid[])
-                  AND c.channel_type IN ('EMAIL', 'WEBSITE', 'PHONE_UNKNOWN', 'LANDLINE', 'MOBILE', 'WHATSAPP')
+                  AND c.channel_type IN (
+                      'EMAIL', 'WEBSITE', 'PHONE_UNKNOWN', 'LANDLINE',
+                      'MOBILE', 'WHATSAPP'
+                  )
                 """,
                 (entity_ids,),
             )
@@ -625,7 +681,13 @@ def _load_context(entity_ids: list[str]) -> dict[str, dict[str, list[dict[str, A
     return context
 
 
-def _city_evidence(value: Any, models: ReferenceModels, *, source: str, weight: float) -> list[Evidence]:
+def _city_evidence(
+    value: Any,
+    models: ReferenceModels,
+    *,
+    source: str,
+    weight: float,
+) -> list[Evidence]:
     city = _normalize_city(value)
     if not city:
         return []
@@ -634,7 +696,15 @@ def _city_evidence(value: Any, models: ReferenceModels, *, source: str, weight: 
         return []
     country, dominance, sample_count = match
     adjusted = min(weight, weight * dominance)
-    return [Evidence(country, "CITY_CORPUS_MODEL", adjusted, str(value), f"{source};n={sample_count};share={dominance:.3f}")]
+    return [
+        Evidence(
+            country,
+            "CITY_CORPUS_MODEL",
+            adjusted,
+            str(value),
+            f"{source};n={sample_count};share={dominance:.3f}",
+        )
+    ]
 
 
 def _address_city_tokens(value: Any) -> list[str]:
@@ -656,26 +726,66 @@ def _entity_evidence(
         country = str(identifier.get("country_code") or "").upper()
         if country:
             evidence.append(
-                Evidence(country, "IDENTIFIER_COUNTRY", 0.98, str(identifier.get("identifier_value") or ""), str(identifier.get("identifier_type") or "identifier"))
+                Evidence(
+                    country,
+                    "IDENTIFIER_COUNTRY",
+                    0.98,
+                    str(identifier.get("identifier_value") or ""),
+                    str(identifier.get("identifier_type") or "identifier"),
+                )
             )
 
     for mention in context["mentions"]:
         country = str(mention.get("country_code") or "").upper()
         if country:
-            evidence.append(Evidence(country, "TRADEMARK_MENTION_COUNTRY", 0.98, country, str(mention.get("role") or "mention")))
+            evidence.append(
+                Evidence(
+                    country,
+                    "TRADEMARK_MENTION_COUNTRY",
+                    0.98,
+                    country,
+                    str(mention.get("role") or "mention"),
+                )
+            )
         address = str(mention.get("raw_address") or "")
         for code in _countries_in_text(address):
-            evidence.append(Evidence(code, "MENTION_ADDRESS_COUNTRY_NAME", 0.97, address, "entity.entity_mention.raw_address"))
+            evidence.append(
+                Evidence(
+                    code,
+                    "MENTION_ADDRESS_COUNTRY_NAME",
+                    0.97,
+                    address,
+                    "entity.entity_mention.raw_address",
+                )
+            )
         if country and mention.get("city"):
-            evidence.append(Evidence(country, "MENTION_CITY_WITH_COUNTRY", 0.82, str(mention["city"]), "entity.entity_mention"))
+            evidence.append(
+                Evidence(
+                    country,
+                    "MENTION_CITY_WITH_COUNTRY",
+                    0.82,
+                    str(mention["city"]),
+                    "entity.entity_mention",
+                )
+            )
 
     if entity.get("city"):
-        evidence.extend(_city_evidence(entity["city"], models, source="entity.entity.city", weight=0.76))
+        evidence.extend(
+            _city_evidence(entity["city"], models, source="entity.entity.city", weight=0.76)
+        )
 
     for raw in context["raw"]:
         default_country = str(raw.get("default_country_code") or "").upper()
         if default_country:
-            evidence.append(Evidence(default_country, "SOURCE_DEFAULT_COUNTRY", 0.97, default_country, str(raw.get("source_name") or "source")))
+            evidence.append(
+                Evidence(
+                    default_country,
+                    "SOURCE_DEFAULT_COUNTRY",
+                    0.97,
+                    default_country,
+                    str(raw.get("source_name") or "source"),
+                )
+            )
         data = raw.get("raw_data") or {}
         if not isinstance(data, dict):
             continue
@@ -684,26 +794,56 @@ def _entity_evidence(
             if not value:
                 continue
             normalized_key = _normalize_key(key)
-            if any(_normalize_key(hint) in normalized_key for hint in _COUNTRY_FIELD_HINTS):
+            country_field = any(
+                _normalize_key(hint) in normalized_key for hint in _COUNTRY_FIELD_HINTS
+            ) and "nationality" not in normalized_key
+            if country_field:
                 country = _country_from_explicit_value(value)
                 if country:
-                    evidence.append(Evidence(country, "RAW_EXPLICIT_COUNTRY_FIELD", 0.995, value, str(key)))
+                    evidence.append(
+                        Evidence(country, "RAW_EXPLICIT_COUNTRY_FIELD", 0.995, value, str(key))
+                    )
                     continue
-            is_city = any(_normalize_key(hint) == normalized_key or _normalize_key(hint) in normalized_key for hint in _CITY_FIELD_HINTS)
-            is_address = any(_normalize_key(hint) in normalized_key for hint in _ADDRESS_FIELD_HINTS)
+            is_city = any(
+                _normalize_key(hint) == normalized_key
+                or _normalize_key(hint) in normalized_key
+                for hint in _CITY_FIELD_HINTS
+            )
+            is_address = any(
+                _normalize_key(hint) in normalized_key for hint in _ADDRESS_FIELD_HINTS
+            )
             if is_city:
-                evidence.extend(_city_evidence(value, models, source=f"raw:{key}", weight=0.78))
+                evidence.extend(
+                    _city_evidence(value, models, source=f"raw:{key}", weight=0.78)
+                )
             if is_address:
                 for code in _countries_in_text(value):
-                    evidence.append(Evidence(code, "RAW_ADDRESS_COUNTRY_NAME", 0.98, value, str(key)))
+                    evidence.append(
+                        Evidence(code, "RAW_ADDRESS_COUNTRY_NAME", 0.98, value, str(key))
+                    )
                 for token in _address_city_tokens(value):
-                    evidence.extend(_city_evidence(token, models, source=f"raw-address:{key}", weight=0.60))
+                    evidence.extend(
+                        _city_evidence(
+                            token,
+                            models,
+                            source=f"raw-address:{key}",
+                            weight=0.60,
+                        )
+                    )
 
     # Entity normalized_address can still contain a country name even when the
     # source did not map a dedicated country field.
     normalized_address = str(entity.get("normalized_address") or "")
     for code in _countries_in_text(normalized_address):
-        evidence.append(Evidence(code, "ENTITY_ADDRESS_COUNTRY_NAME", 0.96, normalized_address, "entity.entity.normalized_address"))
+        evidence.append(
+            Evidence(
+                code,
+                "ENTITY_ADDRESS_COUNTRY_NAME",
+                0.96,
+                normalized_address,
+                "entity.entity.normalized_address",
+            )
+        )
 
     for channel in context["channels"]:
         channel_type = str(channel.get("channel_type") or "").upper()
@@ -713,7 +853,15 @@ def _entity_evidence(
             phone = _phone_country(raw_value or normalized_value)
             if phone:
                 country, weight = phone
-                evidence.append(Evidence(country, "INTERNATIONAL_PHONE", weight, raw_value or normalized_value, channel_type))
+                evidence.append(
+                    Evidence(
+                        country,
+                        "INTERNATIONAL_PHONE",
+                        weight,
+                        raw_value or normalized_value,
+                        channel_type,
+                    )
+                )
             continue
         if channel_type not in {"EMAIL", "WEBSITE"}:
             continue
@@ -724,17 +872,31 @@ def _entity_evidence(
         if known and host not in _FREE_EMAIL_DOMAINS:
             country, dominance, sample_count = known
             evidence.append(
-                Evidence(country, "KNOWN_CORPORATE_DOMAIN", min(0.94, 0.90 + 0.04 * dominance), host, f"corpus;n={sample_count};share={dominance:.3f}")
+                Evidence(
+                    country,
+                    "KNOWN_CORPORATE_DOMAIN",
+                    min(0.94, 0.90 + 0.04 * dominance),
+                    host,
+                    f"corpus;n={sample_count};share={dominance:.3f}",
+                )
             )
         cctld = _cctld_country(host)
         if cctld:
             country, weight = cctld
-            evidence.append(Evidence(country, "COUNTRY_CODE_DOMAIN", weight, host, channel_type))
+            evidence.append(
+                Evidence(country, "COUNTRY_CODE_DOMAIN", weight, host, channel_type)
+            )
 
     return evidence
 
 
-def _upsert_inference(cur, run_id: str, entity_id: str, inference: Inference, applied: bool) -> None:
+def _upsert_inference(
+    cur,
+    run_id: str,
+    entity_id: str,
+    inference: Inference,
+    applied: bool,
+) -> None:
     cur.execute(
         """
         INSERT INTO contact.entity_country_inference AS current (
@@ -758,7 +920,10 @@ def _upsert_inference(cur, run_id: str, entity_id: str, inference: Inference, ap
             evidence = EXCLUDED.evidence,
             reason_codes = EXCLUDED.reason_codes,
             last_inferred_at = now(),
-            applied_at = CASE WHEN EXCLUDED.applied_at IS NOT NULL THEN EXCLUDED.applied_at ELSE current.applied_at END
+            applied_at = CASE
+                WHEN EXCLUDED.applied_at IS NOT NULL THEN EXCLUDED.applied_at
+                ELSE current.applied_at
+            END
         """,
         (
             entity_id,
@@ -784,7 +949,9 @@ def _unknown_contact_count(cur) -> int:
         WHERE e.country_code IS NULL
           AND (
               EXISTS (SELECT 1 FROM contact.raw_record rr WHERE rr.entity_id = e.entity_id)
-              OR EXISTS (SELECT 1 FROM contact.entity_person_relation r WHERE r.entity_id = e.entity_id)
+              OR EXISTS (
+                  SELECT 1 FROM contact.entity_person_relation r WHERE r.entity_id = e.entity_id
+              )
               OR EXISTS (SELECT 1 FROM contact.channel c WHERE c.entity_id = e.entity_id)
           )
         """
@@ -792,7 +959,13 @@ def _unknown_contact_count(cur) -> int:
     return int(cur.fetchone()["row_count"] or 0)
 
 
-def _update_run(run_id: str, *, status: str | None = None, metrics: dict[str, Any] | None = None, error: str | None = None) -> None:
+def _update_run(
+    run_id: str,
+    *,
+    status: str | None = None,
+    metrics: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -801,7 +974,10 @@ def _update_run(run_id: str, *, status: str | None = None, metrics: dict[str, An
                 SET status = COALESCE(%s, status),
                     metrics = COALESCE(%s::jsonb, metrics),
                     error_message = %s,
-                    finished_at = CASE WHEN %s IN ('SUCCESS', 'FAILED', 'BUSY') THEN now() ELSE finished_at END
+                    finished_at = CASE
+                        WHEN %s IN ('SUCCESS', 'FAILED', 'BUSY') THEN now()
+                        ELSE finished_at
+                    END
                 WHERE run_id = %s
                 """,
                 (status, _json(metrics) if metrics is not None else None, error, status, run_id),
@@ -838,9 +1014,19 @@ def run_country_inference(
                     min_confidence, min_margin, batch_size
                 ) VALUES (%s, %s, 'RUNNING', %s, %s, %s, %s)
                 """,
-                (run_id, COUNTRY_INFERENCE_VERSION, apply, min_confidence, min_margin, batch_size),
+                (
+                    run_id,
+                    COUNTRY_INFERENCE_VERSION,
+                    apply,
+                    min_confidence,
+                    min_margin,
+                    batch_size,
+                ),
             )
-            cur.execute("SELECT pg_try_advisory_lock(hashtext(%s)) AS acquired", (COUNTRY_INFERENCE_LOCK,))
+            cur.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s)) AS acquired",
+                (COUNTRY_INFERENCE_LOCK,),
+            )
             acquired = bool(cur.fetchone()["acquired"])
             conn.commit()
         if not acquired:
@@ -1000,7 +1186,10 @@ def run_country_inference(
             raise
         finally:
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (COUNTRY_INFERENCE_LOCK,))
+                cur.execute(
+                    "SELECT pg_advisory_unlock(hashtext(%s))",
+                    (COUNTRY_INFERENCE_LOCK,),
+                )
             conn.commit()
 
 
@@ -1030,7 +1219,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Infer missing contact countries from traceable multi-signal evidence"
     )
-    parser.add_argument("--apply", action="store_true", help="Persist only ACCEPTED high-confidence countries")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist only ACCEPTED high-confidence countries",
+    )
     parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     parser.add_argument("--min-margin", type=float, default=DEFAULT_MIN_MARGIN)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -1046,7 +1239,12 @@ def main() -> int:
             emit=_emit,
         )
     except Exception as exc:
-        _emit({"event": "CONTACT_COUNTRY_INFERENCE_FATAL", "error": f"{type(exc).__name__}: {exc}"})
+        _emit(
+            {
+                "event": "CONTACT_COUNTRY_INFERENCE_FATAL",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
         return 2
     _emit({"event": "CONTACT_COUNTRY_INFERENCE_COMPLETE", **result})
     return 0 if result.get("status") in {"SUCCESS", "BUSY"} else 2
