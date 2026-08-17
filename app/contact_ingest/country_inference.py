@@ -70,6 +70,9 @@ _AMBIGUOUS_FREE_TEXT_COUNTRY_NAMES = {
 _COUNTRY_ALIASES = {
     "uk": "GB",
     "great britain": "GB",
+    "usa": "US",
+    "u.s.a.": "US",
+    "prc": "CN",
     "uae": "AE",
     "south korea": "KR",
     "republic of korea": "KR",
@@ -482,8 +485,7 @@ def ensure_country_inference_schema() -> None:
 
 
 def _build_city_model() -> dict[str, tuple[str, float, int]]:
-    # Entity rows inferred by this engine are deliberately excluded from training,
-    # preventing later runs from amplifying their own previous guesses. Explicit
+    # Entity rows activated by this engine are excluded from training. Explicit
     # entity_mention country/city pairs remain source-grounded training evidence.
     sql = """
         SELECT e.city, e.country_code
@@ -518,8 +520,8 @@ def _build_city_model() -> dict[str, tuple[str, float, int]]:
 
 
 def _build_domain_model() -> dict[str, tuple[str, float, int]]:
-    # As with the city model, only pre-existing/source-grounded entity countries
-    # train domain mappings. Countries applied by this inference system are excluded.
+    # Only source-grounded entity countries train domain mappings; activated
+    # inference rows are explicitly excluded so the model cannot self-reinforce.
     sql = """
         WITH channel_owner AS (
             SELECT c.channel_type, c.normalized_value, c.entity_id
@@ -590,6 +592,13 @@ def _candidate_batch(after_entity_id: str | None, batch_size: int) -> list[dict[
         FROM entity.entity AS e
         WHERE e.country_code IS NULL
           {after}
+          AND NOT EXISTS (
+              SELECT 1
+              FROM contact.entity_country_inference AS active_ci
+              WHERE active_ci.entity_id = e.entity_id
+                AND active_ci.status = 'ACCEPTED'
+                AND active_ci.applied_at IS NOT NULL
+          )
           AND (
               EXISTS (SELECT 1 FROM contact.raw_record rr WHERE rr.entity_id = e.entity_id)
               OR EXISTS (
@@ -947,6 +956,13 @@ def _unknown_contact_count(cur) -> int:
         SELECT count(*) AS row_count
         FROM entity.entity AS e
         WHERE e.country_code IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM contact.entity_country_inference AS active_ci
+              WHERE active_ci.entity_id = e.entity_id
+                AND active_ci.status = 'ACCEPTED'
+                AND active_ci.applied_at IS NOT NULL
+          )
           AND (
               EXISTS (SELECT 1 FROM contact.raw_record rr WHERE rr.entity_id = e.entity_id)
               OR EXISTS (
@@ -1039,7 +1055,6 @@ def run_country_inference(
         country_counts: Counter[str] = Counter()
         evidence_counts: Counter[str] = Counter()
         applied_entities = 0
-        person_country_filled = 0
         evaluated = 0
         batches = 0
         after_entity_id: str | None = None
@@ -1058,7 +1073,6 @@ def run_country_inference(
                 batches += 1
                 entity_ids = [str(row["entity_id"]) for row in batch]
                 context = _load_context(entity_ids)
-                accepted: list[tuple[str, str]] = []
                 batch_results: list[tuple[str, Inference]] = []
                 for entity in batch:
                     entity_id = str(entity["entity_id"])
@@ -1073,36 +1087,27 @@ def run_country_inference(
                     if inference.country_code:
                         country_counts[inference.country_code] += 1
                     evidence_counts.update({item.kind for item in inference.evidence})
-                    if apply and inference.status == "ACCEPTED" and inference.country_code:
-                        accepted.append((entity_id, inference.country_code))
 
                 with postgres_conn() as batch_conn:
                     with batch_conn.cursor() as cur:
                         applied_set: set[str] = set()
-                        for entity_id, country in accepted:
-                            cur.execute(
-                                """
-                                UPDATE entity.entity
-                                SET country_code = %s, updated_at = now()
-                                WHERE entity_id = %s AND country_code IS NULL
-                                """,
-                                (country, entity_id),
-                            )
-                            if cur.rowcount:
-                                applied_set.add(entity_id)
-                                applied_entities += 1
+                        if apply:
+                            for entity_id, inference in batch_results:
+                                if inference.status != "ACCEPTED" or not inference.country_code:
+                                    continue
+                                # Source facts win. If a concurrent import filled a real
+                                # country after planning, do not activate the inference.
                                 cur.execute(
                                     """
-                                    UPDATE contact.person AS p
-                                    SET country_code = %s, updated_at = now()
-                                    FROM contact.entity_person_relation AS r
-                                    WHERE r.person_id = p.person_id
-                                      AND r.entity_id = %s
-                                      AND p.country_code IS NULL
+                                    SELECT 1
+                                    FROM entity.entity
+                                    WHERE entity_id = %s AND country_code IS NULL
                                     """,
-                                    (country, entity_id),
+                                    (entity_id,),
                                 )
-                                person_country_filled += int(cur.rowcount or 0)
+                                if cur.fetchone():
+                                    applied_set.add(entity_id)
+                                    applied_entities += 1
                         for entity_id, inference in batch_results:
                             _upsert_inference(
                                 cur,
@@ -1153,14 +1158,14 @@ def run_country_inference(
                 "conflict": status_counts["CONFLICT"],
                 "insufficient": status_counts["INSUFFICIENT"],
                 "applied": applied_entities,
-                "person_country_filled": person_country_filled,
                 "batches": batches,
                 "elapsed_seconds": round(time.monotonic() - started, 2),
                 "country_counts": dict(country_counts.most_common()),
                 "evidence_kind_counts": dict(evidence_counts.most_common()),
                 "reference_city_keys": len(models.city_country),
                 "reference_domain_keys": len(models.domain_country),
-                "semantics": "INFERRED_CONTACT_GEO_NOT_OFFICIAL_TRADEMARK_FACT",
+                "semantics": "INFERRED_CONTACT_GEO_OVERLAY_NOT_OFFICIAL_TRADEMARK_FACT",
+                "source_country_fields_mutated": False,
             }
             _update_run(run_id, status="SUCCESS", metrics=metrics)
             if apply and applied_entities:
@@ -1222,7 +1227,7 @@ def main() -> int:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Persist only ACCEPTED high-confidence countries",
+        help="Activate only ACCEPTED high-confidence inferred countries as a view overlay",
     )
     parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     parser.add_argument("--min-margin", type=float, default=DEFAULT_MIN_MARGIN)
