@@ -1,0 +1,35 @@
+name: Contact Person Dedupe
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare CI Compose environment
+        run: |
+          cp .env.example .env
+          sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
+          mkdir -p raw_data
+
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait postgres
+
+      - name: Run contact person dedupe preview/apply fixture
+        run: >-
+          docker compose run --rm --no-deps worker
+          python -m app.contact_ingest.validate_person_dedupe_fixture
+
+      - name: Tear down fixture database
+        if: always()
+        run: docker compose down -v --remove-orphans
