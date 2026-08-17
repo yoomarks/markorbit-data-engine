@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.cn.publish_dag import CN_FINAL_PUBLISH_DAG
 from app.db import postgres_conn
 
 
-ADMIN_PROGRESS_VERSION = "MARKORBIT_ADMIN_PROGRESS_V1"
+ADMIN_PROGRESS_VERSION = "MARKORBIT_ADMIN_PROGRESS_V2"
 _DOMAIN_JURISDICTION = {
     "CN": "CN",
     "US_APPLICATION": "US",
@@ -70,6 +71,98 @@ def _corpus_progress(domain: str, counts: dict[str, int]) -> dict[str, Any]:
     return result
 
 
+def _elapsed_seconds(value: Any, *, now: datetime | None = None) -> float | None:
+    if not isinstance(value, datetime):
+        return None
+    current = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return max(0.0, (current - value).total_seconds())
+
+
+def _cn_dag_progress(task_group: str) -> dict[str, Any]:
+    order = CN_FINAL_PUBLISH_DAG.topological_order()
+    if task_group not in order:
+        return {
+            "dag_version": CN_FINAL_PUBLISH_DAG.version,
+            "current_node_index": None,
+            "node_total": len(order),
+            "remaining_nodes": [],
+            "remaining_node_count": None,
+        }
+    index = order.index(task_group)
+    return {
+        "dag_version": CN_FINAL_PUBLISH_DAG.version,
+        "current_node_index": index + 1,
+        "node_total": len(order),
+        "remaining_nodes": list(order[index + 1 :]),
+        "remaining_node_count": len(order) - index - 1,
+    }
+
+
+def _estimate_group_eta(
+    *,
+    task_total: int,
+    success_tasks: int,
+    completed_15m: int,
+    completed_30m: int,
+    completed_60m: int,
+) -> dict[str, Any]:
+    remaining = max(int(task_total or 0) - int(success_tasks or 0), 0)
+    rates = {
+        "15m": round(int(completed_15m or 0) * 4.0, 2),
+        "30m": round(int(completed_30m or 0) * 2.0, 2),
+        "60m": round(int(completed_60m or 0) * 1.0, 2),
+    }
+    result: dict[str, Any] = {
+        "remaining_tasks": remaining,
+        "completed_15m": int(completed_15m or 0),
+        "completed_30m": int(completed_30m or 0),
+        "completed_60m": int(completed_60m or 0),
+        "tasks_per_hour": rates,
+        "eta_seconds": None,
+        "eta_basis": "INSUFFICIENT_DURABLE_COMPLETIONS",
+    }
+    if remaining <= 0:
+        result["eta_seconds"] = 0.0
+        result["eta_basis"] = "CURRENT_GROUP_COMPLETE"
+        return result
+
+    # Prefer a longer observation window. Short windows are used only when there
+    # are enough durable completions to avoid manufacturing an ETA from one task.
+    candidates = (
+        ("60m", int(completed_60m or 0), 6),
+        ("30m", int(completed_30m or 0), 4),
+        ("15m", int(completed_15m or 0), 3),
+    )
+    for window, completed, minimum in candidates:
+        rate = rates[window]
+        if completed >= minimum and rate > 0:
+            result["eta_seconds"] = round(remaining / rate * 3600.0, 1)
+            result["eta_basis"] = f"CURRENT_GROUP_{window.upper()}_DURABLE_COMPLETIONS"
+            break
+    return result
+
+
+def _progress_health(
+    *,
+    running_tasks: int,
+    failed_tasks: int,
+    last_progress_age_seconds: float | None,
+) -> str:
+    if failed_tasks:
+        return "FAILED_SUBTASK_PRESENT"
+    if not running_tasks:
+        return "IDLE_OR_AUDIT"
+    if last_progress_age_seconds is None:
+        return "WARMING_UP"
+    if last_progress_age_seconds <= 15 * 60:
+        return "ACTIVE"
+    if last_progress_age_seconds <= 60 * 60:
+        return "QUIET_LONG_TASK"
+    return "NO_RECENT_DURABLE_PROGRESS"
+
+
 def _cn_detail(package_id: str) -> dict[str, Any]:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -90,6 +183,7 @@ def _cn_detail(package_id: str) -> dict[str, Any]:
                 (package_id,),
             )
             checkpoint = dict(cur.fetchone() or {})
+            publish_version = str(checkpoint.get("publish_checkpoint_version") or "")
 
             cur.execute(
                 """
@@ -110,11 +204,14 @@ def _cn_detail(package_id: str) -> dict[str, Any]:
                     count(*) FILTER (WHERE status = 'SUCCESS') AS success_tasks,
                     count(*) FILTER (WHERE status = 'RUNNING') AS running_tasks,
                     count(*) FILTER (WHERE status = 'FAILED') AS failed_tasks,
-                    count(*) AS ledger_tasks
+                    count(*) AS ledger_tasks,
+                    max(completed_at) FILTER (WHERE status = 'SUCCESS')
+                        AS last_durable_progress_at
                 FROM control.cn_publish_subtask
                 WHERE package_id = %s
+                  AND (%s = '' OR checkpoint_version = %s)
                 """,
-                (package_id,),
+                (package_id, publish_version, publish_version),
             )
             ledger = dict(cur.fetchone() or {})
 
@@ -125,18 +222,84 @@ def _cn_detail(package_id: str) -> dict[str, Any]:
                        started_at, completed_at, updated_at, last_error
                 FROM control.cn_publish_subtask
                 WHERE package_id = %s
+                  AND (%s = '' OR checkpoint_version = %s)
                 ORDER BY
                     CASE status WHEN 'RUNNING' THEN 0 WHEN 'FAILED' THEN 1 ELSE 2 END,
                     updated_at DESC, task_index DESC
                 LIMIT 1
                 """,
-                (package_id,),
+                (package_id, publish_version, publish_version),
             )
             subtask_row = cur.fetchone()
             current_subtask = dict(subtask_row) if subtask_row else None
 
+            group_metrics: dict[str, Any] = {}
+            task_group = str((current_subtask or {}).get("task_group") or "")
+            if task_group:
+                cur.execute(
+                    """
+                    SELECT
+                        count(*) FILTER (WHERE status = 'SUCCESS') AS success_tasks,
+                        count(*) FILTER (WHERE status = 'RUNNING') AS running_tasks,
+                        count(*) FILTER (WHERE status = 'FAILED') AS failed_tasks,
+                        COALESCE(max(task_total), 0) AS task_total,
+                        min(started_at) AS group_started_at,
+                        max(completed_at) FILTER (WHERE status = 'SUCCESS')
+                            AS last_durable_progress_at,
+                        count(*) FILTER (
+                            WHERE status = 'SUCCESS'
+                              AND completed_at >= now() - interval '15 minutes'
+                        ) AS completed_15m,
+                        count(*) FILTER (
+                            WHERE status = 'SUCCESS'
+                              AND completed_at >= now() - interval '30 minutes'
+                        ) AS completed_30m,
+                        count(*) FILTER (
+                            WHERE status = 'SUCCESS'
+                              AND completed_at >= now() - interval '60 minutes'
+                        ) AS completed_60m
+                    FROM control.cn_publish_subtask
+                    WHERE package_id = %s
+                      AND (%s = '' OR checkpoint_version = %s)
+                      AND task_group = %s
+                    """,
+                    (package_id, publish_version, publish_version, task_group),
+                )
+                group_metrics = dict(cur.fetchone() or {})
+
+    now = datetime.now(timezone.utc)
     stage_version = str(checkpoint.get("stage_checkpoint_version") or "")
-    publish_version = str(checkpoint.get("publish_checkpoint_version") or "")
+    last_progress_at = group_metrics.get("last_durable_progress_at") or ledger.get(
+        "last_durable_progress_at"
+    )
+    current_task_elapsed = _elapsed_seconds((current_subtask or {}).get("started_at"), now=now)
+    last_progress_age = _elapsed_seconds(last_progress_at, now=now)
+    group_eta = _estimate_group_eta(
+        task_total=int(group_metrics.get("task_total") or 0),
+        success_tasks=int(group_metrics.get("success_tasks") or 0),
+        completed_15m=int(group_metrics.get("completed_15m") or 0),
+        completed_30m=int(group_metrics.get("completed_30m") or 0),
+        completed_60m=int(group_metrics.get("completed_60m") or 0),
+    )
+    group_eta.update(
+        {
+            "task_group": str((current_subtask or {}).get("task_group") or ""),
+            "success_tasks": int(group_metrics.get("success_tasks") or 0),
+            "running_tasks": int(group_metrics.get("running_tasks") or 0),
+            "failed_tasks": int(group_metrics.get("failed_tasks") or 0),
+            "group_started_at": group_metrics.get("group_started_at"),
+            "last_durable_progress_at": last_progress_at,
+            "last_durable_progress_age_seconds": last_progress_age,
+            "current_task_elapsed_seconds": current_task_elapsed,
+            "health": _progress_health(
+                running_tasks=int(group_metrics.get("running_tasks") or 0),
+                failed_tasks=int(group_metrics.get("failed_tasks") or 0),
+                last_progress_age_seconds=last_progress_age,
+            ),
+        }
+    )
+    dag_progress = _cn_dag_progress(str((current_subtask or {}).get("task_group") or ""))
+
     return {
         "stage_checkpoint_version": stage_version,
         "stage_checkpoint_at": checkpoint.get("stage_checkpoint_at"),
@@ -153,7 +316,10 @@ def _cn_detail(package_id: str) -> dict[str, Any]:
             "running_tasks": int(ledger.get("running_tasks") or 0),
             "failed_tasks": int(ledger.get("failed_tasks") or 0),
             "ledger_tasks": int(ledger.get("ledger_tasks") or 0),
+            "last_durable_progress_at": ledger.get("last_durable_progress_at"),
             "current_subtask": current_subtask,
+            "current_group": group_eta,
+            "dag": dag_progress,
         },
     }
 
