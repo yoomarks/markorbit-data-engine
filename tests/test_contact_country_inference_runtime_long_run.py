@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from app.contact_ingest import country_inference_runtime as runtime
 
 
