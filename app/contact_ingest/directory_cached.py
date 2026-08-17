@@ -113,13 +113,19 @@ def invalidate_contact_view_cache() -> None:
     analytics_source.invalidate_contact_directory_cache()
 
 
+def _load_fresh_analytics() -> dict[str, Any]:
+    # An outer cache miss can be caused by a new import generation. Clear the
+    # old 30-second compatibility cache before recomputing so generation changes
+    # become visible immediately rather than after that legacy TTL expires.
+    analytics_source.invalidate_contact_directory_cache()
+    return analytics_source.contact_directory_analytics()
+
+
 def cached_contact_directory_analytics(*, force_refresh: bool = False) -> dict[str, Any]:
-    if force_refresh:
-        analytics_source.invalidate_contact_directory_cache()
     return _get_or_load(
         ("analytics",),
         ttl_seconds=CONTACT_OVERVIEW_CACHE_TTL_SECONDS,
-        loader=analytics_source.contact_directory_analytics,
+        loader=_load_fresh_analytics,
         force_refresh=force_refresh,
     )
 
