@@ -86,6 +86,43 @@ def activate_persisted_run(
 
             with postgres_conn() as conn:
                 with conn.cursor() as cur:
+                    # Defense in depth against persisted-row corruption. These checks
+                    # are evaluated under the inference advisory lock immediately before
+                    # activation, so no ACCEPTED row can be activated below the original
+                    # run thresholds or without a country code.
+                    cur.execute(
+                        """
+                        SELECT
+                            count(*) FILTER (
+                                WHERE ci.status = 'ACCEPTED' AND ci.country_code IS NULL
+                            ) AS accepted_without_country,
+                            count(*) FILTER (
+                                WHERE ci.status = 'ACCEPTED'
+                                  AND ci.confidence < %s::numeric
+                            ) AS accepted_below_confidence,
+                            count(*) FILTER (
+                                WHERE ci.status = 'ACCEPTED'
+                                  AND (ci.confidence - ci.runner_up_confidence) < %s::numeric
+                            ) AS accepted_below_margin
+                        FROM contact.entity_country_inference AS ci
+                        WHERE ci.last_run_id = %s::uuid
+                        """,
+                        (
+                            report["min_confidence"],
+                            report["min_margin"],
+                            normalized_run_id,
+                        ),
+                    )
+                    threshold_check = dict(cur.fetchone())
+                    invalid_counts = {
+                        key: int(value or 0) for key, value in threshold_check.items()
+                    }
+                    if any(invalid_counts.values()):
+                        raise RuntimeError(
+                            "persisted ACCEPTED rows failed transactional activation checks: "
+                            f"{invalid_counts}"
+                        )
+
                     unknown_before = _unknown_contact_count(cur)
                     cur.execute(
                         """
@@ -98,6 +135,7 @@ def activate_persisted_run(
                           AND ci.status = 'ACCEPTED'
                           AND ci.country_code IS NOT NULL
                           AND ci.confidence >= %s::numeric
+                          AND (ci.confidence - ci.runner_up_confidence) >= %s::numeric
                           AND ci.applied_at IS NULL
                           AND e.country_code IS NULL
                         """,
@@ -105,6 +143,7 @@ def activate_persisted_run(
                             normalized_run_id,
                             report["rule_version"],
                             report["min_confidence"],
+                            report["min_margin"],
                         ),
                     )
                     newly_applied_rows = int(cur.rowcount or 0)
