@@ -10,7 +10,8 @@ from app.db import postgres_conn
 # entire trademark mention corpus before LIMIT/OFFSET, so CN replay growth could
 # make a read-only Contacts page exhaust PostgreSQL resources. Page candidates are
 # now selected from contact-owned tables first; trademark evidence is hydrated only
-# for the requested entity ids.
+# for the requested entity ids. Source country always wins; activated inference is
+# a reversible display/search overlay and never mutates the source fact.
 _CONTACT_ENTITIES_CTE = r"""
 WITH contact_entities AS (
     SELECT entity_id FROM contact.raw_record WHERE entity_id IS NOT NULL
@@ -24,7 +25,16 @@ contact_base AS (
         e.entity_id,
         e.canonical_name AS entity_name,
         e.entity_type,
-        COALESCE(e.country_code, '') AS country_code,
+        COALESCE(NULLIF(e.country_code, ''), active_ci.country_code, '') AS country_code,
+        CASE
+            WHEN NULLIF(e.country_code, '') IS NOT NULL THEN 'SOURCE_ENTITY'
+            WHEN active_ci.country_code IS NOT NULL THEN 'INFERRED'
+            ELSE ''
+        END AS country_source,
+        CASE
+            WHEN NULLIF(e.country_code, '') IS NULL THEN COALESCE(active_ci.confidence, 0)
+            ELSE 0
+        END AS inferred_country_confidence,
         e.region_code,
         e.city,
         (
@@ -54,6 +64,10 @@ contact_base AS (
         ) AS is_direct
     FROM contact_entities AS ce
     JOIN entity.entity AS e ON e.entity_id = ce.entity_id
+    LEFT JOIN contact.entity_country_inference AS active_ci
+      ON active_ci.entity_id = e.entity_id
+     AND active_ci.status = 'ACCEPTED'
+     AND active_ci.applied_at IS NOT NULL
 )
 """
 
@@ -67,10 +81,10 @@ SELECT
     count(*) FILTER (WHERE m.role IN ('OWNER', 'CO_OWNER', 'APPLICANT')) AS applicant_mentions,
     count(*) FILTER (WHERE m.role IN ('AGENT', 'ATTORNEY', 'CORRESPONDENT')) AS agent_mentions,
     CASE
-        WHEN count(DISTINCT m.jurisdiction)
-             FILTER (WHERE m.jurisdiction ~ '^[A-Z]{2}$') = 1
-        THEN max(m.jurisdiction)
-             FILTER (WHERE m.jurisdiction ~ '^[A-Z]{2}$')
+        WHEN count(DISTINCT m.country_code)
+             FILTER (WHERE m.country_code ~ '^[A-Z]{2}$') = 1
+        THEN max(m.country_code)
+             FILTER (WHERE m.country_code ~ '^[A-Z]{2}$')
         ELSE NULL
     END AS single_mention_country
 FROM entity.entity_mention AS m
@@ -189,6 +203,8 @@ SELECT
     entity_name,
     entity_type,
     country_code,
+    country_source,
+    inferred_country_confidence,
     region_code,
     city,
     is_agent,
@@ -246,8 +262,15 @@ LIMIT %s OFFSET %s
         row["whatsapp_count"] = len(row["whatsapps"])
         row["applicant_mentions"] = int(proof.get("applicant_mentions") or 0)
         row["agent_mentions"] = int(proof.get("agent_mentions") or 0)
+        row["inferred_country_confidence"] = float(
+            row.get("inferred_country_confidence") or 0
+        )
+        # A trademark office jurisdiction is not the contact's country. Only an
+        # explicit country_code on linked mention evidence may fill this read-only
+        # source fallback when neither entity source nor activated inference exists.
         if not row.get("country_code") and proof.get("single_mention_country"):
             row["country_code"] = str(proof["single_mention_country"])
+            row["country_source"] = "SOURCE_MENTION"
 
         row["is_agent"] = bool(row.get("is_agent")) or row["agent_mentions"] > 0
         row["is_direct"] = bool(row.get("is_direct")) or row["applicant_mentions"] > 0

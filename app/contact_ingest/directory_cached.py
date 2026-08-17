@@ -22,7 +22,7 @@ _cache: OrderedDict[tuple[Any, ...], tuple[float, str, dict[str, Any]]] = Ordere
 
 
 def _contact_generation() -> str:
-    """Return a cheap cross-process mutation fingerprint for successful imports."""
+    """Return a cheap cross-process mutation fingerprint for contact read models."""
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -32,8 +32,25 @@ def _contact_generation() -> str:
                 WHERE status = 'SUCCESS'
                 """
             )
-            row = cur.fetchone()
-    return str((row or {}).get("generation") or "")
+            import_row = cur.fetchone()
+            import_generation = str((import_row or {}).get("generation") or "")
+
+            cur.execute(
+                "SELECT to_regclass('contact.entity_country_inference') IS NOT NULL AS exists"
+            )
+            has_country_inference = bool(cur.fetchone()["exists"])
+            country_generation = ""
+            if has_country_inference:
+                cur.execute(
+                    """
+                    SELECT COALESCE(max(applied_at)::text, '') AS generation
+                    FROM contact.entity_country_inference
+                    WHERE applied_at IS NOT NULL
+                    """
+                )
+                country_row = cur.fetchone()
+                country_generation = str((country_row or {}).get("generation") or "")
+    return f"{import_generation}|{country_generation}"
 
 
 def _decorate(
@@ -52,7 +69,7 @@ def _decorate(
         "ttl_seconds": int(ttl_seconds),
         "cached_at": cached_at,
         "generation": generation,
-        "invalidation": "CONTACT_IMPORT_GENERATION_OR_FORCE_REFRESH_OR_TTL",
+        "invalidation": "CONTACT_IMPORT_OR_COUNTRY_INFERENCE_GENERATION_OR_FORCE_REFRESH_OR_TTL",
     }
     return result
 
@@ -104,7 +121,7 @@ def _get_or_load(
 
 
 def invalidate_contact_view_cache() -> None:
-    """Clear local read-model caches; import generations also invalidate cross-process."""
+    """Clear local read-model caches; durable generations cover cross-process changes."""
     with _cache_lock:
         _cache.clear()
     # directory_api still has a short compatibility cache around the expensive
@@ -114,9 +131,9 @@ def invalidate_contact_view_cache() -> None:
 
 
 def _load_fresh_analytics() -> dict[str, Any]:
-    # An outer cache miss can be caused by a new import generation. Clear the
-    # old 30-second compatibility cache before recomputing so generation changes
-    # become visible immediately rather than after that legacy TTL expires.
+    # An outer cache miss can be caused by a new import/enrichment generation.
+    # Clear the old 30-second compatibility cache before recomputing so durable
+    # generation changes become visible immediately.
     analytics_source.invalidate_contact_directory_cache()
     return analytics_source.contact_directory_analytics()
 

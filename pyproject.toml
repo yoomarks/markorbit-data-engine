@@ -14,7 +14,9 @@ dependencies = [
   "psycopg[binary]==3.2.9",
   "clickhouse-connect==0.8.18",
   "pdfplumber==0.11.10",
-  "xlrd==2.0.2"
+  "xlrd==2.0.2",
+  "phonenumbers==9.0.37",
+  "pycountry==26.2.16"
 ]
 
 [project.optional-dependencies]
