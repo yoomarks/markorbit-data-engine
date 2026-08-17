@@ -7,10 +7,10 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app.contact_ingest.directory_api import contact_directory_analytics
-from app.contact_ingest.directory_runtime import (
-    contact_directory_countries,
-    contact_directory_list,
+from app.contact_ingest.directory_cached import (
+    cached_contact_directory_analytics,
+    cached_contact_directory_countries,
+    cached_contact_directory_list,
 )
 from app.contact_ingest.task_queue import (
     apply_contact_task,
@@ -57,13 +57,13 @@ def admin_contact_summary():
 
 
 @router.get("/api/admin/contacts/directory/analytics")
-def admin_contact_directory_analytics():
-    return contact_directory_analytics()
+def admin_contact_directory_analytics(refresh: bool = False):
+    return cached_contact_directory_analytics(force_refresh=refresh)
 
 
 @router.get("/api/admin/contacts/directory/countries")
-def admin_contact_directory_countries():
-    return contact_directory_countries()
+def admin_contact_directory_countries(refresh: bool = False):
+    return cached_contact_directory_countries(force_refresh=refresh)
 
 
 @router.get("/api/admin/contacts/directory")
@@ -74,14 +74,16 @@ def admin_contact_directory(
     q: str = "",
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    refresh: bool = False,
 ):
-    return contact_directory_list(
+    return cached_contact_directory_list(
         country=country,
         segment=segment,
         channel=channel,
         query=q,
         limit=limit,
         offset=offset,
+        force_refresh=refresh,
     )
 
 
