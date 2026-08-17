@@ -26,6 +26,7 @@ def test_explicit_country_names_codes_and_business_aliases_are_supported() -> No
     assert _country_from_explicit_value("中国") == "CN"
     assert _country_from_explicit_value("香港") == "HK"
     assert _countries_in_text("Room 8, Shibuya-ku, Tokyo, Japan") == {"JP"}
+    assert _countries_in_text("Suite 8, New York, USA") == {"US"}
     assert _countries_in_text("深圳市南山区，中国") == {"CN"}
     assert _countries_in_text("中国香港九龙") == {"HK"}
 
@@ -155,18 +156,31 @@ def test_inference_schema_cli_and_training_preserve_safety_contracts() -> None:
     assert "ci.applied_at IS NOT NULL" in source
     assert "AND ci.entity_id IS NULL" in source
     assert "--apply" in source
-    assert "INFERRED_CONTACT_GEO_NOT_OFFICIAL_TRADEMARK_FACT" in source
+    assert "INFERRED_CONTACT_GEO_OVERLAY_NOT_OFFICIAL_TRADEMARK_FACT" in source
+    assert '"source_country_fields_mutated": False' in source
+    assert "UPDATE entity.entity" not in source
+    assert "UPDATE contact.person" not in source
     assert "CREATE TABLE IF NOT EXISTS contact.entity_country_inference" in migration
     assert "ix_contact_country_inference_applied" in migration
 
 
 def test_directory_fallback_uses_explicit_mention_country_not_jurisdiction() -> None:
-    source = (ROOT / "app" / "contact_ingest" / "directory_runtime.py").read_text(
+    runtime = (ROOT / "app" / "contact_ingest" / "directory_runtime.py").read_text(
         encoding="utf-8"
     )
-    evidence_sql = source.split("_PAGE_EVIDENCE_SQL", 1)[1].split(
+    evidence_sql = runtime.split("_PAGE_EVIDENCE_SQL", 1)[1].split(
         "def _channel_exists_sql", 1
     )[0]
     assert "DISTINCT m.country_code" in evidence_sql
     assert "max(m.country_code)" in evidence_sql
     assert "DISTINCT m.jurisdiction" not in evidence_sql
+    assert "active_ci.status = 'ACCEPTED'" in runtime
+    assert "active_ci.applied_at IS NOT NULL" in runtime
+
+    analytics = (ROOT / "app" / "contact_ingest" / "directory_api.py").read_text(
+        encoding="utf-8"
+    )
+    mention_cte = analytics.split("mention_stats AS (", 1)[1].split("source_stats AS (", 1)[0]
+    assert "DISTINCT country_code" in mention_cte
+    assert "DISTINCT jurisdiction" not in mention_cte
+    assert "SOURCE_ENTITY_THEN_SOURCE_MENTION_THEN_APPLIED_INFERENCE" in analytics
