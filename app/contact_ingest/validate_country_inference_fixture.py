@@ -8,6 +8,8 @@ from app.contact_ingest.country_inference import (
     build_reference_models,
     run_country_inference,
 )
+from app.contact_ingest.directory_api import contact_directory_analytics
+from app.contact_ingest.directory_runtime import contact_directory_countries
 from app.contact_ingest.migrations import ensure_contact_schema
 from app.db import postgres_conn
 
@@ -30,7 +32,14 @@ def _entity_key(name: str) -> str:
     return (name.encode("utf-8").hex() + "0" * 64)[:64]
 
 
-def _insert_entity(cur, key: str, name: str, *, country: str | None = None, city: str = "") -> None:
+def _insert_entity(
+    cur,
+    key: str,
+    name: str,
+    *,
+    country: str | None = None,
+    city: str = "",
+) -> None:
     cur.execute(
         """
         INSERT INTO entity.entity(
@@ -70,13 +79,19 @@ def _insert_raw(cur, key: str, row_no: int, raw_data: dict[str, str]) -> None:
 
 def _cleanup(cur) -> None:
     ids = list(ENTITY_IDS.values())
-    cur.execute("DELETE FROM contact.entity_country_inference WHERE entity_id = ANY(%s::uuid[])", (ids,))
+    cur.execute(
+        "DELETE FROM contact.entity_country_inference WHERE entity_id = ANY(%s::uuid[])",
+        (ids,),
+    )
     cur.execute("DELETE FROM contact.channel WHERE entity_id = ANY(%s::uuid[])", (ids,))
     cur.execute("DELETE FROM contact.raw_record WHERE entity_id = ANY(%s::uuid[])", (ids,))
     cur.execute("DELETE FROM entity.entity_identifier WHERE entity_id = ANY(%s::uuid[])", (ids,))
     cur.execute("DELETE FROM entity.entity_mention WHERE entity_id = ANY(%s::uuid[])", (ids,))
     cur.execute("DELETE FROM entity.entity WHERE entity_id = ANY(%s::uuid[])", (ids,))
-    cur.execute("DELETE FROM contact.country_inference_run WHERE rule_version = %s", (COUNTRY_INFERENCE_VERSION,))
+    cur.execute(
+        "DELETE FROM contact.country_inference_run WHERE rule_version = %s",
+        (COUNTRY_INFERENCE_VERSION,),
+    )
     cur.execute("DELETE FROM contact.source WHERE source_id = %s", (SOURCE_ID,))
 
 
@@ -125,7 +140,7 @@ def seed_fixture() -> None:
         conn.commit()
 
 
-def _countries() -> dict[str, str | None]:
+def _source_countries() -> dict[str, str | None]:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -139,26 +154,50 @@ def _countries() -> dict[str, str | None]:
             return {str(row["entity_id"]): row["country_code"] for row in cur.fetchall()}
 
 
+def _effective_countries() -> dict[str, str | None]:
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT e.entity_id::text,
+                       COALESCE(e.country_code, active_ci.country_code) AS country_code
+                FROM entity.entity AS e
+                LEFT JOIN contact.entity_country_inference AS active_ci
+                  ON active_ci.entity_id = e.entity_id
+                 AND active_ci.status = 'ACCEPTED'
+                 AND active_ci.applied_at IS NOT NULL
+                WHERE e.entity_id = ANY(%s::uuid[])
+                """,
+                (list(ENTITY_IDS.values()),),
+            )
+            return {str(row["entity_id"]): row["country_code"] for row in cur.fetchall()}
+
+
 def validate() -> dict[str, object]:
     seed_fixture()
-    before = _countries()
+    source_before = _source_countries()
 
     preview = run_country_inference(apply=False, batch_size=50)
-    preview_countries = _countries()
     assert preview["status"] == "SUCCESS"
     assert preview["apply"] is False
     assert preview["applied"] == 0
-    assert preview_countries == before
+    assert preview["unknown_after"] == preview["unknown_before"]
+    assert _source_countries() == source_before
+    assert _effective_countries() == source_before
 
     applied = run_country_inference(apply=True, batch_size=50)
-    countries = _countries()
+    source_after = _source_countries()
+    effective = _effective_countries()
     assert applied["status"] == "SUCCESS"
-    assert countries[str(ENTITY_IDS["explicit_gb"])] == "GB"
-    assert countries[str(ENTITY_IDS["phone_gb"])] == "GB"
-    assert countries[str(ENTITY_IDS["domain_au"])] == "AU"
-    assert countries[str(ENTITY_IDS["city_au"])] == "AU"
-    assert countries[str(ENTITY_IDS["conflict"])] is None
-    assert countries[str(ENTITY_IDS["known_ca"])] == "CA"
+    assert applied["source_country_fields_mutated"] is False
+    assert source_after == source_before
+    assert effective[str(ENTITY_IDS["explicit_gb"])] == "GB"
+    assert effective[str(ENTITY_IDS["phone_gb"])] == "GB"
+    assert effective[str(ENTITY_IDS["domain_au"])] == "AU"
+    assert effective[str(ENTITY_IDS["city_au"])] == "AU"
+    assert effective[str(ENTITY_IDS["conflict"])] is None
+    assert effective[str(ENTITY_IDS["known_ca"])] == "CA"
+    assert applied["unknown_after"] < applied["unknown_before"]
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -196,16 +235,34 @@ def validate() -> dict[str, object]:
             }
 
     models_after_apply = build_reference_models()
-    # The inferred Domain AU row must not become a second training observation.
+    # Activated inferred rows must never become new training observations.
     assert models_after_apply.domain_country["sharedfirm.com"] == ("AU", 1.0, 1)
-    # Likewise the inferred Sydney entity must not increase the 3 source-grounded seeds.
     assert models_after_apply.city_country["sydney"] == ("AU", 1.0, 3)
+
+    countries_view = {
+        item["country_code"]: item["entities"]
+        for item in contact_directory_countries()["countries"]
+    }
+    assert countries_view.get("") == 1
+    assert countries_view.get("GB") == 2
+    assert countries_view.get("CA") == 1
+
+    analytics = contact_directory_analytics()
+    unknown_bucket = next(
+        item for item in analytics["countries"] if item["country_code"] == ""
+    )
+    assert unknown_bucket["entities"] == 1
+    assert analytics["country_semantics"] == (
+        "SOURCE_ENTITY_THEN_SOURCE_MENTION_THEN_APPLIED_INFERENCE"
+    )
 
     return {
         "status": "PASS",
         "preview": preview,
         "applied": applied,
-        "countries": countries,
+        "source_countries": source_after,
+        "effective_countries": effective,
+        "directory_countries": countries_view,
         "domain_model_sharedfirm": models_after_apply.domain_country["sharedfirm.com"],
         "city_model_sydney": models_after_apply.city_country["sydney"],
     }
