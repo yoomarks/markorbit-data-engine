@@ -14,11 +14,9 @@ _analytics_cache_at = 0.0
 _analytics_cache_value: dict[str, Any] | None = None
 
 
-# Keep the common rollup deliberately narrow. The old implementation aggregated
-# every person's name and every channel value into arrays before it could count
-# or page entities. With a large Contacts corpus that made even the overview do
-# full-corpus array aggregation twice. Arrays are now hydrated only for the
-# requested page below.
+# Keep the common rollup deliberately narrow. Arrays are hydrated only for a
+# requested page. Country precedence is source entity -> explicit source mention
+# -> activated inference. Trademark-office jurisdiction is never a country signal.
 _CONTACT_ROLLUP_CTE = r"""
 WITH person_owner AS (
     SELECT DISTINCT ON (person_id)
@@ -51,10 +49,10 @@ mention_stats AS (
         count(*) FILTER (WHERE role IN ('OWNER', 'CO_OWNER', 'APPLICANT')) AS applicant_mentions,
         count(*) FILTER (WHERE role IN ('AGENT', 'ATTORNEY', 'CORRESPONDENT')) AS agent_mentions,
         CASE
-            WHEN count(DISTINCT jurisdiction)
-                 FILTER (WHERE jurisdiction ~ '^[A-Z]{2}$') = 1
-            THEN max(jurisdiction)
-                 FILTER (WHERE jurisdiction ~ '^[A-Z]{2}$')
+            WHEN count(DISTINCT country_code)
+                 FILTER (WHERE country_code ~ '^[A-Z]{2}$') = 1
+            THEN max(country_code)
+                 FILTER (WHERE country_code ~ '^[A-Z]{2}$')
             ELSE NULL
         END AS single_mention_country
     FROM entity.entity_mention
@@ -88,7 +86,9 @@ relation_stats AS (
 channel_stats AS (
     SELECT
         entity_id,
-        count(*) FILTER (WHERE channel_type IN ('PHONE', 'MOBILE')) AS phone_count,
+        count(*) FILTER (
+            WHERE channel_type IN ('PHONE', 'MOBILE', 'PHONE_UNKNOWN', 'LANDLINE')
+        ) AS phone_count,
         count(*) FILTER (WHERE channel_type = 'EMAIL') AS email_count,
         count(*) FILTER (WHERE channel_type = 'WEBSITE') AS website_count,
         count(*) FILTER (WHERE channel_type = 'WHATSAPP') AS whatsapp_count
@@ -100,7 +100,23 @@ rollup AS (
         e.entity_id,
         e.canonical_name AS entity_name,
         e.entity_type,
-        COALESCE(NULLIF(e.country_code, ''), ms.single_mention_country) AS country_code,
+        COALESCE(
+            NULLIF(e.country_code, ''),
+            ms.single_mention_country,
+            active_ci.country_code
+        ) AS country_code,
+        CASE
+            WHEN NULLIF(e.country_code, '') IS NOT NULL THEN 'SOURCE_ENTITY'
+            WHEN ms.single_mention_country IS NOT NULL THEN 'SOURCE_MENTION'
+            WHEN active_ci.country_code IS NOT NULL THEN 'INFERRED'
+            ELSE ''
+        END AS country_source,
+        CASE
+            WHEN NULLIF(e.country_code, '') IS NULL
+             AND ms.single_mention_country IS NULL
+            THEN COALESCE(active_ci.confidence, 0)
+            ELSE 0
+        END AS inferred_country_confidence,
         e.region_code,
         e.city,
         COALESCE(rs.person_count, 0) AS person_count,
@@ -126,6 +142,10 @@ rollup AS (
     LEFT JOIN source_stats AS ss ON ss.entity_id = e.entity_id
     LEFT JOIN relation_stats AS rs ON rs.entity_id = e.entity_id
     LEFT JOIN channel_stats AS ch ON ch.entity_id = e.entity_id
+    LEFT JOIN contact.entity_country_inference AS active_ci
+      ON active_ci.entity_id = e.entity_id
+     AND active_ci.status = 'ACCEPTED'
+     AND active_ci.applied_at IS NOT NULL
 )
 """
 
@@ -172,7 +192,9 @@ channels AS (
     SELECT
         entity_id,
         array_agg(DISTINCT channel_value ORDER BY channel_value)
-            FILTER (WHERE channel_type IN ('PHONE', 'MOBILE')) AS phones,
+            FILTER (
+                WHERE channel_type IN ('PHONE', 'MOBILE', 'PHONE_UNKNOWN', 'LANDLINE')
+            ) AS phones,
         array_agg(DISTINCT channel_value ORDER BY channel_value)
             FILTER (WHERE channel_type = 'EMAIL') AS emails,
         array_agg(DISTINCT channel_value ORDER BY channel_value)
@@ -293,6 +315,7 @@ ORDER BY GROUPING(country_code) DESC, entities DESC, country_code NULLS LAST
     result = {
         "totals": total,
         "countries": countries,
+        "country_semantics": "SOURCE_ENTITY_THEN_SOURCE_MENTION_THEN_APPLIED_INFERENCE",
         "classification": {
             "agent": "代理角色商标记录、来源清单标注 AGENT、AGENT_CONTACT_LIST 来源或 ATTORNEY/AGENT/CORRESPONDENT 关系",
             "direct_client": "OWNER/CO_OWNER/APPLICANT 商标记录、来源清单标注 DIRECT 或 QCC_COMPANY_EXPORT 来源",
@@ -313,7 +336,7 @@ def contact_directory_list(
     limit: int = 100,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Page lightweight entity rows first, then hydrate details only for that page."""
+    """Legacy rollup paginator retained for callers outside the fast runtime route."""
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -372,6 +395,8 @@ SELECT
     entity_name,
     entity_type,
     COALESCE(country_code, '') AS country_code,
+    country_source,
+    inferred_country_confidence,
     region_code,
     city,
     CASE
@@ -424,6 +449,9 @@ LIMIT %s OFFSET %s
             "agent_mentions",
         ):
             row[key] = int(row.get(key) or 0)
+        row["inferred_country_confidence"] = float(
+            row.get("inferred_country_confidence") or 0
+        )
         for key in (
             "people",
             "phones",
