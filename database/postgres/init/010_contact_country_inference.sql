@@ -38,3 +38,7 @@ ON contact.entity_country_inference(status, confidence DESC);
 CREATE INDEX IF NOT EXISTS ix_contact_country_inference_country
 ON contact.entity_country_inference(country_code, confidence DESC)
 WHERE country_code IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ix_contact_country_inference_applied
+ON contact.entity_country_inference(applied_at DESC)
+WHERE applied_at IS NOT NULL;
