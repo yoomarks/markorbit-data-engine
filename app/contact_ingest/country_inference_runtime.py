@@ -3,13 +3,15 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 import json
 import re
+import sys
 import time
+import uuid
 
 from app.contact_ingest import country_inference as engine
 from app.db import postgres_conn
 
 
-CONTACT_COUNTRY_RUNTIME_MODEL_VERSION = "CONTACT_COUNTRY_RUNTIME_MODEL_V2"
+CONTACT_COUNTRY_RUNTIME_MODEL_VERSION = "CONTACT_COUNTRY_RUNTIME_MODEL_V3"
 
 # The original V1 city learner included every entity.entity_mention row. That is
 # acceptable for small fixtures but unsafe on a real trademark corpus: millions of
@@ -41,6 +43,8 @@ WHERE e.country_code IS NOT NULL
   AND ci.entity_id IS NULL
 GROUP BY e.city, e.country_code
 """
+
+_ORIGINAL_UNKNOWN_CONTACT_COUNT = engine._unknown_contact_count
 
 
 def _emit(event: str, **payload: object) -> None:
@@ -122,15 +126,77 @@ def build_runtime_reference_models() -> engine.ReferenceModels:
     )
 
 
+def _unknown_contact_count_with_commit(cur) -> int:
+    """End the count transaction while retaining the session advisory lock.
+
+    V1 intentionally holds a session-level advisory lock for the whole inference
+    run. PostgreSQL session advisory locks survive COMMIT, so there is no reason to
+    keep the transaction opened by the initial unknown-count SELECT alive while
+    reference models and tens of thousands of contacts are processed on separate
+    connections. Keeping it open trips the normal 60-second
+    idle_in_transaction_session_timeout on real runs and can turn an otherwise
+    successful 60+ minute preview into a fatal error during final unlock.
+    """
+    result = _ORIGINAL_UNKNOWN_CONTACT_COUNT(cur)
+    cur.connection.commit()
+    return result
+
+
+def _country_inference_run(run_id: str) -> dict[str, object] | None:
+    """Read one persisted inference run without re-evaluating contacts."""
+    normalized_run_id = str(uuid.UUID(run_id))
+    engine.ensure_country_inference_schema()
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT run_id::text, rule_version, status, apply_mode,
+                       min_confidence, min_margin, batch_size, metrics,
+                       error_message, started_at, finished_at
+                FROM contact.country_inference_run
+                WHERE run_id = %s::uuid
+                """,
+                (normalized_run_id,),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def _show_run(run_id: str) -> int:
+    try:
+        row = _country_inference_run(run_id)
+    except (ValueError, AttributeError) as exc:
+        _emit("CONTACT_COUNTRY_INFERENCE_RUN_LOOKUP_ERROR", run_id=run_id, error=str(exc))
+        return 2
+    if row is None:
+        _emit("CONTACT_COUNTRY_INFERENCE_RUN_NOT_FOUND", run_id=run_id)
+        return 1
+    _emit("CONTACT_COUNTRY_INFERENCE_RUN", run=row)
+    return 0
+
+
 def main() -> int:
-    # V1 remains the scoring/audit/apply authority. Only its unbounded reference
-    # model builder is replaced at the operator boundary.
+    if len(sys.argv) >= 2 and sys.argv[1] == "--show-run":
+        if len(sys.argv) != 3:
+            _emit(
+                "CONTACT_COUNTRY_INFERENCE_RUN_LOOKUP_ERROR",
+                error="usage: country_inference_runtime --show-run <run-id>",
+            )
+            return 2
+        return _show_run(sys.argv[2])
+
+    # V1 remains the scoring/audit/apply authority. Only the unbounded reference
+    # model builder and the long-lived count transaction are replaced at the
+    # operator boundary. The session-level advisory lock remains held across the
+    # explicit COMMIT performed by _unknown_contact_count_with_commit.
     engine.build_reference_models = build_runtime_reference_models
+    engine._unknown_contact_count = _unknown_contact_count_with_commit
     _emit(
         "CONTACT_COUNTRY_RUNTIME_START",
         inference_rule_version=engine.COUNTRY_INFERENCE_VERSION,
         city_training_scope="CONTACT_ENTITIES_ONLY",
         global_entity_mention_training_scan=False,
+        long_run_transaction_policy="COMMIT_COUNT_TRANSACTION_KEEP_SESSION_LOCK",
     )
     return engine.main()
 
