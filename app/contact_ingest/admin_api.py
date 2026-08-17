@@ -12,6 +12,7 @@ from app.contact_ingest.directory_cached import (
     cached_contact_directory_countries,
     cached_contact_directory_list,
 )
+from app.contact_ingest.directory_indexes import ensure_contact_directory_indexes
 from app.contact_ingest.task_queue import (
     apply_contact_task,
     contact_task_summary,
@@ -40,6 +41,13 @@ def _apply_batch_in_background(task_ids: list[str]) -> None:
 
 @router.on_event("startup")
 def start_contact_discovery() -> None:
+    try:
+        ensure_contact_directory_indexes()
+    except Exception:
+        # Directory caching remains available even if an additive read index cannot
+        # be installed on an older/operator-managed PostgreSQL volume. Keep API
+        # startup available and make the index issue visible in logs.
+        _logger.exception("Unable to ensure contact directory read indexes")
     start_contact_task_scanner()
 
 
