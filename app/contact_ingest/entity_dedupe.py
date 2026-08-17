@@ -180,24 +180,91 @@ def _load_snapshots(cur, *, country_code: str = "") -> list[EntitySnapshot]:
         )
         params.append(country_code[:2])
 
+    # The trademark mention corpus can be much larger than Contacts. Do not run
+    # one correlated mention/raw/identifier/channel aggregate per entity. First
+    # materialize the small contact-owned entity universe and country-filtered
+    # eligible set, then aggregate each evidence family once and join it back.
+    # This preserves V1 merge semantics while keeping scan count bounded by
+    # evidence family rather than by number of contact entities.
     cur.execute(
         f"""
-        WITH contact_entities AS (
+        WITH contact_entity_ids AS MATERIALIZED (
             SELECT entity_id FROM contact.raw_record WHERE entity_id IS NOT NULL
             UNION
             SELECT entity_id FROM contact.entity_person_relation
             UNION
             SELECT entity_id FROM contact.channel WHERE entity_id IS NOT NULL
         ),
+        eligible_entities AS MATERIALIZED (
+            SELECT
+                e.entity_id,
+                e.entity_type,
+                e.canonical_name,
+                e.normalized_name,
+                e.normalized_address,
+                COALESCE(e.country_code, '') AS source_country_code,
+                COALESCE(active_ci.country_code, '') AS inferred_country_code,
+                COALESCE(active_ci.confidence, 0) AS inferred_country_confidence,
+                COALESCE(e.source_primary, '') AS source_primary,
+                e.status,
+                COALESCE(e.confidence_score, 0) AS confidence_score,
+                e.first_seen_at
+            FROM contact_entity_ids AS ce
+            JOIN entity.entity AS e ON e.entity_id = ce.entity_id
+            LEFT JOIN contact.entity_country_inference AS active_ci
+              ON active_ci.entity_id = e.entity_id
+             AND active_ci.status = 'ACCEPTED'
+             AND active_ci.applied_at IS NOT NULL
+            WHERE e.normalized_name <> ''
+              AND e.status <> 'MERGED'
+              {country_clause}
+        ),
+        mention_stats AS (
+            SELECT m.entity_id, count(*) AS mention_count
+            FROM entity.entity_mention AS m
+            JOIN eligible_entities AS e ON e.entity_id = m.entity_id
+            GROUP BY m.entity_id
+        ),
+        raw_stats AS (
+            SELECT rr.entity_id, count(*) AS raw_record_count
+            FROM contact.raw_record AS rr
+            JOIN eligible_entities AS e ON e.entity_id = rr.entity_id
+            GROUP BY rr.entity_id
+        ),
+        identifier_stats AS (
+            SELECT
+                i.entity_id,
+                jsonb_agg(
+                    jsonb_build_object(
+                        'identifier_type', i.identifier_type,
+                        'normalized_value', i.normalized_value,
+                        'country_code', COALESCE(i.country_code, '')
+                    )
+                    ORDER BY i.identifier_type, i.normalized_value
+                ) AS identifiers
+            FROM entity.entity_identifier AS i
+            JOIN eligible_entities AS e ON e.entity_id = i.entity_id
+            GROUP BY i.entity_id
+        ),
         entity_channels AS (
             SELECT c.entity_id, c.channel_type, c.normalized_value
             FROM contact.channel AS c
+            JOIN eligible_entities AS e ON e.entity_id = c.entity_id
             WHERE c.entity_id IS NOT NULL AND c.normalized_value <> ''
             UNION
             SELECT r.entity_id, c.channel_type, c.normalized_value
-            FROM contact.channel AS c
-            JOIN contact.entity_person_relation AS r ON r.person_id = c.person_id
+            FROM contact.entity_person_relation AS r
+            JOIN eligible_entities AS e ON e.entity_id = r.entity_id
+            JOIN contact.channel AS c ON c.person_id = r.person_id
             WHERE c.person_id IS NOT NULL AND c.normalized_value <> ''
+        ),
+        channel_stats AS (
+            SELECT
+                ec.entity_id,
+                array_agg(DISTINCT ec.channel_type || '|' || ec.normalized_value)
+                    AS channels
+            FROM entity_channels AS ec
+            GROUP BY ec.entity_id
         )
         SELECT
             e.entity_id,
@@ -205,43 +272,22 @@ def _load_snapshots(cur, *, country_code: str = "") -> list[EntitySnapshot]:
             e.canonical_name,
             e.normalized_name,
             e.normalized_address,
-            COALESCE(e.country_code, '') AS source_country_code,
-            COALESCE(active_ci.country_code, '') AS inferred_country_code,
-            COALESCE(active_ci.confidence, 0) AS inferred_country_confidence,
-            COALESCE(e.source_primary, '') AS source_primary,
+            e.source_country_code,
+            e.inferred_country_code,
+            e.inferred_country_confidence,
+            e.source_primary,
             e.status,
-            COALESCE(e.confidence_score, 0) AS confidence_score,
+            e.confidence_score,
             e.first_seen_at,
-            (SELECT count(*) FROM entity.entity_mention AS m
-             WHERE m.entity_id = e.entity_id) AS mention_count,
-            (SELECT count(*) FROM contact.raw_record AS rr
-             WHERE rr.entity_id = e.entity_id) AS raw_record_count,
-            COALESCE((
-                SELECT jsonb_agg(
-                    jsonb_build_object(
-                        'identifier_type', i.identifier_type,
-                        'normalized_value', i.normalized_value,
-                        'country_code', COALESCE(i.country_code, '')
-                    )
-                    ORDER BY i.identifier_type, i.normalized_value
-                )
-                FROM entity.entity_identifier AS i
-                WHERE i.entity_id = e.entity_id
-            ), '[]'::jsonb) AS identifiers,
-            COALESCE((
-                SELECT array_agg(DISTINCT ec.channel_type || '|' || ec.normalized_value)
-                FROM entity_channels AS ec
-                WHERE ec.entity_id = e.entity_id
-            ), ARRAY[]::text[]) AS channels
-        FROM contact_entities AS ce
-        JOIN entity.entity AS e ON e.entity_id = ce.entity_id
-        LEFT JOIN contact.entity_country_inference AS active_ci
-          ON active_ci.entity_id = e.entity_id
-         AND active_ci.status = 'ACCEPTED'
-         AND active_ci.applied_at IS NOT NULL
-        WHERE e.normalized_name <> ''
-          AND e.status <> 'MERGED'
-          {country_clause}
+            COALESCE(ms.mention_count, 0) AS mention_count,
+            COALESCE(rs.raw_record_count, 0) AS raw_record_count,
+            COALESCE(ids.identifiers, '[]'::jsonb) AS identifiers,
+            COALESCE(cs.channels, ARRAY[]::text[]) AS channels
+        FROM eligible_entities AS e
+        LEFT JOIN mention_stats AS ms ON ms.entity_id = e.entity_id
+        LEFT JOIN raw_stats AS rs ON rs.entity_id = e.entity_id
+        LEFT JOIN identifier_stats AS ids ON ids.entity_id = e.entity_id
+        LEFT JOIN channel_stats AS cs ON cs.entity_id = e.entity_id
         ORDER BY e.normalized_name, e.entity_id
         """,
         params,
