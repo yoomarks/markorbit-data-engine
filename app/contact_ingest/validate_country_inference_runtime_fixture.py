@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 
+from psycopg.pq import TransactionStatus
+
+from app.contact_ingest import country_inference as engine
 from app.contact_ingest.country_inference_runtime import (
     CONTACT_COUNTRY_RUNTIME_MODEL_VERSION,
+    _unknown_contact_count_with_commit,
     build_contact_scoped_city_model,
 )
 from app.contact_ingest.validate_country_inference_fixture import ENTITY_IDS, seed_fixture
@@ -36,12 +40,39 @@ def validate() -> dict[str, object]:
     model = build_contact_scoped_city_model()
     assert model["sydney"] == ("AU", 1.0, 3)
 
+    # Reproduce the real operator lifecycle: a session advisory lock is acquired,
+    # the initial unknown-contact SELECT opens a transaction, and the runtime
+    # wrapper must end that transaction without releasing the session lock. This
+    # prevents idle_in_transaction_session_timeout from killing a 60+ minute run.
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_lock(hashtext(%s))",
+                (engine.COUNTRY_INFERENCE_LOCK,),
+            )
+        conn.commit()
+
+        with conn.cursor() as cur:
+            unknown_count = _unknown_contact_count_with_commit(cur)
+        assert unknown_count >= 1
+        assert conn.info.transaction_status == TransactionStatus.IDLE
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_unlock(hashtext(%s)) AS unlocked",
+                (engine.COUNTRY_INFERENCE_LOCK,),
+            )
+            assert bool(cur.fetchone()["unlocked"]) is True
+        conn.commit()
+
     return {
         "status": "PASS",
         "runtime_model_version": CONTACT_COUNTRY_RUNTIME_MODEL_VERSION,
         "sydney": model["sydney"],
         "city_keys": len(model),
         "global_entity_mention_training_scan": False,
+        "count_transaction_idle_after_commit": True,
+        "session_advisory_lock_survived_commit": True,
     }
 
 
