@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from app.contact_ingest import directory_api as analytics_source
 from app.contact_ingest import directory_runtime as runtime_source
+from app.db import postgres_conn
 
 
 CONTACT_OVERVIEW_CACHE_TTL_SECONDS = 600.0
@@ -20,6 +21,21 @@ _cache_lock = threading.Lock()
 _cache: OrderedDict[tuple[Any, ...], tuple[float, str, dict[str, Any]]] = OrderedDict()
 
 
+def _contact_generation() -> str:
+    """Return a cheap cross-process mutation fingerprint for successful imports."""
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(max(finished_at)::text, '') AS generation
+                FROM contact.import_run
+                WHERE status = 'SUCCESS'
+                """
+            )
+            row = cur.fetchone()
+    return str((row or {}).get("generation") or "")
+
+
 def _decorate(
     value: dict[str, Any],
     *,
@@ -27,6 +43,7 @@ def _decorate(
     age_seconds: float,
     ttl_seconds: float,
     cached_at: str,
+    generation: str,
 ) -> dict[str, Any]:
     result = deepcopy(value)
     result["_cache"] = {
@@ -34,7 +51,8 @@ def _decorate(
         "age_seconds": round(max(0.0, age_seconds), 3),
         "ttl_seconds": int(ttl_seconds),
         "cached_at": cached_at,
-        "invalidation": "CONTACT_IMPORT_SUCCESS_OR_FORCE_REFRESH_OR_TTL",
+        "generation": generation,
+        "invalidation": "CONTACT_IMPORT_GENERATION_OR_FORCE_REFRESH_OR_TTL",
     }
     return result
 
@@ -46,30 +64,33 @@ def _get_or_load(
     loader: Callable[[], dict[str, Any]],
     force_refresh: bool = False,
 ) -> dict[str, Any]:
+    generation = _contact_generation()
+    versioned_key = (*key, generation)
     now = time.monotonic()
     if not force_refresh:
         with _cache_lock:
-            cached = _cache.get(key)
+            cached = _cache.get(versioned_key)
             if cached is not None:
                 stored_at, cached_at, value = cached
                 age = now - stored_at
                 if age < ttl_seconds:
-                    _cache.move_to_end(key)
+                    _cache.move_to_end(versioned_key)
                     return _decorate(
                         value,
                         hit=True,
                         age_seconds=age,
                         ttl_seconds=ttl_seconds,
                         cached_at=cached_at,
+                        generation=generation,
                     )
-                _cache.pop(key, None)
+                _cache.pop(versioned_key, None)
 
     value = loader()
     cached_at = datetime.now(timezone.utc).isoformat()
     stored_at = time.monotonic()
     with _cache_lock:
-        _cache[key] = (stored_at, cached_at, deepcopy(value))
-        _cache.move_to_end(key)
+        _cache[versioned_key] = (stored_at, cached_at, deepcopy(value))
+        _cache.move_to_end(versioned_key)
         while len(_cache) > CONTACT_DIRECTORY_CACHE_MAX_ENTRIES:
             _cache.popitem(last=False)
     return _decorate(
@@ -78,11 +99,12 @@ def _get_or_load(
         age_seconds=0.0,
         ttl_seconds=ttl_seconds,
         cached_at=cached_at,
+        generation=generation,
     )
 
 
 def invalidate_contact_view_cache() -> None:
-    """Invalidate all read-model caches after a successful contact mutation."""
+    """Clear local read-model caches; import generations also invalidate cross-process."""
     with _cache_lock:
         _cache.clear()
     # directory_api still has a short compatibility cache around the expensive
