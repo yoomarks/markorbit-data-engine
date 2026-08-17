@@ -7,6 +7,7 @@ import threading
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from app.contact_ingest.country_inference import ensure_country_inference_schema
 from app.contact_ingest.directory_cached import (
     cached_contact_directory_analytics,
     cached_contact_directory_countries,
@@ -42,12 +43,14 @@ def _apply_batch_in_background(task_ids: list[str]) -> None:
 @router.on_event("startup")
 def start_contact_discovery() -> None:
     try:
+        # Existing PostgreSQL volumes do not replay docker init scripts. Ensure the
+        # additive country-overlay table exists before Contacts read models join it.
+        ensure_country_inference_schema()
         ensure_contact_directory_indexes()
     except Exception:
-        # Directory caching remains available even if an additive read index cannot
-        # be installed on an older/operator-managed PostgreSQL volume. Keep API
-        # startup available and make the index issue visible in logs.
-        _logger.exception("Unable to ensure contact directory read indexes")
+        # Keep API startup available if an operator-managed volume temporarily
+        # blocks an additive schema/index upgrade; the error remains visible in logs.
+        _logger.exception("Unable to ensure contact country/read-model schema")
     start_contact_task_scanner()
 
 
