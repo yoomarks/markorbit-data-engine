@@ -21,7 +21,13 @@ WHERE status = 'SUCCESS';
 
 def ensure_contact_directory_indexes() -> None:
     """Install additive indexes used only by read-heavy Contacts admin views."""
+    from app.contact_ingest.migrations import ensure_contact_schema
+
     with postgres_conn() as conn:
+        # Existing volumes may predate the contact tables. Reuse the additive
+        # schema ensure before attempting read-only indexes; no CN/US tables are
+        # touched by this path.
+        ensure_contact_schema(conn)
         with conn.cursor() as cur:
             cur.execute(_INDEX_SQL)
         conn.commit()
