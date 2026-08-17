@@ -28,7 +28,7 @@ def test_snapshot_loader_aggregates_each_evidence_family_once() -> None:
 def test_snapshot_loader_filters_country_before_large_evidence_joins() -> None:
     source = inspect.getsource(entity_dedupe._load_snapshots)
     eligible_pos = source.index("eligible_entities AS MATERIALIZED")
-    country_pos = source.index("country_clause")
+    country_pos = source.index("{country_clause}")
     mention_pos = source.index("mention_stats AS")
 
     assert eligible_pos < country_pos < mention_pos
