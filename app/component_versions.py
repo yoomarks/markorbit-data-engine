@@ -13,6 +13,7 @@ from app.storage_headroom import HEADROOM_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
+from app.us_mark_image import SOURCE_VERSION as US_MARK_IMAGE_SOURCE_VERSION
 from app.us_ttab import TTAB_SCHEMA_VERSION
 from app.us_tsdr.adapter import TSDR_SOURCE_VERSION
 from app.us_tsdr.policy import POLICY_VERSION as TSDR_ACQUISITION_POLICY_VERSION
@@ -51,6 +52,9 @@ def component_versions() -> dict[str, Any]:
             "us_tsdr": {
                 "source_version": TSDR_SOURCE_VERSION,
                 "acquisition_policy_version": TSDR_ACQUISITION_POLICY_VERSION,
+            },
+            "us_mark_image": {
+                "source_version": US_MARK_IMAGE_SOURCE_VERSION,
             },
             "us_alert_engine": {
                 "version": ALERT_ENGINE_VERSION,
