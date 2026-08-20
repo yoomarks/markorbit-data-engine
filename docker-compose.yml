@@ -48,10 +48,14 @@ services:
       POSTGRES_HOST: postgres
       CLICKHOUSE_HOST: clickhouse
       RAW_DATA_ROOT: /data/raw
+      VISUAL_RAW_ROOT: /data/visual-raw
+      VISUAL_PROCESSED_ROOT: /data/visual-processed
     ports:
       - "${API_PORT:-8080}:8080"
     volumes:
       - "${RAW_DATA_PATH}:/data/raw"
+      - "${VISUAL_RAW_PATH:-./raw_data}:/data/visual-raw"
+      - "${VISUAL_PROCESSED_PATH:-./raw_data/visual_processed}:/data/visual-processed"
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,8 +73,12 @@ services:
       POSTGRES_HOST: postgres
       CLICKHOUSE_HOST: clickhouse
       RAW_DATA_ROOT: /data/raw
+      VISUAL_RAW_ROOT: /data/visual-raw
+      VISUAL_PROCESSED_ROOT: /data/visual-processed
     volumes:
       - "${RAW_DATA_PATH}:/data/raw"
+      - "${VISUAL_RAW_PATH:-./raw_data}:/data/visual-raw"
+      - "${VISUAL_PROCESSED_PATH:-./raw_data/visual_processed}:/data/visual-processed"
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,8 +97,12 @@ services:
       POSTGRES_HOST: postgres
       CLICKHOUSE_HOST: clickhouse
       RAW_DATA_ROOT: /data/raw
+      VISUAL_RAW_ROOT: /data/visual-raw
+      VISUAL_PROCESSED_ROOT: /data/visual-processed
     volumes:
       - "${RAW_DATA_PATH}:/data/raw"
+      - "${VISUAL_RAW_PATH:-./raw_data}:/data/visual-raw"
+      - "${VISUAL_PROCESSED_PATH:-./raw_data/visual_processed}:/data/visual-processed"
     depends_on:
       postgres:
         condition: service_healthy
