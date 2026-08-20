@@ -77,6 +77,26 @@ services:
       clickhouse:
         condition: service_healthy
 
+  mark-image-worker:
+    profiles: ["mark-image"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.us_mark_image.worker"]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      CLICKHOUSE_HOST: clickhouse
+      RAW_DATA_ROOT: /data/raw
+    volumes:
+      - "${RAW_DATA_PATH}:/data/raw"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   clickhouse_data:

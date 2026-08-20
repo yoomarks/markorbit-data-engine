@@ -1,4 +1,4 @@
-name: US TSDR Weekly Acquisition
+name: US Mark Image
 
 on:
   pull_request:
@@ -25,15 +25,10 @@ jobs:
       - name: Start PostgreSQL
         run: docker compose up -d --wait postgres
 
-      - name: Run weekly acquisition export/result fixture
+      - name: Run mark-image storage and dedupe fixture
         run: >-
           docker compose run --rm --no-deps worker
-          python -m app.us_tsdr.validate_weekly_acquisition_fixture
-
-      - name: Run collector TXT/CSV observation fixture
-        run: >-
-          docker compose run --rm --no-deps worker
-          python -m app.us_tsdr.validate_collector_contract_fixture
+          python -m app.us_mark_image.validate_fixture
 
       - name: Tear down fixture database
         if: always()

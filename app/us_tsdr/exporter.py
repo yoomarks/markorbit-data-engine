@@ -6,7 +6,12 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.db import postgres_conn
+from app.us_tsdr.collector_contract import status_view_url
 from app.us_tsdr.migrations import ensure_tsdr_schema
+
+
+COLLECTOR_TASK_FILE = "tasks.txt"
+INTERNAL_TASK_MAP_FILE = "task-map.jsonl"
 
 
 def _default_outgoing_root() -> Path:
@@ -14,7 +19,13 @@ def _default_outgoing_root() -> Path:
 
 
 def export_batch(batch_key: str, *, outgoing_root: Path | None = None) -> dict[str, object]:
-    """Export one planned weekly batch as a streaming JSONL task package."""
+    """Export one planned weekly batch for the external TSDR collector.
+
+    The collector-facing contract is deliberately minimal: ``tasks.txt`` contains
+    exactly one TSDR status URL per line and no JSON metadata. Data Engine keeps a
+    separate internal task map and the durable PostgreSQL task ledger for audit and
+    result reconciliation. The collector never has to understand scheduling logic.
+    """
     ensure_tsdr_schema()
     outgoing_root = outgoing_root or _default_outgoing_root()
 
@@ -52,13 +63,22 @@ def export_batch(batch_key: str, *, outgoing_root: Path | None = None) -> dict[s
 
             batch_dir = outgoing_root / batch_key
             batch_dir.mkdir(parents=True, exist_ok=True)
-            task_path = batch_dir / "tasks.jsonl"
+            task_path = batch_dir / COLLECTOR_TASK_FILE
+            map_path = batch_dir / INTERNAL_TASK_MAP_FILE
+
             hasher = hashlib.sha256()
-            with task_path.open("wb") as handle:
-                for task in tasks:
+            with task_path.open("wb") as task_handle, map_path.open(
+                "w", encoding="utf-8", newline="\n"
+            ) as map_handle:
+                for line_number, task in enumerate(tasks, start=1):
+                    url_line = f"{status_view_url(task['serial_number'])}\n".encode("utf-8")
+                    hasher.update(url_line)
+                    task_handle.write(url_line)
                     payload = {
+                        "line_number": line_number,
                         "task_id": str(task["task_id"]),
                         "serial_number": task["serial_number"],
+                        "status_url": status_view_url(task["serial_number"]),
                         "task_type": task["task_type"],
                         "priority_score": int(task["priority_score"]),
                         "reason_codes": list(task["reason_codes"] or []),
@@ -68,15 +88,15 @@ def export_batch(batch_key: str, *, outgoing_root: Path | None = None) -> dict[s
                         "source_attorney_fingerprint": task["source_attorney_fingerprint"],
                         "source_attorney_present": bool(task["source_attorney_present"]),
                     }
-                    line = (
-                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
-                    ).encode("utf-8")
-                    hasher.update(line)
-                    handle.write(line)
+                    map_handle.write(
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                        + "\n"
+                    )
             digest = hasher.hexdigest()
 
             manifest = {
-                "contract": "US_TSDR_WEEKLY_BATCH_V1",
+                "contract": "US_TSDR_WEEKLY_BATCH_V2",
+                "collector_contract": "US_TSDR_COLLECTOR_TXT_V1",
                 "batch_id": str(batch["batch_id"]),
                 "batch_key": batch["batch_key"],
                 "policy_version": batch["policy_version"],
@@ -91,8 +111,9 @@ def export_batch(batch_key: str, *, outgoing_root: Path | None = None) -> dict[s
                     int(batch["source_rank_to"]),
                     batch["source_serial_to"],
                 ],
-                "task_file": "tasks.jsonl",
-                "task_file_sha256": digest,
+                "collector_task_file": COLLECTOR_TASK_FILE,
+                "collector_task_file_sha256": digest,
+                "internal_task_map_file": INTERNAL_TASK_MAP_FILE,
                 "planned_at": batch["planned_at"].isoformat(),
                 "metrics": batch["metrics"],
             }
@@ -127,6 +148,7 @@ def export_batch(batch_key: str, *, outgoing_root: Path | None = None) -> dict[s
         "directory": str(batch_dir),
         "manifest": str(manifest_path),
         "tasks": str(task_path),
+        "task_map": str(map_path),
         "tasks_sha256": digest,
         "status": "EXPORTED",
     }
