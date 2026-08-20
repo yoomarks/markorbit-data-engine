@@ -5,6 +5,7 @@ import logging
 import time
 
 from app.cn_qcc.operator import run_cycle
+from app.cn_qcc.preflight import production_preflight
 from app.config import get_settings
 
 
@@ -18,14 +19,32 @@ def main() -> None:
 
     while True:
         try:
-            result = run_cycle(
-                enabled=settings.cn_qcc_acquisition_enabled,
+            preflight = production_preflight(
                 capacity=settings.cn_qcc_capacity,
                 refresh_days=settings.cn_qcc_refresh_days,
+                cycle_interval_seconds=settings.cn_qcc_cycle_interval_seconds,
+                stale_batch_hours=settings.cn_qcc_stale_batch_hours,
                 outgoing_root=settings.resolved_cn_qcc_outgoing_root,
                 incoming_root=settings.resolved_cn_qcc_incoming_root,
             )
-            logger.info("CN_QCC_ACQUISITION_CYCLE %s", json.dumps(result, ensure_ascii=False, default=str))
+            if settings.cn_qcc_acquisition_enabled and not preflight.ready:
+                logger.error(
+                    "CN_QCC_ACQUISITION_BLOCKED_BY_PREFLIGHT %s",
+                    json.dumps(preflight.as_dict(), ensure_ascii=False, default=str),
+                )
+            else:
+                result = run_cycle(
+                    enabled=settings.cn_qcc_acquisition_enabled,
+                    capacity=settings.cn_qcc_capacity,
+                    refresh_days=settings.cn_qcc_refresh_days,
+                    outgoing_root=settings.resolved_cn_qcc_outgoing_root,
+                    incoming_root=settings.resolved_cn_qcc_incoming_root,
+                )
+                result["preflight"] = preflight.as_dict()
+                logger.info(
+                    "CN_QCC_ACQUISITION_CYCLE %s",
+                    json.dumps(result, ensure_ascii=False, default=str),
+                )
         except Exception:
             logger.exception("CN_QCC_ACQUISITION_CYCLE_FAILED")
         time.sleep(interval)
