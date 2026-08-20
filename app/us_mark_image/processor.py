@@ -104,7 +104,7 @@ def analyze_image(raw_bytes: bytes) -> ImageAnalysis:
 
 
 def _asset_root(root: Path | None = None) -> Path:
-    return (root or get_settings().raw_data_root).resolve()
+    return (root or get_settings().resolved_visual_raw_root).resolve()
 
 
 def store_original(
