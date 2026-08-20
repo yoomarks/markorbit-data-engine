@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     clickhouse_send_receive_timeout: int = 300
 
     raw_data_root: Path = Path("./raw_data")
+    # Visual assets can be detached from the database/runtime SSD. Keep these
+    # unset for the legacy layout; a large HDD can own raw official assets while
+    # an SSD owns canonical/search derivatives.
+    visual_raw_root: Path | None = None
+    visual_processed_root: Path | None = None
     cn_scan_interval_seconds: int = 300
     contact_scan_interval_seconds: int = 60
     us_download_enabled: bool = False
@@ -54,6 +59,14 @@ class Settings(BaseSettings):
     integration_api_keys: str = ""
 
     log_level: str = "INFO"
+
+    @property
+    def resolved_visual_raw_root(self) -> Path:
+        return self.visual_raw_root or self.raw_data_root
+
+    @property
+    def resolved_visual_processed_root(self) -> Path:
+        return self.visual_processed_root or (self.raw_data_root / "visual_processed")
 
     @property
     def postgres_dsn(self) -> str:
