@@ -4,6 +4,7 @@ from typing import Any
 
 from app.cn import CN_MODEL_VERSION
 from app.cn.final_checkpoint import CHECKPOINT_VERSION as CN_CHECKPOINT_VERSION
+from app.cn_mark_image import SOURCE_VERSION as CN_MARK_IMAGE_SOURCE_VERSION
 from app.contact_ingest import CONTACT_INGEST_VERSION
 from app.contact_ingest.task_migrations import CONTACT_TASK_CONTROL_VERSION
 from app.domain_lifecycle import LIFECYCLE_VERSION
@@ -39,6 +40,9 @@ def component_versions() -> dict[str, Any]:
             "cn": {
                 "model_version": CN_MODEL_VERSION,
                 "final_checkpoint_version": CN_CHECKPOINT_VERSION,
+            },
+            "cn_mark_image": {
+                "source_version": CN_MARK_IMAGE_SOURCE_VERSION,
             },
             "us_application": {
                 "schema_version": US_SCHEMA_VERSION,
