@@ -28,7 +28,14 @@ def _reset() -> None:
     ensure_mark_image_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE visual.trademark_asset, acquisition.us_mark_image_coverage, visual.asset")
+            # visual.asset is now a global registry referenced by CN visual
+            # derivative/version tables as well as US trademark links. CASCADE is
+            # intentional in this disposable fixture database so future global
+            # visual consumers do not make the legacy US reset brittle.
+            cur.execute(
+                "TRUNCATE visual.trademark_asset, "
+                "acquisition.us_mark_image_coverage, visual.asset CASCADE"
+            )
             cur.execute(
                 """
                 UPDATE acquisition.us_mark_image_planner_state
