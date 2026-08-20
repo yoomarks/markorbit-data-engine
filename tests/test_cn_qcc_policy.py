@@ -85,7 +85,9 @@ def test_backfill_page_keeps_cursor_until_bucket_is_exhausted() -> None:
         scan_limit=2,
         current_watermark="",
     )
-    assert [row["entity_id"] for row in selected] == rows[:2]
+    assert [row["entity_id"] for row in selected] == [
+        row["entity_id"] for row in rows[:2]
+    ]
     assert watermark == rows[1]["entity_id"]
     assert exhausted is False
 
@@ -94,7 +96,9 @@ def test_backfill_page_keeps_cursor_until_bucket_is_exhausted() -> None:
         scan_limit=2,
         current_watermark=watermark,
     )
-    assert [row["entity_id"] for row in tail] == rows[2:]
+    assert [row["entity_id"] for row in tail] == [
+        row["entity_id"] for row in rows[2:]
+    ]
     assert tail_watermark == rows[2]["entity_id"]
     assert tail_exhausted is True
 
