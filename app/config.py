@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     us_download_enabled: bool = False
     us_base_url: str = ""
 
+    # QCC enrichment is deliberately opt-in. The acquisition operator is a
+    # separate scheduler-friendly process so enabling it never changes the
+    # behavior of the long-running CN/contact workers.
+    cn_qcc_acquisition_enabled: bool = False
+    cn_qcc_capacity: int = 500
+    cn_qcc_refresh_days: int = 180
+    cn_qcc_cycle_interval_seconds: int = 3600
+    cn_qcc_outgoing_root: Path | None = None
+    cn_qcc_incoming_root: Path | None = None
+
     # USPTO mark-image acquisition is a separate, opt-in worker. Defaults keep
     # one official request slot every 2.5 seconds while local image analysis and
     # persistence execute between request starts.
@@ -67,6 +77,14 @@ class Settings(BaseSettings):
     @property
     def resolved_visual_processed_root(self) -> Path:
         return self.visual_processed_root or (self.raw_data_root / "visual_processed")
+
+    @property
+    def resolved_cn_qcc_outgoing_root(self) -> Path:
+        return self.cn_qcc_outgoing_root or (self.raw_data_root / "outgoing" / "cn_qcc")
+
+    @property
+    def resolved_cn_qcc_incoming_root(self) -> Path:
+        return self.cn_qcc_incoming_root or (self.raw_data_root / "incoming" / "cn_qcc")
 
     @property
     def postgres_dsn(self) -> str:
