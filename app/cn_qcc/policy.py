@@ -100,13 +100,15 @@ def score_candidate(candidate: QccCandidate, *, now: datetime | None = None) -> 
     status = (candidate.last_result_status or "NEVER_FETCHED").upper()
     reasons: list[str] = []
     score = 0
+    task_type = "INITIAL_FETCH" if status == "NEVER_FETCHED" else "REFRESH"
 
+    # Acquisition triggers are intentionally distinct from priority modifiers.
+    # Historical/backfill lane membership or trademark holdings may rank work,
+    # but they must never schedule a successful/not-found entity before its
+    # refresh contract is due.
     if status == "NEVER_FETCHED":
         score += 1_000_000
         reasons.append("NEVER_FETCHED")
-        task_type = "INITIAL_FETCH"
-    else:
-        task_type = "REFRESH"
 
     if (
         candidate.last_source_fingerprint
@@ -123,6 +125,9 @@ def score_candidate(candidate: QccCandidate, *, now: datetime | None = None) -> 
         score += 600_000
         reasons.append("REFRESH_DUE")
 
+    if score <= 0:
+        return None
+
     if candidate.lane_reason:
         reasons.append(candidate.lane_reason)
         if candidate.lane_reason == "RECENT_SOURCE_CHANGE":
@@ -137,8 +142,6 @@ def score_candidate(candidate: QccCandidate, *, now: datetime | None = None) -> 
         score += min(holdings, 1000) * 100
         reasons.append("TRADEMARK_HOLDER")
 
-    if score <= 0:
-        return None
     return PlannedCandidate(
         candidate=candidate,
         task_type=task_type,
