@@ -114,7 +114,6 @@ def acquisition_state(
     enabled: bool,
     incoming_root: Path,
 ) -> AcquisitionState:
-    batch = _open_batch()
     if not enabled:
         return AcquisitionState(
             enabled=False,
@@ -127,6 +126,8 @@ def acquisition_state(
             result_expected_path="",
             action_required="enable CN_QCC_ACQUISITION_ENABLED to run acquisition cycles",
         )
+
+    batch = _open_batch()
     if not batch:
         return AcquisitionState(
             enabled=True,
