@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     us_download_enabled: bool = False
     us_base_url: str = ""
 
+    # USPTO mark-image acquisition is a separate, opt-in worker. Defaults keep
+    # one official request slot every 2.5 seconds while local image analysis and
+    # persistence execute between request starts.
+    us_mark_image_request_interval_seconds: float = 2.5
+    us_mark_image_http_timeout_seconds: int = 30
+    us_mark_image_queue_floor: int = 20_000
+    us_mark_image_queue_target: int = 100_000
+    us_mark_image_recent_lookback_days: int = 14
+    us_mark_image_idle_sleep_seconds: int = 60
+
     # Consumer-facing /api/v1 authentication is disabled by default for local
     # compatibility. Production deployments can switch to required and provide
     # comma-separated bearer keys to support overlap during key rotation.
