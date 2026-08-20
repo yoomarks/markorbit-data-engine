@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.cn_qcc.policy import QccCandidate, has_company_name_signal, score_candidate, select_candidates
+from app.cn_qcc.source_candidates import _bounded_backfill_rows
 
 
 def _candidate(**overrides) -> QccCandidate:
@@ -59,6 +60,43 @@ def test_source_identity_change_is_high_priority() -> None:
     assert planned is not None
     assert "SOURCE_IDENTITY_CHANGED" in planned.reason_codes
     assert planned.task_type == "REFRESH"
+
+
+def test_historical_lane_does_not_force_early_refresh() -> None:
+    now = datetime(2026, 8, 21, tzinfo=timezone.utc)
+    item = _candidate(
+        last_result_status="SUCCESS",
+        last_source_fingerprint="a" * 64,
+        refresh_due_at=now + timedelta(days=90),
+        lane_reason="HISTORICAL_BACKFILL",
+        trademark_count=999,
+    )
+    assert score_candidate(item, now=now) is None
+
+
+def test_backfill_page_keeps_cursor_until_bucket_is_exhausted() -> None:
+    rows = [
+        {"entity_id": "00000000-0000-0000-0000-000000000001"},
+        {"entity_id": "00000000-0000-0000-0000-000000000002"},
+        {"entity_id": "00000000-0000-0000-0000-000000000003"},
+    ]
+    selected, watermark, exhausted = _bounded_backfill_rows(
+        rows,
+        scan_limit=2,
+        current_watermark="",
+    )
+    assert [row["entity_id"] for row in selected] == rows[:2]
+    assert watermark == rows[1]["entity_id"]
+    assert exhausted is False
+
+    tail, tail_watermark, tail_exhausted = _bounded_backfill_rows(
+        rows[2:],
+        scan_limit=2,
+        current_watermark=watermark,
+    )
+    assert [row["entity_id"] for row in tail] == rows[2:]
+    assert tail_watermark == rows[2]["entity_id"]
+    assert tail_exhausted is True
 
 
 def test_non_company_and_foreign_company_are_not_qcc_tasks() -> None:
