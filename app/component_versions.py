@@ -14,6 +14,8 @@ from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
 from app.us_ttab import TTAB_SCHEMA_VERSION
+from app.us_tsdr.adapter import TSDR_SOURCE_VERSION
+from app.us_tsdr.policy import POLICY_VERSION as TSDR_ACQUISITION_POLICY_VERSION
 from app.version import engine_version
 
 
@@ -45,6 +47,10 @@ def component_versions() -> dict[str, Any]:
             },
             "us_ttab": {
                 "schema_version": TTAB_SCHEMA_VERSION,
+            },
+            "us_tsdr": {
+                "source_version": TSDR_SOURCE_VERSION,
+                "acquisition_policy_version": TSDR_ACQUISITION_POLICY_VERSION,
             },
             "us_alert_engine": {
                 "version": ALERT_ENGINE_VERSION,
