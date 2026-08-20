@@ -5,6 +5,8 @@ from typing import Any
 from app.cn import CN_MODEL_VERSION
 from app.cn.final_checkpoint import CHECKPOINT_VERSION as CN_CHECKPOINT_VERSION
 from app.cn_mark_image import SOURCE_VERSION as CN_MARK_IMAGE_SOURCE_VERSION
+from app.cn_qcc import POLICY_VERSION as CN_QCC_POLICY_VERSION
+from app.cn_qcc import SOURCE_VERSION as CN_QCC_SOURCE_VERSION
 from app.contact_ingest import CONTACT_INGEST_VERSION
 from app.contact_ingest.task_migrations import CONTACT_TASK_CONTROL_VERSION
 from app.domain_lifecycle import LIFECYCLE_VERSION
@@ -43,6 +45,10 @@ def component_versions() -> dict[str, Any]:
             },
             "cn_mark_image": {
                 "source_version": CN_MARK_IMAGE_SOURCE_VERSION,
+            },
+            "cn_qcc": {
+                "source_version": CN_QCC_SOURCE_VERSION,
+                "acquisition_policy_version": CN_QCC_POLICY_VERSION,
             },
             "us_application": {
                 "schema_version": US_SCHEMA_VERSION,
