@@ -115,7 +115,7 @@ def load_backfill_candidates(*, limit: int = 300_000) -> tuple[list[MarkImageCan
         """
     )
     if not rows:
-        return [], ""
+        return [], safe_cursor
     candidates = [_candidate(row) for row in rows]
     return candidates, candidates[-1].serial_number
 
