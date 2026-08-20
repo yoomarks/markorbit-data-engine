@@ -18,7 +18,9 @@ def _reset() -> None:
     ensure_tsdr_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE acquisition.us_tsdr_task, acquisition.us_tsdr_batch, acquisition.us_tsdr_case_coverage")
+            cur.execute(
+                "TRUNCATE acquisition.us_tsdr_task, acquisition.us_tsdr_batch, acquisition.us_tsdr_case_coverage"
+            )
             cur.execute(
                 """
                 UPDATE acquisition.us_tsdr_planner_state
@@ -60,14 +62,56 @@ def main() -> None:
         conn.commit()
 
     candidates = [
-        Candidate("99000001", 101, applicant_country="US", current_attorney_present=True, lifecycle_state="REFRESHABLE", is_new_application=True),
-        Candidate("99000002", 102, applicant_country="CN", current_attorney_present=False, lifecycle_state="REFRESHABLE", is_new_application=True),
-        Candidate("71000001", 60, applicant_country="CN", current_attorney_present=False, lifecycle_state="REFRESHABLE"),
-        Candidate("72000001", 50, applicant_country="US", lifecycle_state="TERMINAL_INVALID"),
-        Candidate("70000001", 40, applicant_country="US", current_attorney_present=False, source_attorney_fingerprint="b" * 64, lifecycle_state="REFRESHABLE"),
-        Candidate("70000002", 30, applicant_country="US", lifecycle_state="TERMINAL_INVALID"),
+        Candidate(
+            "99000001",
+            101,
+            applicant_country="US",
+            current_attorney_present=True,
+            lifecycle_state="REFRESHABLE",
+            is_new_application=True,
+        ),
+        Candidate(
+            "99000002",
+            102,
+            applicant_country="CN",
+            current_attorney_present=False,
+            lifecycle_state="REFRESHABLE",
+            is_new_application=True,
+        ),
+        Candidate(
+            "71000001",
+            60,
+            applicant_country="CN",
+            current_attorney_present=False,
+            lifecycle_state="REFRESHABLE",
+        ),
+        Candidate(
+            "72000001",
+            50,
+            applicant_country="US",
+            lifecycle_state="TERMINAL_INVALID",
+        ),
+        Candidate(
+            "70000001",
+            40,
+            applicant_country="US",
+            current_attorney_present=False,
+            source_attorney_fingerprint="b" * 64,
+            lifecycle_state="REFRESHABLE",
+        ),
+        Candidate(
+            "70000002",
+            30,
+            applicant_country="US",
+            lifecycle_state="TERMINAL_INVALID",
+        ),
     ]
-    planned = create_weekly_batch(candidates, capacity=5, now=now, source_watermark_to=(102, "99000002"))
+    planned = create_weekly_batch(
+        candidates,
+        capacity=5,
+        now=now,
+        source_watermark_to=(102, "99000002"),
+    )
     assert planned["task_count"] == 5, planned
     assert planned["metrics"]["new_application_count"] == 2, planned
     assert planned["source_watermark_to"] == [102, "99000002"], planned
@@ -77,11 +121,26 @@ def main() -> None:
         exported = export_batch(planned["batch_key"], outgoing_root=root / "outgoing")
         assert exported["task_count"] == 5, exported
 
-        tasks = [json.loads(line) for line in Path(exported["tasks"]).read_text(encoding="utf-8").splitlines()]
+        collector_urls = Path(exported["tasks"]).read_text(encoding="utf-8").splitlines()
+        assert len(collector_urls) == 5, collector_urls
+        assert all(url.startswith("https://tsdr.uspto.gov/statusview/sn") for url in collector_urls)
+        assert all(len(url.rsplit("sn", 1)[-1]) == 8 for url in collector_urls)
+
+        tasks = [
+            json.loads(line)
+            for line in Path(exported["task_map"]).read_text(encoding="utf-8").splitlines()
+        ]
+        assert [task["status_url"] for task in tasks] == collector_urls
+
         result_dir = root / "incoming" / planned["batch_key"]
         result_dir.mkdir(parents=True)
         (result_dir / "manifest.json").write_text(
-            json.dumps({"contract": "US_TSDR_RESULT_V1", "batch_key": planned["batch_key"]}),
+            json.dumps(
+                {
+                    "contract": "US_TSDR_RESULT_V1",
+                    "batch_key": planned["batch_key"],
+                }
+            ),
             encoding="utf-8",
         )
         rows = []
@@ -93,7 +152,9 @@ def main() -> None:
             raw_relative = Path("raw") / f"{task['serial_number']}.json"
             raw_path = result_dir / raw_relative
             raw_path.parent.mkdir(parents=True, exist_ok=True)
-            raw_bytes = json.dumps({"serial_number": task["serial_number"], "source": "fixture"}).encode("utf-8")
+            raw_bytes = json.dumps(
+                {"serial_number": task["serial_number"], "source": "fixture"}
+            ).encode("utf-8")
             raw_path.write_bytes(raw_bytes)
             rows.append(
                 {
@@ -135,8 +196,20 @@ def main() -> None:
 
     follow_up = create_weekly_batch(
         [
-            Candidate("99000003", 103, applicant_country="US", lifecycle_state="REFRESHABLE", is_new_application=True),
-            Candidate("71000001", 60, applicant_country="CN", current_attorney_present=False, lifecycle_state="REFRESHABLE"),
+            Candidate(
+                "99000003",
+                103,
+                applicant_country="US",
+                lifecycle_state="REFRESHABLE",
+                is_new_application=True,
+            ),
+            Candidate(
+                "71000001",
+                60,
+                applicant_country="CN",
+                current_attorney_present=False,
+                lifecycle_state="REFRESHABLE",
+            ),
         ],
         capacity=2,
         now=now + timedelta(days=7),
@@ -144,7 +217,12 @@ def main() -> None:
     )
     assert follow_up["task_count"] == 2, follow_up
     assert follow_up["metrics"]["reason_counts"]["RETRY_PREVIOUS_FAILURE"] == 1, follow_up
-    print(json.dumps({"status": "PASS", "first_batch": planned, "follow_up": follow_up}, default=str))
+    print(
+        json.dumps(
+            {"status": "PASS", "first_batch": planned, "follow_up": follow_up},
+            default=str,
+        )
+    )
 
 
 if __name__ == "__main__":
