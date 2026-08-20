@@ -8,6 +8,7 @@ from app.cn_qcc.exporter import export_batch
 from app.cn_qcc.incoming import ingest_result
 from app.cn_qcc.migrations import ensure_qcc_schema
 from app.cn_qcc.planner import create_batch, plan_as_dict
+from app.cn_qcc.portability import ensure_qcc_portability_schema
 from app.db import postgres_conn
 
 
@@ -226,6 +227,7 @@ def run_cycle(
         }
 
     if before.readiness == "RESULT_READY":
+        ensure_qcc_portability_schema()
         result = ingest_result(before.open_batch_id, Path(before.result_expected_path))
         return {
             "action": "INGESTED",
