@@ -1,0 +1,6 @@
+from __future__ import annotations
+
+SOURCE_VERSION = "CN_QCC_ENRICHMENT_V1"
+POLICY_VERSION = "CN_QCC_ACQUISITION_POLICY_V1"
+
+__all__ = ["SOURCE_VERSION", "POLICY_VERSION"]
