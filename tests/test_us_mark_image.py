@@ -7,6 +7,7 @@ import tempfile
 
 from PIL import Image, ImageDraw
 
+from app.us_mark_image import planner as mark_image_planner
 from app.us_mark_image.planner import MarkImageCandidate
 from app.us_mark_image.processor import analyze_image, store_original
 
@@ -57,3 +58,11 @@ def test_content_addressed_store_writes_exact_bytes_once() -> None:
         path = root / first
         assert path.read_bytes() == raw
         assert len(list((root / "assets" / "us" / "mark-images").rglob("*.png"))) == 1
+
+
+def test_backfill_cursor_does_not_restart_after_reaching_corpus_end(monkeypatch) -> None:
+    monkeypatch.setattr(mark_image_planner, "_backfill_cursor", lambda: "99999999")
+    monkeypatch.setattr(mark_image_planner, "_rows", lambda _sql: [])
+    candidates, cursor = mark_image_planner.load_backfill_candidates(limit=100)
+    assert candidates == []
+    assert cursor == "99999999"
