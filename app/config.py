@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     cn_qcc_capacity: int = 500
     cn_qcc_refresh_days: int = 180
     cn_qcc_cycle_interval_seconds: int = 3600
+    cn_qcc_stale_batch_hours: int = 168
     cn_qcc_outgoing_root: Path | None = None
     cn_qcc_incoming_root: Path | None = None
 
