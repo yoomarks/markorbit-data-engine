@@ -9,6 +9,7 @@ from app.cn_qcc.exporter import export_batch
 from app.cn_qcc.incoming import ingest_result
 from app.cn_qcc.operator import acquisition_state, run_cycle
 from app.cn_qcc.planner import create_batch, plan_as_dict
+from app.cn_qcc.portability import ensure_qcc_portability_schema
 from app.cn_qcc.preflight import production_preflight
 from app.config import get_settings
 
@@ -54,6 +55,7 @@ def main() -> None:
     elif args.command == "export":
         payload = export_batch(args.batch_id, args.out)
     elif args.command == "ingest":
+        ensure_qcc_portability_schema()
         payload = ingest_result(args.batch_id, args.csv)
     elif args.command == "state":
         payload = asdict(

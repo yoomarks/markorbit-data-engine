@@ -5,6 +5,8 @@ import hashlib
 from pathlib import Path
 
 from app.cn_qcc.migrations import ensure_qcc_schema
+from app.cn_qcc.portability import ensure_qcc_portability_schema
+from app.cn_qcc.storage_refs import export_object_key
 from app.db import postgres_conn
 
 
@@ -35,6 +37,7 @@ def _sha256_file(path: Path) -> str:
 
 def export_batch(batch_id: str, output_path: Path) -> dict[str, object]:
     ensure_qcc_schema()
+    ensure_qcc_portability_schema()
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with postgres_conn() as conn:
@@ -85,15 +88,16 @@ def export_batch(batch_id: str, output_path: Path) -> dict[str, object]:
                 )
 
         export_sha256 = _sha256_file(output_path)
+        object_key = export_object_key(str(batch["batch_key"]))
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE acquisition.cn_qcc_batch
                 SET status = 'EXPORTED', exported_at = COALESCE(exported_at, now()),
-                    export_path = %s, export_sha256 = %s
+                    export_path = %s, export_object_key = %s, export_sha256 = %s
                 WHERE batch_id = %s
                 """,
-                (str(output_path), export_sha256, batch_id),
+                (str(output_path), object_key, export_sha256, batch_id),
             )
             cur.execute(
                 """
@@ -109,6 +113,7 @@ def export_batch(batch_id: str, output_path: Path) -> dict[str, object]:
         "batch_key": str(batch["batch_key"]),
         "task_count": len(rows),
         "output_path": str(output_path),
+        "object_key": object_key,
         "sha256": export_sha256,
     }
 
