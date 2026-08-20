@@ -30,6 +30,11 @@ jobs:
           docker compose run --rm --no-deps worker
           python -m app.us_tsdr.validate_weekly_acquisition_fixture
 
+      - name: Run collector TXT/CSV observation fixture
+        run: >-
+          docker compose run --rm --no-deps worker
+          python -m app.us_tsdr.validate_collector_contract_fixture
+
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
