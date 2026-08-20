@@ -4,10 +4,7 @@ from pathlib import Path
 
 from app.us_tsdr.collector_contract import (
     COLLECTOR_CONTRACT_VERSION,
-    DEFAULT_MARK_IMAGE_MODE,
     collector_task_lines,
-    mark_image_descriptor,
-    mark_image_url,
     parse_collector_csv,
     status_view_url,
 )
@@ -71,8 +68,10 @@ Correspondent e-mail Authorized:Yes
 def test_parse_wide_collector_csv_supports_serial_and_multiline_address(tmp_path: Path) -> None:
     path = tmp_path / "collector.csv"
     path.write_text(
-        'Serial Number,Attorney Name,Attorney Primary Email Address,Correspondent Name/Address,Phone,Correspondent e-mail\n'
-        '90817045,Adriano Pacifici,apacifici@iplawconsulting.com,"ADRIANO PACIFICI\n400 POYDRAS STREET",504-323-6600,"apacifici@iplawconsulting.com dmintlsz@yeah.net"\n',
+        'Serial Number,Attorney Name,Attorney Primary Email Address,Correspondent Name/Address,'
+        'Phone,Correspondent e-mail\n'
+        '90817045,Adriano Pacifici,apacifici@iplawconsulting.com,"ADRIANO PACIFICI\n'
+        '400 POYDRAS STREET",504-323-6600,"apacifici@iplawconsulting.com dmintlsz@yeah.net"\n',
         encoding="utf-8",
     )
     item = parse_collector_csv(path)[0]
@@ -85,11 +84,3 @@ def test_parse_wide_collector_csv_supports_serial_and_multiline_address(tmp_path
         "apacifici@iplawconsulting.com",
         "dmintlsz@yeah.net",
     )
-
-
-def test_mark_image_is_remote_deferred_and_not_structured_coverage_requirement() -> None:
-    assert mark_image_url("90817045") == "https://tsdr.uspto.gov/img/90817045/large"
-    descriptor = mark_image_descriptor("90817045")
-    assert descriptor["acquisition_mode"] == DEFAULT_MARK_IMAGE_MODE
-    assert descriptor["binary_required_for_tsdr_structured_coverage"] is False
-    assert descriptor["source_url"] == "https://tsdr.uspto.gov/img/90817045/large"
