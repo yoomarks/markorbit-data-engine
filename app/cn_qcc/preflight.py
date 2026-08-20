@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 
-from app.cn_qcc.migrations import ensure_qcc_schema
 from app.db import postgres_conn
 
 
@@ -51,6 +50,23 @@ def _path_check(name: str, path: Path) -> PreflightCheck:
     )
 
 
+def _report(
+    checks: list[PreflightCheck],
+    *,
+    open_batch_id: str = "",
+    open_batch_status: str = "",
+    open_batch_age_hours: float | None = None,
+) -> PreflightReport:
+    ready = not any(not check.ok and check.severity == "BLOCKER" for check in checks)
+    return PreflightReport(
+        ready=ready,
+        checks=tuple(checks),
+        open_batch_id=open_batch_id,
+        open_batch_status=open_batch_status,
+        open_batch_age_hours=open_batch_age_hours,
+    )
+
+
 def production_preflight(
     *,
     capacity: int,
@@ -61,7 +77,7 @@ def production_preflight(
     incoming_root: Path,
     now: datetime | None = None,
 ) -> PreflightReport:
-    """Return a read-only production enablement report for periodic QCC acquisition."""
+    """Return a strictly read-only production enablement report for QCC acquisition."""
     checks: list[PreflightCheck] = [
         PreflightCheck(
             "capacity",
@@ -91,83 +107,112 @@ def production_preflight(
         _path_check("incoming_root", incoming_root),
     ]
 
-    ensure_qcc_schema()
     open_batch_id = ""
     open_batch_status = ""
     open_batch_age_hours: float | None = None
     reference_now = now or datetime.now(timezone.utc)
 
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT batch_id, batch_key, status, planned_at, task_count, export_path
-                FROM acquisition.cn_qcc_batch
-                WHERE status IN ('PLANNED', 'EXPORTED', 'RESULT_RECEIVED')
-                ORDER BY planned_at DESC
-                """
-            )
-            open_batches = cur.fetchall()
-            single_open = len(open_batches) <= 1
-            checks.append(
-                PreflightCheck(
-                    "single_open_batch",
-                    single_open,
-                    "INFO" if single_open else "BLOCKER",
-                    f"open_batches={len(open_batches)}",
+    try:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT to_regclass('acquisition.cn_qcc_batch') AS batch_table,
+                           to_regclass('acquisition.cn_qcc_task') AS task_table
+                    """
                 )
-            )
-            if open_batches:
-                batch = open_batches[0]
-                open_batch_id = str(batch["batch_id"])
-                open_batch_status = str(batch["status"])
-                planned_at = batch["planned_at"]
-                if planned_at.tzinfo is None:
-                    planned_at = planned_at.replace(tzinfo=timezone.utc)
-                open_batch_age_hours = max(0.0, (reference_now - planned_at).total_seconds() / 3600.0)
-                stale = open_batch_age_hours > stale_batch_hours
+                schema = cur.fetchone()
+                schema_ready = bool(schema["batch_table"] and schema["task_table"])
                 checks.append(
                     PreflightCheck(
-                        "open_batch_not_stale",
-                        not stale,
-                        "INFO" if not stale else "BLOCKER",
-                        f"age_hours={open_batch_age_hours:.2f}; limit_hours={stale_batch_hours}",
+                        "qcc_schema_present",
+                        schema_ready,
+                        "INFO" if schema_ready else "BLOCKER",
+                        "required acquisition tables present" if schema_ready else "required acquisition tables missing",
                     )
                 )
-                if open_batch_status == "EXPORTED":
-                    stored_export_path = str(batch.get("export_path") or "")
-                    export_evidence = bool(stored_export_path)
+                if not schema_ready:
+                    return _report(checks)
+
+                cur.execute(
+                    """
+                    SELECT batch_id, batch_key, status, planned_at, task_count, export_path
+                    FROM acquisition.cn_qcc_batch
+                    WHERE status IN ('PLANNED', 'EXPORTED', 'RESULT_RECEIVED')
+                    ORDER BY planned_at DESC
+                    """
+                )
+                open_batches = cur.fetchall()
+                single_open = len(open_batches) <= 1
+                checks.append(
+                    PreflightCheck(
+                        "single_open_batch",
+                        single_open,
+                        "INFO" if single_open else "BLOCKER",
+                        f"open_batches={len(open_batches)}",
+                    )
+                )
+                if open_batches:
+                    batch = open_batches[0]
+                    open_batch_id = str(batch["batch_id"])
+                    open_batch_status = str(batch["status"])
+                    planned_at = batch["planned_at"]
+                    if planned_at.tzinfo is None:
+                        planned_at = planned_at.replace(tzinfo=timezone.utc)
+                    open_batch_age_hours = max(
+                        0.0,
+                        (reference_now - planned_at).total_seconds() / 3600.0,
+                    )
+                    stale = open_batch_age_hours > stale_batch_hours
                     checks.append(
                         PreflightCheck(
-                            "export_evidence_present",
-                            export_evidence,
-                            "INFO" if export_evidence else "BLOCKER",
-                            f"stored_export_path={'present' if export_evidence else 'missing'}",
+                            "open_batch_not_stale",
+                            not stale,
+                            "INFO" if not stale else "BLOCKER",
+                            f"age_hours={open_batch_age_hours:.2f}; limit_hours={stale_batch_hours}",
                         )
                     )
+                    if open_batch_status == "EXPORTED":
+                        stored_export_path = str(batch.get("export_path") or "")
+                        deterministic_path = outgoing_root.resolve() / f"{batch['batch_key']}.tasks.csv"
+                        stored_file = Path(stored_export_path) if stored_export_path else None
+                        export_evidence = deterministic_path.is_file() or bool(
+                            stored_file and stored_file.is_file()
+                        )
+                        checks.append(
+                            PreflightCheck(
+                                "export_evidence_present",
+                                export_evidence,
+                                "INFO" if export_evidence else "BLOCKER",
+                                (
+                                    f"deterministic_path={deterministic_path}; "
+                                    f"stored_export_path={stored_export_path or '<missing>'}"
+                                ),
+                            )
+                        )
 
-            cur.execute(
-                """
-                SELECT count(*) AS n
-                FROM acquisition.cn_qcc_task t
-                LEFT JOIN acquisition.cn_qcc_batch b ON b.batch_id = t.batch_id
-                WHERE b.batch_id IS NULL
-                """
-            )
-            orphan_tasks = int(cur.fetchone()["n"])
-            checks.append(
-                PreflightCheck(
-                    "no_orphan_tasks",
-                    orphan_tasks == 0,
-                    "INFO" if orphan_tasks == 0 else "BLOCKER",
-                    f"orphan_tasks={orphan_tasks}",
+                cur.execute(
+                    """
+                    SELECT count(*) AS n
+                    FROM acquisition.cn_qcc_task t
+                    LEFT JOIN acquisition.cn_qcc_batch b ON b.batch_id = t.batch_id
+                    WHERE b.batch_id IS NULL
+                    """
                 )
-            )
+                orphan_tasks = int(cur.fetchone()["n"])
+                checks.append(
+                    PreflightCheck(
+                        "no_orphan_tasks",
+                        orphan_tasks == 0,
+                        "INFO" if orphan_tasks == 0 else "BLOCKER",
+                        f"orphan_tasks={orphan_tasks}",
+                    )
+                )
+    except Exception as exc:  # noqa: BLE001 - health report must fail closed, not crash.
+        checks.append(PreflightCheck("postgres_read", False, "BLOCKER", str(exc)))
 
-    ready = all(check.ok for check in checks if check.severity == "BLOCKER")
-    return PreflightReport(
-        ready=ready,
-        checks=tuple(checks),
+    return _report(
+        checks,
         open_batch_id=open_batch_id,
         open_batch_status=open_batch_status,
         open_batch_age_hours=open_batch_age_hours,
