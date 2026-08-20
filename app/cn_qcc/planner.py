@@ -25,19 +25,23 @@ class BatchPlan:
     target_capacity: int
     refresh_days: int
     backfill_bucket: int
+    backfill_entity_from: str
+    backfill_entity_to: str
+    backfill_bucket_exhausted: bool
     task_count: int
     source_watermark_from: tuple[int, str]
     source_watermark_to: tuple[int, str]
     lane_counts: dict[str, int]
 
 
-def _planner_state() -> tuple[tuple[int, str], int]:
+def _planner_state() -> tuple[tuple[int, str], int, str]:
     ensure_qcc_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT source_rank_watermark, source_entity_watermark, backfill_bucket
+                SELECT source_rank_watermark, source_entity_watermark,
+                       backfill_bucket, backfill_entity_watermark
                 FROM acquisition.cn_qcc_planner_state
                 WHERE state_key = %s
                 """,
@@ -49,6 +53,7 @@ def _planner_state() -> tuple[tuple[int, str], int]:
     return (
         (int(row["source_rank_watermark"]), str(row["source_entity_watermark"] or "")),
         int(row["backfill_bucket"]),
+        str(row["backfill_entity_watermark"] or ""),
     )
 
 
@@ -58,7 +63,8 @@ def _existing_open_batch() -> dict[str, object] | None:
             cur.execute(
                 """
                 SELECT batch_id, batch_key, policy_version, status, target_capacity,
-                       refresh_days, backfill_bucket, task_count,
+                       refresh_days, backfill_bucket, backfill_entity_from,
+                       backfill_entity_to, backfill_bucket_exhausted, task_count,
                        source_rank_from, source_entity_from,
                        source_rank_to, source_entity_to, metrics
                 FROM acquisition.cn_qcc_batch
@@ -82,6 +88,9 @@ def _row_to_plan(row: dict[str, object]) -> BatchPlan:
         target_capacity=int(row["target_capacity"]),
         refresh_days=int(row["refresh_days"]),
         backfill_bucket=int(row["backfill_bucket"]),
+        backfill_entity_from=str(row.get("backfill_entity_from") or ""),
+        backfill_entity_to=str(row.get("backfill_entity_to") or ""),
+        backfill_bucket_exhausted=bool(row.get("backfill_bucket_exhausted")),
         task_count=int(row["task_count"]),
         source_watermark_from=(int(row["source_rank_from"]), str(row["source_entity_from"] or "")),
         source_watermark_to=(int(row["source_rank_to"]), str(row["source_entity_to"] or "")),
@@ -95,6 +104,7 @@ def _persist_batch(
     capacity: int,
     refresh_days: int,
     source_watermark_from: tuple[int, str],
+    backfill_entity_from: str,
     pool: CandidatePool,
 ) -> BatchPlan:
     batch_id = uuid.uuid4()
@@ -116,10 +126,14 @@ def _persist_batch(
                 """
                 INSERT INTO acquisition.cn_qcc_batch (
                     batch_id, batch_key, policy_version, status, target_capacity,
-                    refresh_days, backfill_bucket, task_count,
+                    refresh_days, backfill_bucket, backfill_entity_from,
+                    backfill_entity_to, backfill_bucket_exhausted, task_count,
                     source_rank_from, source_entity_from, source_rank_to, source_entity_to,
                     metrics
-                ) VALUES (%s, %s, %s, 'PLANNED', %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                ) VALUES (
+                    %s, %s, %s, 'PLANNED', %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s::jsonb
+                )
                 """,
                 (
                     batch_id,
@@ -128,6 +142,9 @@ def _persist_batch(
                     capacity,
                     refresh_days,
                     pool.backfill_bucket,
+                    backfill_entity_from,
+                    pool.backfill_entity_watermark_to,
+                    pool.backfill_bucket_exhausted,
                     len(selected),
                     source_watermark_from[0],
                     source_watermark_from[1],
@@ -178,6 +195,9 @@ def _persist_batch(
         target_capacity=capacity,
         refresh_days=refresh_days,
         backfill_bucket=pool.backfill_bucket,
+        backfill_entity_from=backfill_entity_from,
+        backfill_entity_to=pool.backfill_entity_watermark_to,
+        backfill_bucket_exhausted=pool.backfill_bucket_exhausted,
         task_count=len(selected),
         source_watermark_from=source_watermark_from,
         source_watermark_to=pool.source_watermark_to,
@@ -195,7 +215,7 @@ def create_batch(*, capacity: int, refresh_days: int = 180) -> BatchPlan:
         raise ValueError("capacity must be positive")
     if refresh_days <= 0:
         raise ValueError("refresh_days must be positive")
-    watermark, backfill_bucket = _planner_state()
+    watermark, backfill_bucket, backfill_entity_watermark = _planner_state()
     existing = _existing_open_batch()
     if existing:
         return _row_to_plan(existing)
@@ -203,6 +223,7 @@ def create_batch(*, capacity: int, refresh_days: int = 180) -> BatchPlan:
         source_watermark=watermark,
         capacity=capacity,
         backfill_bucket=backfill_bucket,
+        backfill_entity_watermark=backfill_entity_watermark,
     )
     selected = select_candidates(pool.candidates, capacity=capacity)
     return _persist_batch(
@@ -210,6 +231,7 @@ def create_batch(*, capacity: int, refresh_days: int = 180) -> BatchPlan:
         capacity=capacity,
         refresh_days=refresh_days,
         source_watermark_from=watermark,
+        backfill_entity_from=backfill_entity_watermark,
         pool=pool,
     )
 
@@ -222,6 +244,9 @@ def create_batch_from_candidates(
     source_watermark_from: tuple[int, str] = (0, ""),
     source_watermark_to: tuple[int, str] = (0, ""),
     backfill_bucket: int = 0,
+    backfill_entity_from: str = "",
+    backfill_entity_to: str = "",
+    backfill_bucket_exhausted: bool = True,
 ) -> BatchPlan:
     """Deterministic fixture/operator hook; production planning uses create_batch()."""
     ensure_qcc_schema()
@@ -229,6 +254,8 @@ def create_batch_from_candidates(
         candidates=candidates,
         source_watermark_to=source_watermark_to,
         backfill_bucket=backfill_bucket % 52,
+        backfill_entity_watermark_to=backfill_entity_to,
+        backfill_bucket_exhausted=backfill_bucket_exhausted,
         lane_counts={"supplied_candidates": len(candidates)},
     )
     selected = select_candidates(candidates, capacity=capacity)
@@ -237,6 +264,7 @@ def create_batch_from_candidates(
         capacity=capacity,
         refresh_days=refresh_days,
         source_watermark_from=source_watermark_from,
+        backfill_entity_from=backfill_entity_from,
         pool=pool,
     )
 
