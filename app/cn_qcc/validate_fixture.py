@@ -61,18 +61,37 @@ def _reset() -> None:
                   AND source_scope LIKE 'fixture-%'
                 """
             )
-            cur.execute("DELETE FROM acquisition.cn_qcc_company_observation WHERE entity_id = %s", (_ENTITY_ID,))
-            cur.execute("DELETE FROM acquisition.cn_qcc_task WHERE entity_id = %s", (_ENTITY_ID,))
-            cur.execute("DELETE FROM acquisition.cn_qcc_company_coverage WHERE entity_id = %s", (_ENTITY_ID,))
-            cur.execute("DELETE FROM acquisition.cn_qcc_batch WHERE batch_key LIKE 'CN_QCC_FIXTURE_%'")
             cur.execute(
-                """
-                DELETE FROM contact.entity_person_relation WHERE entity_id = %s;
-                DELETE FROM contact.channel WHERE entity_id = %s;
-                DELETE FROM entity.entity_identifier WHERE entity_id = %s;
-                DELETE FROM entity.entity WHERE entity_id = %s;
-                """,
-                (_ENTITY_ID, _ENTITY_ID, _ENTITY_ID, _ENTITY_ID),
+                "DELETE FROM acquisition.cn_qcc_company_observation WHERE entity_id = %s",
+                (_ENTITY_ID,),
+            )
+            cur.execute(
+                "DELETE FROM acquisition.cn_qcc_task WHERE entity_id = %s",
+                (_ENTITY_ID,),
+            )
+            cur.execute(
+                "DELETE FROM acquisition.cn_qcc_company_coverage WHERE entity_id = %s",
+                (_ENTITY_ID,),
+            )
+            cur.execute(
+                "DELETE FROM acquisition.cn_qcc_batch WHERE batch_key LIKE 'CN_QCC_FIXTURE_%'"
+            )
+            # Psycopg prepared statements intentionally execute one SQL command at a time.
+            cur.execute(
+                "DELETE FROM contact.entity_person_relation WHERE entity_id = %s",
+                (_ENTITY_ID,),
+            )
+            cur.execute(
+                "DELETE FROM contact.channel WHERE entity_id = %s",
+                (_ENTITY_ID,),
+            )
+            cur.execute(
+                "DELETE FROM entity.entity_identifier WHERE entity_id = %s",
+                (_ENTITY_ID,),
+            )
+            cur.execute(
+                "DELETE FROM entity.entity WHERE entity_id = %s",
+                (_ENTITY_ID,),
             )
             cur.execute(
                 """
@@ -139,12 +158,26 @@ def main() -> None:
         result_csv = root / "qcc_result.csv"
         with result_csv.open("w", encoding="utf-8-sig", newline="") as handle:
             fieldnames = [
-                "task_id", "entity_id", "result_status", "fetched_at",
-                "qcc_company_id", "company_name", "unified_social_credit_code",
-                "legal_representative", "registration_status", "registered_capital",
-                "establishment_date", "registered_address", "business_scope",
-                "phones", "emails", "websites", "contact_name", "contact_title",
-                "contact_phones", "contact_emails",
+                "task_id",
+                "entity_id",
+                "result_status",
+                "fetched_at",
+                "qcc_company_id",
+                "company_name",
+                "unified_social_credit_code",
+                "legal_representative",
+                "registration_status",
+                "registered_capital",
+                "establishment_date",
+                "registered_address",
+                "business_scope",
+                "phones",
+                "emails",
+                "websites",
+                "contact_name",
+                "contact_title",
+                "contact_phones",
+                "contact_emails",
             ]
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
@@ -153,7 +186,9 @@ def main() -> None:
                     "task_id": task_id,
                     "entity_id": str(_ENTITY_ID),
                     "result_status": "SUCCESS",
-                    "fetched_at": datetime(2026, 8, 21, 1, 0, tzinfo=timezone.utc).isoformat(),
+                    "fetched_at": datetime(
+                        2026, 8, 21, 1, 0, tzinfo=timezone.utc
+                    ).isoformat(),
                     "qcc_company_id": "QCC-FIXTURE-1",
                     "company_name": "北京轨道示例科技有限公司",
                     "unified_social_credit_code": "91110105MA01ABCDE1",
@@ -233,8 +268,13 @@ def main() -> None:
                 """,
                 (_ENTITY_ID,),
             )
-            relations = {row["relation_type"]: int(row["n"]) for row in cur.fetchall()}
-            assert relations == {"CONTACT_PERSON": 1, "LEGAL_REPRESENTATIVE": 1}, relations
+            relations = {
+                row["relation_type"]: int(row["n"]) for row in cur.fetchall()
+            }
+            assert relations == {
+                "CONTACT_PERSON": 1,
+                "LEGAL_REPRESENTATIVE": 1,
+            }, relations
 
     print(
         json.dumps(
