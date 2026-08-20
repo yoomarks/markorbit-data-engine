@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 from app.db import postgres_conn
 
 
@@ -91,6 +93,7 @@ WHERE state IN ('RETRYABLE', 'NOT_FOUND');
 '''
 
 
+@lru_cache(maxsize=1)
 def ensure_mark_image_schema() -> None:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
