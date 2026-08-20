@@ -59,6 +59,56 @@ def _open_batch() -> dict[str, object] | None:
             return cur.fetchone()
 
 
+def _complete_empty_batch(batch_id: str) -> None:
+    """Close a zero-task planner batch and advance only its durable scan state."""
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT batch_id, status, task_count, source_rank_to,
+                       source_entity_to, backfill_bucket
+                FROM acquisition.cn_qcc_batch
+                WHERE batch_id = %s
+                FOR UPDATE
+                """,
+                (batch_id,),
+            )
+            batch = cur.fetchone()
+            if not batch:
+                raise ValueError(f"unknown CN QCC batch: {batch_id}")
+            if batch["status"] == "COMPLETED":
+                return
+            if batch["status"] != "PLANNED" or int(batch["task_count"] or 0) != 0:
+                raise ValueError("only a zero-task PLANNED QCC batch can be auto-completed")
+            cur.execute(
+                """
+                UPDATE acquisition.cn_qcc_batch
+                SET status = 'COMPLETED', completed_at = now(),
+                    metrics = metrics || '{"empty_batch": true}'::jsonb
+                WHERE batch_id = %s
+                """,
+                (batch_id,),
+            )
+            cur.execute(
+                """
+                UPDATE acquisition.cn_qcc_planner_state
+                SET source_rank_watermark = %s,
+                    source_entity_watermark = %s,
+                    backfill_bucket = %s,
+                    last_completed_batch_id = %s,
+                    updated_at = now()
+                WHERE state_key = 'CN_QCC_APPLICANT'
+                """,
+                (
+                    int(batch["source_rank_to"]),
+                    str(batch["source_entity_to"] or ""),
+                    (int(batch["backfill_bucket"]) + 1) % 52,
+                    batch["batch_id"],
+                ),
+            )
+        conn.commit()
+
+
 def acquisition_state(
     *,
     enabled: bool,
@@ -131,6 +181,11 @@ def run_cycle(
     result, or report that the operator is waiting for the collector result.
     This makes the command safe for host schedulers to invoke repeatedly.
     """
+    if capacity <= 0:
+        raise ValueError("capacity must be positive")
+    if refresh_days <= 0:
+        raise ValueError("refresh_days must be positive")
+
     before = acquisition_state(enabled=enabled, incoming_root=incoming_root)
     if not enabled:
         return {"action": "DISABLED", "state": asdict(before)}
@@ -138,6 +193,7 @@ def run_cycle(
     if before.readiness == "READY_TO_PLAN":
         plan = create_batch(capacity=capacity, refresh_days=refresh_days)
         if plan.task_count == 0:
+            _complete_empty_batch(plan.batch_id)
             return {
                 "action": "IDLE",
                 "plan": plan_as_dict(plan),
@@ -152,6 +208,12 @@ def run_cycle(
         }
 
     if before.readiness == "READY_TO_EXPORT":
+        if before.task_count == 0:
+            _complete_empty_batch(before.open_batch_id)
+            return {
+                "action": "IDLE",
+                "state": asdict(acquisition_state(enabled=True, incoming_root=incoming_root)),
+            }
         exported = export_batch(
             before.open_batch_id,
             outgoing_path(outgoing_root, before.batch_key),
