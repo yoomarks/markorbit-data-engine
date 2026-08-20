@@ -4,6 +4,7 @@ import csv
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Iterable
 
@@ -177,41 +178,63 @@ def _observation_from_fields(
     )
 
 
+def _assign_field(fields: dict[str, str], canonical: str, value: str) -> None:
+    if canonical in fields and fields[canonical] and value:
+        fields[canonical] = fields[canonical] + "\n" + value
+    elif value or canonical not in fields:
+        fields[canonical] = value
+
+
+def _parse_key_value_text(
+    text: str,
+    *,
+    fallback_serial: str | None,
+) -> list[CollectorObservation]:
+    """Parse the collector's label:value export without rewriting address punctuation."""
+    fields: dict[str, str] = {}
+    last_key: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        canonical: str | None = None
+        value = ""
+        if ":" in line:
+            possible_label, possible_value = line.split(":", 1)
+            canonical = _canonical_key(possible_label)
+            if canonical is not None:
+                value = possible_value.strip()
+        if canonical is not None:
+            _assign_field(fields, canonical, value)
+            last_key = canonical
+            continue
+        if last_key == "correspondent_name_address_raw":
+            _assign_field(fields, last_key, line)
+    return [_observation_from_fields(fields, fallback_serial=fallback_serial)] if fields else []
+
+
 def _parse_key_value_rows(
     rows: list[list[str]],
     *,
     fallback_serial: str | None,
 ) -> list[CollectorObservation]:
+    """Parse a true two-column label/value CSV fallback."""
     fields: dict[str, str] = {}
     last_key: str | None = None
     for row in rows:
         if not row or not any(cell.strip() for cell in row):
             continue
         label = row[0].strip()
-        value = ""
         canonical = _canonical_key(label)
         if canonical is not None:
             value = ",".join(row[1:]).strip() if len(row) > 1 else ""
-        elif len(row) == 1 and ":" in label:
-            possible_label, possible_value = label.split(":", 1)
-            canonical = _canonical_key(possible_label)
-            if canonical is not None:
-                value = possible_value.strip()
-        if canonical is not None:
-            if canonical in fields and fields[canonical] and value:
-                fields[canonical] = fields[canonical] + "\n" + value
-            elif value or canonical not in fields:
-                fields[canonical] = value
+            _assign_field(fields, canonical, value)
             last_key = canonical
             continue
-
-        # Preserve wrapped lines in Correspondent Name/Address instead of guessing
-        # which token is a person, firm, street, city, state, or postal code.
         if last_key == "correspondent_name_address_raw":
             continuation = ",".join(row).strip()
             if continuation:
-                fields[last_key] = (fields.get(last_key, "") + "\n" + continuation).strip()
-
+                _assign_field(fields, last_key, continuation)
     return [_observation_from_fields(fields, fallback_serial=fallback_serial)] if fields else []
 
 
@@ -264,12 +287,11 @@ def parse_collector_csv(
     *,
     serial_number: str | None = None,
 ) -> list[CollectorObservation]:
-    """Parse either a wide CSV export or the collector's label/value CSV form.
+    """Parse either a wide CSV export or the collector's label/value form.
 
-    The parser intentionally preserves the entire Correspondent Name/Address block.
-    It extracts only fields that are explicit in the collector output and does not
-    infer whether a secondary correspondent email belongs to a US attorney, foreign
-    intermediary, applicant, or another party.
+    The label:value form is read as raw text so punctuation and line boundaries in
+    Correspondent Name/Address are retained for later analysis. Only explicit fields
+    are extracted; ownership of secondary contacts is never inferred here.
     """
     path = Path(path)
     fallback_serial = (
@@ -277,15 +299,28 @@ def parse_collector_csv(
         if serial_number
         else _serial_from_text(path.name)
     )
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        rows = [list(row) for row in csv.reader(handle)]
-    if not rows:
+    text = path.read_text(encoding="utf-8-sig")
+    if not text.strip():
         return []
 
-    header_hits = sum(1 for cell in rows[0] if _canonical_key(cell) is not None)
-    likely_wide = len(rows[0]) >= 3 and header_hits >= 2
+    first_nonempty = next((line for line in text.splitlines() if line.strip()), "")
+    first_row = next(csv.reader(StringIO(first_nonempty)), [])
+    header_hits = sum(1 for cell in first_row if _canonical_key(cell) is not None)
+    likely_wide = len(first_row) >= 3 and header_hits >= 2
     if likely_wide:
+        rows = [list(row) for row in csv.reader(StringIO(text))]
         return _parse_wide_rows(rows, fallback_serial=fallback_serial)
+
+    colon_labels = 0
+    for line in text.splitlines()[:20]:
+        if ":" not in line:
+            continue
+        possible_label = line.split(":", 1)[0]
+        colon_labels += int(_canonical_key(possible_label) is not None)
+    if colon_labels:
+        return _parse_key_value_text(text, fallback_serial=fallback_serial)
+
+    rows = [list(row) for row in csv.reader(StringIO(text))]
     return _parse_key_value_rows(rows, fallback_serial=fallback_serial)
 
 
