@@ -109,6 +109,24 @@ services:
       clickhouse:
         condition: service_healthy
 
+  qcc-acquisition:
+    profiles: ["qcc"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.cn_qcc.runner"]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      CLICKHOUSE_HOST: clickhouse
+      RAW_DATA_ROOT: /data/raw
+    volumes:
+      - "${RAW_DATA_PATH}:/data/raw"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   clickhouse_data:
