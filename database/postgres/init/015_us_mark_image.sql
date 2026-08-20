@@ -38,6 +38,7 @@ ON visual.trademark_asset (asset_id);
 CREATE TABLE IF NOT EXISTS acquisition.us_mark_image_planner_state (
     state_key text PRIMARY KEY,
     backfill_serial_cursor text NOT NULL DEFAULT '',
+    request_not_before timestamptz,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
