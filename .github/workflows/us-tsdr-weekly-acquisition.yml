@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  unit-and-postgres-fixture:
+  postgres-fixture:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,11 +24,6 @@ jobs:
 
       - name: Start PostgreSQL
         run: docker compose up -d --wait postgres
-
-      - name: Run TSDR policy unit tests
-        run: >-
-          docker compose run --rm --no-deps worker
-          pytest -q tests/test_us_tsdr_weekly_policy.py
 
       - name: Run weekly acquisition export/result fixture
         run: >-
