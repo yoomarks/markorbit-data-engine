@@ -7,7 +7,7 @@ import json
 from typing import Iterable
 
 from app.db import clickhouse_client, postgres_conn
-from app.us_mark_image import DEFAULT_QUEUE_FLOOR, DEFAULT_QUEUE_TARGET
+from app.us_mark_image import DEFAULT_QUEUE_FLOOR, DEFAULT_QUEUE_TARGET, mark_image_url
 from app.us_mark_image.migrations import ensure_mark_image_schema
 
 
@@ -22,7 +22,7 @@ class MarkImageCandidate:
 
     @property
     def source_url(self) -> str:
-        return f"https://tsdr.uspto.gov/img/{self.serial_number}/large"
+        return mark_image_url(self.serial_number)
 
     @property
     def source_mark_fingerprint(self) -> str:
