@@ -20,6 +20,8 @@ jobs:
         run: docker compose up -d --wait postgres
       - name: Run QCC planning/export/import fixture
         run: docker compose run --rm --no-deps worker python -m app.cn_qcc.validate_fixture
+      - name: Run QCC periodic operator fixture
+        run: docker compose run --rm --no-deps worker python -m app.cn_qcc.validate_operator_fixture
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
