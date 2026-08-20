@@ -17,7 +17,7 @@ dependencies = [
   "xlrd==2.0.2",
   "phonenumbers==9.0.37",
   "pycountry==26.2.16",
-  "pillow==11.3.0"
+  "pillow==12.2.0"
 ]
 
 [project.optional-dependencies]
