@@ -9,6 +9,7 @@ from app.cn_qcc.exporter import export_batch
 from app.cn_qcc.incoming import ingest_result
 from app.cn_qcc.operator import acquisition_state, run_cycle
 from app.cn_qcc.planner import create_batch, plan_as_dict
+from app.cn_qcc.preflight import production_preflight
 from app.config import get_settings
 
 
@@ -29,8 +30,20 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--csv", type=Path, required=True)
 
     sub.add_parser("state", help="show current QCC acquisition readiness and operator action")
-    sub.add_parser("cycle", help="run one idempotent scheduler-friendly QCC acquisition cycle")
+    sub.add_parser("preflight", help="check whether periodic QCC acquisition is safe to enable/run")
+    sub.add_parser("cycle", help="run one preflight-gated scheduler-friendly QCC acquisition cycle")
     return parser
+
+
+def _preflight(settings) -> dict[str, object]:
+    return production_preflight(
+        capacity=settings.cn_qcc_capacity,
+        refresh_days=settings.cn_qcc_refresh_days,
+        cycle_interval_seconds=settings.cn_qcc_cycle_interval_seconds,
+        stale_batch_hours=settings.cn_qcc_stale_batch_hours,
+        outgoing_root=settings.resolved_cn_qcc_outgoing_root,
+        incoming_root=settings.resolved_cn_qcc_incoming_root,
+    ).as_dict()
 
 
 def main() -> None:
@@ -49,14 +62,21 @@ def main() -> None:
                 incoming_root=settings.resolved_cn_qcc_incoming_root,
             )
         )
+    elif args.command == "preflight":
+        payload = _preflight(settings)
     else:
-        payload = run_cycle(
-            enabled=settings.cn_qcc_acquisition_enabled,
-            capacity=settings.cn_qcc_capacity,
-            refresh_days=settings.cn_qcc_refresh_days,
-            outgoing_root=settings.resolved_cn_qcc_outgoing_root,
-            incoming_root=settings.resolved_cn_qcc_incoming_root,
-        )
+        preflight = _preflight(settings)
+        if settings.cn_qcc_acquisition_enabled and not preflight["ready"]:
+            payload = {"action": "BLOCKED_BY_PREFLIGHT", "preflight": preflight}
+        else:
+            payload = run_cycle(
+                enabled=settings.cn_qcc_acquisition_enabled,
+                capacity=settings.cn_qcc_capacity,
+                refresh_days=settings.cn_qcc_refresh_days,
+                outgoing_root=settings.resolved_cn_qcc_outgoing_root,
+                incoming_root=settings.resolved_cn_qcc_incoming_root,
+            )
+            payload["preflight"] = preflight
     print(json.dumps(payload, ensure_ascii=False, default=str))
 
 
