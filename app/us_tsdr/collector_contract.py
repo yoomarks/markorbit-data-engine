@@ -9,12 +9,12 @@ from typing import Iterable
 
 
 COLLECTOR_CONTRACT_VERSION = "US_TSDR_COLLECTOR_TXT_CSV_V1"
-VISUAL_ASSET_POLICY_VERSION = "US_TSDR_MARK_IMAGE_DEFERRED_V1"
 STATUS_VIEW_TEMPLATE = "https://tsdr.uspto.gov/statusview/sn{serial_number}"
-MARK_IMAGE_TEMPLATE = "https://tsdr.uspto.gov/img/{serial_number}/large"
-DEFAULT_MARK_IMAGE_MODE = "DEFERRED_REMOTE_ONLY"
 
-_EMAIL_RE = re.compile(r"(?i)(?<![A-Z0-9._%+\-])[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}(?![A-Z0-9._%+\-])")
+_EMAIL_RE = re.compile(
+    r"(?i)(?<![A-Z0-9._%+\-])[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"
+    r"(?![A-Z0-9._%+\-])"
+)
 _SERIAL_RE = re.compile(r"(?<!\d)(\d{8})(?!\d)")
 
 
@@ -27,27 +27,6 @@ def validate_serial_number(value: object) -> str:
 
 def status_view_url(serial_number: object) -> str:
     return STATUS_VIEW_TEMPLATE.format(serial_number=validate_serial_number(serial_number))
-
-
-def mark_image_url(serial_number: object) -> str:
-    return MARK_IMAGE_TEMPLATE.format(serial_number=validate_serial_number(serial_number))
-
-
-def mark_image_descriptor(serial_number: object) -> dict[str, object]:
-    """Return a remote locator without implying that the image must be downloaded.
-
-    Mark-image binary acquisition is intentionally independent from structured TSDR
-    coverage. Missing local image bytes are therefore not a structured-data gap.
-    """
-    serial = validate_serial_number(serial_number)
-    return {
-        "policy_version": VISUAL_ASSET_POLICY_VERSION,
-        "asset_kind": "USPTO_TSDR_MARK_IMAGE",
-        "serial_number": serial,
-        "source_url": mark_image_url(serial),
-        "acquisition_mode": DEFAULT_MARK_IMAGE_MODE,
-        "binary_required_for_tsdr_structured_coverage": False,
-    }
 
 
 def _label_key(value: object) -> str:
@@ -198,7 +177,11 @@ def _observation_from_fields(
     )
 
 
-def _parse_key_value_rows(rows: list[list[str]], *, fallback_serial: str | None) -> list[CollectorObservation]:
+def _parse_key_value_rows(
+    rows: list[list[str]],
+    *,
+    fallback_serial: str | None,
+) -> list[CollectorObservation]:
     fields: dict[str, str] = {}
     last_key: str | None = None
     for row in rows:
@@ -232,7 +215,11 @@ def _parse_key_value_rows(rows: list[list[str]], *, fallback_serial: str | None)
     return [_observation_from_fields(fields, fallback_serial=fallback_serial)] if fields else []
 
 
-def _parse_wide_rows(rows: list[list[str]], *, fallback_serial: str | None) -> list[CollectorObservation]:
+def _parse_wide_rows(
+    rows: list[list[str]],
+    *,
+    fallback_serial: str | None,
+) -> list[CollectorObservation]:
     if not rows:
         return []
     headers = rows[0]
@@ -250,7 +237,6 @@ def _parse_wide_rows(rows: list[list[str]], *, fallback_serial: str | None) -> l
             if canonical is not None:
                 fields[canonical] = value
         observation = _observation_from_fields(fields, fallback_serial=fallback_serial)
-        combined = observation.normalized_payload()
         combined_raw = dict(observation.raw_fields)
         combined_raw.update(raw_fields)
         observations.append(
@@ -270,11 +256,14 @@ def _parse_wide_rows(rows: list[list[str]], *, fallback_serial: str | None) -> l
                 raw_fields=combined_raw,
             )
         )
-        del combined
     return observations
 
 
-def parse_collector_csv(path: Path, *, serial_number: str | None = None) -> list[CollectorObservation]:
+def parse_collector_csv(
+    path: Path,
+    *,
+    serial_number: str | None = None,
+) -> list[CollectorObservation]:
     """Parse either a wide CSV export or the collector's label/value CSV form.
 
     The parser intentionally preserves the entire Correspondent Name/Address block.
@@ -283,7 +272,11 @@ def parse_collector_csv(path: Path, *, serial_number: str | None = None) -> list
     intermediary, applicant, or another party.
     """
     path = Path(path)
-    fallback_serial = validate_serial_number(serial_number) if serial_number else _serial_from_text(path.name)
+    fallback_serial = (
+        validate_serial_number(serial_number)
+        if serial_number
+        else _serial_from_text(path.name)
+    )
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         rows = [list(row) for row in csv.reader(handle)]
     if not rows:
