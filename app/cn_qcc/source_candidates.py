@@ -13,6 +13,8 @@ class CandidatePool:
     candidates: list[QccCandidate]
     source_watermark_to: tuple[int, str]
     backfill_bucket: int
+    backfill_entity_watermark_to: str
+    backfill_bucket_exhausted: bool
     lane_counts: dict[str, int]
 
 
@@ -184,11 +186,27 @@ def _candidate_from_rows(
     )
 
 
+def _bounded_backfill_rows(
+    rows: list[dict[str, object]],
+    *,
+    scan_limit: int,
+    current_watermark: str,
+) -> tuple[list[dict[str, object]], str, bool]:
+    """Return one bounded backfill page plus durable cursor/exhaustion state."""
+    selected = rows[:scan_limit]
+    watermark_to = current_watermark
+    if selected:
+        watermark_to = _entity_id(selected[-1]["entity_id"])
+    exhausted = len(rows) <= scan_limit
+    return selected, watermark_to, exhausted
+
+
 def load_candidate_pool(
     *,
     source_watermark: tuple[int, str],
     capacity: int,
     backfill_bucket: int,
+    backfill_entity_watermark: str = "",
 ) -> CandidatePool:
     if capacity <= 0:
         raise ValueError("capacity must be positive")
@@ -197,6 +215,13 @@ def load_candidate_pool(
         entity_watermark = _entity_id(entity_watermark) if entity_watermark else ""
     except ValueError:
         entity_watermark = ""
+    try:
+        backfill_entity_watermark = (
+            _entity_id(backfill_entity_watermark) if backfill_entity_watermark else ""
+        )
+    except ValueError:
+        backfill_entity_watermark = ""
+
     client = clickhouse_client()
     scan_limit = min(max(capacity * 3, 5000), 200_000)
 
@@ -228,7 +253,7 @@ def load_candidate_pool(
     due_ids = _due_entity_ids(scan_limit)
 
     bucket = int(backfill_bucket) % 52
-    backfill_rows = _rows(
+    backfill_query_rows = _rows(
         client,
         f"""
         SELECT toString(assumeNotNull(entity_id)) AS entity_id
@@ -238,10 +263,16 @@ def load_candidate_pool(
           AND role IN ('OWNER', 'CO_OWNER', 'APPLICANT')
           AND isNotNull(entity_id)
           AND cityHash64(toString(assumeNotNull(entity_id))) % 52 = {bucket}
+          AND toString(assumeNotNull(entity_id)) > '{backfill_entity_watermark}'
         GROUP BY entity_id
         ORDER BY entity_id
-        LIMIT {scan_limit}
+        LIMIT {scan_limit + 1}
         """,
+    )
+    backfill_rows, backfill_watermark_to, backfill_exhausted = _bounded_backfill_rows(
+        backfill_query_rows,
+        scan_limit=scan_limit,
+        current_watermark=backfill_entity_watermark,
     )
     backfill_ids = [_entity_id(row["entity_id"]) for row in backfill_rows]
 
@@ -279,14 +310,17 @@ def load_candidate_pool(
         candidates=candidates,
         source_watermark_to=watermark_to,
         backfill_bucket=bucket,
+        backfill_entity_watermark_to=backfill_watermark_to,
+        backfill_bucket_exhausted=backfill_exhausted,
         lane_counts={
             "recent_source_change": len(changed_ids),
             "refresh_or_retry": len(due_ids),
             "historical_bucket": len(backfill_ids),
+            "historical_bucket_exhausted": int(backfill_exhausted),
             "deduplicated_entities": len(ordered),
             "company_candidates": len(candidates),
         },
     )
 
 
-__all__ = ["CandidatePool", "load_candidate_pool"]
+__all__ = ["CandidatePool", "_bounded_backfill_rows", "load_candidate_pool"]

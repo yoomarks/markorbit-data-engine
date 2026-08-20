@@ -5,9 +5,11 @@ CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_planner_state (
     source_rank_watermark bigint NOT NULL DEFAULT 0 CHECK (source_rank_watermark >= 0),
     source_entity_watermark text NOT NULL DEFAULT '',
     backfill_bucket integer NOT NULL DEFAULT 0 CHECK (backfill_bucket >= 0 AND backfill_bucket < 52),
+    backfill_entity_watermark text NOT NULL DEFAULT '',
     last_completed_batch_id uuid,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE acquisition.cn_qcc_planner_state ADD COLUMN IF NOT EXISTS backfill_entity_watermark text NOT NULL DEFAULT '';
 INSERT INTO acquisition.cn_qcc_planner_state (state_key) VALUES ('CN_QCC_APPLICANT') ON CONFLICT (state_key) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_company_coverage (
@@ -35,6 +37,9 @@ CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_batch (
     target_capacity integer NOT NULL CHECK (target_capacity > 0),
     refresh_days integer NOT NULL CHECK (refresh_days > 0),
     backfill_bucket integer NOT NULL CHECK (backfill_bucket >= 0 AND backfill_bucket < 52),
+    backfill_entity_from text NOT NULL DEFAULT '',
+    backfill_entity_to text NOT NULL DEFAULT '',
+    backfill_bucket_exhausted boolean NOT NULL DEFAULT false,
     task_count integer NOT NULL DEFAULT 0 CHECK (task_count >= 0),
     source_rank_from bigint NOT NULL DEFAULT 0 CHECK (source_rank_from >= 0),
     source_entity_from text NOT NULL DEFAULT '',
@@ -53,6 +58,9 @@ CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_batch (
     CHECK (export_sha256 IS NULL OR export_sha256 ~ '^[0-9a-fA-F]{64}$'),
     CHECK (result_sha256 IS NULL OR result_sha256 ~ '^[0-9a-fA-F]{64}$')
 );
+ALTER TABLE acquisition.cn_qcc_batch ADD COLUMN IF NOT EXISTS backfill_entity_from text NOT NULL DEFAULT '';
+ALTER TABLE acquisition.cn_qcc_batch ADD COLUMN IF NOT EXISTS backfill_entity_to text NOT NULL DEFAULT '';
+ALTER TABLE acquisition.cn_qcc_batch ADD COLUMN IF NOT EXISTS backfill_bucket_exhausted boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_cn_qcc_one_open_batch ON acquisition.cn_qcc_batch ((1)) WHERE status IN ('PLANNED', 'EXPORTED', 'RESULT_RECEIVED');
 
 CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_task (
@@ -93,7 +101,7 @@ CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_company_observation (
     task_id uuid NOT NULL UNIQUE REFERENCES acquisition.cn_qcc_task(task_id) ON DELETE RESTRICT,
     batch_id uuid NOT NULL REFERENCES acquisition.cn_qcc_batch(batch_id) ON DELETE RESTRICT,
     entity_id uuid NOT NULL REFERENCES entity.entity(entity_id) ON DELETE RESTRICT,
-    observation_hash char(64) NOT NULL UNIQUE,
+    observation_hash char(64) NOT NULL,
     qcc_company_id text NOT NULL DEFAULT '',
     company_name text NOT NULL DEFAULT '',
     unified_social_credit_code text NOT NULL DEFAULT '',
@@ -119,7 +127,71 @@ CREATE TABLE IF NOT EXISTS acquisition.cn_qcc_company_observation (
     CHECK (observation_hash ~ '^[0-9a-fA-F]{64}$'),
     CHECK (source_result_sha256 ~ '^[0-9a-fA-F]{64}$')
 );
+ALTER TABLE acquisition.cn_qcc_company_observation DROP CONSTRAINT IF EXISTS cn_qcc_company_observation_observation_hash_key;
+CREATE INDEX IF NOT EXISTS ix_cn_qcc_observation_hash ON acquisition.cn_qcc_company_observation(observation_hash);
 CREATE INDEX IF NOT EXISTS ix_cn_qcc_observation_entity ON acquisition.cn_qcc_company_observation(entity_id, observed_at DESC);
+
+CREATE OR REPLACE FUNCTION acquisition.cn_qcc_normalize_company_name(value text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT lower(regexp_replace(translate(btrim(coalesce(value, '')), '，。；：、（）()【】[]《》“”‘’·-_.&', ''), '[[:space:]]+', '', 'g'))
+$$;
+
+CREATE OR REPLACE FUNCTION acquisition.cn_qcc_validate_observation_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    expected_name text;
+BEGIN
+    SELECT normalized_name INTO expected_name
+    FROM acquisition.cn_qcc_task
+    WHERE task_id = NEW.task_id AND batch_id = NEW.batch_id AND entity_id = NEW.entity_id;
+    IF expected_name IS NULL THEN
+        RAISE EXCEPTION 'QCC observation does not match an exported task identity' USING ERRCODE = '23514';
+    END IF;
+    IF acquisition.cn_qcc_normalize_company_name(NEW.company_name) = ''
+       OR acquisition.cn_qcc_normalize_company_name(NEW.company_name) <> acquisition.cn_qcc_normalize_company_name(expected_name) THEN
+        RAISE EXCEPTION 'QCC returned company_name does not exactly match exported task company identity' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END
+$$;
+DROP TRIGGER IF EXISTS trg_cn_qcc_validate_observation_identity ON acquisition.cn_qcc_company_observation;
+CREATE TRIGGER trg_cn_qcc_validate_observation_identity BEFORE INSERT ON acquisition.cn_qcc_company_observation FOR EACH ROW EXECUTE FUNCTION acquisition.cn_qcc_validate_observation_identity();
+
+CREATE OR REPLACE FUNCTION acquisition.cn_qcc_guard_backfill_progress()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    completed_bucket integer;
+    completed_cursor text;
+    bucket_exhausted boolean;
+BEGIN
+    IF NEW.last_completed_batch_id IS DISTINCT FROM OLD.last_completed_batch_id AND NEW.last_completed_batch_id IS NOT NULL THEN
+        SELECT backfill_bucket, backfill_entity_to, backfill_bucket_exhausted
+        INTO completed_bucket, completed_cursor, bucket_exhausted
+        FROM acquisition.cn_qcc_batch
+        WHERE batch_id = NEW.last_completed_batch_id;
+        IF completed_bucket IS NOT NULL THEN
+            IF bucket_exhausted THEN
+                NEW.backfill_bucket := (completed_bucket + 1) % 52;
+                NEW.backfill_entity_watermark := '';
+            ELSE
+                NEW.backfill_bucket := completed_bucket;
+                NEW.backfill_entity_watermark := coalesce(completed_cursor, '');
+            END IF;
+        END IF;
+    END IF;
+    RETURN NEW;
+END
+$$;
+DROP TRIGGER IF EXISTS trg_cn_qcc_guard_backfill_progress ON acquisition.cn_qcc_planner_state;
+CREATE TRIGGER trg_cn_qcc_guard_backfill_progress BEFORE UPDATE ON acquisition.cn_qcc_planner_state FOR EACH ROW EXECUTE FUNCTION acquisition.cn_qcc_guard_backfill_progress();
 
 INSERT INTO control.schema_version(component, version)
 VALUES ('CN_QCC_ENRICHMENT', 'CN_QCC_ENRICHMENT_V1')
