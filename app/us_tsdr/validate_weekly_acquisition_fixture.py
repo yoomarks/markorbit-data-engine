@@ -19,7 +19,8 @@ def _reset() -> None:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "TRUNCATE acquisition.us_tsdr_task, acquisition.us_tsdr_batch, acquisition.us_tsdr_case_coverage"
+                "TRUNCATE acquisition.us_tsdr_contact_observation, acquisition.us_tsdr_task, "
+                "acquisition.us_tsdr_batch, acquisition.us_tsdr_case_coverage"
             )
             cur.execute(
                 """
