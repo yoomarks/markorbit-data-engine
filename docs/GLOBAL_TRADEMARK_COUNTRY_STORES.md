@@ -177,17 +177,32 @@ observation. The native EU schema is intentionally allowed to grow beyond TM-Lin
 
 ### Canada
 
-- `CIPO_GLOBAL_2025_06_14`: authoritative ST.96 baseline. Core ingestion is implemented with
-  durable batch commits and resumable checkpoints.
-- `CIPO_WEEKLY`: authoritative updates and deletion stream after the baseline. Core Update/Delete
-  observations and source-presence tombstones are implemented and tested. `pipeline_ready=false`
-  remains deliberate until rich weekly party/goods/events/relationships/assets parsing is complete.
-- Earlier weekly packages are optional historical replay, not required for current-state build.
-- Preserve rich ST.96 domains: party, goods/services, events/history, registry relationships and
-  assets. TM-Link CA is reference-only.
+- `CIPO_GLOBAL_2025_06_14`: authoritative ST.96 baseline. Core ingestion is durable/resumable and
+  `CIPO_ST96_RICH_OBSERVATION_V1` now preserves source-faithful child observations for the current
+  owner, trademark agent, representative for service, goods/services statements and Nice classes,
+  office actions/events, previous-associated/divisional application links, and national associated
+  marks.
+- Rich child rows are **immutable source-object observations**, keyed by deterministic
+  `source_row_hash`. They are not a source-current table. A later weekly Update contributes a new
+  source-object-specific child snapshot and leaves the earlier observation intact for history and
+  provenance.
+- `CIPO_WEEKLY`: Update/Delete observations, exact application/extension source-presence
+  tombstones, and the same rich child observation extraction are implemented. A Delete does not
+  insert empty replacement children and never erases previously observed party/goods/event/
+  relationship evidence.
+- `CIPO_WEEKLY.pipeline_ready=false` remains deliberate. Before the weekly source is promoted to a
+  production-current pipeline, Data Engine still needs an ordered source-current projection that
+  applies baseline/predecessor/weekly precedence explicitly, plus asset/image ingestion and real
+  package shape/performance validation.
+- Earlier weekly packages remain optional temporal-history replay rather than a prerequisite for
+  reconstructing current state from the 2025-06-14 GLOBAL baseline plus later weekly packages.
+- TM-Link CA remains reference-only because official CIPO ST.96 is richer and newer.
 
-A CIPO `Delete` observation is a source tombstone for the exact application/extension record; it
-is not promoted into a legal conclusion that the trademark itself is invalid or nonexistent.
+CIPO's relationship structures are retained as source-declared registry facts. In particular,
+associated-mark and divisional/previous-application links must not be reinterpreted inside Data
+Engine as a semantic brand family. Likewise, a CIPO `Delete` observation is only a source tombstone
+for the exact application/extension record; it is not a legal conclusion that the trademark itself
+is invalid or nonexistent.
 
 ### Australia
 
