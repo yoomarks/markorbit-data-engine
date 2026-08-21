@@ -50,6 +50,10 @@ def _application_identity(element: ET.Element) -> tuple[str | None, str]:
     return None, "00"
 
 
+def _record_key(application_number: str, extension_counter: str) -> str:
+    return f"{application_number}:{extension_counter}"
+
+
 def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
     for _event, element in ET.iterparse(handle, events=("end",)):
         if _local_name(element.tag) != "Trademark":
@@ -57,6 +61,7 @@ def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
         application_number, extension_counter = _application_identity(element)
         if application_number:
             yield {
+                "record_key": _record_key(application_number, extension_counter),
                 "application_number": application_number,
                 "extension_counter": extension_counter,
                 "registration_number": _first_text(element, "RegistrationNumber"),
@@ -118,12 +123,16 @@ def ingest_cipo_st96_core(
     )
     sql = """
         INSERT INTO trademark_ca.st96_record (
-            application_number, extension_counter, registration_number,
+            record_key, application_number, extension_counter, registration_number,
             international_registration_number, mark_text, mark_category, source_status,
             status_date, filed_date, registered_date, expiry_date, termination_date,
             application_language, source_object_id, source_payload
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-        ON CONFLICT (application_number) DO UPDATE SET
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+        )
+        ON CONFLICT (record_key) DO UPDATE SET
+            application_number = EXCLUDED.application_number,
             extension_counter = EXCLUDED.extension_counter,
             registration_number = EXCLUDED.registration_number,
             international_registration_number = EXCLUDED.international_registration_number,
@@ -141,8 +150,9 @@ def ingest_cipo_st96_core(
     """
     lineage_sql = """
         INSERT INTO acquisition.global_trademark_record_source (
-            jurisdiction, application_number, source_object_id, source_record_role
-        ) VALUES ('CA', %s, %s, %s)
+            jurisdiction, application_number, source_record_key,
+            source_object_id, source_record_role
+        ) VALUES ('CA', %s, %s, %s, %s)
         ON CONFLICT DO NOTHING
     """
 
@@ -153,8 +163,10 @@ def ingest_cipo_st96_core(
         with conn.cursor() as cur:
             for record in iter_cipo_records(path):
                 application_number = str(record["application_number"])
+                record_key = str(record["record_key"])
                 rows.append(
                     (
+                        record_key,
                         application_number,
                         record["extension_counter"],
                         record["registration_number"],
@@ -172,7 +184,9 @@ def ingest_cipo_st96_core(
                         json.dumps(record, ensure_ascii=False, default=str),
                     )
                 )
-                lineage_rows.append((application_number, source_object, "CIPO_ST96_CORE"))
+                lineage_rows.append(
+                    (application_number, record_key, source_object, "CIPO_ST96_CORE")
+                )
                 if len(rows) >= batch_size:
                     cur.executemany(sql, rows)
                     cur.executemany(lineage_sql, lineage_rows)
