@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.db import postgres_conn
+from app.global_trademarks.ca_current import ensure_ca_current_projection_schema
 from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 
 
 GLOBAL_TRADEMARK_SCHEMA_COMPONENT = "GLOBAL_TRADEMARK"
-GLOBAL_TRADEMARK_SCHEMA_VERSION = "GLOBAL_TM_SCHEMA_V1"
+GLOBAL_TRADEMARK_SCHEMA_VERSION = "GLOBAL_TM_SCHEMA_V2"
 
 _MANIFEST_SQL = """
 CREATE TABLE IF NOT EXISTS acquisition.global_trademark_manifest (
@@ -65,6 +66,7 @@ class GlobalTrademarkMigrationStatus:
     ready: bool
     manifest_relation_ready: bool
     manifest_object_relation_ready: bool
+    ca_current_source_order_ready: bool
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -74,6 +76,7 @@ class GlobalTrademarkMigrationStatus:
             "ready": self.ready,
             "manifest_relation_ready": self.manifest_relation_ready,
             "manifest_object_relation_ready": self.manifest_object_relation_ready,
+            "ca_current_source_order_ready": self.ca_current_source_order_ready,
         }
 
 
@@ -84,9 +87,17 @@ def migrate_global_trademark_schema() -> GlobalTrademarkMigrationStatus:
     downloads or ingests a source file and it does not touch the CN/US fact stores.
     """
     ensure_seed_ingest_schema()
+    # The Canada ordered-current ledger references dataset manifests, so manifest
+    # relations must exist before that additive country projection is installed.
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(_MANIFEST_SQL)
+        conn.commit()
+
+    ensure_ca_current_projection_schema()
+
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO control.schema_version(component, version)
@@ -113,13 +124,16 @@ def global_trademark_migration_status() -> GlobalTrademarkMigrationStatus:
                 SELECT
                     to_regclass('acquisition.global_trademark_manifest') AS manifest_relation,
                     to_regclass('acquisition.global_trademark_manifest_object')
-                        AS manifest_object_relation
+                        AS manifest_object_relation,
+                    to_regclass('trademark_ca.current_source_order')
+                        AS ca_current_source_order_relation
                 """
             )
             relations = cur.fetchone()
     installed = str(row["version"]) if row else None
     manifest_ready = relations["manifest_relation"] is not None
     manifest_object_ready = relations["manifest_object_relation"] is not None
+    ca_current_ready = relations["ca_current_source_order_relation"] is not None
     return GlobalTrademarkMigrationStatus(
         installed_version=installed,
         expected_version=GLOBAL_TRADEMARK_SCHEMA_VERSION,
@@ -127,9 +141,11 @@ def global_trademark_migration_status() -> GlobalTrademarkMigrationStatus:
             installed == GLOBAL_TRADEMARK_SCHEMA_VERSION
             and manifest_ready
             and manifest_object_ready
+            and ca_current_ready
         ),
         manifest_relation_ready=manifest_ready,
         manifest_object_relation_ready=manifest_object_ready,
+        ca_current_source_order_ready=ca_current_ready,
     )
 
 
@@ -141,6 +157,7 @@ def assert_global_trademark_schema() -> None:
         "Global trademark schema is not at the required operator version. "
         f"installed={status.installed_version!r}, expected={status.expected_version!r}, "
         f"manifest_relation_ready={status.manifest_relation_ready}, "
-        f"manifest_object_relation_ready={status.manifest_object_relation_ready}. "
+        f"manifest_object_relation_ready={status.manifest_object_relation_ready}, "
+        f"ca_current_source_order_ready={status.ca_current_source_order_ready}. "
         "Run `python -m app.global_trademarks.cli migrate` before --apply ingestion."
     )
