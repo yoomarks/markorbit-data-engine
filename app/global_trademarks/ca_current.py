@@ -111,6 +111,13 @@ def ensure_ca_current_projection_schema() -> None:
         conn.commit()
 
 
+def _current_order_relation_ready(cur) -> bool:
+    cur.execute(
+        "SELECT to_regclass('trademark_ca.current_source_order') AS relation"
+    )
+    return cur.fetchone()["relation"] is not None
+
+
 def cipo_source_order(source_object_id: uuid.UUID) -> CipoSourceOrder | None:
     """Return the one manifest-backed ordering context for a CIPO source object.
 
@@ -124,13 +131,15 @@ def cipo_source_order(source_object_id: uuid.UUID) -> CipoSourceOrder | None:
                 """
                 SELECT
                     to_regclass('acquisition.global_trademark_manifest') AS manifest_relation,
-                    to_regclass('acquisition.global_trademark_manifest_object') AS object_relation
+                    to_regclass('acquisition.global_trademark_manifest_object') AS object_relation,
+                    to_regclass('trademark_ca.current_source_order') AS current_relation
                 """
             )
             relations = cur.fetchone()
             if (
                 relations["manifest_relation"] is None
                 or relations["object_relation"] is None
+                or relations["current_relation"] is None
             ):
                 return None
             cur.execute(
@@ -188,6 +197,8 @@ def current_projection_accepts(
     ``(source_period_end, source_precedence, source_sequence)``. Equal-ranked different
     source objects are rejected instead of being resolved by ingestion time.
     """
+    if not _current_order_relation_ready(cur):
+        return True
     cur.execute(
         """
         SELECT source_object_id, source_period_end, source_precedence, source_sequence
