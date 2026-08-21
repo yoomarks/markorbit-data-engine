@@ -5,11 +5,16 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
+from app.db import postgres_conn
 from app.global_trademarks.acceptance import (
     evaluate_manifest_acceptance,
     evaluate_manifest_data_trust,
 )
 from app.global_trademarks.gb_open_data import UK_FIELDS, ingest_ukipo_2018
+from app.global_trademarks.ingest_runs import (
+    begin_or_resume_ingest_run,
+    complete_ingest_run,
+)
 from app.global_trademarks.manifest import attach_manifest_object, upsert_source_manifest
 from app.global_trademarks.migrations import migrate_global_trademark_schema
 from app.global_trademarks.source_objects import register_source_object
@@ -36,6 +41,24 @@ def _uk_fixture(path: Path) -> None:
         writer.writerow(row)
 
 
+def _complete_wrong_pipeline(source_object_id) -> None:
+    wrong = begin_or_resume_ingest_run(
+        source_object_id=source_object_id,
+        jurisdiction="GB",
+        pipeline_id="UKIPO_2018_MADRID_IR_V1",
+        metadata={"fixture": "wrong pipeline must not satisfy acceptance"},
+    )
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            complete_ingest_run(
+                cur,
+                run_id=wrong.run_id,
+                checkpoint=0,
+                rows_committed=0,
+            )
+        conn.commit()
+
+
 def main() -> int:
     assert migrate_global_trademark_schema().ready
 
@@ -49,6 +72,7 @@ def main() -> int:
             path=source_path,
             source_period_start=date(2018, 1, 1),
             source_period_end=date(2018, 12, 31),
+            metadata={"intended_pipeline_id": "UKIPO_2018_DOMESTIC_V1"},
         )
         manifest = upsert_source_manifest(
             jurisdiction="GB",
@@ -70,7 +94,14 @@ def main() -> int:
 
         before = evaluate_manifest_acceptance(manifest.manifest_id)
         assert before.release_accepted is False
+        assert before.intended_pipeline_identity_complete is True
         assert "SOURCE_OBJECT_WITHOUT_COMPLETE_INGEST_RUN" in before.reason_codes
+
+        _complete_wrong_pipeline(source_object_id)
+        wrong_pipeline = evaluate_manifest_acceptance(manifest.manifest_id)
+        assert wrong_pipeline.release_accepted is False
+        assert wrong_pipeline.complete_run_objects == 0
+        assert "SOURCE_OBJECT_WITHOUT_COMPLETE_INGEST_RUN" in wrong_pipeline.reason_codes
 
         assert ingest_ukipo_2018(source_path, source_stream="DOMESTIC") == 1
         accepted = evaluate_manifest_acceptance(manifest.manifest_id)
@@ -80,6 +111,7 @@ def main() -> int:
         assert accepted.objects_complete is True
         assert accepted.part_sequence_complete is True
         assert accepted.source_identity_complete is True
+        assert accepted.intended_pipeline_identity_complete is True
         assert accepted.sha_verified is True
         assert accepted.complete_run_objects == 1
         assert accepted.missing_run_objects == 0
@@ -142,6 +174,8 @@ def main() -> int:
         {
             "status": "PASS",
             "release_acceptance_fails_closed": True,
+            "exact_intended_pipeline_required": True,
+            "wrong_pipeline_does_not_satisfy_acceptance": True,
             "complete_ingest_required": True,
             "part_sequence_required": True,
             "source_identity_guarded": True,
