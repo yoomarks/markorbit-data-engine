@@ -13,6 +13,15 @@ Flow:
 Source lineage is mandatory. `acquisition.global_trademark_source_object` records the logical
 object key, SHA256 and source period without persisting host-specific absolute paths.
 
+Dataset-level ordering/completeness is tracked separately from individual files through:
+
+- `acquisition.global_trademark_manifest` — one source release / dataset manifest;
+- `acquisition.global_trademark_manifest_object` — exact source objects attached to that manifest.
+
+This allows a multi-object release such as the CIPO GLOBAL snapshot to express expected object
+count, deterministic part sequence, source period, source precedence and predecessor/baseline
+relationships without pretending that one ZIP represents the entire release.
+
 Source catalog state has two independent dimensions:
 
 - `active_now`: the source exists/is available or is part of the current acquisition plan.
@@ -20,6 +29,37 @@ Source catalog state has two independent dimensions:
 
 A source can therefore be `active_now=true` while `pipeline_ready=false`. This prevents the
 operator/catalog from confusing source availability with production ingestion capability.
+
+## Operator safety
+
+The versioned global-trademark control plane is `GLOBAL_TM_SCHEMA_V1` and the operator contract
+is `GLOBAL_TM_OPERATOR_V1`.
+
+Schema migration is an explicit operator action:
+
+```bash
+python -m app.global_trademarks.cli migrate
+```
+
+Country ingestion commands are **no-write plans by default**. Database mutation requires an
+explicit `--apply` flag after source preflight. The apply path registers the exact SHA-backed
+source object, attaches it to a dataset manifest, and acquires a PostgreSQL advisory execution
+lock so the same source scope cannot accidentally run twice on the current single-host setup.
+
+Example:
+
+```bash
+python -m app.global_trademarks.cli ingest-ca-st96 \
+  --path <file.zip> \
+  --source-id CIPO_GLOBAL_2025_06_14 \
+  --manifest-key CIPO_GLOBAL_2025_06_14 \
+  --expected-objects 161 \
+  --part-sequence 1
+```
+
+The command above performs preflight and prints a plan only. Add `--apply` only after the plan is
+accepted. Manifest attachment means the source object was received/registered; it does **not**
+mean ingestion or jurisdiction acceptance succeeded. Those remain separate evidence gates.
 
 ## Jurisdiction plans
 
@@ -52,11 +92,15 @@ observation. The native EU schema is intentionally allowed to grow beyond TM-Lin
 
 - `CIPO_GLOBAL_2025_06_14`: authoritative ST.96 baseline. Core ingestion is implemented with
   durable batch commits and resumable checkpoints.
-- `CIPO_WEEKLY`: authoritative updates and deletion stream after the baseline. The source is
-  available, but `pipeline_ready=false` until deletion/tombstone semantics are implemented and tested.
+- `CIPO_WEEKLY`: authoritative updates and deletion stream after the baseline. Core Update/Delete
+  observations and source-presence tombstones are implemented and tested. `pipeline_ready=false`
+  remains deliberate until rich weekly party/goods/events/relationships/assets parsing is complete.
 - Earlier weekly packages are optional historical replay, not required for current-state build.
 - Preserve rich ST.96 domains: party, goods/services, events/history, registry relationships and
   assets. TM-Link CA is reference-only.
+
+A CIPO `Delete` observation is a source tombstone for the exact application/extension record; it
+is not promoted into a legal conclusion that the trademark itself is invalid or nonexistent.
 
 ### Australia
 
@@ -75,16 +119,9 @@ observation. The native EU schema is intentionally allowed to grow beyond TM-Lin
   API access is confirmed usable.
 - Seed rows remain unverified current state until an official observation arrives.
 
-## Operational safety
+## Operational boundary
 
-Schema installation is additive and does not start acquisition:
-
-```bash
-python -m app.global_trademarks.cli catalog
-python -m app.global_trademarks.cli migrate
-```
-
-`migrate` creates or safely upgrades the country-native PostgreSQL schemas/tables. It does not
-rebuild or restart the existing CN worker, does not enable QCC, and does not download or ingest
-any real country data. Large source ingestion must use fixture validation, checksum-backed source
-objects and resumable/durable acquisition before production execution.
+Large-source ingestion must use no-write source preflight, the versioned migration gate,
+checksum-backed source objects, dataset manifests, the explicit `--apply` operator boundary,
+and durable/resumable acquisition. None of these commands rebuild or restart the existing CN
+worker, enable QCC, or authorize a new jurisdiction as accepted merely because its jobs complete.
