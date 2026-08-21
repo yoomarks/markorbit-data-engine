@@ -244,6 +244,38 @@ def attach_manifest_object(
         with conn.cursor() as cur:
             cur.execute(
                 """
+                SELECT m.jurisdiction AS manifest_jurisdiction,
+                       m.source_id AS manifest_source_id,
+                       m.expected_objects,
+                       s.jurisdiction AS object_jurisdiction,
+                       s.source_id AS object_source_id
+                FROM acquisition.global_trademark_manifest AS m
+                CROSS JOIN acquisition.global_trademark_source_object AS s
+                WHERE m.manifest_id = %s AND s.object_id = %s
+                FOR UPDATE OF m
+                """,
+                (manifest_id, source_object_id),
+            )
+            identity = cur.fetchone()
+            if not identity:
+                raise ValueError("manifest or source object does not exist")
+            if (
+                identity["manifest_jurisdiction"] != identity["object_jurisdiction"]
+                or identity["manifest_source_id"] != identity["object_source_id"]
+            ):
+                raise ValueError(
+                    "source object jurisdiction/source_id does not match its dataset manifest"
+                )
+            expected_objects = identity["expected_objects"]
+            if (
+                expected_objects is not None
+                and part_sequence is not None
+                and part_sequence > int(expected_objects)
+            ):
+                raise ValueError("part_sequence cannot exceed manifest expected_objects")
+
+            cur.execute(
+                """
                 INSERT INTO acquisition.global_trademark_manifest_object (
                     manifest_id, source_object_id, part_sequence, object_role
                 ) VALUES (%s, %s, %s, %s)
