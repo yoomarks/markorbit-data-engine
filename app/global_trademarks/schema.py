@@ -122,6 +122,7 @@ SCHEMA_SQL = dedent(
         source_payload jsonb NOT NULL DEFAULT '{}'::jsonb
     );
     CREATE TABLE IF NOT EXISTS trademark_au.party_activity (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_au.application(application_number),
         party_id bigint NOT NULL,
         party_role text NOT NULL,
@@ -135,48 +136,57 @@ SCHEMA_SQL = dedent(
         effective_from_date date,
         effective_to_date date,
         is_current boolean NOT NULL DEFAULT false,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, party_id, party_role, effective_from_date)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_au_party_activity_application
+        ON trademark_au.party_activity (application_number);
     CREATE TABLE IF NOT EXISTS trademark_au.application_link (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_au.application(application_number),
         link_type text NOT NULL,
         linked_application_number text NOT NULL,
         linked_application_country text,
         link_date date,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, link_type, linked_application_number)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_au_application_link_application
+        ON trademark_au.application_link (application_number);
     CREATE TABLE IF NOT EXISTS trademark_au.application_event (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_au.application(application_number),
         event_type text NOT NULL,
         event_category text,
         event_effective_date date,
         event_declared_date date,
         is_standing boolean,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, event_type, event_effective_date, event_declared_date)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_au_application_event_application
+        ON trademark_au.application_event (application_number);
     CREATE TABLE IF NOT EXISTS trademark_au.application_classification (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_au.application(application_number),
-        classification_system text NOT NULL,
-        classification text NOT NULL,
+        classification_system text,
+        classification text,
         classification_importance text,
         classification_inventiveness text,
         classification_source text,
         classification_date date,
         classification_removal_date date,
         is_current boolean,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, classification_system, classification, classification_date)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_au_application_classification_application
+        ON trademark_au.application_classification (application_number);
     CREATE TABLE IF NOT EXISTS trademark_au.application_description (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_au.application(application_number),
-        description_type text NOT NULL,
-        description_value text NOT NULL,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, description_type, description_value)
+        description_type text,
+        description_value text,
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_au_application_description_application
+        ON trademark_au.application_description (application_number);
 
     CREATE SCHEMA IF NOT EXISTS trademark_ca;
     CREATE TABLE IF NOT EXISTS trademark_ca.st96_record (
@@ -197,44 +207,54 @@ SCHEMA_SQL = dedent(
         source_payload jsonb NOT NULL DEFAULT '{}'::jsonb
     );
     CREATE TABLE IF NOT EXISTS trademark_ca.party (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
         party_role text NOT NULL,
         party_name text NOT NULL,
         address_country text,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, party_role, party_name)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_party_application
+        ON trademark_ca.party (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.goods_service (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
         class_number smallint,
         text_value text NOT NULL,
         language_code text,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, class_number, text_value)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_goods_service_application
+        ON trademark_ca.goods_service (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.event (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
         event_code text NOT NULL,
         event_date date,
         event_text text,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, event_code, event_date)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_event_application
+        ON trademark_ca.event (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.relationship (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
         relationship_type text NOT NULL,
         related_application_number text NOT NULL,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, relationship_type, related_application_number)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_relationship_application
+        ON trademark_ca.relationship (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.asset (
+        source_row_hash text PRIMARY KEY,
         application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
         asset_type text NOT NULL,
         object_key text NOT NULL,
         sha256 text NOT NULL,
-        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        PRIMARY KEY (application_number, asset_type, sha256)
+        source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_asset_application
+        ON trademark_ca.asset (application_number);
     """
 ).strip()
 
