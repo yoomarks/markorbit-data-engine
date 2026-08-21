@@ -28,6 +28,33 @@ def ingest_run_id(*, source_object_id: uuid.UUID, pipeline_id: str) -> uuid.UUID
     return uuid.uuid5(_RUN_NAMESPACE, f"{source_object_id}\0{pipeline_id}")
 
 
+def get_ingest_run_state(
+    *,
+    source_object_id: uuid.UUID,
+    pipeline_id: str,
+) -> IngestRunState | None:
+    run_id = ingest_run_id(source_object_id=source_object_id, pipeline_id=pipeline_id)
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT run_id, checkpoint, rows_committed, status
+                FROM acquisition.global_trademark_ingest_run
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return IngestRunState(
+        run_id=row["run_id"],
+        checkpoint=int(row["checkpoint"]),
+        rows_committed=int(row["rows_committed"]),
+        status=row["status"],
+    )
+
+
 def begin_or_resume_ingest_run(
     *,
     source_object_id: uuid.UUID,
