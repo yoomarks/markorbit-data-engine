@@ -16,7 +16,7 @@ from app.global_trademarks.preflight import SourcePreflight
 from app.global_trademarks.source_objects import register_source_object
 
 
-GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V2"
+GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +111,8 @@ def build_ingest_plan(
     source_id = source_id.strip()
     resolved_object_key = (object_key or path.name).strip()
     resolved_manifest_key = (manifest_key or resolved_object_key).strip()
+    if Path(preflight.path).resolve() != path.resolve():
+        raise ValueError("preflight source path does not match ingest plan path")
     if not jurisdiction or not source_id or not resolved_object_key or not resolved_manifest_key:
         raise ValueError("jurisdiction, source_id, object_key and manifest_key are required")
     if source_period_start and source_period_end and source_period_end < source_period_start:
@@ -160,7 +162,8 @@ def register_plan_source(
 
     Manifest attachment means the exact source object was received/registered. It does
     not mean parsing or ingestion succeeded; acceptance must additionally inspect the
-    ingest-run ledger.
+    ingest-run ledger. The digest comes from the already-completed no-write preflight;
+    the apply path re-verifies those bytes immediately before loader execution.
     """
     assert_global_trademark_schema()
     if not plan.preflight.schema_valid:
@@ -178,6 +181,7 @@ def register_plan_source(
             "max_records": plan.max_records,
             **(metadata or {}),
         },
+        precomputed_sha256=plan.preflight.sha256,
     )
     manifest = upsert_source_manifest(
         jurisdiction=plan.jurisdiction,
