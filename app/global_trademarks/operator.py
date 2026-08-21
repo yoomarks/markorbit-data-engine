@@ -16,7 +16,7 @@ from app.global_trademarks.preflight import SourcePreflight
 from app.global_trademarks.source_objects import register_source_object
 
 
-GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V1"
+GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +37,7 @@ class IngestPlan:
     baseline_manifest_key: str | None
     parser_version: str
     mapping_version: str
+    max_records: int | None
     preflight: SourcePreflight
 
     @property
@@ -78,6 +79,8 @@ class IngestPlan:
             "baseline_manifest_key": self.baseline_manifest_key,
             "parser_version": self.parser_version,
             "mapping_version": self.mapping_version,
+            "max_records": self.max_records,
+            "bounded_apply": self.max_records is not None,
             "execution_scope": self.execution_scope,
             "preflight": self.preflight.as_dict(),
         }
@@ -102,6 +105,7 @@ def build_ingest_plan(
     baseline_manifest_key: str | None = None,
     parser_version: str = "",
     mapping_version: str = "COUNTRY_NATIVE_V1",
+    max_records: int | None = None,
 ) -> IngestPlan:
     jurisdiction = jurisdiction.strip().upper()
     source_id = source_id.strip()
@@ -117,6 +121,8 @@ def build_ingest_plan(
         raise ValueError("expected_objects must be at least 1 when provided")
     if part_sequence is not None and part_sequence < 1:
         raise ValueError("part_sequence must be at least 1 when provided")
+    if max_records is not None and max_records < 1:
+        raise ValueError("max_records must be at least 1 when provided")
     if (
         expected_objects is not None
         and part_sequence is not None
@@ -140,6 +146,7 @@ def build_ingest_plan(
         baseline_manifest_key=baseline_manifest_key,
         parser_version=parser_version,
         mapping_version=mapping_version,
+        max_records=max_records,
         preflight=preflight,
     )
 
@@ -168,6 +175,7 @@ def register_plan_source(
         metadata={
             "operator_version": GLOBAL_TRADEMARK_OPERATOR_VERSION,
             "manifest_key": plan.manifest_key,
+            "max_records": plan.max_records,
             **(metadata or {}),
         },
     )
