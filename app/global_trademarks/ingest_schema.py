@@ -6,11 +6,19 @@ INGEST_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS acquisition.global_trademark_record_source (
     jurisdiction text NOT NULL,
     application_number text NOT NULL,
+    source_record_key text NOT NULL,
     source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object(object_id),
     source_record_role text NOT NULL,
     observed_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (jurisdiction, application_number, source_object_id, source_record_role)
+    PRIMARY KEY (
+        jurisdiction,
+        source_record_key,
+        source_object_id,
+        source_record_role
+    )
 );
+CREATE INDEX IF NOT EXISTS idx_global_trademark_record_source_application
+    ON acquisition.global_trademark_record_source (jurisdiction, application_number);
 """
 
 
