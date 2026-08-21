@@ -41,13 +41,16 @@ class IngestPlan:
 
     @property
     def execution_scope(self) -> str:
+        # The execution lock follows the exact source bytes rather than the manifest
+        # alias. The same object must not run concurrently merely because an operator
+        # supplied a different release label for it.
         return ":".join(
             (
                 "GLOBAL_TM",
                 self.jurisdiction,
                 self.source_id,
-                self.manifest_key,
                 self.object_key,
+                self.preflight.sha256,
             )
         )
 
