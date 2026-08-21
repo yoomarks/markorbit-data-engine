@@ -34,6 +34,9 @@ jobs:
       - name: Validate CIPO weekly deletion tombstones
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_cipo_weekly_fixture
 
+      - name: Validate read-only country readiness audit
+        run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_readiness_audit
+
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
