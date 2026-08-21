@@ -39,6 +39,9 @@ jobs:
       - name: Validate no-write plan and explicit apply operator contract
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_operator_fixture
 
+      - name: Validate bounded pilot apply and resume contract
+        run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_bounded_pilot_fixture
+
       - name: Validate durable resumable country ingestion
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_resumable_fixture
 
