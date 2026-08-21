@@ -13,7 +13,7 @@ from app.global_trademarks.au_ipgod import (
 from app.global_trademarks.ca_st96 import ingest_cipo_st96_core
 from app.global_trademarks.catalog import COUNTRY_SOURCES
 from app.global_trademarks.gb_open_data import ingest_ukipo_2018
-from app.global_trademarks.schema import ensure_country_trademark_schemas
+from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 from app.global_trademarks.tm_link_seed import (
     ingest_tm_link_applicants,
     ingest_tm_link_applications,
@@ -50,7 +50,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Country-native trademark store administration")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("catalog", help="Print the configured jurisdiction/source plan")
-    sub.add_parser("migrate", help="Install additive country-native PostgreSQL schemas")
+    sub.add_parser("migrate", help="Install or safely upgrade country-native PostgreSQL schemas")
 
     gb = sub.add_parser("ingest-gb-2018", help="Ingest one UKIPO 2018 TXT source")
     gb.add_argument("--path", required=True, type=_path)
@@ -96,7 +96,7 @@ def main() -> int:
         return 0
 
     if args.command == "migrate":
-        ensure_country_trademark_schemas()
+        ensure_seed_ingest_schema()
         print("GLOBAL_TRADEMARK_COUNTRY_SCHEMAS_READY")
         return 0
 
