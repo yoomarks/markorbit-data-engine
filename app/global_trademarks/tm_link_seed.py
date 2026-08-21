@@ -54,6 +54,7 @@ def _ingest_rows(
     jurisdiction: str,
     object_key: str | None,
     batch_size: int,
+    max_records: int | None,
     table_name: str,
     role: str,
     sql: str,
@@ -61,6 +62,8 @@ def _ingest_rows(
 ) -> int:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if max_records is not None and max_records <= 0:
+        raise ValueError("max_records must be positive when provided")
     key = _validate_jurisdiction(jurisdiction)
     ensure_seed_ingest_schema()
     source_object = register_source_object(
@@ -75,7 +78,11 @@ def _ingest_rows(
         source_object_id=source_object,
         jurisdiction=key,
         pipeline_id=f"TM_LINK_{key}_{pipeline_token}_V1",
-        metadata={"tm_link_table": table_name, "batch_size": batch_size},
+        metadata={
+            "tm_link_table": table_name,
+            "batch_size": batch_size,
+            "max_records": max_records,
+        },
     )
     if run.complete:
         return run.rows_committed
@@ -88,8 +95,10 @@ def _ingest_rows(
         ON CONFLICT DO NOTHING
     """
     rows_committed = run.rows_committed
+    invocation_committed = 0
     checkpoint = run.checkpoint
     source_position = 0
+    bounded_stop = False
     rows: list[tuple] = []
     lineage_rows: list[tuple] = []
 
@@ -112,10 +121,15 @@ def _ingest_rows(
                     lineage_rows.append(
                         (key, application_number, application_number, source_object, role)
                     )
-                    if len(rows) >= batch_size:
+                    limit_reached = bool(
+                        max_records is not None
+                        and invocation_committed + len(rows) >= max_records
+                    )
+                    if len(rows) >= batch_size or limit_reached:
                         cur.executemany(sql, rows)
                         cur.executemany(lineage_sql, lineage_rows)
                         rows_committed += len(rows)
+                        invocation_committed += len(rows)
                         checkpoint = source_position
                         checkpoint_ingest_run(
                             cur,
@@ -126,19 +140,24 @@ def _ingest_rows(
                         conn.commit()
                         rows.clear()
                         lineage_rows.clear()
+                        if limit_reached:
+                            bounded_stop = True
+                            break
 
                 if rows:
                     cur.executemany(sql, rows)
                     cur.executemany(lineage_sql, lineage_rows)
                     rows_committed += len(rows)
+                    invocation_committed += len(rows)
                     checkpoint = source_position
 
-                complete_ingest_run(
-                    cur,
-                    run_id=run.run_id,
-                    checkpoint=max(checkpoint, source_position),
-                    rows_committed=rows_committed,
-                )
+                if not bounded_stop:
+                    complete_ingest_run(
+                        cur,
+                        run_id=run.run_id,
+                        checkpoint=max(checkpoint, source_position),
+                        rows_committed=rows_committed,
+                    )
                 conn.commit()
     except Exception as exc:
         fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
@@ -153,6 +172,7 @@ def ingest_tm_link_applications(
     jurisdiction: str,
     object_key: str | None = None,
     batch_size: int = 5000,
+    max_records: int | None = None,
 ) -> int:
     key = _validate_jurisdiction(jurisdiction)
     table = _TABLES[key]
@@ -204,6 +224,7 @@ def ingest_tm_link_applications(
         jurisdiction=key,
         object_key=object_key,
         batch_size=batch_size,
+        max_records=max_records,
         table_name="applications",
         role="TM_LINK_APPLICATIONS",
         sql=sql,
@@ -217,6 +238,7 @@ def ingest_tm_link_applicants(
     jurisdiction: str,
     object_key: str | None = None,
     batch_size: int = 5000,
+    max_records: int | None = None,
 ) -> int:
     key = _validate_jurisdiction(jurisdiction)
     table = _TABLES[key]
@@ -258,6 +280,7 @@ def ingest_tm_link_applicants(
         jurisdiction=key,
         object_key=object_key,
         batch_size=batch_size,
+        max_records=max_records,
         table_name="applicants",
         role="TM_LINK_APPLICANTS",
         sql=sql,
@@ -271,6 +294,7 @@ def ingest_tm_link_details(
     jurisdiction: str,
     object_key: str | None = None,
     batch_size: int = 5000,
+    max_records: int | None = None,
 ) -> int:
     key = _validate_jurisdiction(jurisdiction)
     table = _TABLES[key]
@@ -292,6 +316,7 @@ def ingest_tm_link_details(
         jurisdiction=key,
         object_key=object_key,
         batch_size=batch_size,
+        max_records=max_records,
         table_name="trademark_details",
         role="TM_LINK_DETAILS",
         sql=sql,
@@ -305,6 +330,7 @@ def ingest_tm_link_classes(
     jurisdiction: str,
     object_key: str | None = None,
     batch_size: int = 5000,
+    max_records: int | None = None,
 ) -> int:
     key = _validate_jurisdiction(jurisdiction)
     table = _TABLES[key]
@@ -337,6 +363,7 @@ def ingest_tm_link_classes(
         jurisdiction=key,
         object_key=object_key,
         batch_size=batch_size,
+        max_records=max_records,
         table_name="nice_class",
         role="TM_LINK_CLASSES",
         sql=sql,

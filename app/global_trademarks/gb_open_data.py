@@ -97,11 +97,14 @@ def ingest_ukipo_2018(
     source_stream: str,
     object_key: str | None = None,
     batch_size: int = 2000,
+    max_records: int | None = None,
 ) -> int:
     if source_stream not in {"DOMESTIC", "MADRID_IR"}:
         raise ValueError("source_stream must be DOMESTIC or MADRID_IR")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if max_records is not None and max_records <= 0:
+        raise ValueError("max_records must be positive when provided")
 
     ensure_seed_ingest_schema()
     source_object = register_source_object(
@@ -115,7 +118,11 @@ def ingest_ukipo_2018(
         source_object_id=source_object,
         jurisdiction="GB",
         pipeline_id=f"UKIPO_2018_{source_stream}_V1",
-        metadata={"source_stream": source_stream, "batch_size": batch_size},
+        metadata={
+            "source_stream": source_stream,
+            "batch_size": batch_size,
+            "max_records": max_records,
+        },
     )
     if run.complete:
         return run.rows_committed
@@ -164,8 +171,10 @@ def ingest_ukipo_2018(
     """
 
     rows_committed = run.rows_committed
+    invocation_committed = 0
     checkpoint = run.checkpoint
     record_position = 0
+    bounded_stop = False
     batch: list[dict[str, object]] = []
     lineage_batch: list[tuple] = []
 
@@ -189,10 +198,15 @@ def ingest_ukipo_2018(
                             f"UKIPO_2018_{source_stream}",
                         )
                     )
-                    if len(batch) >= batch_size:
+                    limit_reached = bool(
+                        max_records is not None
+                        and invocation_committed + len(batch) >= max_records
+                    )
+                    if len(batch) >= batch_size or limit_reached:
                         cur.executemany(sql, batch)
                         cur.executemany(lineage_sql, lineage_batch)
                         rows_committed += len(batch)
+                        invocation_committed += len(batch)
                         checkpoint = record_position
                         checkpoint_ingest_run(
                             cur,
@@ -203,19 +217,24 @@ def ingest_ukipo_2018(
                         conn.commit()
                         batch.clear()
                         lineage_batch.clear()
+                        if limit_reached:
+                            bounded_stop = True
+                            break
 
                 if batch:
                     cur.executemany(sql, batch)
                     cur.executemany(lineage_sql, lineage_batch)
                     rows_committed += len(batch)
+                    invocation_committed += len(batch)
                     checkpoint = record_position
 
-                complete_ingest_run(
-                    cur,
-                    run_id=run.run_id,
-                    checkpoint=max(checkpoint, record_position),
-                    rows_committed=rows_committed,
-                )
+                if not bounded_stop:
+                    complete_ingest_run(
+                        cur,
+                        run_id=run.run_id,
+                        checkpoint=max(checkpoint, record_position),
+                        rows_committed=rows_committed,
+                    )
                 conn.commit()
     except Exception as exc:
         fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
