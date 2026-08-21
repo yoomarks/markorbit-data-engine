@@ -20,6 +20,27 @@ CREATE TABLE IF NOT EXISTS acquisition.global_trademark_record_source (
 );
 CREATE INDEX IF NOT EXISTS idx_global_trademark_record_source_application
     ON acquisition.global_trademark_record_source (jurisdiction, application_number);
+
+CREATE TABLE IF NOT EXISTS acquisition.global_trademark_ingest_run (
+    run_id uuid PRIMARY KEY,
+    source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object(object_id),
+    jurisdiction text NOT NULL,
+    pipeline_id text NOT NULL,
+    status text NOT NULL DEFAULT 'RUNNING',
+    checkpoint bigint NOT NULL DEFAULT 0,
+    rows_committed bigint NOT NULL DEFAULT 0,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    error_text text,
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (source_object_id, pipeline_id),
+    CHECK (status IN ('RUNNING', 'COMPLETE', 'FAILED')),
+    CHECK (checkpoint >= 0),
+    CHECK (rows_committed >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_global_trademark_ingest_run_status
+    ON acquisition.global_trademark_ingest_run (jurisdiction, pipeline_id, status);
 """
 
 
