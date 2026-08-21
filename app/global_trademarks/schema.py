@@ -190,7 +190,8 @@ SCHEMA_SQL = dedent(
 
     CREATE SCHEMA IF NOT EXISTS trademark_ca;
     CREATE TABLE IF NOT EXISTS trademark_ca.st96_record (
-        application_number text PRIMARY KEY,
+        record_key text PRIMARY KEY,
+        application_number text NOT NULL,
         extension_counter text NOT NULL DEFAULT '00',
         registration_number text,
         international_registration_number text,
@@ -204,11 +205,15 @@ SCHEMA_SQL = dedent(
         termination_date date,
         application_language text,
         source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id),
-        source_payload jsonb NOT NULL DEFAULT '{}'::jsonb
+        source_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+        UNIQUE (application_number, extension_counter)
     );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_st96_application
+        ON trademark_ca.st96_record (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.party (
         source_row_hash text PRIMARY KEY,
-        application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
+        record_key text NOT NULL REFERENCES trademark_ca.st96_record(record_key),
+        application_number text NOT NULL,
         party_role text NOT NULL,
         party_name text NOT NULL,
         address_country text,
@@ -218,7 +223,8 @@ SCHEMA_SQL = dedent(
         ON trademark_ca.party (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.goods_service (
         source_row_hash text PRIMARY KEY,
-        application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
+        record_key text NOT NULL REFERENCES trademark_ca.st96_record(record_key),
+        application_number text NOT NULL,
         class_number smallint,
         text_value text NOT NULL,
         language_code text,
@@ -228,7 +234,8 @@ SCHEMA_SQL = dedent(
         ON trademark_ca.goods_service (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.event (
         source_row_hash text PRIMARY KEY,
-        application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
+        record_key text NOT NULL REFERENCES trademark_ca.st96_record(record_key),
+        application_number text NOT NULL,
         event_code text NOT NULL,
         event_date date,
         event_text text,
@@ -238,7 +245,8 @@ SCHEMA_SQL = dedent(
         ON trademark_ca.event (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.relationship (
         source_row_hash text PRIMARY KEY,
-        application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
+        record_key text NOT NULL REFERENCES trademark_ca.st96_record(record_key),
+        application_number text NOT NULL,
         relationship_type text NOT NULL,
         related_application_number text NOT NULL,
         source_object_id uuid REFERENCES acquisition.global_trademark_source_object(object_id)
@@ -247,7 +255,8 @@ SCHEMA_SQL = dedent(
         ON trademark_ca.relationship (application_number);
     CREATE TABLE IF NOT EXISTS trademark_ca.asset (
         source_row_hash text PRIMARY KEY,
-        application_number text NOT NULL REFERENCES trademark_ca.st96_record(application_number),
+        record_key text NOT NULL REFERENCES trademark_ca.st96_record(record_key),
+        application_number text NOT NULL,
         asset_type text NOT NULL,
         object_key text NOT NULL,
         sha256 text NOT NULL,
