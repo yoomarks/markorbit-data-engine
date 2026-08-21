@@ -33,7 +33,7 @@ operator/catalog from confusing source availability with production ingestion ca
 ## Operator safety
 
 The versioned global-trademark control plane is `GLOBAL_TM_SCHEMA_V1` and the operator contract
-is `GLOBAL_TM_OPERATOR_V2`.
+is `GLOBAL_TM_OPERATOR_V3`.
 
 Schema migration is an explicit operator action:
 
@@ -45,6 +45,14 @@ Country ingestion commands are **no-write plans by default**. Database mutation 
 explicit `--apply` flag after source preflight. The apply path registers the exact SHA-backed
 source object, attaches it to a dataset manifest, and acquires a PostgreSQL advisory execution
 lock so the same source scope cannot accidentally run twice on the current single-host setup.
+
+V3 additionally binds the ingest plan to the exact path that was preflighted. The preflight SHA is
+used to register the planned source object without an unnecessary second registration hash, then a
+one-shot source-object pin is armed. When the loader starts, its normal source registration call
+must resolve to that exact object and the file is SHA256-hashed again immediately before mutation.
+If the path was replaced or the bytes changed after planning, apply fails before a country row or
+ingest-run checkpoint is written; the loader is not allowed to silently create a second source
+object for changed bytes.
 
 Example:
 
@@ -63,7 +71,7 @@ mean ingestion or jurisdiction acceptance succeeded. Those remain separate evide
 
 ### Bounded pilot apply
 
-V2 adds an explicit bounded execution control for first-contact or pilot ingestion:
+The operator retains the V2 bounded execution control for first-contact or pilot ingestion:
 
 ```bash
 python -m app.global_trademarks.cli ingest-ca-st96 \
@@ -87,14 +95,14 @@ The operator reports both `processed_rows` for the current invocation and
 a loader can measure inserts versus updates accurately; the operator does not fabricate it.
 
 A bounded partial run cannot satisfy source-release acceptance because the attached source object
-has no completed ingest run yet. If the bound happens to coincide exactly with EOF, the first call
-may still remain partial rather than peeking past the safety boundary; a subsequent resume reaches
-EOF and marks the durable run complete. This deliberately prefers false-incomplete over
-false-complete.
+has no completed intended-pipeline run yet. If the bound happens to coincide exactly with EOF, the
+first call may still remain partial rather than peeking past the safety boundary; a subsequent
+resume reaches EOF and marks the durable run complete. This deliberately prefers false-incomplete
+over false-complete.
 
 ## Release acceptance and Data Trust
 
-`GLOBAL_TM_ACCEPTANCE_V1` evaluates one source release after ingestion. It is deliberately
+`GLOBAL_TM_ACCEPTANCE_V2` evaluates one source release after ingestion. It is deliberately
 narrower than country/jurisdiction acceptance.
 
 The release acceptance gate requires all of the following before `release_accepted=true`:
@@ -105,8 +113,14 @@ The release acceptance gate requires all of the following before `release_accept
 - part sequences form the complete deterministic range `1..expected_objects`;
 - every attached object matches the manifest jurisdiction/source identity;
 - every object carries the persisted SHA256 identity created during source registration;
-- every attached object has completed ingestion and none remain running or failed;
+- every object carries the operator-declared `intended_pipeline_id`;
+- every attached object has a completed run for **that exact intended pipeline**, and that intended
+  pipeline is neither running nor failed;
 - declared predecessor and baseline manifests resolve within the same jurisdiction/source chain.
+
+A completed unrelated pipeline for the same source object does not satisfy acceptance. This closes
+the gap where generic "some complete run exists" evidence could otherwise be mistaken for proof
+that the operator-declared loader/domain actually completed.
 
 Read-only evaluation is exposed through:
 
@@ -119,11 +133,11 @@ python -m app.global_trademarks.cli accept-manifest \
 The command projects the release evidence into the existing Data Trust dimensions:
 `queryable`, `complete`, `fresh`, `accepted`, and `trusted_for_silence`.
 
-V1 intentionally forces `trusted_for_silence=false`. A source release being complete, fresh and
-accepted does **not** establish that absence of a source observation means legal nonexistence,
-invalidity, abandonment, expiration, or any other legal/business conclusion. Jurisdiction-specific
-contracts must separately prove any supported silence semantics before that flag can ever become
-true.
+Acceptance intentionally forces `trusted_for_silence=false`. A source release being complete,
+fresh and accepted does **not** establish that absence of a source observation means legal
+nonexistence, invalidity, abandonment, expiration, or any other legal/business conclusion.
+Jurisdiction-specific contracts must separately prove any supported silence semantics before that
+flag can ever become true.
 
 Accordingly:
 
@@ -196,7 +210,7 @@ is not promoted into a legal conclusion that the trademark itself is invalid or 
 
 Large-source ingestion must use no-write source preflight, the versioned migration gate,
 checksum-backed source objects, dataset manifests, the explicit `--apply` operator boundary,
-durable/resumable acquisition, bounded pilot execution for cautious first runs when appropriate,
-and the separate read-only release acceptance gate. None of these commands rebuild or restart the
-existing CN worker, enable QCC, or authorize a new jurisdiction as current/accepted merely because
-its jobs complete.
+source-identity pinning, durable/resumable acquisition, bounded pilot execution for cautious first
+runs when appropriate, and the separate read-only release acceptance gate. None of these commands
+rebuild or restart the existing CN worker, enable QCC, or authorize a new jurisdiction as
+current/accepted merely because its jobs complete.
