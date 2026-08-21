@@ -25,8 +25,8 @@ jobs:
       - name: Start PostgreSQL
         run: docker compose up -d --wait postgres
 
-      - name: Validate country-native trademark schemas
-        run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_fixture
+      - name: Validate legacy upgrade and country-native ingestion
+        run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_upgrade_fixture
 
       - name: Tear down fixture database
         if: always()
