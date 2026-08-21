@@ -1,4 +1,5 @@
 from app.db import postgres_conn
+from app.global_trademarks.ca_rich_schema import ensure_ca_rich_observation_schema
 from app.global_trademarks.legacy_upgrade import upgrade_pre_ingest_country_schemas
 from app.global_trademarks.schema import ensure_country_trademark_schemas
 
@@ -47,6 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_global_trademark_ingest_run_status
 def ensure_seed_ingest_schema() -> None:
     upgrade_pre_ingest_country_schemas()
     ensure_country_trademark_schemas()
+    ensure_ca_rich_observation_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(INGEST_SCHEMA_SQL)

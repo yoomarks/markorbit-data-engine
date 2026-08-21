@@ -128,7 +128,11 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 authoritative=True,
                 active_now=True,
                 pipeline_ready=True,
-                notes="ST.96 global snapshot baseline; core ingestion is durable and resumable.",
+                notes=(
+                    "ST.96 global snapshot baseline; core record plus source-faithful party, "
+                    "goods/services, office-event and registry-relationship observations are "
+                    "durable and resumable."
+                ),
             ),
             SourceSpec(
                 source_id="CIPO_WEEKLY",
@@ -136,7 +140,11 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 authoritative=True,
                 active_now=True,
                 pipeline_ready=False,
-                notes="Core Update/Delete observations and source-presence tombstones are implemented; rich weekly party/goods/events/assets parsing remains before full production readiness.",
+                notes=(
+                    "Update/Delete observations, source-presence tombstones and rich child "
+                    "observation snapshots are implemented. Ordered source-current projection "
+                    "and assets remain before full production readiness."
+                ),
             ),
             SourceSpec(
                 source_id="TM_LINK_CA",

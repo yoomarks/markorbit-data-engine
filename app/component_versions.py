@@ -12,6 +12,7 @@ from app.contact_ingest.task_migrations import CONTACT_TASK_CONTROL_VERSION
 from app.domain_lifecycle import LIFECYCLE_VERSION
 from app.four_domain_acceptance import AUDIT_VERSION as FOUR_DOMAIN_ACCEPTANCE_VERSION
 from app.global_trademarks.acceptance import GLOBAL_TRADEMARK_ACCEPTANCE_VERSION
+from app.global_trademarks.ca_rich_schema import CIPO_ST96_RICH_OBSERVATION_VERSION
 from app.global_trademarks.migrations import GLOBAL_TRADEMARK_SCHEMA_VERSION
 from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
@@ -76,6 +77,7 @@ def component_versions() -> dict[str, Any]:
                 "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,
                 "operator_version": GLOBAL_TRADEMARK_OPERATOR_VERSION,
                 "acceptance_version": GLOBAL_TRADEMARK_ACCEPTANCE_VERSION,
+                "cipo_st96_rich_observation_version": CIPO_ST96_RICH_OBSERVATION_VERSION,
             },
             "contact_ingestion": {
                 "version": CONTACT_INGEST_VERSION,
