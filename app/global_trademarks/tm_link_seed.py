@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from app.db import postgres_conn
+from app.global_trademarks.ingest_runs import (
+    begin_or_resume_ingest_run,
+    checkpoint_ingest_run,
+    complete_ingest_run,
+    fail_ingest_run,
+)
 from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 from app.global_trademarks.source_objects import register_source_object
 
@@ -64,6 +70,16 @@ def _ingest_rows(
         object_key=object_key,
         metadata={"tm_link_table": table_name},
     )
+    pipeline_token = table_name.upper().replace("-", "_")
+    run = begin_or_resume_ingest_run(
+        source_object_id=source_object,
+        jurisdiction=key,
+        pipeline_id=f"TM_LINK_{key}_{pipeline_token}_V1",
+        metadata={"tm_link_table": table_name, "batch_size": batch_size},
+    )
+    if run.complete:
+        return run.rows_committed
+
     lineage_sql = """
         INSERT INTO acquisition.global_trademark_record_source (
             jurisdiction, application_number, source_record_key,
@@ -71,37 +87,64 @@ def _ingest_rows(
         ) VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT DO NOTHING
     """
-    count = 0
+    rows_committed = run.rows_committed
+    checkpoint = run.checkpoint
+    source_position = 0
     rows: list[tuple] = []
     lineage_rows: list[tuple] = []
 
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
-            for raw in _iter_csv(path):
-                if _country(raw.get("application_country")) not in _SOURCE_OFFICE[key]:
-                    continue
-                application_number = (raw.get("application_number") or "").strip()
-                if not application_number:
-                    continue
-                values = values_for(raw, source_object)
-                if values is None:
-                    continue
-                rows.append(values)
-                lineage_rows.append(
-                    (key, application_number, application_number, source_object, role)
-                )
-                if len(rows) >= batch_size:
+    try:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                for raw in _iter_csv(path):
+                    source_position += 1
+                    if source_position <= checkpoint:
+                        continue
+                    if _country(raw.get("application_country")) not in _SOURCE_OFFICE[key]:
+                        continue
+                    application_number = (raw.get("application_number") or "").strip()
+                    if not application_number:
+                        continue
+                    values = values_for(raw, source_object)
+                    if values is None:
+                        continue
+                    rows.append(values)
+                    lineage_rows.append(
+                        (key, application_number, application_number, source_object, role)
+                    )
+                    if len(rows) >= batch_size:
+                        cur.executemany(sql, rows)
+                        cur.executemany(lineage_sql, lineage_rows)
+                        rows_committed += len(rows)
+                        checkpoint = source_position
+                        checkpoint_ingest_run(
+                            cur,
+                            run_id=run.run_id,
+                            checkpoint=checkpoint,
+                            rows_committed=rows_committed,
+                        )
+                        conn.commit()
+                        rows.clear()
+                        lineage_rows.clear()
+
+                if rows:
                     cur.executemany(sql, rows)
                     cur.executemany(lineage_sql, lineage_rows)
-                    count += len(rows)
-                    rows.clear()
-                    lineage_rows.clear()
-            if rows:
-                cur.executemany(sql, rows)
-                cur.executemany(lineage_sql, lineage_rows)
-                count += len(rows)
-        conn.commit()
-    return count
+                    rows_committed += len(rows)
+                    checkpoint = source_position
+
+                complete_ingest_run(
+                    cur,
+                    run_id=run.run_id,
+                    checkpoint=max(checkpoint, source_position),
+                    rows_committed=rows_committed,
+                )
+                conn.commit()
+    except Exception as exc:
+        fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
+        raise
+
+    return rows_committed
 
 
 def ingest_tm_link_applications(
