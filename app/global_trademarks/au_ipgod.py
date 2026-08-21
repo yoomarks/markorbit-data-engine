@@ -54,25 +54,34 @@ def _batch_execute(
     rows: Iterable[tuple],
     *,
     batch_size: int,
+    max_records: int | None,
     source_object,
     pipeline_id: str,
     table_name: str,
 ) -> int:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if max_records is not None and max_records <= 0:
+        raise ValueError("max_records must be positive when provided")
 
     run = begin_or_resume_ingest_run(
         source_object_id=source_object,
         jurisdiction="AU",
         pipeline_id=pipeline_id,
-        metadata={"ipgod_table": table_name, "batch_size": batch_size},
+        metadata={
+            "ipgod_table": table_name,
+            "batch_size": batch_size,
+            "max_records": max_records,
+        },
     )
     if run.complete:
         return run.rows_committed
 
     rows_committed = run.rows_committed
+    invocation_committed = 0
     checkpoint = run.checkpoint
     record_position = 0
+    bounded_stop = False
     batch: list[tuple] = []
 
     try:
@@ -83,9 +92,14 @@ def _batch_execute(
                     if record_position <= checkpoint:
                         continue
                     batch.append(row)
-                    if len(batch) >= batch_size:
+                    limit_reached = bool(
+                        max_records is not None
+                        and invocation_committed + len(batch) >= max_records
+                    )
+                    if len(batch) >= batch_size or limit_reached:
                         cur.executemany(sql, batch)
                         rows_committed += len(batch)
+                        invocation_committed += len(batch)
                         checkpoint = record_position
                         checkpoint_ingest_run(
                             cur,
@@ -95,18 +109,23 @@ def _batch_execute(
                         )
                         conn.commit()
                         batch.clear()
+                        if limit_reached:
+                            bounded_stop = True
+                            break
 
                 if batch:
                     cur.executemany(sql, batch)
                     rows_committed += len(batch)
+                    invocation_committed += len(batch)
                     checkpoint = record_position
 
-                complete_ingest_run(
-                    cur,
-                    run_id=run.run_id,
-                    checkpoint=max(checkpoint, record_position),
-                    rows_committed=rows_committed,
-                )
+                if not bounded_stop:
+                    complete_ingest_run(
+                        cur,
+                        run_id=run.run_id,
+                        checkpoint=max(checkpoint, record_position),
+                        rows_committed=rows_committed,
+                    )
                 conn.commit()
     except Exception as exc:
         fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
@@ -126,7 +145,13 @@ def _source_object(path: Path, *, object_key: str | None, table_name: str):
     )
 
 
-def ingest_application(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
+def ingest_application(
+    path: Path,
+    *,
+    object_key: str | None = None,
+    batch_size: int = 5000,
+    max_records: int | None = None,
+) -> int:
     table_name = "application"
     source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
@@ -171,13 +196,20 @@ def ingest_application(path: Path, *, object_key: str | None = None, batch_size:
         sql,
         rows(),
         batch_size=batch_size,
+        max_records=max_records,
         source_object=source_object,
         pipeline_id="IPGOD_2022_APPLICATION_V1",
         table_name=table_name,
     )
 
 
-def ingest_party_activity(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
+def ingest_party_activity(
+    path: Path,
+    *,
+    object_key: str | None = None,
+    batch_size: int = 5000,
+    max_records: int | None = None,
+) -> int:
     table_name = "party-activity"
     source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
@@ -218,13 +250,20 @@ def ingest_party_activity(path: Path, *, object_key: str | None = None, batch_si
         sql,
         rows(),
         batch_size=batch_size,
+        max_records=max_records,
         source_object=source_object,
         pipeline_id="IPGOD_2022_PARTY_ACTIVITY_V1",
         table_name=table_name,
     )
 
 
-def ingest_application_links(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
+def ingest_application_links(
+    path: Path,
+    *,
+    object_key: str | None = None,
+    batch_size: int = 5000,
+    max_records: int | None = None,
+) -> int:
     table_name = "application-links"
     source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
@@ -256,13 +295,20 @@ def ingest_application_links(path: Path, *, object_key: str | None = None, batch
         sql,
         rows(),
         batch_size=batch_size,
+        max_records=max_records,
         source_object=source_object,
         pipeline_id="IPGOD_2022_APPLICATION_LINKS_V1",
         table_name=table_name,
     )
 
 
-def ingest_application_events(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
+def ingest_application_events(
+    path: Path,
+    *,
+    object_key: str | None = None,
+    batch_size: int = 5000,
+    max_records: int | None = None,
+) -> int:
     table_name = "application-events"
     source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
@@ -294,6 +340,7 @@ def ingest_application_events(path: Path, *, object_key: str | None = None, batc
         sql,
         rows(),
         batch_size=batch_size,
+        max_records=max_records,
         source_object=source_object,
         pipeline_id="IPGOD_2022_APPLICATION_EVENTS_V1",
         table_name=table_name,
@@ -301,7 +348,11 @@ def ingest_application_events(path: Path, *, object_key: str | None = None, batc
 
 
 def ingest_application_classification(
-    path: Path, *, object_key: str | None = None, batch_size: int = 5000
+    path: Path,
+    *,
+    object_key: str | None = None,
+    batch_size: int = 5000,
+    max_records: int | None = None,
 ) -> int:
     table_name = "application-classification"
     source_object = _source_object(path, object_key=object_key, table_name=table_name)
@@ -337,6 +388,7 @@ def ingest_application_classification(
         sql,
         rows(),
         batch_size=batch_size,
+        max_records=max_records,
         source_object=source_object,
         pipeline_id="IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
         table_name=table_name,
@@ -344,7 +396,11 @@ def ingest_application_classification(
 
 
 def ingest_application_description(
-    path: Path, *, object_key: str | None = None, batch_size: int = 5000
+    path: Path,
+    *,
+    object_key: str | None = None,
+    batch_size: int = 5000,
+    max_records: int | None = None,
 ) -> int:
     table_name = "application-description"
     source_object = _source_object(path, object_key=object_key, table_name=table_name)
@@ -375,6 +431,7 @@ def ingest_application_description(
         sql,
         rows(),
         batch_size=batch_size,
+        max_records=max_records,
         source_object=source_object,
         pipeline_id="IPGOD_2022_APPLICATION_DESCRIPTION_V1",
         table_name=table_name,
