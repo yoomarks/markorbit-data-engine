@@ -65,6 +65,46 @@ def source_manifest_id(*, jurisdiction: str, source_id: str, manifest_key: str) 
     return uuid.uuid5(_MANIFEST_NAMESPACE, material)
 
 
+def _assert_manifest_compatible(
+    row: dict[str, object],
+    *,
+    source_period_start: date | None,
+    source_period_end: date | None,
+    source_sequence: int,
+    source_precedence: int,
+    expected_objects: int | None,
+    predecessor_manifest_key: str | None,
+    baseline_manifest_key: str | None,
+    parser_version: str,
+    mapping_version: str,
+) -> None:
+    checks = (
+        ("source_period_start", source_period_start, False),
+        ("source_period_end", source_period_end, False),
+        ("source_sequence", source_sequence, True),
+        ("source_precedence", source_precedence, True),
+        ("expected_objects", expected_objects, False),
+        ("predecessor_manifest_key", predecessor_manifest_key, False),
+        ("baseline_manifest_key", baseline_manifest_key, False),
+        ("parser_version", parser_version or None, False),
+        ("mapping_version", mapping_version or None, False),
+    )
+    conflicts: list[str] = []
+    for field, requested, always_assert in checks:
+        if requested is None and not always_assert:
+            continue
+        existing = row[field]
+        if existing in (None, ""):
+            continue
+        if existing != requested:
+            conflicts.append(f"{field}: existing={existing!r}, requested={requested!r}")
+    if conflicts:
+        raise ValueError(
+            "global trademark manifest metadata conflict; use a different manifest_key "
+            "instead of rewriting an existing source release: " + "; ".join(conflicts)
+        )
+
+
 def upsert_source_manifest(
     *,
     jurisdiction: str,
@@ -110,41 +150,7 @@ def upsert_source_manifest(
                     source_precedence, expected_objects, predecessor_manifest_key,
                     baseline_manifest_key, parser_version, mapping_version
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (jurisdiction, source_id, manifest_key) DO UPDATE SET
-                    source_period_start = COALESCE(
-                        EXCLUDED.source_period_start,
-                        acquisition.global_trademark_manifest.source_period_start
-                    ),
-                    source_period_end = COALESCE(
-                        EXCLUDED.source_period_end,
-                        acquisition.global_trademark_manifest.source_period_end
-                    ),
-                    source_sequence = EXCLUDED.source_sequence,
-                    source_precedence = EXCLUDED.source_precedence,
-                    expected_objects = COALESCE(
-                        EXCLUDED.expected_objects,
-                        acquisition.global_trademark_manifest.expected_objects
-                    ),
-                    predecessor_manifest_key = COALESCE(
-                        EXCLUDED.predecessor_manifest_key,
-                        acquisition.global_trademark_manifest.predecessor_manifest_key
-                    ),
-                    baseline_manifest_key = COALESCE(
-                        EXCLUDED.baseline_manifest_key,
-                        acquisition.global_trademark_manifest.baseline_manifest_key
-                    ),
-                    parser_version = CASE
-                        WHEN EXCLUDED.parser_version = ''
-                        THEN acquisition.global_trademark_manifest.parser_version
-                        ELSE EXCLUDED.parser_version
-                    END,
-                    mapping_version = CASE
-                        WHEN EXCLUDED.mapping_version = ''
-                        THEN acquisition.global_trademark_manifest.mapping_version
-                        ELSE EXCLUDED.mapping_version
-                    END,
-                    updated_at = now()
-                RETURNING manifest_id
+                ON CONFLICT (jurisdiction, source_id, manifest_key) DO NOTHING
                 """,
                 (
                     manifest_id,
@@ -162,11 +168,59 @@ def upsert_source_manifest(
                     mapping_version,
                 ),
             )
+            cur.execute(
+                """
+                SELECT manifest_id, source_period_start, source_period_end,
+                       source_sequence, source_precedence, expected_objects,
+                       predecessor_manifest_key, baseline_manifest_key,
+                       parser_version, mapping_version
+                FROM acquisition.global_trademark_manifest
+                WHERE jurisdiction = %s AND source_id = %s AND manifest_key = %s
+                FOR UPDATE
+                """,
+                (jurisdiction, source_id, manifest_key),
+            )
             row = cur.fetchone()
+            if not row:
+                raise RuntimeError("failed to persist global trademark source manifest")
+            _assert_manifest_compatible(
+                row,
+                source_period_start=source_period_start,
+                source_period_end=source_period_end,
+                source_sequence=source_sequence,
+                source_precedence=source_precedence,
+                expected_objects=expected_objects,
+                predecessor_manifest_key=predecessor_manifest_key,
+                baseline_manifest_key=baseline_manifest_key,
+                parser_version=parser_version,
+                mapping_version=mapping_version,
+            )
+            cur.execute(
+                """
+                UPDATE acquisition.global_trademark_manifest
+                SET source_period_start = COALESCE(source_period_start, %s),
+                    source_period_end = COALESCE(source_period_end, %s),
+                    expected_objects = COALESCE(expected_objects, %s),
+                    predecessor_manifest_key = COALESCE(predecessor_manifest_key, %s),
+                    baseline_manifest_key = COALESCE(baseline_manifest_key, %s),
+                    parser_version = CASE WHEN parser_version = '' THEN %s ELSE parser_version END,
+                    mapping_version = CASE WHEN mapping_version = '' THEN %s ELSE mapping_version END,
+                    updated_at = now()
+                WHERE manifest_id = %s
+                """,
+                (
+                    source_period_start,
+                    source_period_end,
+                    expected_objects,
+                    predecessor_manifest_key,
+                    baseline_manifest_key,
+                    parser_version,
+                    mapping_version,
+                    row["manifest_id"],
+                ),
+            )
         conn.commit()
-    if not row:
-        raise RuntimeError("failed to persist global trademark source manifest")
-    result = source_manifest(row["manifest_id"])
+    result = source_manifest(manifest_id)
     if result is None:
         raise RuntimeError("persisted global trademark source manifest is not readable")
     return result
