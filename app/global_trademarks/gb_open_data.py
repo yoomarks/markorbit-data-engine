@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterator
 
 from app.db import postgres_conn
+from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 from app.global_trademarks.source_objects import register_source_object
 
 
@@ -96,6 +97,7 @@ def ingest_ukipo_2018(
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
 
+    ensure_seed_ingest_schema()
     source_object = register_source_object(
         jurisdiction="GB",
         source_id="UKIPO_OPEN_DATA_2018",
@@ -138,21 +140,41 @@ def ingest_ukipo_2018(
             source_object_id = EXCLUDED.source_object_id,
             source_payload = EXCLUDED.source_payload
     """
+    lineage_sql = """
+        INSERT INTO acquisition.global_trademark_record_source (
+            jurisdiction, application_number, source_record_key,
+            source_object_id, source_record_role
+        ) VALUES ('GB', %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+    """
 
     count = 0
     batch: list[dict[str, object]] = []
+    lineage_batch: list[tuple] = []
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             for record in iter_ukipo_2018(path):
+                application_number = str(record["application_number"])
                 record["source_stream"] = source_stream
                 record["source_object_id"] = source_object
                 batch.append(record)
+                lineage_batch.append(
+                    (
+                        application_number,
+                        application_number,
+                        source_object,
+                        f"UKIPO_2018_{source_stream}",
+                    )
+                )
                 if len(batch) >= batch_size:
                     cur.executemany(sql, batch)
+                    cur.executemany(lineage_sql, lineage_batch)
                     count += len(batch)
                     batch.clear()
+                    lineage_batch.clear()
             if batch:
                 cur.executemany(sql, batch)
+                cur.executemany(lineage_sql, lineage_batch)
                 count += len(batch)
         conn.commit()
     return count
