@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Iterator
 
 from app.db import postgres_conn
+from app.global_trademarks.ingest_runs import (
+    begin_or_resume_ingest_run,
+    checkpoint_ingest_run,
+    complete_ingest_run,
+    fail_ingest_run,
+)
 from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 from app.global_trademarks.source_objects import register_source_object
 
@@ -105,6 +111,15 @@ def ingest_ukipo_2018(
         object_key=object_key,
         metadata={"source_stream": source_stream},
     )
+    run = begin_or_resume_ingest_run(
+        source_object_id=source_object,
+        jurisdiction="GB",
+        pipeline_id=f"UKIPO_2018_{source_stream}_V1",
+        metadata={"source_stream": source_stream, "batch_size": batch_size},
+    )
+    if run.complete:
+        return run.rows_committed
+
     sql = """
         INSERT INTO trademark_gb.historical_record (
             application_number, mark_text, applicant_name, postcode, region, country,
@@ -148,33 +163,62 @@ def ingest_ukipo_2018(
         ON CONFLICT DO NOTHING
     """
 
-    count = 0
+    rows_committed = run.rows_committed
+    checkpoint = run.checkpoint
+    record_position = 0
     batch: list[dict[str, object]] = []
     lineage_batch: list[tuple] = []
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
-            for record in iter_ukipo_2018(path):
-                application_number = str(record["application_number"])
-                record["source_stream"] = source_stream
-                record["source_object_id"] = source_object
-                batch.append(record)
-                lineage_batch.append(
-                    (
-                        application_number,
-                        application_number,
-                        source_object,
-                        f"UKIPO_2018_{source_stream}",
+
+    try:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                for record in iter_ukipo_2018(path):
+                    record_position += 1
+                    if record_position <= checkpoint:
+                        continue
+
+                    application_number = str(record["application_number"])
+                    record["source_stream"] = source_stream
+                    record["source_object_id"] = source_object
+                    batch.append(record)
+                    lineage_batch.append(
+                        (
+                            application_number,
+                            application_number,
+                            source_object,
+                            f"UKIPO_2018_{source_stream}",
+                        )
                     )
-                )
-                if len(batch) >= batch_size:
+                    if len(batch) >= batch_size:
+                        cur.executemany(sql, batch)
+                        cur.executemany(lineage_sql, lineage_batch)
+                        rows_committed += len(batch)
+                        checkpoint = record_position
+                        checkpoint_ingest_run(
+                            cur,
+                            run_id=run.run_id,
+                            checkpoint=checkpoint,
+                            rows_committed=rows_committed,
+                        )
+                        conn.commit()
+                        batch.clear()
+                        lineage_batch.clear()
+
+                if batch:
                     cur.executemany(sql, batch)
                     cur.executemany(lineage_sql, lineage_batch)
-                    count += len(batch)
-                    batch.clear()
-                    lineage_batch.clear()
-            if batch:
-                cur.executemany(sql, batch)
-                cur.executemany(lineage_sql, lineage_batch)
-                count += len(batch)
-        conn.commit()
-    return count
+                    rows_committed += len(batch)
+                    checkpoint = record_position
+
+                complete_ingest_run(
+                    cur,
+                    run_id=run.run_id,
+                    checkpoint=max(checkpoint, record_position),
+                    rows_committed=rows_committed,
+                )
+                conn.commit()
+    except Exception as exc:
+        fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
+        raise
+
+    return rows_committed

@@ -16,6 +16,7 @@ class SourceSpec:
     role: SourceRole
     authoritative: bool
     active_now: bool
+    pipeline_ready: bool
     notes: str
 
 
@@ -36,6 +37,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.PRIMARY,
                 authoritative=True,
                 active_now=True,
+                pipeline_ready=True,
                 notes="Existing USPTO application/TSDR/assignment/TTAB pipelines remain authoritative.",
             ),
             SourceSpec(
@@ -43,6 +45,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.REFERENCE,
                 authoritative=False,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Not used for ingestion; official USPTO data is richer and newer.",
             ),
         ),
@@ -56,6 +59,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.HISTORICAL_SEED,
                 authoritative=True,
                 active_now=True,
+                pipeline_ready=True,
                 notes="Domestic and Madrid-to-UK TXT exports form the historical thin baseline.",
             ),
             SourceSpec(
@@ -63,20 +67,23 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.INCREMENTAL,
                 authoritative=True,
                 active_now=True,
-                notes="Weekly rich records/events progressively enrich and refresh the baseline.",
+                pipeline_ready=False,
+                notes="Source is available, but the weekly event/current-state ingestion pipeline is not implemented yet.",
             ),
             SourceSpec(
                 source_id="UKIPO_COMPARABLE_RIGHTS",
                 role=SourceRole.HISTORICAL_SEED,
                 authoritative=True,
                 active_now=True,
-                notes="Separate Brexit comparable-right population; relationship must be preserved.",
+                pipeline_ready=False,
+                notes="Source population is known, but comparable-right ingestion is not implemented yet.",
             ),
             SourceSpec(
                 source_id="UKIPO_DETAIL_PAGE",
                 role=SourceRole.ENRICHMENT,
                 authoritative=True,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Demand-driven only; may be blocked by human-verification controls.",
             ),
             SourceSpec(
@@ -84,6 +91,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.REFERENCE,
                 authoritative=False,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Not ingested because it is derived from the 2018 UKIPO files and is thinner.",
             ),
         ),
@@ -97,6 +105,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.HISTORICAL_SEED,
                 authoritative=False,
                 active_now=True,
+                pipeline_ready=True,
                 notes="Temporary historical seed while original EUIPO bulk data is unavailable.",
             ),
             SourceSpec(
@@ -104,6 +113,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.ENRICHMENT,
                 authoritative=True,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Future official refresh/enrichment source; access and rate limits must be respected.",
             ),
         ),
@@ -117,20 +127,23 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.PRIMARY,
                 authoritative=True,
                 active_now=True,
-                notes="ST.96 global snapshot is the baseline; preserve complete source structure.",
+                pipeline_ready=True,
+                notes="ST.96 global snapshot baseline; core ingestion is durable and resumable.",
             ),
             SourceSpec(
                 source_id="CIPO_WEEKLY",
                 role=SourceRole.INCREMENTAL,
                 authoritative=True,
                 active_now=True,
-                notes="Weekly update and deletion records maintain current state after the baseline.",
+                pipeline_ready=False,
+                notes="Core ST.96 parsing exists, but weekly deletion/tombstone semantics must be completed before production sync.",
             ),
             SourceSpec(
                 source_id="TM_LINK_CA",
                 role=SourceRole.REFERENCE,
                 authoritative=False,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Not used for ingestion because CIPO ST.96 is richer and newer.",
             ),
         ),
@@ -144,6 +157,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.PRIMARY,
                 authoritative=True,
                 active_now=True,
+                pipeline_ready=True,
                 notes="Preserve the six-table snowflake model, then project country current state.",
             ),
             SourceSpec(
@@ -151,6 +165,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.INCREMENTAL,
                 authoritative=True,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Reserved for a later official source supplying post-IPGOD freshness.",
             ),
             SourceSpec(
@@ -158,6 +173,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.REFERENCE,
                 authoritative=False,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Not used because it derives from older IPGOD data and discards fields.",
             ),
         ),
@@ -171,6 +187,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.HISTORICAL_SEED,
                 authoritative=False,
                 active_now=True,
+                pipeline_ready=True,
                 notes="Historical thin seed for application number, applicant, class and basic dates/text.",
             ),
             SourceSpec(
@@ -178,6 +195,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 role=SourceRole.ENRICHMENT,
                 authoritative=True,
                 active_now=False,
+                pipeline_ready=False,
                 notes="Future official update discovery and case-detail enrichment once access works.",
             ),
         ),
