@@ -10,6 +10,7 @@ from app.component_versions import (
 )
 from app.domain_lifecycle import LIFECYCLE_VERSION
 from app.four_domain_acceptance import AUDIT_VERSION as FOUR_DOMAIN_ACCEPTANCE_VERSION
+from app.global_trademarks.acceptance import GLOBAL_TRADEMARK_ACCEPTANCE_VERSION
 from app.global_trademarks.migrations import GLOBAL_TRADEMARK_SCHEMA_VERSION
 from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
@@ -38,6 +39,10 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert components["us_alert_engine"]["version"] == ALERT_ENGINE_VERSION
     assert components["global_trademark"]["schema_version"] == GLOBAL_TRADEMARK_SCHEMA_VERSION
     assert components["global_trademark"]["operator_version"] == GLOBAL_TRADEMARK_OPERATOR_VERSION
+    assert (
+        components["global_trademark"]["acceptance_version"]
+        == GLOBAL_TRADEMARK_ACCEPTANCE_VERSION
+    )
     assert components["storage"]["policy_version"] == STORAGE_POLICY_VERSION
     assert components["storage"]["headroom_version"] == HEADROOM_VERSION
     assert components["storage"]["replay_telemetry_version"] == REPLAY_TELEMETRY_VERSION
@@ -62,6 +67,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         ALERT_ENGINE_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,
         GLOBAL_TRADEMARK_OPERATOR_VERSION,
+        GLOBAL_TRADEMARK_ACCEPTANCE_VERSION,
         STORAGE_POLICY_VERSION,
         REPLAY_TELEMETRY_VERSION,
         CONTRACT_VERSION,

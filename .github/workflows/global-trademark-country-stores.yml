@@ -48,6 +48,9 @@ jobs:
       - name: Validate read-only country readiness audit
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_readiness_audit
 
+      - name: Validate source-release acceptance and Data Trust boundary
+        run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_acceptance_fixture
+
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
