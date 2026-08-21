@@ -2,6 +2,12 @@ from app.global_trademarks.catalog import SourceRole, country_plan
 from app.global_trademarks.schema import SCHEMA_SQL
 
 
+def _source(jurisdiction: str, source_id: str):
+    return next(
+        source for source in country_plan(jurisdiction).sources if source.source_id == source_id
+    )
+
+
 def test_tm_link_is_only_active_for_eu_and_nz() -> None:
     active_tm_link = {
         jurisdiction
@@ -26,6 +32,37 @@ def test_country_plans_preserve_source_specific_strategies() -> None:
     assert au_sources == {"IPGOD_2022"}
 
     assert country_plan("EM") is country_plan("EU")
+
+
+def test_source_availability_is_not_pipeline_readiness() -> None:
+    for jurisdiction, source_id in (
+        ("US", "USPTO_OFFICIAL"),
+        ("GB", "UKIPO_OPEN_DATA_2018"),
+        ("EU", "TM_LINK_EU"),
+        ("CA", "CIPO_GLOBAL_2025_06_14"),
+        ("AU", "IPGOD_2022"),
+        ("NZ", "TM_LINK_NZ"),
+    ):
+        source = _source(jurisdiction, source_id)
+        assert source.active_now is True
+        assert source.pipeline_ready is True
+
+    for jurisdiction, source_id in (
+        ("GB", "UKIPO_WEEKLY"),
+        ("GB", "UKIPO_COMPARABLE_RIGHTS"),
+        ("CA", "CIPO_WEEKLY"),
+    ):
+        source = _source(jurisdiction, source_id)
+        assert source.active_now is True
+        assert source.pipeline_ready is False
+
+    for jurisdiction, source_id in (
+        ("EU", "EUIPO_API"),
+        ("NZ", "IPONZ_API"),
+        ("AU", "AU_FUTURE_FRESHNESS"),
+    ):
+        source = _source(jurisdiction, source_id)
+        assert source.pipeline_ready is False
 
 
 def test_schema_is_country_native_not_one_lossy_common_table() -> None:
