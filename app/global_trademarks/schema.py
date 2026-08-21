@@ -210,6 +210,31 @@ SCHEMA_SQL = dedent(
     );
     CREATE INDEX IF NOT EXISTS idx_trademark_ca_st96_application
         ON trademark_ca.st96_record (application_number);
+    CREATE TABLE IF NOT EXISTS trademark_ca.record_state (
+        record_key text PRIMARY KEY,
+        application_number text NOT NULL,
+        extension_counter text NOT NULL DEFAULT '00',
+        source_present boolean NOT NULL,
+        last_operation_category text NOT NULL,
+        last_source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object(object_id),
+        observed_at timestamptz NOT NULL DEFAULT now(),
+        CHECK (last_operation_category IN ('Update', 'Delete'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_record_state_application
+        ON trademark_ca.record_state (application_number);
+    CREATE TABLE IF NOT EXISTS trademark_ca.record_operation (
+        source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object(object_id),
+        record_key text NOT NULL,
+        application_number text NOT NULL,
+        extension_counter text NOT NULL DEFAULT '00',
+        operation_category text NOT NULL,
+        observed_at timestamptz NOT NULL DEFAULT now(),
+        payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+        PRIMARY KEY (source_object_id, record_key, operation_category),
+        CHECK (operation_category IN ('Update', 'Delete'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_trademark_ca_record_operation_application
+        ON trademark_ca.record_operation (application_number, observed_at);
     CREATE TABLE IF NOT EXISTS trademark_ca.party (
         source_row_hash text PRIMARY KEY,
         record_key text NOT NULL REFERENCES trademark_ca.st96_record(record_key),
