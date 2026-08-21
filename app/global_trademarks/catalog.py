@@ -136,7 +136,7 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 authoritative=True,
                 active_now=True,
                 pipeline_ready=False,
-                notes="Core ST.96 parsing exists, but weekly deletion/tombstone semantics must be completed before production sync.",
+                notes="Core Update/Delete observations and source-presence tombstones are implemented; rich weekly party/goods/events/assets parsing remains before full production readiness.",
             ),
             SourceSpec(
                 source_id="TM_LINK_CA",
