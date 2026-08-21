@@ -129,9 +129,8 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 active_now=True,
                 pipeline_ready=True,
                 notes=(
-                    "ST.96 global snapshot baseline; core record plus source-faithful party, "
-                    "goods/services, office-event and registry-relationship observations are "
-                    "durable and resumable."
+                    "ST.96 global snapshot baseline; core record, rich child observations and "
+                    "manifest-ordered source-current projection are durable and resumable."
                 ),
             ),
             SourceSpec(
@@ -141,9 +140,9 @@ COUNTRY_SOURCES: dict[str, CountrySourcePlan] = {
                 active_now=True,
                 pipeline_ready=False,
                 notes=(
-                    "Update/Delete observations, source-presence tombstones and rich child "
-                    "observation snapshots are implemented. Ordered source-current projection "
-                    "and assets remain before full production readiness."
+                    "Update/Delete observations, tombstones, rich child snapshots and monotonic "
+                    "manifest-ordered current projection are implemented. Asset/image ingestion "
+                    "and real-package shape/performance validation remain before production readiness."
                 ),
             ),
             SourceSpec(
