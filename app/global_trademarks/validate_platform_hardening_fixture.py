@@ -68,6 +68,23 @@ def main() -> int:
             mapping_version="COUNTRY_NATIVE_V1",
         )
         assert manifest.objects_complete is False
+
+        conflict_blocked = False
+        try:
+            upsert_source_manifest(
+                jurisdiction="CA",
+                source_id="CIPO_GLOBAL_2025_06_14",
+                manifest_key="CIPO_GLOBAL_2025_06_14",
+                source_sequence=1,
+                source_precedence=100,
+                expected_objects=1,
+                parser_version="CIPO_ST96_CORE_V1",
+                mapping_version="COUNTRY_NATIVE_V1",
+            )
+        except ValueError as exc:
+            conflict_blocked = "manifest metadata conflict" in str(exc)
+        assert conflict_blocked is True
+
         manifest = attach_manifest_object(
             manifest_id=manifest.manifest_id,
             source_object_id=object_ids[0],
@@ -117,6 +134,7 @@ def main() -> int:
             "migration_idempotent": True,
             "source_period_preserved": True,
             "dataset_manifest_complete": True,
+            "manifest_metadata_conflict_blocked": True,
             "duplicate_execution_blocked": True,
         }
     )
