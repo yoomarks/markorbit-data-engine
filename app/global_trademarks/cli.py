@@ -85,6 +85,7 @@ def main() -> int:
                         "role": source.role.value,
                         "authoritative": source.authoritative,
                         "active_now": source.active_now,
+                        "pipeline_ready": source.pipeline_ready,
                         "notes": source.notes,
                     }
                     for source in plan.sources
