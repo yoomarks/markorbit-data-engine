@@ -15,6 +15,12 @@ from app.global_trademarks.catalog import COUNTRY_SOURCES
 from app.global_trademarks.diagnostics import collect_readiness_audit
 from app.global_trademarks.gb_open_data import ingest_ukipo_2018
 from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
+from app.global_trademarks.preflight import (
+    inspect_au_ipgod,
+    inspect_ca_st96,
+    inspect_gb_2018,
+    inspect_tm_link,
+)
 from app.global_trademarks.tm_link_seed import (
     ingest_tm_link_applicants,
     ingest_tm_link_applications,
@@ -53,6 +59,13 @@ def main() -> int:
     sub.add_parser("catalog", help="Print the configured jurisdiction/source plan")
     sub.add_parser("schema-status", help="Read-only audit of country-store schema and ingest state")
     sub.add_parser("migrate", help="Install or safely upgrade country-native PostgreSQL schemas")
+
+    preflight = sub.add_parser("preflight-source", help="Validate one source file without database writes")
+    preflight.add_argument("--path", required=True, type=_path)
+    preflight.add_argument("--kind", required=True, choices=("GB_2018", "CA_ST96", "TM_LINK", "AU_IPGOD"))
+    preflight.add_argument("--jurisdiction", choices=("EU", "NZ"))
+    preflight.add_argument("--table")
+    preflight.add_argument("--sample-limit", type=int, default=100)
 
     gb = sub.add_parser("ingest-gb-2018", help="Ingest one UKIPO 2018 TXT source")
     gb.add_argument("--path", required=True, type=_path)
@@ -101,6 +114,29 @@ def main() -> int:
     if args.command == "schema-status":
         print(json.dumps(collect_readiness_audit().as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+
+    if args.command == "preflight-source":
+        if args.sample_limit <= 0:
+            parser.error("--sample-limit must be positive")
+        if args.kind == "GB_2018":
+            result = inspect_gb_2018(args.path, sample_limit=args.sample_limit)
+        elif args.kind == "CA_ST96":
+            result = inspect_ca_st96(args.path, sample_limit=args.sample_limit)
+        elif args.kind == "TM_LINK":
+            if not args.jurisdiction or not args.table:
+                parser.error("TM_LINK preflight requires --jurisdiction and --table")
+            result = inspect_tm_link(
+                args.path,
+                jurisdiction=args.jurisdiction,
+                table=args.table,
+                sample_limit=args.sample_limit,
+            )
+        else:
+            if not args.table:
+                parser.error("AU_IPGOD preflight requires --table")
+            result = inspect_au_ipgod(args.path, table=args.table, sample_limit=args.sample_limit)
+        print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result.schema_valid else 2
 
     if args.command == "migrate":
         ensure_seed_ingest_schema()

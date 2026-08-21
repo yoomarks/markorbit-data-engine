@@ -22,6 +22,9 @@ jobs:
           sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
           mkdir -p raw_data
 
+      - name: Validate no-write source preflight contracts
+        run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_source_preflight_fixture
+
       - name: Start PostgreSQL
         run: docker compose up -d --wait postgres
 
