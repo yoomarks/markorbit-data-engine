@@ -2,16 +2,37 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from app.db import postgres_conn
 from app.global_trademarks.schema import ensure_country_trademark_schemas
 
 
 _SOURCE_NAMESPACE = uuid.UUID("c37b1f26-5d5a-4afb-9708-a601903b1ad1")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceObjectPin:
+    object_id: uuid.UUID
+    jurisdiction: str
+    source_id: str
+    object_key: str
+    sha256: str
+    path: Path
+
+
+_SOURCE_OBJECT_PIN: ContextVar[SourceObjectPin | None] = ContextVar(
+    "global_trademark_source_object_pin",
+    default=None,
+)
 
 
 def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -22,9 +43,100 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def _sha256(value: str) -> str:
+    normalized = value.strip().lower()
+    if not _SHA256_RE.fullmatch(normalized):
+        raise ValueError("expected a lowercase/uppercase 64-character SHA256 hex digest")
+    return normalized
+
+
 def source_object_id(*, source_id: str, object_key: str, sha256: str) -> uuid.UUID:
     material = f"{source_id}\0{object_key}\0{sha256}"
     return uuid.uuid5(_SOURCE_NAMESPACE, material)
+
+
+def _merge_source_metadata(object_id: uuid.UUID, metadata: dict[str, Any] | None) -> None:
+    if not metadata:
+        return
+    payload = json.dumps(metadata, ensure_ascii=False)
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE acquisition.global_trademark_source_object
+                SET metadata = metadata || %s::jsonb
+                WHERE object_id = %s
+                """,
+                (payload, object_id),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"missing pinned global trademark source object: {object_id}")
+        conn.commit()
+
+
+@contextmanager
+def pinned_registered_source_object(
+    *,
+    object_id: uuid.UUID,
+    jurisdiction: str,
+    source_id: str,
+    object_key: str,
+    path: Path,
+    expected_sha256: str,
+) -> Iterator[None]:
+    """Pin one operator-approved source object for the loader execution context.
+
+    The apply path hashes the file immediately before loader execution and refuses to
+    continue if those bytes no longer match the no-write preflight digest. While the
+    pin is active, loader calls to ``register_source_object`` may only resolve to this
+    exact object; they cannot silently register a second object if a path was replaced
+    between planning and mutation.
+    """
+    expected = _sha256(expected_sha256)
+    resolved_path = path.resolve()
+    actual = sha256_file(path)
+    if actual != expected:
+        raise RuntimeError(
+            "global trademark source bytes changed after preflight; refusing apply: "
+            f"expected_sha256={expected} actual_sha256={actual} path={path}"
+        )
+
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT jurisdiction, source_id, object_key, sha256
+                FROM acquisition.global_trademark_source_object
+                WHERE object_id = %s
+                """,
+                (object_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise RuntimeError(f"missing registered global trademark source object: {object_id}")
+    if (
+        row["jurisdiction"] != jurisdiction
+        or row["source_id"] != source_id
+        or row["object_key"] != object_key
+        or str(row["sha256"]).lower() != expected
+    ):
+        raise RuntimeError(
+            "registered global trademark source identity does not match the operator plan"
+        )
+
+    pin = SourceObjectPin(
+        object_id=object_id,
+        jurisdiction=jurisdiction,
+        source_id=source_id,
+        object_key=object_key,
+        sha256=expected,
+        path=resolved_path,
+    )
+    token = _SOURCE_OBJECT_PIN.set(pin)
+    try:
+        yield
+    finally:
+        _SOURCE_OBJECT_PIN.reset(token)
 
 
 def register_source_object(
@@ -36,13 +148,32 @@ def register_source_object(
     source_period_start: date | None = None,
     source_period_end: date | None = None,
     metadata: dict[str, Any] | None = None,
+    precomputed_sha256: str | None = None,
 ) -> uuid.UUID:
     ensure_country_trademark_schemas()
     if source_period_start and source_period_end and source_period_end < source_period_start:
         raise ValueError("source_period_end cannot be before source_period_start")
 
     resolved_key = object_key or path.name
-    checksum = sha256_file(path)
+    pin = _SOURCE_OBJECT_PIN.get()
+    if pin is not None:
+        if (
+            pin.jurisdiction != jurisdiction
+            or pin.source_id != source_id
+            or pin.object_key != resolved_key
+            or pin.path != path.resolve()
+        ):
+            raise RuntimeError(
+                "loader source registration does not match the pinned operator source object"
+            )
+        _merge_source_metadata(pin.object_id, metadata)
+        return pin.object_id
+
+    checksum = (
+        _sha256(precomputed_sha256)
+        if precomputed_sha256 is not None
+        else sha256_file(path)
+    )
     object_id = source_object_id(
         source_id=source_id,
         object_key=resolved_key,
