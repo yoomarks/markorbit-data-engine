@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import BinaryIO, Iterator
 
 from app.db import postgres_conn
+from app.global_trademarks.ingest_runs import (
+    begin_or_resume_ingest_run,
+    checkpoint_ingest_run,
+    complete_ingest_run,
+    fail_ingest_run,
+)
 from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 from app.global_trademarks.source_objects import register_source_object
 
@@ -121,6 +127,15 @@ def ingest_cipo_st96_core(
         object_key=object_key,
         metadata={"format": "WIPO_ST96_XML"},
     )
+    run = begin_or_resume_ingest_run(
+        source_object_id=source_object,
+        jurisdiction="CA",
+        pipeline_id="CIPO_ST96_CORE_V1",
+        metadata={"source_id": source_id, "batch_size": batch_size},
+    )
+    if run.complete:
+        return run.rows_committed
+
     sql = """
         INSERT INTO trademark_ca.st96_record (
             record_key, application_number, extension_counter, registration_number,
@@ -156,46 +171,75 @@ def ingest_cipo_st96_core(
         ON CONFLICT DO NOTHING
     """
 
-    count = 0
+    rows_committed = run.rows_committed
+    checkpoint = run.checkpoint
     rows: list[tuple] = []
     lineage_rows: list[tuple] = []
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
-            for record in iter_cipo_records(path):
-                application_number = str(record["application_number"])
-                record_key = str(record["record_key"])
-                rows.append(
-                    (
-                        record_key,
-                        application_number,
-                        record["extension_counter"],
-                        record["registration_number"],
-                        record["international_registration_number"],
-                        record["mark_text"],
-                        record["mark_category"],
-                        record["source_status"],
-                        record["status_date"],
-                        record["filed_date"],
-                        record["registered_date"],
-                        record["expiry_date"],
-                        record["termination_date"],
-                        record["application_language"],
-                        source_object,
-                        json.dumps(record, ensure_ascii=False, default=str),
+    record_position = 0
+
+    try:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                for record in iter_cipo_records(path):
+                    record_position += 1
+                    if record_position <= checkpoint:
+                        continue
+
+                    application_number = str(record["application_number"])
+                    record_key = str(record["record_key"])
+                    rows.append(
+                        (
+                            record_key,
+                            application_number,
+                            record["extension_counter"],
+                            record["registration_number"],
+                            record["international_registration_number"],
+                            record["mark_text"],
+                            record["mark_category"],
+                            record["source_status"],
+                            record["status_date"],
+                            record["filed_date"],
+                            record["registered_date"],
+                            record["expiry_date"],
+                            record["termination_date"],
+                            record["application_language"],
+                            source_object,
+                            json.dumps(record, ensure_ascii=False, default=str),
+                        )
                     )
-                )
-                lineage_rows.append(
-                    (application_number, record_key, source_object, "CIPO_ST96_CORE")
-                )
-                if len(rows) >= batch_size:
+                    lineage_rows.append(
+                        (application_number, record_key, source_object, "CIPO_ST96_CORE")
+                    )
+                    if len(rows) >= batch_size:
+                        cur.executemany(sql, rows)
+                        cur.executemany(lineage_sql, lineage_rows)
+                        rows_committed += len(rows)
+                        checkpoint = record_position
+                        checkpoint_ingest_run(
+                            cur,
+                            run_id=run.run_id,
+                            checkpoint=checkpoint,
+                            rows_committed=rows_committed,
+                        )
+                        conn.commit()
+                        rows.clear()
+                        lineage_rows.clear()
+
+                if rows:
                     cur.executemany(sql, rows)
                     cur.executemany(lineage_sql, lineage_rows)
-                    count += len(rows)
-                    rows.clear()
-                    lineage_rows.clear()
-            if rows:
-                cur.executemany(sql, rows)
-                cur.executemany(lineage_sql, lineage_rows)
-                count += len(rows)
-        conn.commit()
-    return count
+                    rows_committed += len(rows)
+                    checkpoint = record_position
+
+                complete_ingest_run(
+                    cur,
+                    run_id=run.run_id,
+                    checkpoint=max(checkpoint, record_position),
+                    rows_committed=rows_committed,
+                )
+                conn.commit()
+    except Exception as exc:
+        fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
+        raise
+
+    return rows_committed
