@@ -5,7 +5,8 @@ import tempfile
 from pathlib import Path
 
 from app.db import postgres_conn
-from app.global_trademarks import ca_st96, gb_open_data, tm_link_seed
+from app.global_trademarks import au_ipgod, ca_st96, gb_open_data, tm_link_seed
+from app.global_trademarks.au_ipgod import ingest_application
 from app.global_trademarks.ca_st96 import ingest_cipo_st96_core
 from app.global_trademarks.gb_open_data import ingest_ukipo_2018
 from app.global_trademarks.tm_link_seed import ingest_tm_link_applications
@@ -87,6 +88,37 @@ def _tm_link_source(root: Path) -> Path:
                     "filing_date": f"201{number}-02-01",
                     "registration_date": f"201{number}-09-01",
                     "renewal_due_date": f"202{number}-09-01",
+                }
+            )
+    return path
+
+
+def _au_source(root: Path) -> Path:
+    path = root / "IPGOD-resume-application.csv"
+    fields = [
+        "ip_right_type",
+        "application_number",
+        "ip_right_sub_type",
+        "status",
+        "earliest_filed_date",
+        "priority_date",
+        "gained_registration_status_date",
+        "gained_enforceable_status_date",
+        "enforceable_from_date",
+        "deemed_retired_date",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for number in range(1, 4):
+            writer.writerow(
+                {
+                    "ip_right_type": "trade_mark",
+                    "application_number": f"AU990000{number}",
+                    "ip_right_sub_type": "trade_mark",
+                    "status": "protected",
+                    "earliest_filed_date": f"201{number}-03-01",
+                    "priority_date": f"201{number}-03-01",
                 }
             )
     return path
@@ -218,12 +250,45 @@ def _validate_tm_link(root: Path) -> None:
     assert ingest_tm_link_applications(path, jurisdiction="EU", batch_size=1) == 3
 
 
+def _validate_au(root: Path) -> None:
+    path = _au_source(root)
+    original_iter = au_ipgod._iter_trade_mark_rows
+
+    def interrupted_iter(source_path: Path):
+        iterator = original_iter(source_path)
+        yield next(iterator)
+        raise RuntimeError("intentional IPGOD fixture interruption")
+
+    au_ipgod._iter_trade_mark_rows = interrupted_iter
+    try:
+        _assert_interrupted(
+            lambda: ingest_application(path, batch_size=1),
+            "intentional IPGOD fixture interruption",
+        )
+    finally:
+        au_ipgod._iter_trade_mark_rows = original_iter
+
+    assert _run_state(
+        source_id="IPGOD_2022",
+        object_key=path.name,
+        pipeline_id="IPGOD_2022_APPLICATION_V1",
+    ) == {"status": "FAILED", "checkpoint": 1, "rows_committed": 1}
+    assert ingest_application(path, batch_size=1) == 3
+    assert _run_state(
+        source_id="IPGOD_2022",
+        object_key=path.name,
+        pipeline_id="IPGOD_2022_APPLICATION_V1",
+    ) == {"status": "COMPLETE", "checkpoint": 3, "rows_committed": 3}
+    assert ingest_application(path, batch_size=1) == 3
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="global-trademark-resume-") as temporary:
         root = Path(temporary)
         _validate_ca(root)
         _validate_gb(root)
         _validate_tm_link(root)
+        _validate_au(root)
 
         with postgres_conn() as conn:
             with conn.cursor() as cur:
@@ -243,6 +308,10 @@ def main() -> int:
                     "SELECT COUNT(*) AS count FROM trademark_eu.tm_link_seed WHERE application_number LIKE '9900000%'"
                 )
                 assert cur.fetchone()["count"] == 3
+                cur.execute(
+                    "SELECT COUNT(*) AS count FROM trademark_au.application WHERE application_number LIKE 'AU990000%'"
+                )
+                assert cur.fetchone()["count"] == 3
 
     print(
         {
@@ -250,7 +319,12 @@ def main() -> int:
             "durable_batch_commit": True,
             "resume_from_checkpoint": True,
             "completed_run_noop": True,
-            "pipelines": ["CIPO_ST96_CORE_V1", "UKIPO_2018_DOMESTIC_V1", "TM_LINK_EU_APPLICATIONS_V1"],
+            "pipelines": [
+                "CIPO_ST96_CORE_V1",
+                "UKIPO_2018_DOMESTIC_V1",
+                "TM_LINK_EU_APPLICATIONS_V1",
+                "IPGOD_2022_APPLICATION_V1",
+            ],
         }
     )
     return 0
