@@ -14,7 +14,7 @@ from app.global_trademarks.manifest import SourceManifest, source_manifest
 from app.global_trademarks.migrations import global_trademark_migration_status
 
 
-GLOBAL_TRADEMARK_ACCEPTANCE_VERSION = "GLOBAL_TM_ACCEPTANCE_V1"
+GLOBAL_TRADEMARK_ACCEPTANCE_VERSION = "GLOBAL_TM_ACCEPTANCE_V2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -26,6 +26,7 @@ class ManifestObjectEvidence:
     jurisdiction: str
     source_id: str
     sha256: str
+    intended_pipeline_id: str | None
     complete_runs: int
     running_runs: int
     failed_runs: int
@@ -54,6 +55,7 @@ class ManifestAcceptanceResult:
     objects_complete: bool
     part_sequence_complete: bool
     source_identity_complete: bool
+    intended_pipeline_identity_complete: bool
     sha_verified: bool
     complete_run_objects: int
     running_run_objects: int
@@ -142,9 +144,19 @@ def _object_evidence(manifest: SourceManifest) -> tuple[ManifestObjectEvidence, 
                     s.jurisdiction,
                     s.source_id,
                     s.sha256,
-                    COUNT(r.run_id) FILTER (WHERE r.status = 'COMPLETE') AS complete_runs,
-                    COUNT(r.run_id) FILTER (WHERE r.status = 'RUNNING') AS running_runs,
-                    COUNT(r.run_id) FILTER (WHERE r.status = 'FAILED') AS failed_runs
+                    NULLIF(s.metadata ->> 'intended_pipeline_id', '') AS intended_pipeline_id,
+                    COUNT(r.run_id) FILTER (
+                        WHERE r.pipeline_id = NULLIF(s.metadata ->> 'intended_pipeline_id', '')
+                          AND r.status = 'COMPLETE'
+                    ) AS complete_runs,
+                    COUNT(r.run_id) FILTER (
+                        WHERE r.pipeline_id = NULLIF(s.metadata ->> 'intended_pipeline_id', '')
+                          AND r.status = 'RUNNING'
+                    ) AS running_runs,
+                    COUNT(r.run_id) FILTER (
+                        WHERE r.pipeline_id = NULLIF(s.metadata ->> 'intended_pipeline_id', '')
+                          AND r.status = 'FAILED'
+                    ) AS failed_runs
                 FROM acquisition.global_trademark_manifest_object AS o
                 JOIN acquisition.global_trademark_source_object AS s
                   ON s.object_id = o.source_object_id
@@ -152,7 +164,7 @@ def _object_evidence(manifest: SourceManifest) -> tuple[ManifestObjectEvidence, 
                   ON r.source_object_id = o.source_object_id
                 WHERE o.manifest_id = %s
                 GROUP BY o.source_object_id, o.part_sequence, s.object_key,
-                         s.jurisdiction, s.source_id, s.sha256
+                         s.jurisdiction, s.source_id, s.sha256, s.metadata
                 ORDER BY o.part_sequence NULLS LAST, s.object_key, o.source_object_id
                 """,
                 (manifest.manifest_id,),
@@ -168,6 +180,7 @@ def _object_evidence(manifest: SourceManifest) -> tuple[ManifestObjectEvidence, 
             jurisdiction=row["jurisdiction"],
             source_id=row["source_id"],
             sha256=row["sha256"],
+            intended_pipeline_id=row["intended_pipeline_id"],
             complete_runs=int(row["complete_runs"] or 0),
             running_runs=int(row["running_runs"] or 0),
             failed_runs=int(row["failed_runs"] or 0),
@@ -180,9 +193,9 @@ def evaluate_manifest_acceptance(manifest_id: uuid.UUID) -> ManifestAcceptanceRe
     """Evaluate one source release without promoting it to jurisdiction-current truth.
 
     Acceptance here means that the declared release is structurally complete and its
-    attached source objects have verified identities plus completed ingestion work. It
-    never means the jurisdiction is current, legally complete, or safe for absence-based
-    legal conclusions.
+    attached source objects have verified identities plus a completed run for each
+    object's exact operator-declared pipeline. It never means the jurisdiction is
+    current, legally complete, or safe for absence-based legal conclusions.
     """
     manifest = source_manifest(manifest_id)
     if manifest is None:
@@ -215,6 +228,9 @@ def evaluate_manifest_acceptance(manifest_id: uuid.UUID) -> ManifestAcceptanceRe
             and item.source_id == manifest.source_id
             for item in objects
         )
+    )
+    intended_pipeline_identity_complete = bool(
+        objects and all(item.intended_pipeline_id for item in objects)
     )
     sha_verified = bool(objects and all(item.sha_verified for item in objects))
     complete_run_objects = sum(item.has_complete_run for item in objects)
@@ -249,6 +265,8 @@ def evaluate_manifest_acceptance(manifest_id: uuid.UUID) -> ManifestAcceptanceRe
         reasons.append("MANIFEST_PART_SEQUENCE_INCOMPLETE")
     if not source_identity_complete:
         reasons.append("SOURCE_IDENTITY_MISMATCH")
+    if not intended_pipeline_identity_complete:
+        reasons.append("SOURCE_OBJECT_PIPELINE_ID_MISSING")
     if not sha_verified:
         reasons.append("SOURCE_SHA256_NOT_VERIFIED")
     if running_run_objects:
@@ -286,6 +304,7 @@ def evaluate_manifest_acceptance(manifest_id: uuid.UUID) -> ManifestAcceptanceRe
         objects_complete=objects_complete,
         part_sequence_complete=part_sequence_complete,
         source_identity_complete=source_identity_complete,
+        intended_pipeline_identity_complete=intended_pipeline_identity_complete,
         sha_verified=sha_verified,
         complete_run_objects=complete_run_objects,
         running_run_objects=running_run_objects,
@@ -308,7 +327,7 @@ def evaluate_manifest_data_trust(
 ) -> tuple[ManifestAcceptanceResult, DataTrustResult]:
     """Project release acceptance into the existing Data Trust contract.
 
-    `source_supports_silence` is deliberately false in V1. A later jurisdiction-specific
+    `source_supports_silence` is deliberately false. A later jurisdiction-specific
     contract must explicitly prove that absence within verified source coverage carries
     a supported source meaning before Data Engine can expose trusted-for-silence=true.
     """
@@ -320,7 +339,10 @@ def evaluate_manifest_data_trust(
                 f"{acceptance.source_id}:{acceptance.manifest_key}"
             ),
             query_plane_ready=acceptance.schema_ready,
-            source_identity_complete=acceptance.source_identity_complete,
+            source_identity_complete=(
+                acceptance.source_identity_complete
+                and acceptance.intended_pipeline_identity_complete
+            ),
             registered_corpus_complete=(
                 acceptance.objects_complete and acceptance.part_sequence_complete
             ),

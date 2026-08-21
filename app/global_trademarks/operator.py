@@ -13,10 +13,28 @@ from app.global_trademarks.manifest import (
 )
 from app.global_trademarks.migrations import assert_global_trademark_schema
 from app.global_trademarks.preflight import SourcePreflight
-from app.global_trademarks.source_objects import register_source_object
+from app.global_trademarks.source_objects import (
+    arm_registered_source_object,
+    register_source_object,
+)
 
 
-GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V2"
+GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V3"
+
+_TM_LINK_PIPELINE_TOKENS = {
+    "applications": "APPLICATIONS",
+    "applicants": "APPLICANTS",
+    "details": "TRADEMARK_DETAILS",
+    "classes": "NICE_CLASS",
+}
+_AU_PIPELINE_IDS = {
+    "application": "IPGOD_2022_APPLICATION_V1",
+    "party-activity": "IPGOD_2022_PARTY_ACTIVITY_V1",
+    "application-links": "IPGOD_2022_APPLICATION_LINKS_V1",
+    "application-events": "IPGOD_2022_APPLICATION_EVENTS_V1",
+    "application-classification": "IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
+    "application-description": "IPGOD_2022_APPLICATION_DESCRIPTION_V1",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +129,8 @@ def build_ingest_plan(
     source_id = source_id.strip()
     resolved_object_key = (object_key or path.name).strip()
     resolved_manifest_key = (manifest_key or resolved_object_key).strip()
+    if Path(preflight.path).resolve() != path.resolve():
+        raise ValueError("preflight source path does not match ingest plan path")
     if not jurisdiction or not source_id or not resolved_object_key or not resolved_manifest_key:
         raise ValueError("jurisdiction, source_id, object_key and manifest_key are required")
     if source_period_start and source_period_end and source_period_end < source_period_start:
@@ -151,6 +171,25 @@ def build_ingest_plan(
     )
 
 
+def _intended_pipeline_id(
+    plan: IngestPlan,
+    metadata: dict[str, Any],
+) -> str | None:
+    if plan.command == "ingest-gb-2018":
+        stream = str(metadata.get("source_stream") or "").strip()
+        return f"UKIPO_2018_{stream}_V1" if stream in {"DOMESTIC", "MADRID_IR"} else None
+    if plan.command == "ingest-tm-link":
+        table = str(metadata.get("source_table") or "").strip()
+        token = _TM_LINK_PIPELINE_TOKENS.get(table)
+        return f"TM_LINK_{plan.jurisdiction}_{token}_V1" if token else None
+    if plan.command == "ingest-au-ipgod":
+        table = str(metadata.get("source_table") or "").strip()
+        return _AU_PIPELINE_IDS.get(table)
+    if plan.command == "ingest-ca-st96":
+        return "CIPO_ST96_CORE_V1"
+    return None
+
+
 def register_plan_source(
     plan: IngestPlan,
     *,
@@ -160,11 +199,24 @@ def register_plan_source(
 
     Manifest attachment means the exact source object was received/registered. It does
     not mean parsing or ingestion succeeded; acceptance must additionally inspect the
-    ingest-run ledger.
+    ingest-run ledger. The digest comes from the already-completed no-write preflight;
+    the loader re-verifies those bytes immediately before mutation and is pinned to the
+    exact registered object.
     """
     assert_global_trademark_schema()
     if not plan.preflight.schema_valid:
         raise RuntimeError("cannot register an ingest plan with invalid source preflight")
+
+    source_metadata: dict[str, Any] = {
+        "operator_version": GLOBAL_TRADEMARK_OPERATOR_VERSION,
+        "manifest_key": plan.manifest_key,
+        "max_records": plan.max_records,
+        **(metadata or {}),
+    }
+    intended_pipeline_id = _intended_pipeline_id(plan, source_metadata)
+    if intended_pipeline_id:
+        source_metadata["intended_pipeline_id"] = intended_pipeline_id
+
     source_object_id = register_source_object(
         jurisdiction=plan.jurisdiction,
         source_id=plan.source_id,
@@ -172,12 +224,8 @@ def register_plan_source(
         object_key=plan.object_key,
         source_period_start=plan.source_period_start,
         source_period_end=plan.source_period_end,
-        metadata={
-            "operator_version": GLOBAL_TRADEMARK_OPERATOR_VERSION,
-            "manifest_key": plan.manifest_key,
-            "max_records": plan.max_records,
-            **(metadata or {}),
-        },
+        metadata=source_metadata,
+        precomputed_sha256=plan.preflight.sha256,
     )
     manifest = upsert_source_manifest(
         jurisdiction=plan.jurisdiction,
@@ -197,5 +245,13 @@ def register_plan_source(
         manifest_id=manifest.manifest_id,
         source_object_id=source_object_id,
         part_sequence=plan.part_sequence,
+    )
+    arm_registered_source_object(
+        object_id=source_object_id,
+        jurisdiction=plan.jurisdiction,
+        source_id=plan.source_id,
+        object_key=plan.object_key,
+        path=plan.path,
+        expected_sha256=plan.preflight.sha256,
     )
     return source_object_id, manifest

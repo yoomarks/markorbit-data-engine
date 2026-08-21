@@ -10,11 +10,12 @@ from app.global_trademarks import (
     validate_platform_hardening_fixture,
     validate_readiness_audit,
     validate_resumable_fixture,
+    validate_source_identity_fixture,
     validate_upgrade_fixture,
 )
 
 
-GLOBAL_TRADEMARK_CI_SUITE_VERSION = "GLOBAL_TM_CI_SUITE_V1"
+GLOBAL_TRADEMARK_CI_SUITE_VERSION = "GLOBAL_TM_CI_SUITE_V2"
 
 
 def _run(name: str, fixture: Callable[[], int]) -> None:
@@ -32,6 +33,7 @@ def main() -> int:
         ("legacy_upgrade_and_country_ingestion", validate_upgrade_fixture.main),
         ("platform_hardening", validate_platform_hardening_fixture.main),
         ("operator_contract", validate_operator_fixture.main),
+        ("source_identity_pin", validate_source_identity_fixture.main),
         ("bounded_pilot", validate_bounded_pilot_fixture.main),
         ("durable_resume", validate_resumable_fixture.main),
         ("cipo_weekly_tombstones", validate_cipo_weekly_fixture.main),
