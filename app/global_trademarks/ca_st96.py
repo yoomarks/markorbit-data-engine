@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import xml.etree.ElementTree as ET
 import zipfile
@@ -23,13 +24,35 @@ def _local_name(tag: str) -> str:
 
 
 def _first_text(element: ET.Element, *local_names: str) -> str | None:
-    wanted = set(local_names)
-    for child in element.iter():
-        if _local_name(child.tag) in wanted:
-            text = (child.text or "").strip()
-            if text:
-                return text
+    for local_name in local_names:
+        for child in element.iter():
+            if _local_name(child.tag) == local_name:
+                text = (child.text or "").strip()
+                if text:
+                    return text
     return None
+
+
+def _elements(element: ET.Element, local_name: str) -> list[ET.Element]:
+    return [child for child in element.iter() if _local_name(child.tag) == local_name]
+
+
+def _first_element(element: ET.Element, local_name: str) -> ET.Element | None:
+    for child in element.iter():
+        if _local_name(child.tag) == local_name:
+            return child
+    return None
+
+
+def _texts(element: ET.Element, local_name: str) -> list[str]:
+    values: list[str] = []
+    for child in element.iter():
+        if _local_name(child.tag) != local_name:
+            continue
+        value = (child.text or "").strip()
+        if value:
+            values.append(value)
+    return values
 
 
 def _attribute(element: ET.Element, local_name: str) -> str | None:
@@ -61,6 +84,28 @@ def _date(value: str | None) -> date | None:
         return None
 
 
+def _bool(value: str | None) -> bool | None:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"true", "1", "yes", "y"}:
+        return True
+    if normalized in {"false", "0", "no", "n"}:
+        return False
+    return None
+
+
+def _smallint(value: str | None) -> int | None:
+    normalized = (value or "").strip()
+    if not normalized:
+        return None
+    try:
+        number = int(normalized)
+    except ValueError:
+        return None
+    return number if 1 <= number <= 45 else None
+
+
 def _application_identity(element: ET.Element) -> tuple[str | None, str]:
     st13 = _first_text(element, "ST13ApplicationNumber")
     if st13:
@@ -69,14 +114,249 @@ def _application_identity(element: ET.Element) -> tuple[str | None, str]:
             serial = digits[-9:]
             application = serial[:-2].lstrip("0") or "0"
             return application, serial[-2:]
-    raw = _first_text(element, "ApplicationNumber")
-    if raw and raw.isdigit():
-        return raw.lstrip("0") or "0", "00"
+    raw = _first_text(element, "ApplicationNumberText", "ApplicationNumber")
+    if raw:
+        digits = "".join(character for character in raw if character.isdigit())
+        if digits:
+            return digits.lstrip("0") or "0", "00"
     return None, "00"
 
 
 def _record_key(application_number: str, extension_counter: str) -> str:
     return f"{application_number}:{extension_counter}"
+
+
+def _party_payload(
+    element: ET.Element,
+    *,
+    party_role: str,
+    party_code: str | None = None,
+) -> dict[str, object] | None:
+    contact = _first_element(element, "Contact")
+    entity_name = _first_element(element, "EntityName")
+    postal = _first_element(element, "PostalStructuredAddress")
+
+    party_name = _first_text(element, "LegalEntityName", "EntityName")
+    language_code = None
+    if contact is not None:
+        language_code = _attribute(contact, "languageCode")
+    if language_code is None and entity_name is not None:
+        language_code = _attribute(entity_name, "languageCode")
+
+    address_lines = _texts(postal, "AddressLineText") if postal is not None else []
+    address_region = _first_text(postal, "GeographicRegionName") if postal is not None else None
+    address_country = _first_text(postal, "CountryCode") if postal is not None else None
+    postal_code = _first_text(postal, "PostalCode") if postal is not None else None
+    legal_entity_code = _first_text(element, "NationalLegalEntityCode")
+
+    if not any(
+        (
+            party_name,
+            party_code,
+            language_code,
+            address_lines,
+            address_region,
+            address_country,
+            postal_code,
+            legal_entity_code,
+        )
+    ):
+        return None
+
+    return {
+        "party_role": party_role,
+        "party_name": party_name,
+        "language_code": language_code,
+        "party_code": party_code,
+        "address_lines": address_lines,
+        "address_region": address_region,
+        "address_country": address_country,
+        "postal_code": postal_code,
+        "national_legal_entity_code": legal_entity_code,
+    }
+
+
+def _extract_parties(element: ET.Element) -> list[dict[str, object]]:
+    parties: list[dict[str, object]] = []
+
+    for bag in _elements(element, "ApplicantBag"):
+        for applicant in _elements(bag, "Applicant"):
+            payload = _party_payload(applicant, party_role="CURRENT_OWNER")
+            if payload is not None:
+                parties.append(payload)
+
+    for representative in _elements(element, "NationalRepresentative"):
+        payload = _party_payload(
+            representative,
+            party_role="TRADEMARK_AGENT",
+            party_code=_first_text(representative, "CommentText"),
+        )
+        if payload is not None:
+            parties.append(payload)
+
+    for correspondent in _elements(element, "NationalCorrespondent"):
+        payload = _party_payload(
+            correspondent,
+            party_role="REPRESENTATIVE_FOR_SERVICE",
+            party_code=_first_text(correspondent, "CommentText"),
+        )
+        if payload is not None:
+            parties.append(payload)
+
+    for source_index, payload in enumerate(parties, start=1):
+        payload["source_index"] = source_index
+    return parties
+
+
+def _extract_goods_services(element: ET.Element) -> list[dict[str, object]]:
+    observations: list[dict[str, object]] = []
+    for bag in _elements(element, "GoodsServicesBag"):
+        for class_description in _elements(bag, "ClassDescription"):
+            class_number = _smallint(_first_text(class_description, "ClassNumber"))
+            classification_version = _first_text(class_description, "ClassificationVersion")
+
+            for text_element in _elements(class_description, "GoodsServicesDescriptionText"):
+                text_value = (text_element.text or "").strip()
+                if not text_value:
+                    continue
+                observations.append(
+                    {
+                        "class_number": class_number,
+                        "classification_version": classification_version,
+                        "sequence_number": _attribute(text_element, "sequenceNumber"),
+                        "language_code": _attribute(text_element, "languageCode"),
+                        "text_kind": "GOODS_SERVICES_DESCRIPTION",
+                        "text_value": text_value,
+                    }
+                )
+
+            for text_element in _elements(class_description, "ClassificationTermText"):
+                text_value = (text_element.text or "").strip()
+                if not text_value:
+                    continue
+                observations.append(
+                    {
+                        "class_number": class_number,
+                        "classification_version": classification_version,
+                        "sequence_number": _attribute(text_element, "sequenceNumber"),
+                        "language_code": _attribute(text_element, "languageCode"),
+                        "text_kind": "CLASSIFICATION_TERM",
+                        "text_value": text_value,
+                    }
+                )
+
+    for source_index, payload in enumerate(observations, start=1):
+        payload["source_index"] = source_index
+    return observations
+
+
+def _extract_events(element: ET.Element) -> list[dict[str, object]]:
+    observations: list[dict[str, object]] = []
+    for bag in _elements(element, "MarkEventBag"):
+        for mark_event in _elements(bag, "MarkEvent"):
+            national = _first_element(mark_event, "NationalMarkEvent")
+            event_scope = national if national is not None else mark_event
+            additional_values = _texts(event_scope, "MarkEventAdditionalText")
+            payload = {
+                "event_category": _first_text(mark_event, "MarkEventCategory"),
+                "event_code": _first_text(event_scope, "MarkEventCode"),
+                "event_text": _first_text(event_scope, "MarkEventDescriptionText"),
+                "event_date": _date(_first_text(mark_event, "MarkEventDate")),
+                "response_date": _date(_first_text(mark_event, "MarkEventResponseDate")),
+                "additional_text": "\n".join(additional_values) if additional_values else None,
+            }
+            if any(value is not None for value in payload.values()):
+                observations.append(payload)
+
+    for source_index, payload in enumerate(observations, start=1):
+        payload["source_index"] = source_index
+    return observations
+
+
+def _extract_relationships(element: ET.Element) -> list[dict[str, object]]:
+    observations: list[dict[str, object]] = []
+
+    for associated in _elements(element, "AssociatedApplicationNumber"):
+        related_application, related_extension = _application_identity(associated)
+        if related_application is None:
+            continue
+        observations.append(
+            {
+                "relationship_type": "PREVIOUS_ASSOCIATED_APPLICATION",
+                "related_application_number": related_application,
+                "related_extension_counter": related_extension,
+                "related_registration_number": None,
+                "related_office_code": _first_text(associated, "IPOfficeCode"),
+                "per_se_registration": None,
+                "initial_application_date": None,
+            }
+        )
+
+    for divisional_bag in _elements(element, "DivisionalApplicationBag"):
+        initial = _first_element(divisional_bag, "InitialApplicationNumber")
+        if initial is None:
+            continue
+        related_application, related_extension = _application_identity(initial)
+        if related_application is None:
+            continue
+        observations.append(
+            {
+                "relationship_type": "DIVISIONAL_FROM",
+                "related_application_number": related_application,
+                "related_extension_counter": related_extension,
+                "related_registration_number": None,
+                "related_office_code": _first_text(initial, "IPOfficeCode"),
+                "per_se_registration": None,
+                "initial_application_date": _date(
+                    _first_text(divisional_bag, "InitialApplicationDate")
+                ),
+            }
+        )
+
+    for associated_bag in _elements(element, "NationalAssociatedMarkBag"):
+        for associated_mark in _elements(associated_bag, "NationalAssociatedMark"):
+            related_application, related_extension = _application_identity(associated_mark)
+            registration_number = _first_text(associated_mark, "RegistrationNumber")
+            if related_application is None and registration_number is None:
+                continue
+            observations.append(
+                {
+                    "relationship_type": "NATIONAL_ASSOCIATED_MARK",
+                    "related_application_number": related_application,
+                    "related_extension_counter": (
+                        related_extension if related_application is not None else None
+                    ),
+                    "related_registration_number": registration_number,
+                    "related_office_code": _first_text(associated_mark, "IPOfficeCode"),
+                    "per_se_registration": _bool(
+                        _first_text(associated_mark, "PerSeRegistration")
+                    ),
+                    "initial_application_date": None,
+                }
+            )
+
+    for source_index, payload in enumerate(observations, start=1):
+        payload["source_index"] = source_index
+    return observations
+
+
+def _source_row_hash(
+    *,
+    domain: str,
+    source_object: object,
+    record_key: str,
+    source_index: int,
+    payload: dict[str, object],
+) -> str:
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    material = f"{domain}\0{source_object}\0{record_key}\0{source_index}\0{serialized}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
@@ -85,8 +365,10 @@ def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
             continue
         application_number, extension_counter = _application_identity(element)
         if application_number:
+            operation_category = _operation_category(element)
+            rich_update = operation_category == "Update"
             yield {
-                "operation_category": _operation_category(element),
+                "operation_category": operation_category,
                 "record_key": _record_key(application_number, extension_counter),
                 "application_number": application_number,
                 "extension_counter": extension_counter,
@@ -99,6 +381,7 @@ def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
                     "MarkVerbalElementText",
                     "MarkName",
                     "MarkLiteralElement",
+                    "MarkSignificantVerbalElementText",
                 ),
                 "mark_category": _first_text(element, "MarkCategory"),
                 "source_status": _first_text(element, "MarkCurrentStatusCode"),
@@ -108,6 +391,10 @@ def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
                 "expiry_date": _date(_first_text(element, "ExpiryDate")),
                 "termination_date": _date(_first_text(element, "TerminationDate")),
                 "application_language": _first_text(element, "ApplicationLanguageCode"),
+                "parties": _extract_parties(element) if rich_update else [],
+                "goods_services": _extract_goods_services(element) if rich_update else [],
+                "events": _extract_events(element) if rich_update else [],
+                "relationships": _extract_relationships(element) if rich_update else [],
             }
         element.clear()
 
@@ -177,6 +464,46 @@ _OPERATION_SQL = """
     ON CONFLICT DO NOTHING
 """
 
+_PARTY_SQL = """
+    INSERT INTO trademark_ca.party (
+        source_row_hash, record_key, application_number, party_role, party_name,
+        language_code, party_code, address_lines, address_region, address_country,
+        postal_code, national_legal_entity_code, source_index, source_object_id,
+        source_payload
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+    )
+    ON CONFLICT (source_row_hash) DO NOTHING
+"""
+
+_GOODS_SERVICE_SQL = """
+    INSERT INTO trademark_ca.goods_service (
+        source_row_hash, record_key, application_number, class_number, text_value,
+        language_code, classification_version, sequence_number, text_kind,
+        source_index, source_object_id, source_payload
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+    ON CONFLICT (source_row_hash) DO NOTHING
+"""
+
+_EVENT_SQL = """
+    INSERT INTO trademark_ca.event (
+        source_row_hash, record_key, application_number, event_code, event_date,
+        event_text, event_category, response_date, additional_text, source_index,
+        source_object_id, source_payload
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+    ON CONFLICT (source_row_hash) DO NOTHING
+"""
+
+_RELATIONSHIP_SQL = """
+    INSERT INTO trademark_ca.relationship (
+        source_row_hash, record_key, application_number, relationship_type,
+        related_application_number, related_extension_counter,
+        related_registration_number, related_office_code, per_se_registration,
+        initial_application_date, source_index, source_object_id, source_payload
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+    ON CONFLICT (source_row_hash) DO NOTHING
+"""
+
 _LINEAGE_SQL = """
     INSERT INTO acquisition.global_trademark_record_source (
         jurisdiction, application_number, source_record_key,
@@ -190,6 +517,10 @@ def _apply_batch(cur, records: list[dict[str, object]], source_object) -> None:
     update_rows: list[tuple] = []
     state_rows: list[tuple] = []
     operation_rows: list[tuple] = []
+    party_rows: list[tuple] = []
+    goods_service_rows: list[tuple] = []
+    event_rows: list[tuple] = []
+    relationship_rows: list[tuple] = []
     lineage_rows: list[tuple] = []
 
     for record in records:
@@ -219,6 +550,110 @@ def _apply_batch(cur, records: list[dict[str, object]], source_object) -> None:
                     payload,
                 )
             )
+
+            domain_payloads = (
+                ("PARTY", "parties", party_rows),
+                ("GOODS_SERVICE", "goods_services", goods_service_rows),
+                ("EVENT", "events", event_rows),
+                ("RELATIONSHIP", "relationships", relationship_rows),
+            )
+            for domain, record_field, target_rows in domain_payloads:
+                observations = list(record[record_field])
+                if observations:
+                    lineage_rows.append(
+                        (
+                            application_number,
+                            record_key,
+                            source_object,
+                            f"CIPO_ST96_{domain}",
+                        )
+                    )
+                for observation in observations:
+                    source_index = int(observation["source_index"])
+                    row_hash = _source_row_hash(
+                        domain=domain,
+                        source_object=source_object,
+                        record_key=record_key,
+                        source_index=source_index,
+                        payload=observation,
+                    )
+                    observation_payload = json.dumps(
+                        observation,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    if domain == "PARTY":
+                        target_rows.append(
+                            (
+                                row_hash,
+                                record_key,
+                                application_number,
+                                observation["party_role"],
+                                observation["party_name"],
+                                observation["language_code"],
+                                observation["party_code"],
+                                observation["address_lines"],
+                                observation["address_region"],
+                                observation["address_country"],
+                                observation["postal_code"],
+                                observation["national_legal_entity_code"],
+                                source_index,
+                                source_object,
+                                observation_payload,
+                            )
+                        )
+                    elif domain == "GOODS_SERVICE":
+                        target_rows.append(
+                            (
+                                row_hash,
+                                record_key,
+                                application_number,
+                                observation["class_number"],
+                                observation["text_value"],
+                                observation["language_code"],
+                                observation["classification_version"],
+                                observation["sequence_number"],
+                                observation["text_kind"],
+                                source_index,
+                                source_object,
+                                observation_payload,
+                            )
+                        )
+                    elif domain == "EVENT":
+                        target_rows.append(
+                            (
+                                row_hash,
+                                record_key,
+                                application_number,
+                                observation["event_code"],
+                                observation["event_date"],
+                                observation["event_text"],
+                                observation["event_category"],
+                                observation["response_date"],
+                                observation["additional_text"],
+                                source_index,
+                                source_object,
+                                observation_payload,
+                            )
+                        )
+                    else:
+                        target_rows.append(
+                            (
+                                row_hash,
+                                record_key,
+                                application_number,
+                                observation["relationship_type"],
+                                observation["related_application_number"],
+                                observation["related_extension_counter"],
+                                observation["related_registration_number"],
+                                observation["related_office_code"],
+                                observation["per_se_registration"],
+                                observation["initial_application_date"],
+                                source_index,
+                                source_object,
+                                observation_payload,
+                            )
+                        )
 
         state_rows.append(
             (
@@ -251,6 +686,14 @@ def _apply_batch(cur, records: list[dict[str, object]], source_object) -> None:
 
     if update_rows:
         cur.executemany(_RECORD_UPSERT_SQL, update_rows)
+    if party_rows:
+        cur.executemany(_PARTY_SQL, party_rows)
+    if goods_service_rows:
+        cur.executemany(_GOODS_SERVICE_SQL, goods_service_rows)
+    if event_rows:
+        cur.executemany(_EVENT_SQL, event_rows)
+    if relationship_rows:
+        cur.executemany(_RELATIONSHIP_SQL, relationship_rows)
     cur.executemany(_STATE_UPSERT_SQL, state_rows)
     cur.executemany(_OPERATION_SQL, operation_rows)
     cur.executemany(_LINEAGE_SQL, lineage_rows)
@@ -287,6 +730,7 @@ def ingest_cipo_st96_core(
             "source_id": source_id,
             "batch_size": batch_size,
             "max_records": max_records,
+            "rich_observations": "CIPO_ST96_RICH_OBSERVATION_V1",
         },
     )
     if run.complete:
