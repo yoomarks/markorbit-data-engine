@@ -61,6 +61,48 @@ The command above performs preflight and prints a plan only. Add `--apply` only 
 accepted. Manifest attachment means the source object was received/registered; it does **not**
 mean ingestion or jurisdiction acceptance succeeded. Those remain separate evidence gates.
 
+## Release acceptance and Data Trust
+
+`GLOBAL_TM_ACCEPTANCE_V1` evaluates one source release after ingestion. It is deliberately
+narrower than country/jurisdiction acceptance.
+
+The release acceptance gate requires all of the following before `release_accepted=true`:
+
+- the configured source pipeline is marked `pipeline_ready`;
+- the country-native schema is ready;
+- `expected_objects` is declared and the exact object count is attached;
+- part sequences form the complete deterministic range `1..expected_objects`;
+- every attached object matches the manifest jurisdiction/source identity;
+- every object carries the persisted SHA256 identity created during source registration;
+- every attached object has completed ingestion and none remain running or failed;
+- declared predecessor and baseline manifests resolve within the same jurisdiction/source chain.
+
+Read-only evaluation is exposed through:
+
+```bash
+python -m app.global_trademarks.cli accept-manifest \
+  --manifest-id <uuid> \
+  --required-coverage-through YYYY-MM-DD
+```
+
+The command projects the release evidence into the existing Data Trust dimensions:
+`queryable`, `complete`, `fresh`, `accepted`, and `trusted_for_silence`.
+
+V1 intentionally forces `trusted_for_silence=false`. A source release being complete, fresh and
+accepted does **not** establish that absence of a source observation means legal nonexistence,
+invalidity, abandonment, expiration, or any other legal/business conclusion. Jurisdiction-specific
+contracts must separately prove any supported silence semantics before that flag can ever become
+true.
+
+Accordingly:
+
+`ingest COMPLETE != release accepted != jurisdiction current != trusted for silence != legal conclusion`
+
+Historical-seed releases can pass structural release acceptance while still carrying warnings that
+the source is historical and current state is not verified. Likewise, an authoritative baseline can
+pass release acceptance without proving that later incremental packages have been applied through
+today.
+
 ## Jurisdiction plans
 
 ### United States
@@ -123,5 +165,6 @@ is not promoted into a legal conclusion that the trademark itself is invalid or 
 
 Large-source ingestion must use no-write source preflight, the versioned migration gate,
 checksum-backed source objects, dataset manifests, the explicit `--apply` operator boundary,
-and durable/resumable acquisition. None of these commands rebuild or restart the existing CN
-worker, enable QCC, or authorize a new jurisdiction as accepted merely because its jobs complete.
+durable/resumable acquisition, and the separate read-only release acceptance gate. None of these
+commands rebuild or restart the existing CN worker, enable QCC, or authorize a new jurisdiction as
+current/accepted merely because its jobs complete.
