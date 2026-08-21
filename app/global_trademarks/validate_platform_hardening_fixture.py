@@ -9,7 +9,11 @@ from app.global_trademarks.execution import (
     ExecutionAlreadyRunning,
     global_trademark_execution_lock,
 )
-from app.global_trademarks.manifest import source_manifest, upsert_source_manifest
+from app.global_trademarks.manifest import (
+    attach_manifest_object,
+    source_manifest,
+    upsert_source_manifest,
+)
 from app.global_trademarks.migrations import (
     GLOBAL_TRADEMARK_SCHEMA_VERSION,
     assert_global_trademark_schema,
@@ -26,35 +30,57 @@ def main() -> int:
     assert_global_trademark_schema()
 
     with tempfile.TemporaryDirectory(prefix="global-platform-hardening-") as temporary:
-        path = Path(temporary) / "source.dat"
-        path.write_bytes(b"official-source-fixture\n")
-        source_object_id = register_source_object(
-            jurisdiction="CA",
-            source_id="CIPO_GLOBAL_2025_06_14",
-            path=path,
-            source_period_start=date(2025, 6, 14),
-            source_period_end=date(2025, 6, 14),
-            metadata={"fixture_a": True},
-        )
+        root = Path(temporary)
+        object_ids = []
+        for part in (1, 2):
+            path = root / f"source-{part}.dat"
+            path.write_bytes(f"official-source-fixture-{part}\n".encode())
+            object_ids.append(
+                register_source_object(
+                    jurisdiction="CA",
+                    source_id="CIPO_GLOBAL_2025_06_14",
+                    path=path,
+                    source_period_start=date(2025, 6, 14),
+                    source_period_end=date(2025, 6, 14),
+                    metadata={"fixture_part": part},
+                )
+            )
+
+        first_object = object_ids[0]
         repeated = register_source_object(
             jurisdiction="CA",
             source_id="CIPO_GLOBAL_2025_06_14",
-            path=path,
-            metadata={"fixture_b": True},
+            path=root / "source-1.dat",
+            metadata={"fixture_replayed": True},
         )
-        assert repeated == source_object_id
+        assert repeated == first_object
 
         manifest = upsert_source_manifest(
-            source_object_id=source_object_id,
+            jurisdiction="CA",
+            source_id="CIPO_GLOBAL_2025_06_14",
+            manifest_key="CIPO_GLOBAL_2025_06_14",
+            source_period_start=date(2025, 6, 14),
+            source_period_end=date(2025, 6, 14),
             source_sequence=1,
             source_precedence=100,
-            expected_parts=161,
-            received_parts=161,
+            expected_objects=2,
             parser_version="CIPO_ST96_CORE_V1",
             mapping_version="COUNTRY_NATIVE_V1",
         )
-        assert manifest.parts_complete is True
-        assert source_manifest(source_object_id) == manifest
+        assert manifest.objects_complete is False
+        manifest = attach_manifest_object(
+            manifest_id=manifest.manifest_id,
+            source_object_id=object_ids[0],
+            part_sequence=1,
+        )
+        assert manifest.objects_complete is False
+        manifest = attach_manifest_object(
+            manifest_id=manifest.manifest_id,
+            source_object_id=object_ids[1],
+            part_sequence=2,
+        )
+        assert manifest.objects_complete is True
+        assert source_manifest(manifest.manifest_id) == manifest
 
         with postgres_conn() as conn:
             with conn.cursor() as cur:
@@ -64,12 +90,12 @@ def main() -> int:
                     FROM acquisition.global_trademark_source_object
                     WHERE object_id = %s
                     """,
-                    (source_object_id,),
+                    (first_object,),
                 )
                 row = cur.fetchone()
         assert row["source_period_start"] == date(2025, 6, 14)
         assert row["source_period_end"] == date(2025, 6, 14)
-        assert row["metadata"] == {"fixture_a": True, "fixture_b": True}
+        assert row["metadata"] == {"fixture_part": 1, "fixture_replayed": True}
 
     scope = "CA:CIPO_GLOBAL_2025_06_14:fixture"
     with global_trademark_execution_lock(scope):
@@ -90,7 +116,7 @@ def main() -> int:
             "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,
             "migration_idempotent": True,
             "source_period_preserved": True,
-            "manifest_complete": True,
+            "dataset_manifest_complete": True,
             "duplicate_execution_blocked": True,
         }
     )
