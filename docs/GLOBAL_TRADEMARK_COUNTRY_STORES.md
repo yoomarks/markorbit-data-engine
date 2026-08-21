@@ -33,7 +33,7 @@ operator/catalog from confusing source availability with production ingestion ca
 ## Operator safety
 
 The versioned global-trademark control plane is `GLOBAL_TM_SCHEMA_V1` and the operator contract
-is `GLOBAL_TM_OPERATOR_V1`.
+is `GLOBAL_TM_OPERATOR_V2`.
 
 Schema migration is an explicit operator action:
 
@@ -60,6 +60,37 @@ python -m app.global_trademarks.cli ingest-ca-st96 \
 The command above performs preflight and prints a plan only. Add `--apply` only after the plan is
 accepted. Manifest attachment means the source object was received/registered; it does **not**
 mean ingestion or jurisdiction acceptance succeeded. Those remain separate evidence gates.
+
+### Bounded pilot apply
+
+V2 adds an explicit bounded execution control for first-contact or pilot ingestion:
+
+```bash
+python -m app.global_trademarks.cli ingest-ca-st96 \
+  --path <file.zip> \
+  --source-id CIPO_GLOBAL_2025_06_14 \
+  --manifest-key CIPO_GLOBAL_2025_06_14 \
+  --expected-objects 161 \
+  --part-sequence 1 \
+  --max-records 1000 \
+  --apply
+```
+
+`--max-records N` caps **newly committed records in that invocation**, not the lifetime total for
+the source object. Each bounded commit persists the same durable ingest checkpoint used by normal
+replay. If the bound is reached before EOF, the ingest run remains `RUNNING` and the CLI reports
+`status=PARTIAL`; it is intentionally **not** marked `COMPLETE`. A later bounded or unbounded call
+resumes from the durable checkpoint.
+
+The operator reports both `processed_rows` for the current invocation and
+`cumulative_committed_rows` from the durable ingest run. `net_inserted_rows` remains unknown unless
+a loader can measure inserts versus updates accurately; the operator does not fabricate it.
+
+A bounded partial run cannot satisfy source-release acceptance because the attached source object
+has no completed ingest run yet. If the bound happens to coincide exactly with EOF, the first call
+may still remain partial rather than peeking past the safety boundary; a subsequent resume reaches
+EOF and marks the durable run complete. This deliberately prefers false-incomplete over
+false-complete.
 
 ## Release acceptance and Data Trust
 
@@ -165,6 +196,7 @@ is not promoted into a legal conclusion that the trademark itself is invalid or 
 
 Large-source ingestion must use no-write source preflight, the versioned migration gate,
 checksum-backed source objects, dataset manifests, the explicit `--apply` operator boundary,
-durable/resumable acquisition, and the separate read-only release acceptance gate. None of these
-commands rebuild or restart the existing CN worker, enable QCC, or authorize a new jurisdiction as
-current/accepted merely because its jobs complete.
+durable/resumable acquisition, bounded pilot execution for cautious first runs when appropriate,
+and the separate read-only release acceptance gate. None of these commands rebuild or restart the
+existing CN worker, enable QCC, or authorize a new jurisdiction as current/accepted merely because
+its jobs complete.
