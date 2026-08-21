@@ -1,8 +1,10 @@
 import argparse
 import json
+import uuid
 from datetime import date
 from pathlib import Path
 
+from app.global_trademarks.acceptance import evaluate_manifest_data_trust
 from app.global_trademarks.au_ipgod import (
     ingest_application,
     ingest_application_classification,
@@ -70,6 +72,13 @@ def _iso_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("expected ISO date YYYY-MM-DD") from exc
+
+
+def _uuid(value: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected UUID") from exc
 
 
 def _add_apply_controls(parser: argparse.ArgumentParser) -> None:
@@ -188,6 +197,13 @@ def main() -> int:
     preflight.add_argument("--table")
     preflight.add_argument("--sample-limit", type=int, default=100)
 
+    acceptance = sub.add_parser(
+        "accept-manifest",
+        help="Read-only release acceptance and Data Trust evaluation for one source manifest",
+    )
+    acceptance.add_argument("--manifest-id", required=True, type=_uuid)
+    acceptance.add_argument("--required-coverage-through", type=_iso_date)
+
     gb = sub.add_parser(
         "ingest-gb-2018",
         help="Plan UKIPO 2018 ingestion; requires --apply for database mutation",
@@ -281,6 +297,24 @@ def main() -> int:
         status = migrate_global_trademark_schema()
         print(json.dumps(status.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if status.ready else 2
+
+    if args.command == "accept-manifest":
+        manifest_acceptance, trust = evaluate_manifest_data_trust(
+            args.manifest_id,
+            required_coverage_through=args.required_coverage_through,
+        )
+        print(
+            json.dumps(
+                {
+                    "acceptance": manifest_acceptance.as_dict(),
+                    "data_trust": trust.as_dict(),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0 if manifest_acceptance.release_accepted else 2
 
     if args.source_sequence < 0 or args.source_precedence < 0:
         parser.error("--source-sequence and --source-precedence must be non-negative")
