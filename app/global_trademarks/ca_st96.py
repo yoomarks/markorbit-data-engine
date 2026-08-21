@@ -32,6 +32,25 @@ def _first_text(element: ET.Element, *local_names: str) -> str | None:
     return None
 
 
+def _attribute(element: ET.Element, local_name: str) -> str | None:
+    for name, value in element.attrib.items():
+        if _local_name(name) == local_name:
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+    return None
+
+
+def _operation_category(element: ET.Element) -> str:
+    raw = _attribute(element, "operationCategory") or "Update"
+    normalized = raw.strip().lower()
+    if normalized == "update":
+        return "Update"
+    if normalized == "delete":
+        return "Delete"
+    raise ValueError(f"unsupported CIPO trademark operationCategory: {raw}")
+
+
 def _date(value: str | None) -> date | None:
     value = (value or "").strip()
     if not value:
@@ -67,6 +86,7 @@ def _iter_trademarks(handle: BinaryIO) -> Iterator[dict[str, object]]:
         application_number, extension_counter = _application_identity(element)
         if application_number:
             yield {
+                "operation_category": _operation_category(element),
                 "record_key": _record_key(application_number, extension_counter),
                 "application_number": application_number,
                 "extension_counter": extension_counter,
@@ -107,6 +127,135 @@ def iter_cipo_records(path: Path) -> Iterator[dict[str, object]]:
         yield from _iter_trademarks(handle)
 
 
+_RECORD_UPSERT_SQL = """
+    INSERT INTO trademark_ca.st96_record (
+        record_key, application_number, extension_counter, registration_number,
+        international_registration_number, mark_text, mark_category, source_status,
+        status_date, filed_date, registered_date, expiry_date, termination_date,
+        application_language, source_object_id, source_payload
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+    )
+    ON CONFLICT (record_key) DO UPDATE SET
+        application_number = EXCLUDED.application_number,
+        extension_counter = EXCLUDED.extension_counter,
+        registration_number = EXCLUDED.registration_number,
+        international_registration_number = EXCLUDED.international_registration_number,
+        mark_text = EXCLUDED.mark_text,
+        mark_category = EXCLUDED.mark_category,
+        source_status = EXCLUDED.source_status,
+        status_date = EXCLUDED.status_date,
+        filed_date = EXCLUDED.filed_date,
+        registered_date = EXCLUDED.registered_date,
+        expiry_date = EXCLUDED.expiry_date,
+        termination_date = EXCLUDED.termination_date,
+        application_language = EXCLUDED.application_language,
+        source_object_id = EXCLUDED.source_object_id,
+        source_payload = EXCLUDED.source_payload
+"""
+
+_STATE_UPSERT_SQL = """
+    INSERT INTO trademark_ca.record_state (
+        record_key, application_number, extension_counter, source_present,
+        last_operation_category, last_source_object_id, observed_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, now())
+    ON CONFLICT (record_key) DO UPDATE SET
+        application_number = EXCLUDED.application_number,
+        extension_counter = EXCLUDED.extension_counter,
+        source_present = EXCLUDED.source_present,
+        last_operation_category = EXCLUDED.last_operation_category,
+        last_source_object_id = EXCLUDED.last_source_object_id,
+        observed_at = now()
+"""
+
+_OPERATION_SQL = """
+    INSERT INTO trademark_ca.record_operation (
+        source_object_id, record_key, application_number, extension_counter,
+        operation_category, payload
+    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+    ON CONFLICT DO NOTHING
+"""
+
+_LINEAGE_SQL = """
+    INSERT INTO acquisition.global_trademark_record_source (
+        jurisdiction, application_number, source_record_key,
+        source_object_id, source_record_role
+    ) VALUES ('CA', %s, %s, %s, %s)
+    ON CONFLICT DO NOTHING
+"""
+
+
+def _apply_batch(cur, records: list[dict[str, object]], source_object) -> None:
+    update_rows: list[tuple] = []
+    state_rows: list[tuple] = []
+    operation_rows: list[tuple] = []
+    lineage_rows: list[tuple] = []
+
+    for record in records:
+        application_number = str(record["application_number"])
+        record_key = str(record["record_key"])
+        operation_category = str(record["operation_category"])
+        payload = json.dumps(record, ensure_ascii=False, default=str)
+
+        if operation_category == "Update":
+            update_rows.append(
+                (
+                    record_key,
+                    application_number,
+                    record["extension_counter"],
+                    record["registration_number"],
+                    record["international_registration_number"],
+                    record["mark_text"],
+                    record["mark_category"],
+                    record["source_status"],
+                    record["status_date"],
+                    record["filed_date"],
+                    record["registered_date"],
+                    record["expiry_date"],
+                    record["termination_date"],
+                    record["application_language"],
+                    source_object,
+                    payload,
+                )
+            )
+
+        state_rows.append(
+            (
+                record_key,
+                application_number,
+                record["extension_counter"],
+                operation_category == "Update",
+                operation_category,
+                source_object,
+            )
+        )
+        operation_rows.append(
+            (
+                source_object,
+                record_key,
+                application_number,
+                record["extension_counter"],
+                operation_category,
+                payload,
+            )
+        )
+        lineage_rows.append(
+            (
+                application_number,
+                record_key,
+                source_object,
+                f"CIPO_ST96_{operation_category.upper()}",
+            )
+        )
+
+    if update_rows:
+        cur.executemany(_RECORD_UPSERT_SQL, update_rows)
+    cur.executemany(_STATE_UPSERT_SQL, state_rows)
+    cur.executemany(_OPERATION_SQL, operation_rows)
+    cur.executemany(_LINEAGE_SQL, lineage_rows)
+
+
 def ingest_cipo_st96_core(
     path: Path,
     *,
@@ -136,45 +285,9 @@ def ingest_cipo_st96_core(
     if run.complete:
         return run.rows_committed
 
-    sql = """
-        INSERT INTO trademark_ca.st96_record (
-            record_key, application_number, extension_counter, registration_number,
-            international_registration_number, mark_text, mark_category, source_status,
-            status_date, filed_date, registered_date, expiry_date, termination_date,
-            application_language, source_object_id, source_payload
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s::jsonb
-        )
-        ON CONFLICT (record_key) DO UPDATE SET
-            application_number = EXCLUDED.application_number,
-            extension_counter = EXCLUDED.extension_counter,
-            registration_number = EXCLUDED.registration_number,
-            international_registration_number = EXCLUDED.international_registration_number,
-            mark_text = EXCLUDED.mark_text,
-            mark_category = EXCLUDED.mark_category,
-            source_status = EXCLUDED.source_status,
-            status_date = EXCLUDED.status_date,
-            filed_date = EXCLUDED.filed_date,
-            registered_date = EXCLUDED.registered_date,
-            expiry_date = EXCLUDED.expiry_date,
-            termination_date = EXCLUDED.termination_date,
-            application_language = EXCLUDED.application_language,
-            source_object_id = EXCLUDED.source_object_id,
-            source_payload = EXCLUDED.source_payload
-    """
-    lineage_sql = """
-        INSERT INTO acquisition.global_trademark_record_source (
-            jurisdiction, application_number, source_record_key,
-            source_object_id, source_record_role
-        ) VALUES ('CA', %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
-    """
-
     rows_committed = run.rows_committed
     checkpoint = run.checkpoint
-    rows: list[tuple] = []
-    lineage_rows: list[tuple] = []
+    records: list[dict[str, object]] = []
     record_position = 0
 
     try:
@@ -184,36 +297,10 @@ def ingest_cipo_st96_core(
                     record_position += 1
                     if record_position <= checkpoint:
                         continue
-
-                    application_number = str(record["application_number"])
-                    record_key = str(record["record_key"])
-                    rows.append(
-                        (
-                            record_key,
-                            application_number,
-                            record["extension_counter"],
-                            record["registration_number"],
-                            record["international_registration_number"],
-                            record["mark_text"],
-                            record["mark_category"],
-                            record["source_status"],
-                            record["status_date"],
-                            record["filed_date"],
-                            record["registered_date"],
-                            record["expiry_date"],
-                            record["termination_date"],
-                            record["application_language"],
-                            source_object,
-                            json.dumps(record, ensure_ascii=False, default=str),
-                        )
-                    )
-                    lineage_rows.append(
-                        (application_number, record_key, source_object, "CIPO_ST96_CORE")
-                    )
-                    if len(rows) >= batch_size:
-                        cur.executemany(sql, rows)
-                        cur.executemany(lineage_sql, lineage_rows)
-                        rows_committed += len(rows)
+                    records.append(record)
+                    if len(records) >= batch_size:
+                        _apply_batch(cur, records, source_object)
+                        rows_committed += len(records)
                         checkpoint = record_position
                         checkpoint_ingest_run(
                             cur,
@@ -222,13 +309,11 @@ def ingest_cipo_st96_core(
                             rows_committed=rows_committed,
                         )
                         conn.commit()
-                        rows.clear()
-                        lineage_rows.clear()
+                        records.clear()
 
-                if rows:
-                    cur.executemany(sql, rows)
-                    cur.executemany(lineage_sql, lineage_rows)
-                    rows_committed += len(rows)
+                if records:
+                    _apply_batch(cur, records, source_object)
+                    rows_committed += len(records)
                     checkpoint = record_position
 
                 complete_ingest_run(
