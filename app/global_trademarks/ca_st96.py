@@ -262,9 +262,12 @@ def ingest_cipo_st96_core(
     source_id: str = "CIPO_GLOBAL_2025_06_14",
     object_key: str | None = None,
     batch_size: int = 2000,
+    max_records: int | None = None,
 ) -> int:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if max_records is not None and max_records <= 0:
+        raise ValueError("max_records must be positive when provided")
     if source_id not in {"CIPO_GLOBAL_2025_06_14", "CIPO_WEEKLY"}:
         raise ValueError("unsupported CIPO source_id")
 
@@ -280,15 +283,21 @@ def ingest_cipo_st96_core(
         source_object_id=source_object,
         jurisdiction="CA",
         pipeline_id="CIPO_ST96_CORE_V1",
-        metadata={"source_id": source_id, "batch_size": batch_size},
+        metadata={
+            "source_id": source_id,
+            "batch_size": batch_size,
+            "max_records": max_records,
+        },
     )
     if run.complete:
         return run.rows_committed
 
     rows_committed = run.rows_committed
+    invocation_committed = 0
     checkpoint = run.checkpoint
     records: list[dict[str, object]] = []
     record_position = 0
+    bounded_stop = False
 
     try:
         with postgres_conn() as conn:
@@ -298,9 +307,14 @@ def ingest_cipo_st96_core(
                     if record_position <= checkpoint:
                         continue
                     records.append(record)
-                    if len(records) >= batch_size:
+                    limit_reached = bool(
+                        max_records is not None
+                        and invocation_committed + len(records) >= max_records
+                    )
+                    if len(records) >= batch_size or limit_reached:
                         _apply_batch(cur, records, source_object)
                         rows_committed += len(records)
+                        invocation_committed += len(records)
                         checkpoint = record_position
                         checkpoint_ingest_run(
                             cur,
@@ -310,18 +324,23 @@ def ingest_cipo_st96_core(
                         )
                         conn.commit()
                         records.clear()
+                        if limit_reached:
+                            bounded_stop = True
+                            break
 
                 if records:
                     _apply_batch(cur, records, source_object)
                     rows_committed += len(records)
+                    invocation_committed += len(records)
                     checkpoint = record_position
 
-                complete_ingest_run(
-                    cur,
-                    run_id=run.run_id,
-                    checkpoint=max(checkpoint, record_position),
-                    rows_committed=rows_committed,
-                )
+                if not bounded_stop:
+                    complete_ingest_run(
+                        cur,
+                        run_id=run.run_id,
+                        checkpoint=max(checkpoint, record_position),
+                        rows_committed=rows_committed,
+                    )
                 conn.commit()
     except Exception as exc:
         fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
