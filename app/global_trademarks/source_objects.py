@@ -4,12 +4,11 @@ import hashlib
 import json
 import re
 import uuid
-from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from app.db import postgres_conn
 from app.global_trademarks.schema import ensure_country_trademark_schemas
@@ -46,7 +45,7 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 def _sha256(value: str) -> str:
     normalized = value.strip().lower()
     if not _SHA256_RE.fullmatch(normalized):
-        raise ValueError("expected a lowercase/uppercase 64-character SHA256 hex digest")
+        raise ValueError("expected a 64-character SHA256 hex digest")
     return normalized
 
 
@@ -74,8 +73,7 @@ def _merge_source_metadata(object_id: uuid.UUID, metadata: dict[str, Any] | None
         conn.commit()
 
 
-@contextmanager
-def pinned_registered_source_object(
+def arm_registered_source_object(
     *,
     object_id: uuid.UUID,
     jurisdiction: str,
@@ -83,24 +81,18 @@ def pinned_registered_source_object(
     object_key: str,
     path: Path,
     expected_sha256: str,
-) -> Iterator[None]:
-    """Pin one operator-approved source object for the loader execution context.
+) -> None:
+    """Arm a one-shot source identity guard for the next loader registration.
 
-    The apply path hashes the file immediately before loader execution and refuses to
-    continue if those bytes no longer match the no-write preflight digest. While the
-    pin is active, loader calls to ``register_source_object`` may only resolve to this
-    exact object; they cannot silently register a second object if a path was replaced
-    between planning and mutation.
+    ``register_plan_source`` records the preflight-approved object first. The loader's
+    normal ``register_source_object`` call then consumes this pin, re-hashes the file
+    immediately before ingestion, and refuses to create or switch to a different source
+    object if the path was replaced after planning.
     """
-    expected = _sha256(expected_sha256)
-    resolved_path = path.resolve()
-    actual = sha256_file(path)
-    if actual != expected:
-        raise RuntimeError(
-            "global trademark source bytes changed after preflight; refusing apply: "
-            f"expected_sha256={expected} actual_sha256={actual} path={path}"
-        )
+    if _SOURCE_OBJECT_PIN.get() is not None:
+        raise RuntimeError("a global trademark source object pin is already armed")
 
+    expected = _sha256(expected_sha256)
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -124,19 +116,16 @@ def pinned_registered_source_object(
             "registered global trademark source identity does not match the operator plan"
         )
 
-    pin = SourceObjectPin(
-        object_id=object_id,
-        jurisdiction=jurisdiction,
-        source_id=source_id,
-        object_key=object_key,
-        sha256=expected,
-        path=resolved_path,
+    _SOURCE_OBJECT_PIN.set(
+        SourceObjectPin(
+            object_id=object_id,
+            jurisdiction=jurisdiction,
+            source_id=source_id,
+            object_key=object_key,
+            sha256=expected,
+            path=path.resolve(),
+        )
     )
-    token = _SOURCE_OBJECT_PIN.set(pin)
-    try:
-        yield
-    finally:
-        _SOURCE_OBJECT_PIN.reset(token)
 
 
 def register_source_object(
@@ -157,17 +146,26 @@ def register_source_object(
     resolved_key = object_key or path.name
     pin = _SOURCE_OBJECT_PIN.get()
     if pin is not None:
-        if (
-            pin.jurisdiction != jurisdiction
-            or pin.source_id != source_id
-            or pin.object_key != resolved_key
-            or pin.path != path.resolve()
-        ):
-            raise RuntimeError(
-                "loader source registration does not match the pinned operator source object"
-            )
-        _merge_source_metadata(pin.object_id, metadata)
-        return pin.object_id
+        try:
+            if (
+                pin.jurisdiction != jurisdiction
+                or pin.source_id != source_id
+                or pin.object_key != resolved_key
+                or pin.path != path.resolve()
+            ):
+                raise RuntimeError(
+                    "loader source registration does not match the pinned operator source object"
+                )
+            actual = sha256_file(path)
+            if actual != pin.sha256:
+                raise RuntimeError(
+                    "global trademark source bytes changed after preflight; refusing apply: "
+                    f"expected_sha256={pin.sha256} actual_sha256={actual} path={path}"
+                )
+            _merge_source_metadata(pin.object_id, metadata)
+            return pin.object_id
+        finally:
+            _SOURCE_OBJECT_PIN.set(None)
 
     checksum = (
         _sha256(precomputed_sha256)
