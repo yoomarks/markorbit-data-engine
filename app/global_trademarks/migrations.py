@@ -10,31 +10,51 @@ GLOBAL_TRADEMARK_SCHEMA_COMPONENT = "GLOBAL_TRADEMARK"
 GLOBAL_TRADEMARK_SCHEMA_VERSION = "GLOBAL_TM_SCHEMA_V1"
 
 _MANIFEST_SQL = """
-CREATE TABLE IF NOT EXISTS acquisition.global_trademark_source_manifest (
-    source_object_id uuid PRIMARY KEY
-        REFERENCES acquisition.global_trademark_source_object(object_id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS acquisition.global_trademark_manifest (
+    manifest_id uuid PRIMARY KEY,
+    jurisdiction text NOT NULL,
+    source_id text NOT NULL,
+    manifest_key text NOT NULL,
+    source_period_start date,
+    source_period_end date,
     source_sequence bigint NOT NULL DEFAULT 0,
     source_precedence bigint NOT NULL DEFAULT 0,
-    expected_parts integer,
-    received_parts integer,
-    predecessor_object_key text,
-    baseline_object_key text,
+    expected_objects integer,
+    predecessor_manifest_key text,
+    baseline_manifest_key text,
     parser_version text NOT NULL DEFAULT '',
     mapping_version text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (jurisdiction, source_id, manifest_key),
     CHECK (source_sequence >= 0),
     CHECK (source_precedence >= 0),
-    CHECK (expected_parts IS NULL OR expected_parts >= 0),
-    CHECK (received_parts IS NULL OR received_parts >= 0),
+    CHECK (expected_objects IS NULL OR expected_objects >= 0),
     CHECK (
-        expected_parts IS NULL
-        OR received_parts IS NULL
-        OR received_parts <= expected_parts
+        source_period_start IS NULL
+        OR source_period_end IS NULL
+        OR source_period_end >= source_period_start
     )
 );
-CREATE INDEX IF NOT EXISTS idx_global_trademark_source_manifest_sequence
-    ON acquisition.global_trademark_source_manifest (source_sequence, source_precedence);
+CREATE INDEX IF NOT EXISTS idx_global_trademark_manifest_order
+    ON acquisition.global_trademark_manifest (
+        jurisdiction, source_id, source_sequence, source_precedence
+    );
+
+CREATE TABLE IF NOT EXISTS acquisition.global_trademark_manifest_object (
+    manifest_id uuid NOT NULL
+        REFERENCES acquisition.global_trademark_manifest(manifest_id) ON DELETE CASCADE,
+    source_object_id uuid NOT NULL
+        REFERENCES acquisition.global_trademark_source_object(object_id) ON DELETE CASCADE,
+    part_sequence integer,
+    object_role text NOT NULL DEFAULT 'PRIMARY',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (manifest_id, source_object_id),
+    UNIQUE (manifest_id, part_sequence),
+    CHECK (part_sequence IS NULL OR part_sequence >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_global_trademark_manifest_object_source
+    ON acquisition.global_trademark_manifest_object (source_object_id);
 """
 
 
@@ -44,6 +64,7 @@ class GlobalTrademarkMigrationStatus:
     expected_version: str
     ready: bool
     manifest_relation_ready: bool
+    manifest_object_relation_ready: bool
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -52,6 +73,7 @@ class GlobalTrademarkMigrationStatus:
             "expected_version": self.expected_version,
             "ready": self.ready,
             "manifest_relation_ready": self.manifest_relation_ready,
+            "manifest_object_relation_ready": self.manifest_object_relation_ready,
         }
 
 
@@ -87,15 +109,27 @@ def global_trademark_migration_status() -> GlobalTrademarkMigrationStatus:
             )
             row = cur.fetchone()
             cur.execute(
-                "SELECT to_regclass('acquisition.global_trademark_source_manifest') AS relation"
+                """
+                SELECT
+                    to_regclass('acquisition.global_trademark_manifest') AS manifest_relation,
+                    to_regclass('acquisition.global_trademark_manifest_object')
+                        AS manifest_object_relation
+                """
             )
-            manifest_ready = cur.fetchone()["relation"] is not None
+            relations = cur.fetchone()
     installed = str(row["version"]) if row else None
+    manifest_ready = relations["manifest_relation"] is not None
+    manifest_object_ready = relations["manifest_object_relation"] is not None
     return GlobalTrademarkMigrationStatus(
         installed_version=installed,
         expected_version=GLOBAL_TRADEMARK_SCHEMA_VERSION,
-        ready=installed == GLOBAL_TRADEMARK_SCHEMA_VERSION and manifest_ready,
+        ready=(
+            installed == GLOBAL_TRADEMARK_SCHEMA_VERSION
+            and manifest_ready
+            and manifest_object_ready
+        ),
         manifest_relation_ready=manifest_ready,
+        manifest_object_relation_ready=manifest_object_ready,
     )
 
 
@@ -106,6 +140,7 @@ def assert_global_trademark_schema() -> None:
     raise RuntimeError(
         "Global trademark schema is not at the required operator version. "
         f"installed={status.installed_version!r}, expected={status.expected_version!r}, "
-        f"manifest_relation_ready={status.manifest_relation_ready}. "
+        f"manifest_relation_ready={status.manifest_relation_ready}, "
+        f"manifest_object_relation_ready={status.manifest_object_relation_ready}. "
         "Run `python -m app.global_trademarks.cli migrate` before --apply ingestion."
     )
