@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Iterable
 
 from app.db import postgres_conn
+from app.global_trademarks.ingest_runs import (
+    begin_or_resume_ingest_run,
+    checkpoint_ingest_run,
+    complete_ingest_run,
+    fail_ingest_run,
+)
 from app.global_trademarks.ingest_schema import ensure_seed_ingest_schema
 from app.global_trademarks.source_objects import register_source_object
 
@@ -43,35 +49,86 @@ def _iter_trade_mark_rows(path: Path):
                 yield row
 
 
-def _batch_execute(sql: str, rows: Iterable[tuple], *, batch_size: int) -> int:
+def _batch_execute(
+    sql: str,
+    rows: Iterable[tuple],
+    *,
+    batch_size: int,
+    source_object,
+    pipeline_id: str,
+    table_name: str,
+) -> int:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
-    count = 0
+
+    run = begin_or_resume_ingest_run(
+        source_object_id=source_object,
+        jurisdiction="AU",
+        pipeline_id=pipeline_id,
+        metadata={"ipgod_table": table_name, "batch_size": batch_size},
+    )
+    if run.complete:
+        return run.rows_committed
+
+    rows_committed = run.rows_committed
+    checkpoint = run.checkpoint
+    record_position = 0
     batch: list[tuple] = []
-    with postgres_conn() as conn:
-        with conn.cursor() as cur:
-            for row in rows:
-                batch.append(row)
-                if len(batch) >= batch_size:
+
+    try:
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                for row in rows:
+                    record_position += 1
+                    if record_position <= checkpoint:
+                        continue
+                    batch.append(row)
+                    if len(batch) >= batch_size:
+                        cur.executemany(sql, batch)
+                        rows_committed += len(batch)
+                        checkpoint = record_position
+                        checkpoint_ingest_run(
+                            cur,
+                            run_id=run.run_id,
+                            checkpoint=checkpoint,
+                            rows_committed=rows_committed,
+                        )
+                        conn.commit()
+                        batch.clear()
+
+                if batch:
                     cur.executemany(sql, batch)
-                    count += len(batch)
-                    batch.clear()
-            if batch:
-                cur.executemany(sql, batch)
-                count += len(batch)
-        conn.commit()
-    return count
+                    rows_committed += len(batch)
+                    checkpoint = record_position
+
+                complete_ingest_run(
+                    cur,
+                    run_id=run.run_id,
+                    checkpoint=max(checkpoint, record_position),
+                    rows_committed=rows_committed,
+                )
+                conn.commit()
+    except Exception as exc:
+        fail_ingest_run(run_id=run.run_id, error_text=f"{type(exc).__name__}: {exc}")
+        raise
+
+    return rows_committed
 
 
-def ingest_application(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
+def _source_object(path: Path, *, object_key: str | None, table_name: str):
     ensure_seed_ingest_schema()
-    source_object = register_source_object(
+    return register_source_object(
         jurisdiction="AU",
         source_id="IPGOD_2022",
         path=path,
         object_key=object_key,
-        metadata={"ipgod_table": "application"},
+        metadata={"ipgod_table": table_name},
     )
+
+
+def ingest_application(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
+    table_name = "application"
+    source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
         INSERT INTO trademark_au.application (
             application_number, ip_right_sub_type, source_status, earliest_filed_date,
@@ -110,18 +167,19 @@ def ingest_application(path: Path, *, object_key: str | None = None, batch_size:
                 json.dumps(row, ensure_ascii=False),
             )
 
-    return _batch_execute(sql, rows(), batch_size=batch_size)
+    return _batch_execute(
+        sql,
+        rows(),
+        batch_size=batch_size,
+        source_object=source_object,
+        pipeline_id="IPGOD_2022_APPLICATION_V1",
+        table_name=table_name,
+    )
 
 
 def ingest_party_activity(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
-    ensure_seed_ingest_schema()
-    source_object = register_source_object(
-        jurisdiction="AU",
-        source_id="IPGOD_2022",
-        path=path,
-        object_key=object_key,
-        metadata={"ipgod_table": "party-activity"},
-    )
+    table_name = "party-activity"
+    source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
         INSERT INTO trademark_au.party_activity (
             source_row_hash, application_number, party_id, party_role, party_role_category,
@@ -139,7 +197,7 @@ def ingest_party_activity(path: Path, *, object_key: str | None = None, batch_si
             if not application_number or not party_id or not party_role:
                 continue
             yield (
-                _row_hash("party-activity", row),
+                _row_hash(table_name, row),
                 application_number,
                 int(party_id),
                 party_role,
@@ -156,18 +214,19 @@ def ingest_party_activity(path: Path, *, object_key: str | None = None, batch_si
                 source_object,
             )
 
-    return _batch_execute(sql, rows(), batch_size=batch_size)
+    return _batch_execute(
+        sql,
+        rows(),
+        batch_size=batch_size,
+        source_object=source_object,
+        pipeline_id="IPGOD_2022_PARTY_ACTIVITY_V1",
+        table_name=table_name,
+    )
 
 
 def ingest_application_links(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
-    ensure_seed_ingest_schema()
-    source_object = register_source_object(
-        jurisdiction="AU",
-        source_id="IPGOD_2022",
-        path=path,
-        object_key=object_key,
-        metadata={"ipgod_table": "application-links"},
-    )
+    table_name = "application-links"
+    source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
         INSERT INTO trademark_au.application_link (
             source_row_hash, application_number, link_type, linked_application_number,
@@ -184,7 +243,7 @@ def ingest_application_links(path: Path, *, object_key: str | None = None, batch
             if not application_number or not link_type or not linked:
                 continue
             yield (
-                _row_hash("application-links", row),
+                _row_hash(table_name, row),
                 application_number,
                 link_type,
                 linked,
@@ -193,18 +252,19 @@ def ingest_application_links(path: Path, *, object_key: str | None = None, batch
                 source_object,
             )
 
-    return _batch_execute(sql, rows(), batch_size=batch_size)
+    return _batch_execute(
+        sql,
+        rows(),
+        batch_size=batch_size,
+        source_object=source_object,
+        pipeline_id="IPGOD_2022_APPLICATION_LINKS_V1",
+        table_name=table_name,
+    )
 
 
 def ingest_application_events(path: Path, *, object_key: str | None = None, batch_size: int = 5000) -> int:
-    ensure_seed_ingest_schema()
-    source_object = register_source_object(
-        jurisdiction="AU",
-        source_id="IPGOD_2022",
-        path=path,
-        object_key=object_key,
-        metadata={"ipgod_table": "application-events"},
-    )
+    table_name = "application-events"
+    source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
         INSERT INTO trademark_au.application_event (
             source_row_hash, application_number, event_type, event_category,
@@ -220,7 +280,7 @@ def ingest_application_events(path: Path, *, object_key: str | None = None, batc
             if not application_number or not event_type:
                 continue
             yield (
-                _row_hash("application-events", row),
+                _row_hash(table_name, row),
                 application_number,
                 event_type,
                 (row.get("event_category") or "").strip() or None,
@@ -230,20 +290,21 @@ def ingest_application_events(path: Path, *, object_key: str | None = None, batc
                 source_object,
             )
 
-    return _batch_execute(sql, rows(), batch_size=batch_size)
+    return _batch_execute(
+        sql,
+        rows(),
+        batch_size=batch_size,
+        source_object=source_object,
+        pipeline_id="IPGOD_2022_APPLICATION_EVENTS_V1",
+        table_name=table_name,
+    )
 
 
 def ingest_application_classification(
     path: Path, *, object_key: str | None = None, batch_size: int = 5000
 ) -> int:
-    ensure_seed_ingest_schema()
-    source_object = register_source_object(
-        jurisdiction="AU",
-        source_id="IPGOD_2022",
-        path=path,
-        object_key=object_key,
-        metadata={"ipgod_table": "application-classification"},
-    )
+    table_name = "application-classification"
+    source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
         INSERT INTO trademark_au.application_classification (
             source_row_hash, application_number, classification_system, classification,
@@ -259,7 +320,7 @@ def ingest_application_classification(
             if not application_number:
                 continue
             yield (
-                _row_hash("application-classification", row),
+                _row_hash(table_name, row),
                 application_number,
                 (row.get("classification_system") or "").strip() or None,
                 (row.get("classification") or "").strip() or None,
@@ -272,20 +333,21 @@ def ingest_application_classification(
                 source_object,
             )
 
-    return _batch_execute(sql, rows(), batch_size=batch_size)
+    return _batch_execute(
+        sql,
+        rows(),
+        batch_size=batch_size,
+        source_object=source_object,
+        pipeline_id="IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
+        table_name=table_name,
+    )
 
 
 def ingest_application_description(
     path: Path, *, object_key: str | None = None, batch_size: int = 5000
 ) -> int:
-    ensure_seed_ingest_schema()
-    source_object = register_source_object(
-        jurisdiction="AU",
-        source_id="IPGOD_2022",
-        path=path,
-        object_key=object_key,
-        metadata={"ipgod_table": "application-description"},
-    )
+    table_name = "application-description"
+    source_object = _source_object(path, object_key=object_key, table_name=table_name)
     sql = """
         INSERT INTO trademark_au.application_description (
             source_row_hash, application_number, description_type, description_value,
@@ -302,11 +364,18 @@ def ingest_application_description(
             if not application_number or not description_type or not description_value:
                 continue
             yield (
-                _row_hash("application-description", row),
+                _row_hash(table_name, row),
                 application_number,
                 description_type,
                 description_value,
                 source_object,
             )
 
-    return _batch_execute(sql, rows(), batch_size=batch_size)
+    return _batch_execute(
+        sql,
+        rows(),
+        batch_size=batch_size,
+        source_object=source_object,
+        pipeline_id="IPGOD_2022_APPLICATION_DESCRIPTION_V1",
+        table_name=table_name,
+    )
