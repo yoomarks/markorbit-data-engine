@@ -21,6 +21,7 @@ from app.global_trademarks.execution import (
     global_trademark_execution_lock,
 )
 from app.global_trademarks.gb_open_data import ingest_ukipo_2018
+from app.global_trademarks.ingest_runs import IngestRunState, get_ingest_run_state
 from app.global_trademarks.manifest import SourceManifest
 from app.global_trademarks.migrations import (
     assert_global_trademark_schema,
@@ -59,6 +60,22 @@ _AU_LOADERS = {
     "application-description": ingest_application_description,
 }
 
+_AU_PIPELINE_IDS = {
+    "application": "IPGOD_2022_APPLICATION_V1",
+    "party-activity": "IPGOD_2022_PARTY_ACTIVITY_V1",
+    "application-links": "IPGOD_2022_APPLICATION_LINKS_V1",
+    "application-events": "IPGOD_2022_APPLICATION_EVENTS_V1",
+    "application-classification": "IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
+    "application-description": "IPGOD_2022_APPLICATION_DESCRIPTION_V1",
+}
+
+_TM_LINK_PIPELINE_TOKENS = {
+    "applications": "APPLICATIONS",
+    "applicants": "APPLICANTS",
+    "details": "TRADEMARK_DETAILS",
+    "classes": "NICE_CLASS",
+}
+
 
 def _path(value: str) -> Path:
     path = Path(value)
@@ -86,6 +103,14 @@ def _add_apply_controls(parser: argparse.ArgumentParser) -> None:
         "--apply",
         action="store_true",
         help="Actually mutate the database. Without this flag the command is a no-write plan.",
+    )
+    parser.add_argument(
+        "--max-records",
+        type=int,
+        help=(
+            "Bound this invocation to at most N newly committed records. A bounded stop "
+            "remains resumable and is not marked COMPLETE until a later invocation reaches EOF."
+        ),
     )
     parser.add_argument("--manifest-key")
     parser.add_argument("--source-period-start", type=_iso_date)
@@ -146,33 +171,72 @@ def _plan_for_ingest(args: argparse.Namespace, preflight: SourcePreflight):
         predecessor_manifest_key=args.predecessor_manifest_key,
         baseline_manifest_key=args.baseline_manifest_key,
         parser_version=parser_version,
+        max_records=args.max_records,
     )
 
 
 def _ingest_metadata(args: argparse.Namespace) -> dict[str, object]:
+    common = {"max_records": args.max_records}
     if args.command == "ingest-gb-2018":
-        return {"source_stream": args.stream}
+        return {**common, "source_stream": args.stream}
     if args.command in {"ingest-tm-link", "ingest-au-ipgod"}:
-        return {"source_table": args.table}
-    return {"source_kind": "CIPO_ST96_CORE"}
+        return {**common, "source_table": args.table}
+    return {**common, "source_kind": "CIPO_ST96_CORE"}
+
+
+def _pipeline_id_for_ingest(args: argparse.Namespace) -> str:
+    if args.command == "ingest-gb-2018":
+        return f"UKIPO_2018_{args.stream}_V1"
+    if args.command == "ingest-tm-link":
+        token = _TM_LINK_PIPELINE_TOKENS[args.table]
+        return f"TM_LINK_{args.jurisdiction}_{token}_V1"
+    if args.command == "ingest-au-ipgod":
+        return _AU_PIPELINE_IDS[args.table]
+    return "CIPO_ST96_CORE_V1"
 
 
 def _execute_ingest(args: argparse.Namespace) -> int:
     if args.command == "ingest-gb-2018":
-        return ingest_ukipo_2018(args.path, source_stream=args.stream)
+        return ingest_ukipo_2018(
+            args.path,
+            source_stream=args.stream,
+            max_records=args.max_records,
+        )
     if args.command == "ingest-tm-link":
-        return _TM_LINK_LOADERS[args.table](args.path, jurisdiction=args.jurisdiction)
+        return _TM_LINK_LOADERS[args.table](
+            args.path,
+            jurisdiction=args.jurisdiction,
+            max_records=args.max_records,
+        )
     if args.command == "ingest-au-ipgod":
-        return _AU_LOADERS[args.table](args.path)
-    return ingest_cipo_st96_core(args.path, source_id=args.source_id)
+        return _AU_LOADERS[args.table](args.path, max_records=args.max_records)
+    return ingest_cipo_st96_core(
+        args.path,
+        source_id=args.source_id,
+        max_records=args.max_records,
+    )
 
 
-def _print_apply_result(*, count: int, manifest: SourceManifest) -> None:
+def _print_apply_result(
+    *,
+    before_run: IngestRunState | None,
+    after_run: IngestRunState,
+    manifest: SourceManifest,
+    max_records: int | None,
+) -> None:
+    before_rows = before_run.rows_committed if before_run else 0
+    processed_rows = after_run.rows_committed - before_rows
+    if processed_rows < 0:
+        raise RuntimeError("ingest run cumulative row count moved backwards")
     print(
         json.dumps(
             {
-                "status": "COMPLETE",
-                "processed_rows": count,
+                "status": "COMPLETE" if after_run.complete else "PARTIAL",
+                "processed_rows": processed_rows,
+                "cumulative_committed_rows": after_run.rows_committed,
+                "ingest_run_status": after_run.status,
+                "max_records": max_records,
+                "bounded_apply": max_records is not None,
                 "net_inserted_rows": None,
                 "manifest": manifest.as_dict(),
             },
@@ -322,6 +386,8 @@ def main() -> int:
         parser.error("--expected-objects must be at least 1")
     if args.part_sequence is not None and args.part_sequence < 1:
         parser.error("--part-sequence must be at least 1")
+    if args.max_records is not None and args.max_records < 1:
+        parser.error("--max-records must be at least 1")
 
     source_preflight = _preflight_for_ingest(args)
     plan = _plan_for_ingest(args, source_preflight)
@@ -350,11 +416,22 @@ def main() -> int:
     assert_global_trademark_schema()
     try:
         with global_trademark_execution_lock(plan.execution_scope):
-            _source_object_id, manifest = register_plan_source(
+            source_object_id, manifest = register_plan_source(
                 plan,
                 metadata=_ingest_metadata(args),
             )
-            count = _execute_ingest(args)
+            pipeline_id = _pipeline_id_for_ingest(args)
+            before_run = get_ingest_run_state(
+                source_object_id=source_object_id,
+                pipeline_id=pipeline_id,
+            )
+            _execute_ingest(args)
+            after_run = get_ingest_run_state(
+                source_object_id=source_object_id,
+                pipeline_id=pipeline_id,
+            )
+            if after_run is None:
+                raise RuntimeError("ingest command completed without a durable ingest run state")
     except ExecutionAlreadyRunning as exc:
         print(
             json.dumps(
@@ -371,7 +448,12 @@ def main() -> int:
         )
         return 3
 
-    _print_apply_result(count=count, manifest=manifest)
+    _print_apply_result(
+        before_run=before_run,
+        after_run=after_run,
+        manifest=manifest,
+        max_records=args.max_records,
+    )
     return 0
 
 
