@@ -16,8 +16,8 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 | US TTAB schema | `US_TTAB_M1.2` | USPTO TTAB procedural facts; not outcome/substantive-rights conclusion. |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` | Read-only normalized alert/event projection. |
 | Global trademark schema | `GLOBAL_TM_SCHEMA_V1` | Versioned additive country-store control plane, dataset manifests and ingestion ledger. |
-| Global trademark operator | `GLOBAL_TM_OPERATOR_V2` | No-write planning by default, explicit `--apply`, bounded `--max-records` pilot execution, resumable partial status, source-manifest registration and execution lock. |
-| Global trademark acceptance | `GLOBAL_TM_ACCEPTANCE_V1` | Fail-closed source-release acceptance projected into Data Trust; never jurisdiction-current or legal acceptance. |
+| Global trademark operator | `GLOBAL_TM_OPERATOR_V3` | No-write planning by default, explicit `--apply`, bounded `--max-records`, durable resume, and a one-shot source-object pin that re-verifies the preflight SHA immediately before loader mutation. |
+| Global trademark acceptance | `GLOBAL_TM_ACCEPTANCE_V2` | Fail-closed source-release acceptance requiring the exact operator-declared pipeline run for every manifest object; never jurisdiction-current or legal acceptance. |
 | Contact ingestion | `CONTACT_INGEST_V1.6` | Multi-format contact ingestion including legacy XLS, historical `.josn` JSON exports, official HTML card directories, inline/multilingual public agent lists, scanned-PDF OCR fallback, known public-register table normalization, unresolved case-linked contact evidence, and serialized/retried Postgres apply. |
 | Contact task control | `CONTACT_TASK_CONTROL_V1.1` | Incoming-folder discovery, parser-version re-evaluation, interrupted-task recovery, background admin execution, and archive workflow. |
 | Storage policy | `DATA_ENGINE_STORAGE_V2` | Current-fact + true-delta history policy. |
@@ -37,8 +37,8 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 6. **Operational telemetry versions do not redefine source facts.** Replay telemetry is an observability contract over runs, not a new fact-model authority.
 7. **Contact ingestion versions describe the external-contact ingestion contract.** They do not authorize marketing execution or redefine trademark source facts.
 8. **Contact task control only automates discovery and task management.** A file reaching `READY` never implies permission to import; apply remains an explicit operator action.
-9. **Global trademark operator versions describe mutation safety and manifest semantics.** V2 adds bounded pilot execution; a bounded stop remains partial and must not be treated as source-release completion.
-10. **Global trademark release acceptance is narrower than jurisdiction acceptance.** A release can pass while the jurisdiction is still stale, historically seeded, non-authoritative, or not trusted for silence.
+9. **Global trademark operator versions describe mutation safety and manifest semantics.** V3 binds the plan path to its preflight, pins the registered source object, re-verifies its SHA immediately before loader execution, and retains V2 bounded/resumable execution semantics.
+10. **Global trademark release acceptance is narrower than jurisdiction acceptance.** V2 additionally requires the exact intended pipeline declared on each source object; a release can still pass while the jurisdiction is stale, historically seeded, non-authoritative, or not trusted for silence.
 
 ## Release process
 
