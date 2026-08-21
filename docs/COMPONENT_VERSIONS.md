@@ -15,6 +15,8 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 | US Assignment schema | `US_ASSIGNMENT_M1.0` | USPTO recorded assignment/interest facts; not title conclusion. |
 | US TTAB schema | `US_TTAB_M1.2` | USPTO TTAB procedural facts; not outcome/substantive-rights conclusion. |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` | Read-only normalized alert/event projection. |
+| Global trademark schema | `GLOBAL_TM_SCHEMA_V1` | Versioned additive country-store control plane, dataset manifests and ingestion ledger. |
+| Global trademark operator | `GLOBAL_TM_OPERATOR_V1` | No-write planning by default, explicit `--apply`, source-manifest registration and execution lock. |
 | Contact ingestion | `CONTACT_INGEST_V1.6` | Multi-format contact ingestion including legacy XLS, historical `.josn` JSON exports, official HTML card directories, inline/multilingual public agent lists, scanned-PDF OCR fallback, known public-register table normalization, unresolved case-linked contact evidence, and serialized/retried Postgres apply. |
 | Contact task control | `CONTACT_TASK_CONTROL_V1.1` | Incoming-folder discovery, parser-version re-evaluation, interrupted-task recovery, background admin execution, and archive workflow. |
 | Storage policy | `DATA_ENGINE_STORAGE_V2` | Current-fact + true-delta history policy. |
@@ -34,6 +36,7 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 6. **Operational telemetry versions do not redefine source facts.** Replay telemetry is an observability contract over runs, not a new fact-model authority.
 7. **Contact ingestion versions describe the external-contact ingestion contract.** They do not authorize marketing execution or redefine trademark source facts.
 8. **Contact task control only automates discovery and task management.** A file reaching `READY` never implies permission to import; apply remains an explicit operator action.
+9. **Global trademark operator versions describe mutation safety and manifest semantics.** They do not imply that every configured jurisdiction has passed runtime acceptance.
 
 ## Release process
 
