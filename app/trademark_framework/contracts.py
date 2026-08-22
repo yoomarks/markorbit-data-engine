@@ -85,6 +85,20 @@ class ObservationDomain(StrEnum):
     SOURCE_OPERATION = "SOURCE_OPERATION"
 
 
+class JurisdictionStage(StrEnum):
+    SOURCE_FOUND = "SOURCE_FOUND"
+    SOURCE_PROFILED = "SOURCE_PROFILED"
+    PREFLIGHT_READY = "PREFLIGHT_READY"
+    PARSER_READY = "PARSER_READY"
+    COUNTRY_STORE_READY = "COUNTRY_STORE_READY"
+    HISTORY_READY = "HISTORY_READY"
+    CURRENT_PROJECTION_READY = "CURRENT_PROJECTION_READY"
+    ASSET_READY = "ASSET_READY"
+    PILOT_VALIDATED = "PILOT_VALIDATED"
+    RELEASE_ACCEPTED = "RELEASE_ACCEPTED"
+    PRODUCTION_CURRENT = "PRODUCTION_CURRENT"
+
+
 @dataclass(frozen=True, slots=True)
 class IdentityContract:
     fields: tuple[str, ...]
@@ -162,6 +176,7 @@ class SourceDescriptor:
 class CountryPack:
     jurisdiction: str
     store_schema: str
+    maturity: JurisdictionStage
     identity: IdentityContract
     observation_domains: tuple[ObservationDomain, ...]
     current_projection: CurrentProjectionContract
@@ -216,6 +231,7 @@ class CountryPack:
         return {
             "jurisdiction": self.jurisdiction,
             "store_schema": self.store_schema,
+            "maturity": self.maturity.value,
             "identity_fields": list(self.identity.fields),
             "observation_domains": [domain.value for domain in self.observation_domains],
             "current_projection": {
