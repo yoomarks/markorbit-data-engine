@@ -70,6 +70,9 @@ jobs:
       - name: Validate resilient HTTP transport and pagination contracts
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_transport_fixture
 
+      - name: Validate HTTP transport secret redaction
+        run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_transport_security_fixture
+
       - name: Validate resumable source/API acquisition contracts
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_acquisition_fixture
 
