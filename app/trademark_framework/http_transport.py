@@ -20,6 +20,8 @@ _DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 def _safe_url(url: str) -> str:
     parts = urlsplit(url)
     host = parts.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     if parts.port is not None:
         host = f"{host}:{parts.port}"
     return urlunsplit((parts.scheme, host, parts.path, "", ""))
@@ -44,7 +46,7 @@ def _validate_url(url: str, *, allow_insecure_http: bool) -> None:
 
 @dataclass(frozen=True, slots=True)
 class HttpRequestSpec:
-    url: str
+    url: str = field(repr=False)
     method: str = "GET"
     headers: Mapping[str, str] = field(default_factory=dict, repr=False)
     timeout_seconds: float = 30.0
@@ -93,7 +95,7 @@ class RawHttpResponse:
     status_code: int
     body: bytes
     headers: Mapping[str, str] = field(default_factory=dict, repr=False)
-    final_url: str = ""
+    final_url: str = field(default="", repr=False)
 
 
 class HttpBackend(Protocol):
@@ -137,7 +139,9 @@ class HttpTransportError(RuntimeError):
         self.attempts = attempts
         self.status_code = status_code
         status = f" status={status_code}" if status_code is not None else ""
-        super().__init__(f"HTTP transport failed: {reason}; url={safe_url}; attempts={attempts}{status}")
+        super().__init__(
+            f"HTTP transport failed: {reason}; url={safe_url}; attempts={attempts}{status}"
+        )
 
 
 class UrllibHttpBackend:
@@ -157,15 +161,16 @@ class UrllibHttpBackend:
         content_length = headers.get("content-length")
         if content_length is not None:
             try:
-                if int(content_length) > max_response_bytes:
-                    raise HttpTransportError(
-                        reason="response content-length exceeds configured limit",
-                        safe_url=_safe_url(response.geturl()),
-                        attempts=1,
-                        status_code=int(response.getcode()),
-                    )
+                parsed_content_length = int(content_length)
             except ValueError:
-                pass
+                parsed_content_length = None
+            if parsed_content_length is not None and parsed_content_length > max_response_bytes:
+                raise HttpTransportError(
+                    reason="response content-length exceeds configured limit",
+                    safe_url=_safe_url(response.geturl()),
+                    attempts=1,
+                    status_code=int(response.getcode()),
+                )
         payload = response.read(max_response_bytes + 1)
         if len(payload) > max_response_bytes:
             raise HttpTransportError(
@@ -198,9 +203,10 @@ class UrllibHttpBackend:
             _validate_url(final_url, allow_insecure_http=spec.allow_insecure_http)
             status_code = int(response.getcode())
             headers = _normalized_headers(response.headers)
-            body = b"" if spec.method.strip().upper() == "HEAD" else self._read_bounded(
-                response,
-                max_response_bytes=spec.max_response_bytes,
+            body = (
+                b""
+                if spec.method.strip().upper() == "HEAD"
+                else self._read_bounded(response, max_response_bytes=spec.max_response_bytes)
             )
         return RawHttpResponse(
             status_code=status_code,
@@ -238,14 +244,18 @@ def _retry_after_seconds(
 
 
 def _exponential_delay(policy: HttpRetryPolicy, *, attempt: int) -> float:
-    return min(policy.base_delay_seconds * (2 ** max(attempt - 1, 0)), policy.max_delay_seconds)
+    return min(
+        policy.base_delay_seconds * (2 ** max(attempt - 1, 0)),
+        policy.max_delay_seconds,
+    )
 
 
 class ResilientHttpTransport:
     """Read-only HTTP transport with bounded retry/rate-limit behavior.
 
     Credentials may be supplied in HttpRequestSpec.headers by a source-specific adapter, but this
-    transport never serializes them, includes them in repr(), or places header values in errors.
+    transport never serializes them, includes them in repr(), or places header/query values in
+    errors. Source adapters should prefer header-based credentials over query credentials.
     """
 
     def __init__(
@@ -299,6 +309,8 @@ class ResilientHttpTransport:
             final_url = response.final_url or spec.url
             _validate_url(final_url, allow_insecure_http=spec.allow_insecure_http)
             status_code = int(response.status_code)
+            if not isinstance(response.body, bytes):
+                raise TypeError("HTTP backend response body must be bytes")
             headers = _normalized_headers(response.headers)
             if 200 <= status_code < 300:
                 if len(response.body) > spec.max_response_bytes:
@@ -317,8 +329,13 @@ class ResilientHttpTransport:
 
             retryable = status_code in self._retry_policy.retry_statuses
             if not retryable or attempt >= self._retry_policy.max_attempts:
+                reason = (
+                    "retryable HTTP status exhausted"
+                    if retryable
+                    else "non-retryable HTTP status"
+                )
                 raise HttpTransportError(
-                    reason="retryable HTTP status exhausted" if retryable else "non-retryable HTTP status",
+                    reason=reason,
                     safe_url=_safe_url(final_url),
                     attempts=attempt,
                     status_code=status_code,
