@@ -18,6 +18,7 @@ from app.trademark_framework.registry import (
     country_pack,
     country_packs,
     framework_audit,
+    resolve_pipeline_id,
 )
 from app.trademark_framework.scaffold import SCAFFOLD_VERSION, ScaffoldRequest, build_scaffold
 
@@ -47,18 +48,40 @@ def main() -> int:
     assert ca.source("CIPO_GLOBAL_2025_06_14").pipeline_ready is True
     assert ca.source("CIPO_WEEKLY").update_semantics == UpdateSemantics.UPDATE_DELETE
     assert ca.source("CIPO_WEEKLY").pipeline_ready is False
+    assert resolve_pipeline_id("CA", "CIPO_GLOBAL_2025_06_14", {}) == "CIPO_ST96_CORE_V1"
 
     au = country_pack("AU")
     assert au.maturity == JurisdictionStage.COUNTRY_STORE_READY
     assert au.identity.fields == ("application_number", "ip_right_type")
     assert au.source("IPGOD_2022").adapter_kind == SourceAdapterKind.MULTI_TABLE_FILES
     assert len(au.source("IPGOD_2022").pipeline_ids) == 6
+    assert (
+        resolve_pipeline_id("AU", "IPGOD_2022", {"source_table": "application-events"})
+        == "IPGOD_2022_APPLICATION_EVENTS_V1"
+    )
+    assert resolve_pipeline_id("AU", "IPGOD_2022", {"source_table": "unknown"}) is None
 
     gb = country_pack("GB")
     assert gb.maturity == JurisdictionStage.COUNTRY_STORE_READY
     assert gb.source("UKIPO_OPEN_DATA_2018").adapter_kind == SourceAdapterKind.DELIMITED_FILE
     assert gb.source("UKIPO_OPEN_DATA_2018").data_format == DataFormat.TXT
     assert len(gb.source("UKIPO_OPEN_DATA_2018").pipeline_ids) == 2
+    assert (
+        resolve_pipeline_id(
+            "GB",
+            "UKIPO_OPEN_DATA_2018",
+            {"source_stream": "DOMESTIC"},
+        )
+        == "UKIPO_2018_DOMESTIC_V1"
+    )
+    assert (
+        resolve_pipeline_id(
+            "UK",
+            "UKIPO_OPEN_DATA_2018",
+            {"source_stream": "MADRID_IR"},
+        )
+        == "UKIPO_2018_MADRID_IR_V1"
+    )
 
     eu = country_pack("EU")
     nz = country_pack("NZ")
@@ -66,6 +89,14 @@ def main() -> int:
     assert nz.current_projection.mode == CurrentProjectionMode.HISTORICAL_ONLY
     assert len(eu.source("TM_LINK_EU").pipeline_ids) == 4
     assert len(nz.source("TM_LINK_NZ").pipeline_ids) == 4
+    assert (
+        resolve_pipeline_id("EM", "TM_LINK_EU", {"source_table": "details"})
+        == "TM_LINK_EU_TRADEMARK_DETAILS_V1"
+    )
+    assert (
+        resolve_pipeline_id("NZ", "TM_LINK_NZ", {"source_table": "classes"})
+        == "TM_LINK_NZ_NICE_CLASS_V1"
+    )
 
     # The old global-trademark catalog is now a compatibility view, not a second
     # manually maintained source registry.
@@ -138,6 +169,7 @@ def main() -> int:
             "country_patterns_validated": [pack.jurisdiction for pack in country_packs()],
             "maturity": {pack.jurisdiction: pack.maturity.value for pack in country_packs()},
             "catalog_single_source_of_truth": True,
+            "pipeline_routing_centralized": True,
             "country_scaffold_version": SCAFFOLD_VERSION,
             "scaffold_file_count": len(plan.files),
             "scaffold_default_maturity": generated_pack.maturity.value,
