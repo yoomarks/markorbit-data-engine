@@ -1,0 +1,153 @@
+# Trademark Country Factory
+
+## Purpose
+
+`TRADEMARK_COUNTRY_FACTORY_V1` is the orchestration layer for producing and auditing new
+trademark jurisdiction adapters. It consumes the existing
+`TRADEMARK_JURISDICTION_FRAMEWORK_V1` registry as its source of truth; it does **not** create a
+second country/source catalog.
+
+The design goal is:
+
+`verified source/API -> CountryPack -> acquisition/runtime/parser/native store -> current projection -> acceptance`
+
+New jurisdictions should reuse acquisition, HTTP transport, pagination, raw-object evidence,
+manifest/checkpoint/resume, runtime dispatch and acceptance mechanics. Country-specific code should
+be concentrated in source identity, native parsing/mapping, native schema, source ordering/current
+projection, assets and jurisdiction acceptance rules.
+
+## Components
+
+| Contract | Version | Purpose |
+|---|---|---|
+| Country factory | `TRADEMARK_COUNTRY_FACTORY_V1` | Top-level factory orchestration/audit contract. |
+| Factory registry | `TRADEMARK_COUNTRY_FACTORY_REGISTRY_V1` | Read-only projection of framework `CountryPack` objects; supports isolated virtual-pack fixtures without mutating production registry. |
+| Capability matrix | `TRADEMARK_SOURCE_CAPABILITY_MATRIX_V1` | Derives conservative country capabilities from explicit source/store contracts. |
+| Mapping contract | `TRADEMARK_SOURCE_MAPPING_CONTRACT_V1` | Validated declarative source-selector -> country-native observation-field mapping contract. |
+| Readiness audit | `TRADEMARK_COUNTRY_FACTORY_READINESS_V1` | Projects declared engineering maturity and flags structural contradictions without auto-promoting a country. |
+| Factory scaffold facade | `TRADEMARK_COUNTRY_FACTORY_SCAFFOLD_V1` | Delegates generation to the authoritative jurisdiction scaffold rather than maintaining a second template tree. |
+| Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V4` | Generates source-aware country packages; HTTP sources receive the reusable HTTP acquisition skeleton. |
+
+## Single source of truth
+
+The factory must not recreate the definitions already owned by
+`app.trademark_framework.contracts` and `app.trademark_framework.registry`.
+
+Production country profiles are derived from `CountryPack` and `SourceDescriptor` objects. The
+factory registry is immutable and read-only. `app.global_trademarks.catalog` remains a compatibility
+projection from the same framework registry.
+
+This prevents drift such as:
+
+`catalog says source A is ready` while `runtime/factory says source A is not ready`.
+
+## Capability matrix
+
+The capability matrix derives only facts that existing contracts can prove. V1 includes:
+
+- file / HTTP API / SOAP API / SFTP source presence;
+- bulk snapshot / historical seed / incremental update / Update+Delete semantics;
+- record, party, goods/services, classification, event and relationship observation domains;
+- implemented/unknown asset support;
+- current projection, manifest ordering and tombstone support;
+- presence of at least one pipeline-ready source.
+
+`UNKNOWN` is intentional. An unresolved future source or unimplemented asset contract must not be
+reported as unsupported or supported merely by assumption. V1 deliberately does not claim owner
+history completeness, agent history completeness or API pagination unless an explicit contract
+proves those semantics.
+
+Example:
+
+```bash
+python -m app.trademark_factory.cli capabilities --jurisdiction CA
+```
+
+## Mapping contract
+
+`TRADEMARK_SOURCE_MAPPING_CONTRACT_V1` provides reusable mapping metadata without flattening native
+country schemas.
+
+A rule identifies:
+
+- selector kind (`FIELD`, `COLUMN`, `JSON_POINTER`, `XPATH`, `XML_LOCAL_PATH`);
+- source selector;
+- declared observation domain;
+- country-native target field;
+- whether the source field is required/repeated;
+- optional named transform identifier.
+
+The contract validates that the source exists in the target `CountryPack` and that mapped domains
+are declared by that pack. V1 provides deterministic extraction only for simple field/column and
+JSON Pointer selectors. XML/XPath extraction remains parser-owned because namespace, cardinality and
+ordering semantics must be verified against each authority schema.
+
+The mapping layer is not a legal/semantic normalizer. It must not create generic validity statuses,
+renewal opportunities, inferred brand families, lead scores or legal conclusions.
+
+## Readiness
+
+The factory reuses the framework maturity states:
+
+`SOURCE_FOUND -> SOURCE_PROFILED -> PREFLIGHT_READY -> PARSER_READY -> COUNTRY_STORE_READY -> HISTORY_READY -> CURRENT_PROJECTION_READY -> ASSET_READY -> PILOT_VALIDATED -> RELEASE_ACCEPTED -> PRODUCTION_CURRENT`
+
+The readiness audit never promotes a country automatically. It reports the declared stage and flags
+obvious structural contradictions such as a current-ready country whose current projection remains
+`NOT_IMPLEMENTED`.
+
+Engineering maturity is not equivalent to source freshness, release acceptance, trusted-for-silence
+or any legal conclusion.
+
+## Country scaffold V4
+
+For file/bulk sources, the scaffold continues to generate the generic acquisition adapter skeleton.
+For `TransportKind.HTTP_API`, V4 generates an acquisition module that imports and expects the shared:
+
+- `HttpPaginatedAcquisitionAdapter`;
+- `PageNumberPagination`;
+- `OffsetLimitPagination`;
+- `OpaqueCursorPagination`;
+- resilient HTTP transport and source-specific `interpret_page()` boundary.
+
+The generated source remains `pipeline_ready=False`, retains `TODO_SOURCE_IDENTITY`, and contains no
+guessed endpoint, credential or pagination rule.
+
+Example no-write plan:
+
+```bash
+python -m app.trademark_factory.cli scaffold \
+  --jurisdiction JP \
+  --source-id JPO_OFFICIAL \
+  --adapter-kind REST_API \
+  --data-format JSON \
+  --update-semantics API_CURRENT \
+  --transport HTTP_API
+```
+
+Add `--write` only after the source contract is verified. Existing files are never overwritten.
+
+## Virtual-country regression
+
+`app.trademark_factory.validate_fixture` creates an in-memory `XX` jurisdiction only for CI. It
+proves that the factory can:
+
+- register/resolve a CountryPack without changing production registry;
+- derive API, Update/Delete, observation-domain, asset and current-projection capabilities;
+- validate and execute simple declarative JSON mappings;
+- generate HTTP and file country scaffolds through one factory interface;
+- keep generated packs disabled by default;
+- run without DB writes or network calls.
+
+The virtual country is test evidence only and must never appear in the production jurisdiction
+registry.
+
+## Boundaries
+
+Country Factory V1 does not:
+
+- create a Global Trademark Index;
+- flatten jurisdiction-native schemas into one lowest-common-denominator table;
+- infer legal validity, ownership, renewal opportunities, brand families or customer intent;
+- automatically promote source data to `PRODUCTION_CURRENT`;
+- activate a real country source;
+- change live CN runtime behavior or QCC acquisition.
