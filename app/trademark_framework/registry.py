@@ -9,6 +9,7 @@ from app.trademark_framework.contracts import (
     CurrentProjectionMode,
     DataFormat,
     IdentityContract,
+    JurisdictionStage,
     ObservationDomain,
     SourceAdapterKind,
     SourceDescriptor,
@@ -24,6 +25,7 @@ FRAMEWORK_VERSION = "TRADEMARK_JURISDICTION_FRAMEWORK_V1"
 _US = CountryPack(
     jurisdiction="US",
     store_schema="us",
+    maturity=JurisdictionStage.PRODUCTION_CURRENT,
     identity=IdentityContract(
         fields=("serial_number",),
         notes="Existing USPTO subsystems remain authoritative; this pack describes them, not replaces them.",
@@ -76,6 +78,7 @@ _GB = CountryPack(
     jurisdiction="GB",
     aliases=("UK",),
     store_schema="trademark_gb",
+    maturity=JurisdictionStage.COUNTRY_STORE_READY,
     identity=IdentityContract(fields=("application_number",)),
     observation_domains=(
         ObservationDomain.RECORD,
@@ -163,6 +166,7 @@ _EU = CountryPack(
     jurisdiction="EU",
     aliases=("EM",),
     store_schema="trademark_eu",
+    maturity=JurisdictionStage.COUNTRY_STORE_READY,
     identity=IdentityContract(fields=("application_number",)),
     observation_domains=(
         ObservationDomain.RECORD,
@@ -216,6 +220,7 @@ _EU = CountryPack(
 _CA = CountryPack(
     jurisdiction="CA",
     store_schema="trademark_ca",
+    maturity=JurisdictionStage.CURRENT_PROJECTION_READY,
     identity=IdentityContract(
         fields=("application_number", "extension_counter"),
         notes="CIPO ST.96 identity preserves the extension counter; application number alone is insufficient.",
@@ -303,6 +308,7 @@ _CA = CountryPack(
 _AU = CountryPack(
     jurisdiction="AU",
     store_schema="trademark_au",
+    maturity=JurisdictionStage.COUNTRY_STORE_READY,
     identity=IdentityContract(fields=("application_number", "ip_right_type")),
     observation_domains=(
         ObservationDomain.RECORD,
@@ -380,6 +386,7 @@ _AU = CountryPack(
 _NZ = CountryPack(
     jurisdiction="NZ",
     store_schema="trademark_nz",
+    maturity=JurisdictionStage.COUNTRY_STORE_READY,
     identity=IdentityContract(fields=("application_number",)),
     observation_domains=(
         ObservationDomain.RECORD,
@@ -452,6 +459,7 @@ class FrameworkAudit:
             "source_count": self.source_count,
             "ready_source_count": self.ready_source_count,
             "ready": self.ready,
+            "maturity": {pack.jurisdiction: pack.maturity.value for pack in _PACKS},
             "errors": list(self.errors),
         }
 
