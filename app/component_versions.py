@@ -24,6 +24,7 @@ from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
 from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
+from app.trademark_factory.writer import MAPPED_OBSERVATION_WRITER_VERSION
 from app.trademark_framework.acquisition import (
     ACQUISITION_FRAMEWORK_VERSION as TRADEMARK_SOURCE_ACQUISITION_VERSION,
 )
@@ -79,25 +80,15 @@ def component_versions() -> dict[str, Any]:
                 "source_version": CN_QCC_SOURCE_VERSION,
                 "acquisition_policy_version": CN_QCC_POLICY_VERSION,
             },
-            "us_application": {
-                "schema_version": US_SCHEMA_VERSION,
-            },
-            "us_assignment": {
-                "schema_version": ASSIGNMENT_SCHEMA_VERSION,
-            },
-            "us_ttab": {
-                "schema_version": TTAB_SCHEMA_VERSION,
-            },
+            "us_application": {"schema_version": US_SCHEMA_VERSION},
+            "us_assignment": {"schema_version": ASSIGNMENT_SCHEMA_VERSION},
+            "us_ttab": {"schema_version": TTAB_SCHEMA_VERSION},
             "us_tsdr": {
                 "source_version": TSDR_SOURCE_VERSION,
                 "acquisition_policy_version": TSDR_ACQUISITION_POLICY_VERSION,
             },
-            "us_mark_image": {
-                "source_version": US_MARK_IMAGE_SOURCE_VERSION,
-            },
-            "us_alert_engine": {
-                "version": ALERT_ENGINE_VERSION,
-            },
+            "us_mark_image": {"source_version": US_MARK_IMAGE_SOURCE_VERSION},
+            "us_alert_engine": {"version": ALERT_ENGINE_VERSION},
             "trademark_jurisdiction_framework": {
                 "version": TRADEMARK_JURISDICTION_FRAMEWORK_VERSION,
                 "runtime_adapter_version": TRADEMARK_RUNTIME_ADAPTER_VERSION,
@@ -113,6 +104,7 @@ def component_versions() -> dict[str, Any]:
                 "registry_version": FACTORY_REGISTRY_VERSION,
                 "capability_matrix_version": CAPABILITY_MATRIX_VERSION,
                 "mapping_contract_version": MAPPING_CONTRACT_VERSION,
+                "mapped_observation_writer_version": MAPPED_OBSERVATION_WRITER_VERSION,
                 "readiness_audit_version": READINESS_AUDIT_VERSION,
                 "scaffold_facade_version": FACTORY_SCAFFOLD_VERSION,
             },
@@ -132,14 +124,8 @@ def component_versions() -> dict[str, Any]:
                 "headroom_version": HEADROOM_VERSION,
                 "replay_telemetry_version": REPLAY_TELEMETRY_VERSION,
             },
-            "integration": {
-                "contract_version": CONTRACT_VERSION,
-            },
-            "domain_lifecycle": {
-                "version": LIFECYCLE_VERSION,
-            },
-            "four_domain_acceptance": {
-                "version": FOUR_DOMAIN_ACCEPTANCE_VERSION,
-            },
+            "integration": {"contract_version": CONTRACT_VERSION},
+            "domain_lifecycle": {"version": LIFECYCLE_VERSION},
+            "four_domain_acceptance": {"version": FOUR_DOMAIN_ACCEPTANCE_VERSION},
         },
     }
