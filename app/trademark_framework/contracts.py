@@ -23,6 +23,7 @@ class SourceAdapterKind(StrEnum):
     SOAP_API = "SOAP_API"
     SFTP_BULK = "SFTP_BULK"
     REFERENCE_ONLY = "REFERENCE_ONLY"
+    UNRESOLVED = "UNRESOLVED"
 
 
 class TransportKind(StrEnum):
@@ -32,6 +33,7 @@ class TransportKind(StrEnum):
     SOAP_API = "SOAP_API"
     SFTP = "SFTP"
     REFERENCE = "REFERENCE"
+    UNRESOLVED = "UNRESOLVED"
 
 
 class DataFormat(StrEnum):
@@ -203,8 +205,13 @@ class SourceDescriptor:
             errors.append(
                 f"{self.source_id}: multi-pipeline source requires routes covering every pipeline_id"
             )
-        if self.pipeline_ready and self.adapter_kind == SourceAdapterKind.REFERENCE_ONLY:
-            errors.append(f"{self.source_id}: reference-only source cannot be pipeline_ready")
+        if self.pipeline_ready and self.adapter_kind in {
+            SourceAdapterKind.REFERENCE_ONLY,
+            SourceAdapterKind.UNRESOLVED,
+        }:
+            errors.append(
+                f"{self.source_id}: {self.adapter_kind.value} source cannot be pipeline_ready"
+            )
         if self.role == SourceRole.REFERENCE and self.update_semantics != UpdateSemantics.REFERENCE_ONLY:
             errors.append(f"{self.source_id}: REFERENCE role requires REFERENCE_ONLY semantics")
         if self.adapter_kind == SourceAdapterKind.REST_API and self.transport != TransportKind.HTTP_API:
@@ -213,6 +220,8 @@ class SourceDescriptor:
             errors.append(f"{self.source_id}: SOAP_API requires SOAP_API transport")
         if self.adapter_kind == SourceAdapterKind.SFTP_BULK and self.transport != TransportKind.SFTP:
             errors.append(f"{self.source_id}: SFTP_BULK requires SFTP transport")
+        if self.adapter_kind == SourceAdapterKind.UNRESOLVED and self.transport != TransportKind.UNRESOLVED:
+            errors.append(f"{self.source_id}: UNRESOLVED adapter requires UNRESOLVED transport")
         return tuple(errors)
 
     def resolve_pipeline_id(self, metadata: Mapping[str, object]) -> str | None:
