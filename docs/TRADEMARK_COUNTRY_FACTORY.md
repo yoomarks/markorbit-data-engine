@@ -28,7 +28,7 @@ projection, assets and jurisdiction acceptance rules.
 | Native store bundle | `TRADEMARK_NATIVE_STORE_BUNDLE_V1` | Binds one source's reviewed mapping contracts to multiple country-native observation tables and reuses explicit schema install plus atomic-cursor multi-domain append mechanics. |
 | Readiness audit | `TRADEMARK_COUNTRY_FACTORY_READINESS_V1` | Projects declared engineering maturity and flags structural contradictions without auto-promoting a country. |
 | Factory scaffold facade | `TRADEMARK_COUNTRY_FACTORY_SCAFFOLD_V1` | Delegates generation to the authoritative jurisdiction scaffold rather than maintaining a second template tree. |
-| Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V4` | Generates source-aware country packages; HTTP sources receive the reusable HTTP acquisition skeleton. |
+| Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V5` | Generates source-aware country packages with reusable acquisition plus native mapping/schema/store-bundle skeletons while keeping generated sources disabled. |
 
 ## Single source of truth
 
@@ -156,19 +156,23 @@ obvious structural contradictions such as a current-ready country whose current 
 Engineering maturity is not equivalent to source freshness, release acceptance, trusted-for-silence
 or any legal conclusion.
 
-## Country scaffold V4
+## Country scaffold V5
 
-For file/bulk sources, the scaffold continues to generate the generic acquisition adapter skeleton.
-For `TransportKind.HTTP_API`, V4 generates an acquisition module that imports and expects the shared:
+V5 keeps the V4 transport-aware acquisition behavior and adds the native-store construction path to
+every generated country package.
 
-- `HttpPaginatedAcquisitionAdapter`;
-- `PageNumberPagination`;
-- `OffsetLimitPagination`;
-- `OpaqueCursorPagination`;
-- resilient HTTP transport and source-specific `interpret_page()` boundary.
+For file/bulk sources, the scaffold generates the generic acquisition adapter skeleton. For
+`TransportKind.HTTP_API`, it generates the shared `HttpPaginatedAcquisitionAdapter` and
+page/offset/cursor hooks. In both cases it now also generates:
 
+- `mapping.py` with an empty reviewed `MappingContract` registry rather than guessed mappings;
+- `schema.py` with an empty `ObservationTableSpec` registry rather than ad-hoc DDL;
+- `store.py` wired to `NativeStoreBundle`, `StoreBinding`, `install_native_store_bundle()` and
+  `append_native_record_bundle()`.
+
+`store.py` deliberately raises `NotImplementedError` until the table/mapping pairings are reviewed.
 The generated source remains `pipeline_ready=False`, retains `TODO_SOURCE_IDENTITY`, and contains no
-guessed endpoint, credential or pagination rule.
+guessed endpoint, credential, pagination, native-field, mapping or current-state rule.
 
 Example no-write plan:
 
@@ -193,6 +197,7 @@ proves that the factory can:
 - derive API, Update/Delete, observation-domain, asset and current-projection capabilities;
 - validate and execute simple declarative JSON mappings;
 - generate HTTP and file country scaffolds through one factory interface;
+- generate native mapping/schema/store-bundle skeletons without guessing source fields;
 - keep generated packs disabled by default;
 - run without DB writes or network calls.
 
