@@ -16,6 +16,7 @@ from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
 from app.storage_headroom import HEADROOM_VERSION
 from app.trademark_framework.registry import FRAMEWORK_VERSION
+from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
@@ -38,7 +39,9 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert components["us_assignment"]["schema_version"] == ASSIGNMENT_SCHEMA_VERSION
     assert components["us_ttab"]["schema_version"] == TTAB_SCHEMA_VERSION
     assert components["us_alert_engine"]["version"] == ALERT_ENGINE_VERSION
-    assert components["trademark_jurisdiction_framework"]["version"] == FRAMEWORK_VERSION
+    framework = components["trademark_jurisdiction_framework"]
+    assert framework["version"] == FRAMEWORK_VERSION
+    assert framework["runtime_adapter_version"] == RUNTIME_ADAPTER_VERSION
     assert components["global_trademark"]["schema_version"] == GLOBAL_TRADEMARK_SCHEMA_VERSION
     assert components["global_trademark"]["operator_version"] == GLOBAL_TRADEMARK_OPERATOR_VERSION
     assert (
@@ -69,6 +72,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         TTAB_SCHEMA_VERSION,
         ALERT_ENGINE_VERSION,
         FRAMEWORK_VERSION,
+        RUNTIME_ADAPTER_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,
         GLOBAL_TRADEMARK_OPERATOR_VERSION,
         GLOBAL_TRADEMARK_ACCEPTANCE_VERSION,

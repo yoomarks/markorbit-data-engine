@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from app.global_trademarks.catalog import country_plan
+from app.global_trademarks.runtime_adapters import runtime_registry
 from app.trademark_framework.contracts import (
     CurrentProjectionMode,
     DataFormat,
@@ -20,6 +21,7 @@ from app.trademark_framework.registry import (
     framework_audit,
     resolve_pipeline_id,
 )
+from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION
 from app.trademark_framework.scaffold import SCAFFOLD_VERSION, ScaffoldRequest, build_scaffold
 
 
@@ -108,8 +110,6 @@ def main() -> int:
         == "TM_LINK_NZ_NICE_CLASS_V1"
     )
 
-    # The old global-trademark catalog is now a compatibility view, not a second
-    # manually maintained source registry.
     for pack in country_packs():
         compat = country_plan(pack.jurisdiction)
         assert compat.jurisdiction == pack.jurisdiction
@@ -120,6 +120,69 @@ def main() -> int:
         assert tuple(source.pipeline_ready for source in compat.sources) == tuple(
             source.pipeline_ready for source in pack.sources
         )
+
+    runtime = runtime_registry()
+    runtime_audit = runtime.audit()
+    assert runtime_audit.ready, runtime_audit.errors
+    assert runtime_audit.version == RUNTIME_ADAPTER_VERSION
+    assert runtime_audit.adapter_count == 4
+    assert runtime_audit.command_count == 4
+    assert runtime_audit.source_key_count == 6
+
+    dummy_path = Path("/tmp/markorbit-runtime-contract-fixture")
+    gb_runtime = runtime.for_command("ingest-gb-2018")
+    gb_command_request = gb_runtime.request_from_command(
+        "ingest-gb-2018",
+        {
+            "path": dummy_path,
+            "stream": "DOMESTIC",
+            "max_records": 25,
+        },
+    )
+    gb_generic_request = runtime.for_source("GB", "UKIPO_OPEN_DATA_2018").request_from_source(
+        jurisdiction="GB",
+        source_id="UKIPO_OPEN_DATA_2018",
+        path=dummy_path,
+        metadata={"source_stream": "DOMESTIC"},
+        max_records=25,
+    )
+    assert gb_command_request.jurisdiction == gb_generic_request.jurisdiction == "GB"
+    assert gb_command_request.source_id == gb_generic_request.source_id == "UKIPO_OPEN_DATA_2018"
+    assert gb_command_request.parser_version == gb_generic_request.parser_version == "UKIPO_2018_V1"
+    assert dict(gb_command_request.metadata) == dict(gb_generic_request.metadata)
+    assert (
+        resolve_pipeline_id(
+            gb_generic_request.jurisdiction,
+            gb_generic_request.source_id,
+            gb_generic_request.metadata,
+        )
+        == "UKIPO_2018_DOMESTIC_V1"
+    )
+
+    tm_runtime = runtime.for_source("EU", "TM_LINK_EU")
+    tm_request = tm_runtime.request_from_source(
+        jurisdiction="EU",
+        source_id="TM_LINK_EU",
+        path=dummy_path,
+        metadata={"source_table": "details"},
+        max_records=None,
+    )
+    assert tm_request.parser_version == "TM_LINK_SEED_V1"
+    assert (
+        resolve_pipeline_id(tm_request.jurisdiction, tm_request.source_id, tm_request.metadata)
+        == "TM_LINK_EU_TRADEMARK_DETAILS_V1"
+    )
+
+    ca_runtime = runtime.for_source("CA", "CIPO_WEEKLY")
+    ca_request = ca_runtime.request_from_source(
+        jurisdiction="CA",
+        source_id="CIPO_WEEKLY",
+        path=dummy_path,
+        metadata={},
+        max_records=10,
+    )
+    assert ca_request.parser_version == "CIPO_ST96_CORE_V1"
+    assert resolve_pipeline_id("CA", "CIPO_WEEKLY", ca_request.metadata) == "CIPO_ST96_CORE_V1"
 
     request = ScaffoldRequest(
         jurisdiction="JP",
@@ -132,21 +195,25 @@ def main() -> int:
     plan = build_scaffold(request)
     assert plan.version == SCAFFOLD_VERSION
     assert plan.request.store_schema == "trademark_jp"
-    assert len(plan.files) == 10
+    assert len(plan.files) == 11
     expected_paths = {
         "app/trademark_jurisdictions/jp/country.py",
         "app/trademark_jurisdictions/jp/adapter.py",
         "app/trademark_jurisdictions/jp/mapping.py",
         "app/trademark_jurisdictions/jp/schema.py",
         "app/trademark_jurisdictions/jp/preflight.py",
+        "app/trademark_jurisdictions/jp/runtime.py",
         "app/trademark_jurisdictions/jp/current.py",
         "app/trademark_jurisdictions/jp/assets.py",
         "app/trademark_jurisdictions/jp/acceptance.py",
     }
     assert expected_paths.issubset(plan.files)
     country_source = plan.files["app/trademark_jurisdictions/jp/country.py"]
+    runtime_source = plan.files["app/trademark_jurisdictions/jp/runtime.py"]
     assert "pipeline_ready=False" in country_source
     assert "TODO_SOURCE_IDENTITY" in country_source
+    assert "RuntimeRequest" in runtime_source
+    assert "NotImplementedError" in runtime_source
     assert "NotImplementedError" in plan.files["app/trademark_jurisdictions/jp/preflight.py"]
     assert "trusted_for_silence" in plan.files["app/trademark_jurisdictions/jp/acceptance.py"]
 
@@ -176,13 +243,17 @@ def main() -> int:
         {
             "status": "PASS",
             "framework_version": FRAMEWORK_VERSION,
+            "runtime_adapter_version": RUNTIME_ADAPTER_VERSION,
             "country_patterns_validated": [pack.jurisdiction for pack in country_packs()],
             "maturity": {pack.jurisdiction: pack.maturity.value for pack in country_packs()},
             "catalog_single_source_of_truth": True,
             "pipeline_routing_centralized": True,
+            "runtime_dispatch_centralized": True,
+            "generic_source_entrypoint_ready": True,
             "unprofiled_source_contracts_unresolved": True,
             "country_scaffold_version": SCAFFOLD_VERSION,
             "scaffold_file_count": len(plan.files),
+            "scaffold_runtime_stub": True,
             "scaffold_default_maturity": generated_pack.maturity.value,
             "scaffold_default_pipeline_ready": False,
             "scaffold_overwrite_blocked": True,

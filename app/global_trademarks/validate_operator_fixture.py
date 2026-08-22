@@ -67,12 +67,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="global-operator-fixture-") as temporary:
         path = Path(temporary) / "OpenDataDomestic2018.txt"
         _fixture(path)
-        common = (
-            "ingest-gb-2018",
-            "--path",
-            str(path),
-            "--stream",
-            "DOMESTIC",
+        manifest_controls = (
             "--manifest-key",
             "UKIPO_OPEN_DATA_2018_FIXTURE",
             "--source-period-start",
@@ -80,15 +75,46 @@ def main() -> int:
             "--source-period-end",
             "2018-12-31",
         )
+        compatibility = (
+            "ingest-gb-2018",
+            "--path",
+            str(path),
+            "--stream",
+            "DOMESTIC",
+            *manifest_controls,
+        )
+        generic = (
+            "ingest-source",
+            "--jurisdiction",
+            "GB",
+            "--source-id",
+            "UKIPO_OPEN_DATA_2018",
+            "--path",
+            str(path),
+            "--selector",
+            "source_stream=DOMESTIC",
+            *manifest_controls,
+        )
 
-        returncode, plan = _run(*common)
+        returncode, compatibility_plan = _run(*compatibility)
         assert returncode == 0
-        assert plan["status"] == "READY_TO_APPLY"
-        assert plan["mutation"] is False
-        assert plan["apply_required"] is True
+        assert compatibility_plan["status"] == "READY_TO_APPLY"
+        assert compatibility_plan["mutation"] is False
+        assert compatibility_plan["apply_required"] is True
+        assert compatibility_plan["runtime_adapter_id"] == "UKIPO_2018_RUNTIME_V1"
         assert _source_count() == before
 
-        returncode, applied = _run(*common, "--apply")
+        returncode, generic_plan = _run(*generic)
+        assert returncode == 0
+        assert generic_plan["status"] == "READY_TO_APPLY"
+        assert generic_plan["mutation"] is False
+        assert generic_plan["runtime_adapter_id"] == "UKIPO_2018_RUNTIME_V1"
+        assert generic_plan["jurisdiction"] == compatibility_plan["jurisdiction"] == "GB"
+        assert generic_plan["source_id"] == compatibility_plan["source_id"]
+        assert generic_plan["runtime_metadata"] == compatibility_plan["runtime_metadata"]
+        assert _source_count() == before
+
+        returncode, applied = _run(*generic, "--apply")
         assert returncode == 0
         assert applied["status"] == "COMPLETE"
         assert applied["processed_rows"] == 1
@@ -97,11 +123,20 @@ def main() -> int:
         assert applied["manifest"]["attached_objects"] == 1
         assert _source_count() == before + 1
 
+        returncode, compatibility_replay = _run(*compatibility, "--apply")
+        assert returncode == 0
+        assert compatibility_replay["status"] == "COMPLETE"
+        assert compatibility_replay["processed_rows"] == 0
+        assert _source_count() == before + 1
+
     print(
         {
             "status": "PASS",
             "default_ingest_is_no_write": True,
             "explicit_apply_required": True,
+            "generic_and_compatibility_runtime_match": True,
+            "generic_apply_uses_existing_manifest_boundary": True,
+            "compatibility_replay_is_idempotent": True,
             "manifest_attached_before_ingest": True,
             "processed_rows_not_net_inserts": True,
         }

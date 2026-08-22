@@ -5,22 +5,12 @@ from datetime import date
 from pathlib import Path
 
 from app.global_trademarks.acceptance import evaluate_manifest_data_trust
-from app.global_trademarks.au_ipgod import (
-    ingest_application,
-    ingest_application_classification,
-    ingest_application_description,
-    ingest_application_events,
-    ingest_application_links,
-    ingest_party_activity,
-)
-from app.global_trademarks.ca_st96 import ingest_cipo_st96_core
 from app.global_trademarks.catalog import COUNTRY_SOURCES
 from app.global_trademarks.diagnostics import collect_readiness_audit
 from app.global_trademarks.execution import (
     ExecutionAlreadyRunning,
     global_trademark_execution_lock,
 )
-from app.global_trademarks.gb_open_data import ingest_ukipo_2018
 from app.global_trademarks.ingest_runs import IngestRunState, get_ingest_run_state
 from app.global_trademarks.manifest import SourceManifest
 from app.global_trademarks.migrations import (
@@ -36,30 +26,9 @@ from app.global_trademarks.preflight import (
     inspect_gb_2018,
     inspect_tm_link,
 )
-from app.global_trademarks.tm_link_seed import (
-    ingest_tm_link_applicants,
-    ingest_tm_link_applications,
-    ingest_tm_link_classes,
-    ingest_tm_link_details,
-)
+from app.global_trademarks.runtime_adapters import runtime_registry
 from app.trademark_framework.registry import resolve_pipeline_id
-
-
-_TM_LINK_LOADERS = {
-    "applications": ingest_tm_link_applications,
-    "applicants": ingest_tm_link_applicants,
-    "details": ingest_tm_link_details,
-    "classes": ingest_tm_link_classes,
-}
-
-_AU_LOADERS = {
-    "application": ingest_application,
-    "party-activity": ingest_party_activity,
-    "application-links": ingest_application_links,
-    "application-events": ingest_application_events,
-    "application-classification": ingest_application_classification,
-    "application-description": ingest_application_description,
-}
+from app.trademark_framework.runtime import RuntimeRequest, SourceRuntimeAdapter
 
 
 def _path(value: str) -> Path:
@@ -81,6 +50,24 @@ def _uuid(value: str) -> uuid.UUID:
         return uuid.UUID(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("expected UUID") from exc
+
+
+def _selector(value: str) -> tuple[str, str]:
+    key, separator, raw_value = value.partition("=")
+    key = key.strip()
+    raw_value = raw_value.strip()
+    if not separator or not key or not raw_value:
+        raise argparse.ArgumentTypeError("selector must use KEY=VALUE")
+    return key, raw_value
+
+
+def _selector_metadata(values: list[tuple[str, str]] | None) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    for key, value in values or []:
+        if key in metadata:
+            raise ValueError(f"duplicate selector key: {key}")
+        metadata[key] = value
+    return metadata
 
 
 def _add_apply_controls(parser: argparse.ArgumentParser) -> None:
@@ -108,43 +95,39 @@ def _add_apply_controls(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--baseline-manifest-key")
 
 
-def _preflight_for_ingest(args: argparse.Namespace) -> SourcePreflight:
-    if args.command == "ingest-gb-2018":
-        return inspect_gb_2018(args.path)
-    if args.command == "ingest-tm-link":
-        return inspect_tm_link(
-            args.path,
+def _runtime_request_for_args(
+    args: argparse.Namespace,
+) -> tuple[SourceRuntimeAdapter, RuntimeRequest]:
+    registry = runtime_registry()
+    if args.command == "ingest-source":
+        try:
+            metadata = _selector_metadata(args.selector)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+        adapter = registry.for_source(args.jurisdiction, args.source_id)
+        request = adapter.request_from_source(
             jurisdiction=args.jurisdiction,
-            table=args.table,
+            source_id=args.source_id,
+            path=args.path,
+            metadata=metadata,
+            max_records=args.max_records,
         )
-    if args.command == "ingest-au-ipgod":
-        return inspect_au_ipgod(args.path, table=args.table)
-    return inspect_ca_st96(args.path)
+        return adapter, request
+
+    adapter = registry.for_command(args.command)
+    return adapter, adapter.request_from_command(args.command, vars(args))
 
 
-def _plan_for_ingest(args: argparse.Namespace, preflight: SourcePreflight) -> IngestPlan:
-    if args.command == "ingest-gb-2018":
-        jurisdiction = "GB"
-        source_id = "UKIPO_OPEN_DATA_2018"
-        parser_version = "UKIPO_2018_V1"
-    elif args.command == "ingest-tm-link":
-        jurisdiction = args.jurisdiction
-        source_id = f"TM_LINK_{args.jurisdiction}"
-        parser_version = "TM_LINK_SEED_V1"
-    elif args.command == "ingest-au-ipgod":
-        jurisdiction = "AU"
-        source_id = "IPGOD_2022"
-        parser_version = "IPGOD_2022_V1"
-    else:
-        jurisdiction = "CA"
-        source_id = args.source_id
-        parser_version = "CIPO_ST96_CORE_V1"
-
+def _plan_for_request(
+    args: argparse.Namespace,
+    request: RuntimeRequest,
+    preflight: SourcePreflight,
+) -> IngestPlan:
     return build_ingest_plan(
         command=args.command,
-        jurisdiction=jurisdiction,
-        source_id=source_id,
-        path=args.path,
+        jurisdiction=request.jurisdiction,
+        source_id=request.source_id,
+        path=request.path,
         preflight=preflight,
         manifest_key=args.manifest_key,
         source_period_start=args.source_period_start,
@@ -155,53 +138,23 @@ def _plan_for_ingest(args: argparse.Namespace, preflight: SourcePreflight) -> In
         part_sequence=args.part_sequence,
         predecessor_manifest_key=args.predecessor_manifest_key,
         baseline_manifest_key=args.baseline_manifest_key,
-        parser_version=parser_version,
-        max_records=args.max_records,
+        parser_version=request.parser_version,
+        max_records=request.max_records,
     )
 
 
-def _ingest_metadata(args: argparse.Namespace) -> dict[str, object]:
-    common = {"max_records": args.max_records}
-    if args.command == "ingest-gb-2018":
-        return {**common, "source_stream": args.stream}
-    if args.command in {"ingest-tm-link", "ingest-au-ipgod"}:
-        return {**common, "source_table": args.table}
-    return {**common, "source_kind": "CIPO_ST96_CORE"}
-
-
-def _pipeline_id_for_ingest(
-    plan: IngestPlan,
-    metadata: dict[str, object],
-) -> str:
-    pipeline_id = resolve_pipeline_id(plan.jurisdiction, plan.source_id, metadata)
+def _pipeline_id_for_request(request: RuntimeRequest) -> str:
+    pipeline_id = resolve_pipeline_id(
+        request.jurisdiction,
+        request.source_id,
+        request.metadata,
+    )
     if pipeline_id is None:
         raise RuntimeError(
             "jurisdiction framework could not resolve intended pipeline for "
-            f"{plan.jurisdiction}:{plan.source_id} metadata={metadata!r}"
+            f"{request.jurisdiction}:{request.source_id} metadata={dict(request.metadata)!r}"
         )
     return pipeline_id
-
-
-def _execute_ingest(args: argparse.Namespace) -> int:
-    if args.command == "ingest-gb-2018":
-        return ingest_ukipo_2018(
-            args.path,
-            source_stream=args.stream,
-            max_records=args.max_records,
-        )
-    if args.command == "ingest-tm-link":
-        return _TM_LINK_LOADERS[args.table](
-            args.path,
-            jurisdiction=args.jurisdiction,
-            max_records=args.max_records,
-        )
-    if args.command == "ingest-au-ipgod":
-        return _AU_LOADERS[args.table](args.path, max_records=args.max_records)
-    return ingest_cipo_st96_core(
-        args.path,
-        source_id=args.source_id,
-        max_records=args.max_records,
-    )
 
 
 def _print_apply_result(
@@ -234,6 +187,76 @@ def _print_apply_result(
     )
 
 
+def _configure_ingest_commands(sub: argparse._SubParsersAction) -> None:
+    registry = runtime_registry()
+
+    gb_adapter = registry.for_command("ingest-gb-2018")
+    gb = sub.add_parser(
+        "ingest-gb-2018",
+        help="Compatibility command for UKIPO 2018 ingestion; requires --apply for writes",
+    )
+    gb.add_argument("--path", required=True, type=_path)
+    gb.add_argument(
+        "--stream",
+        required=True,
+        choices=gb_adapter.selector_choices["source_stream"],
+    )
+    _add_apply_controls(gb)
+
+    tm_link_adapter = registry.for_command("ingest-tm-link")
+    tm_link = sub.add_parser(
+        "ingest-tm-link",
+        help="Compatibility command for TM-Link EU/NZ seed ingestion",
+    )
+    tm_link.add_argument("--path", required=True, type=_path)
+    tm_link.add_argument("--jurisdiction", required=True, choices=("EU", "NZ"))
+    tm_link.add_argument(
+        "--table",
+        required=True,
+        choices=tm_link_adapter.selector_choices["source_table"],
+    )
+    _add_apply_controls(tm_link)
+
+    au_adapter = registry.for_command("ingest-au-ipgod")
+    au = sub.add_parser(
+        "ingest-au-ipgod",
+        help="Compatibility command for IPGOD ingestion",
+    )
+    au.add_argument("--path", required=True, type=_path)
+    au.add_argument(
+        "--table",
+        required=True,
+        choices=au_adapter.selector_choices["source_table"],
+    )
+    _add_apply_controls(au)
+
+    ca_adapter = registry.for_command("ingest-ca-st96")
+    ca = sub.add_parser(
+        "ingest-ca-st96",
+        help="Compatibility command for CIPO ST.96 ingestion",
+    )
+    ca.add_argument("--path", required=True, type=_path)
+    ca.add_argument(
+        "--source-id",
+        default="CIPO_GLOBAL_2025_06_14",
+        choices=tuple(key.source_id for key in ca_adapter.source_keys),
+    )
+    _add_apply_controls(ca)
+
+    generic = sub.add_parser(
+        "ingest-source",
+        help=(
+            "Generic runtime-adapter ingestion entrypoint. Source-specific selectors use "
+            "repeatable --selector KEY=VALUE; no database mutation occurs without --apply."
+        ),
+    )
+    generic.add_argument("--jurisdiction", required=True)
+    generic.add_argument("--source-id", required=True)
+    generic.add_argument("--path", required=True, type=_path)
+    generic.add_argument("--selector", action="append", type=_selector)
+    _add_apply_controls(generic)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Country-native trademark store administration")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -243,7 +266,7 @@ def main() -> int:
 
     preflight = sub.add_parser(
         "preflight-source",
-        help="Validate one source file without database writes",
+        help="Legacy no-write source-file preflight; generic ingest-source also preflights by default",
     )
     preflight.add_argument("--path", required=True, type=_path)
     preflight.add_argument(
@@ -262,43 +285,7 @@ def main() -> int:
     acceptance.add_argument("--manifest-id", required=True, type=_uuid)
     acceptance.add_argument("--required-coverage-through", type=_iso_date)
 
-    gb = sub.add_parser(
-        "ingest-gb-2018",
-        help="Plan UKIPO 2018 ingestion; requires --apply for database mutation",
-    )
-    gb.add_argument("--path", required=True, type=_path)
-    gb.add_argument("--stream", required=True, choices=("DOMESTIC", "MADRID_IR"))
-    _add_apply_controls(gb)
-
-    tm_link = sub.add_parser(
-        "ingest-tm-link",
-        help="Plan TM-Link EU/NZ seed ingestion; requires --apply for database mutation",
-    )
-    tm_link.add_argument("--path", required=True, type=_path)
-    tm_link.add_argument("--jurisdiction", required=True, choices=("EU", "NZ"))
-    tm_link.add_argument("--table", required=True, choices=tuple(_TM_LINK_LOADERS))
-    _add_apply_controls(tm_link)
-
-    au = sub.add_parser(
-        "ingest-au-ipgod",
-        help="Plan IPGOD ingestion; requires --apply for database mutation",
-    )
-    au.add_argument("--path", required=True, type=_path)
-    au.add_argument("--table", required=True, choices=tuple(_AU_LOADERS))
-    _add_apply_controls(au)
-
-    ca = sub.add_parser(
-        "ingest-ca-st96",
-        help="Plan CIPO ST.96 ingestion; requires --apply for database mutation",
-    )
-    ca.add_argument("--path", required=True, type=_path)
-    ca.add_argument(
-        "--source-id",
-        default="CIPO_GLOBAL_2025_06_14",
-        choices=("CIPO_GLOBAL_2025_06_14", "CIPO_WEEKLY"),
-    )
-    _add_apply_controls(ca)
-
+    _configure_ingest_commands(sub)
     args = parser.parse_args()
 
     if args.command == "catalog":
@@ -383,44 +370,41 @@ def main() -> int:
     if args.max_records is not None and args.max_records < 1:
         parser.error("--max-records must be at least 1")
 
-    source_preflight = _preflight_for_ingest(args)
-    plan = _plan_for_ingest(args, source_preflight)
+    try:
+        adapter, runtime_request = _runtime_request_for_args(args)
+    except (ValueError, argparse.ArgumentTypeError) as exc:
+        parser.error(str(exc))
+
+    source_preflight = adapter.preflight(runtime_request)
+    plan = _plan_for_request(args, runtime_request, source_preflight)
     if not args.apply:
-        print(
-            json.dumps(
-                plan.as_dict(apply_requested=False),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        payload = plan.as_dict(apply_requested=False)
+        payload["runtime_adapter_id"] = adapter.adapter_id
+        payload["runtime_metadata"] = dict(runtime_request.metadata)
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if source_preflight.schema_valid else 2
 
     if not source_preflight.schema_valid:
-        print(
-            json.dumps(
-                plan.as_dict(apply_requested=True),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        payload = plan.as_dict(apply_requested=True)
+        payload["runtime_adapter_id"] = adapter.adapter_id
+        payload["runtime_metadata"] = dict(runtime_request.metadata)
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 2
 
     assert_global_trademark_schema()
     try:
         with global_trademark_execution_lock(plan.execution_scope):
-            ingest_metadata = _ingest_metadata(args)
+            ingest_metadata = dict(runtime_request.metadata)
             source_object_id, manifest = register_plan_source(
                 plan,
                 metadata=ingest_metadata,
             )
-            pipeline_id = _pipeline_id_for_ingest(plan, ingest_metadata)
+            pipeline_id = _pipeline_id_for_request(runtime_request)
             before_run = get_ingest_run_state(
                 source_object_id=source_object_id,
                 pipeline_id=pipeline_id,
             )
-            _execute_ingest(args)
+            adapter.execute(runtime_request)
             after_run = get_ingest_run_state(
                 source_object_id=source_object_id,
                 pipeline_id=pipeline_id,
