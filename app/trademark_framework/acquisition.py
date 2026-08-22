@@ -262,6 +262,30 @@ def _validate_ledger_identity(
         )
 
 
+def _assert_sequence_slot_available(
+    *,
+    objects_root: Path,
+    sequence: int,
+    expected_path: Path,
+) -> None:
+    """Fail closed on unledgered source drift after a crash between object and ledger writes."""
+
+    if not objects_root.exists():
+        return
+    prefix = f"{sequence:08d}-"
+    expected = expected_path.resolve()
+    conflicts = [
+        candidate
+        for candidate in objects_root.glob(f"{prefix}*.raw")
+        if candidate.resolve() != expected
+    ]
+    if conflicts:
+        names = ", ".join(sorted(candidate.name for candidate in conflicts))
+        raise RuntimeError(
+            f"conflicting unledgered acquisition object for sequence {sequence}: {names}"
+        )
+
+
 def materialize_acquisition(
     *,
     adapter: SourceAcquisitionAdapter,
@@ -365,6 +389,11 @@ def materialize_acquisition(
         digest = _sha256(page.payload)
         object_key = f"objects/{sequence:08d}-{digest[:16]}.raw"
         object_path = session_root / object_key
+        _assert_sequence_slot_available(
+            objects_root=objects_root,
+            sequence=sequence,
+            expected_path=object_path,
+        )
         if object_path.exists():
             existing = object_path.read_bytes()
             if _sha256(existing) != digest:
