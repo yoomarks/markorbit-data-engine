@@ -12,7 +12,7 @@ from app.trademark_framework.contracts import (
 )
 
 
-SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_SCAFFOLD_V4"
+SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_SCAFFOLD_V5"
 _JURISDICTION_RE = re.compile(r"^[A-Z0-9]{2,4}$")
 
 
@@ -85,7 +85,7 @@ class ScaffoldPlan:
 
 
 def _adapter_template(request: ScaffoldRequest) -> str:
-    return f'''from __future__ import annotations\n\nfrom collections.abc import Iterator\nfrom pathlib import Path\n\n\nADAPTER_VERSION = "{request.jurisdiction}_TRADEMARK_ADAPTER_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef iter_native_records(path: Path) -> Iterator[dict[str, object]]:\n    """Parse source-native records without inventing semantic/legal facts.\n\n    Replace this stub only after reviewing the authority's schema/data dictionary and\n    real sample payloads. Preserve unknown source fields in source_payload when useful.\n    """\n    raise NotImplementedError("implement {request.jurisdiction} source-native parser")\n\n\ndef native_record_key(record: dict[str, object]) -> str:\n    """Return the source-declared record identity for deterministic replay."""\n    raise NotImplementedError("define {request.jurisdiction} source identity")\n\n\ndef source_operation(record: dict[str, object]) -> str:\n    """Return source operation semantics only when the authority explicitly declares them."""\n    return "OBSERVE"\n'''
+    return f'''from __future__ import annotations\n\nfrom collections.abc import Iterator\nfrom pathlib import Path\n\n\nADAPTER_VERSION = "{request.jurisdiction}_TRADEMARK_ADAPTER_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef iter_native_records(path: Path) -> Iterator[dict[str, object]]:\n    """Parse source-native records without inventing semantic/legal facts.\n\n    Replace this stub only after reviewing the authority's schema/data dictionary and\n    real sample payloads. Preserve unknown source fields in source_payload when useful.\n    The iteration order must be deterministic so source_index replay remains stable.\n    """\n    raise NotImplementedError("implement {request.jurisdiction} source-native parser")\n\n\ndef native_record_key(record: dict[str, object]) -> str:\n    """Return the source-declared record identity for deterministic replay."""\n    raise NotImplementedError("define {request.jurisdiction} source identity")\n\n\ndef source_operation(record: dict[str, object]) -> str:\n    """Return source operation semantics only when the authority explicitly declares them."""\n    return "OBSERVE"\n'''
 
 
 def _country_template(request: ScaffoldRequest) -> str:
@@ -93,11 +93,15 @@ def _country_template(request: ScaffoldRequest) -> str:
 
 
 def _mapping_template(request: ScaffoldRequest) -> str:
-    return f'''from __future__ import annotations\n\n\nMAPPING_VERSION = "{request.jurisdiction}_TRADEMARK_MAPPING_V1"\n\n\ndef map_record(native: dict[str, object]) -> dict[str, object]:\n    """Map one authority record into country-native storage fields.\n\n    Keep this mapping source-faithful. Do not invent global statuses, renewal opportunities,\n    brand families, legal conclusions or business semantics in Data Engine.\n    """\n    raise NotImplementedError("map {request.jurisdiction} authority fields")\n\n\ndef map_child_observations(native: dict[str, object]) -> dict[str, list[dict[str, object]]]:\n    """Return source-declared child observations grouped by native domain."""\n    return {{}}\n'''
+    return f'''from __future__ import annotations\n\nfrom app.trademark_factory.mapping import MappingContract\n\n\nMAPPING_VERSION = "{request.jurisdiction}_TRADEMARK_MAPPING_V1"\n\n\ndef build_mapping_contracts() -> tuple[MappingContract, ...]:\n    """Return reviewed source-selector -> country-native observation mappings.\n\n    Use MappingRule/SelectorKind only after profiling the authority schema. Keep mappings\n    source-faithful and do not invent global statuses, renewal opportunities, brand families,\n    legal conclusions or business semantics in Data Engine. XML namespace/cardinality semantics\n    may remain parser-owned when declarative extraction is not safe.\n    """\n    raise NotImplementedError("define {request.jurisdiction} reviewed mapping contracts")\n'''
+
+
+def _store_template(request: ScaffoldRequest) -> str:
+    return f'''from __future__ import annotations\n\nfrom app.trademark_factory.store_bundle import NativeStoreBundle\n\n\nSTORE_BUNDLE_VERSION = "{request.jurisdiction}_TRADEMARK_STORE_BUNDLE_V1"\nSTORE_SCHEMA = "{request.store_schema}"\nSOURCE_ID = "{request.source_id}"\n\n\ndef build_native_store_bundle() -> NativeStoreBundle:\n    """Bind reviewed mappings to source-native append-only observation tables.\n\n    Define ObservationTableSpec/NativeColumn and StoreBinding only from the authority's real\n    fields. The shared native-store primitives supply provenance, parser/mapping lineage,\n    deterministic replay checks and transaction-safe multi-domain writes.\n    """\n    raise NotImplementedError("define {request.jurisdiction} source-native store bundle")\n'''
 
 
 def _schema_template(request: ScaffoldRequest) -> str:
-    return f'''from __future__ import annotations\n\n\nSCHEMA_VERSION = "{request.jurisdiction}_TRADEMARK_SCHEMA_V1"\nSTORE_SCHEMA = "{request.store_schema}"\n\n\ndef schema_sql() -> str:\n    """Return additive source-native DDL after the source schema has been profiled.\n\n    Keep country-native richness. Do not reduce the source to a global common table.\n    """\n    raise NotImplementedError("design {request.jurisdiction} source-native schema")\n'''
+    return f'''from __future__ import annotations\n\nfrom app.trademark_factory.store_bundle import install_native_store_bundle\nfrom app.trademark_jurisdictions.{request.jurisdiction.lower()}.store import build_native_store_bundle\n\n\nSCHEMA_VERSION = "{request.jurisdiction}_TRADEMARK_SCHEMA_V1"\nSTORE_SCHEMA = "{request.store_schema}"\n\n\ndef install_schema(cur) -> None:\n    """Install additive source-native observation tables in an explicit migration transaction."""\n    install_native_store_bundle(cur, build_native_store_bundle())\n'''
 
 
 def _preflight_template(request: ScaffoldRequest) -> str:
@@ -118,8 +122,14 @@ def _acquisition_template(request: ScaffoldRequest) -> str:
     return _generic_acquisition_template(request)
 
 
+def _loader_template(request: ScaffoldRequest) -> str:
+    code = request.jurisdiction.lower()
+    return f'''from __future__ import annotations\n\nfrom collections.abc import Iterator\nfrom pathlib import Path\nfrom typing import Mapping\n\nfrom app.global_trademarks.source_objects import register_source_object\nfrom app.trademark_factory.native_ingest import (\n    NativeIngestResult,\n    NativeRecordEnvelope,\n    execute_native_ingest,\n)\nfrom app.trademark_framework.registry import resolve_pipeline_id\nfrom app.trademark_jurisdictions.{code}.adapter import iter_native_records, native_record_key\nfrom app.trademark_jurisdictions.{code}.store import build_native_store_bundle\n\n\nLOADER_VERSION = "{request.jurisdiction}_TRADEMARK_LOADER_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef iter_record_envelopes(path: Path) -> Iterator[NativeRecordEnvelope]:\n    """Wrap deterministic authority records in the shared durable-ingest envelope."""\n    for source_index, native in enumerate(iter_native_records(path), start=1):\n        yield NativeRecordEnvelope(\n            source_index=source_index,\n            record_key=native_record_key(native),\n            native=native,\n            source_payload=native,\n        )\n\n\ndef execute_materialized_source(\n    *,\n    path: Path,\n    parser_version: str,\n    metadata: Mapping[str, object],\n    max_records: int | None,\n    batch_size: int = 500,\n) -> NativeIngestResult:\n    """Register the exact materialized object and reuse durable native-ingest mechanics."""\n    source_object_id = register_source_object(\n        jurisdiction="{request.jurisdiction}",\n        source_id=SOURCE_ID,\n        path=path,\n        metadata=dict(metadata),\n    )\n    pipeline_id = resolve_pipeline_id("{request.jurisdiction}", SOURCE_ID, metadata)\n    if pipeline_id is None:\n        raise RuntimeError(\n            "source pipeline route is not configured; review CountryPack before enabling apply"\n        )\n    return execute_native_ingest(\n        source_object_id=source_object_id,\n        pipeline_id=pipeline_id,\n        bundle=build_native_store_bundle(),\n        parser_version=parser_version,\n        records=iter_record_envelopes(path),\n        batch_size=batch_size,\n        max_records=max_records,\n    )\n'''
+
+
 def _runtime_template(request: ScaffoldRequest) -> str:
-    return f'''from __future__ import annotations\n\nfrom pathlib import Path\nfrom typing import Mapping\n\nfrom app.trademark_framework.runtime import RuntimeRequest\n\n\nRUNTIME_ADAPTER_ID = "{request.jurisdiction}_TRADEMARK_RUNTIME_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef request_from_source(\n    *,\n    jurisdiction: str,\n    source_id: str,\n    path: Path,\n    metadata: Mapping[str, object],\n    max_records: int | None,\n) -> RuntimeRequest:\n    """Normalize a materialized raw object into the shared runtime request contract."""\n    raise NotImplementedError("define {request.jurisdiction} runtime selectors and parser version")\n\n\ndef preflight(request: RuntimeRequest, *, sample_limit: int = 100):\n    """Return the country source's no-write preflight result."""\n    raise NotImplementedError("connect {request.jurisdiction} runtime to preflight")\n\n\ndef execute(request: RuntimeRequest) -> int:\n    """Execute only the source-native loader; shared manifests/checkpoints remain external."""\n    raise NotImplementedError("connect {request.jurisdiction} runtime to loader")\n'''
+    code = request.jurisdiction.lower()
+    return f'''from __future__ import annotations\n\nfrom pathlib import Path\nfrom typing import Mapping\n\nfrom app.trademark_framework.runtime import RuntimeRequest\nfrom app.trademark_jurisdictions.{code}.loader import execute_materialized_source\n\n\nRUNTIME_ADAPTER_ID = "{request.jurisdiction}_TRADEMARK_RUNTIME_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef request_from_source(\n    *,\n    jurisdiction: str,\n    source_id: str,\n    path: Path,\n    metadata: Mapping[str, object],\n    max_records: int | None,\n) -> RuntimeRequest:\n    """Normalize a materialized raw object into the shared runtime request contract."""\n    raise NotImplementedError("define {request.jurisdiction} runtime selectors and parser version")\n\n\ndef preflight(request: RuntimeRequest, *, sample_limit: int = 100):\n    """Return the country source's no-write preflight result."""\n    raise NotImplementedError("connect {request.jurisdiction} runtime to preflight")\n\n\ndef execute(request: RuntimeRequest) -> int:\n    """Reuse the generated durable native loader after source-specific contracts are filled."""\n    normalized = request.normalized()\n    result = execute_materialized_source(\n        path=normalized.path,\n        parser_version=normalized.parser_version,\n        metadata=normalized.metadata,\n        max_records=normalized.max_records,\n    )\n    return result.processed_records\n'''
 
 
 def _current_template(request: ScaffoldRequest) -> str:
@@ -135,7 +145,7 @@ def _acceptance_template(request: ScaffoldRequest) -> str:
 
 
 def _fixture_readme(request: ScaffoldRequest) -> str:
-    return f'''# {request.jurisdiction} trademark fixtures\n\nAdd the smallest authority-grounded fixtures needed to prove:\n\n- source identity and native field extraction;\n- acquisition paging/cursor semantics and raw-object materialization when acquisition is remote;\n- source preflight/schema drift detection;\n- runtime selector normalization and pipeline routing;\n- replay idempotency;\n- interruption/resume equivalence;\n- update/delete or snapshot semantics where the source declares them;\n- malformed/unknown source input fails safely;\n- current-state projection never depends on ingestion time;\n- asset/media linkage when the source provides assets;\n- absence of a source record is not promoted to a legal conclusion.\n\nDo not fabricate a production parser/runtime/acquisition adapter from this scaffold without a real\nschema/data dictionary and representative source samples.\n'''
+    return f'''# {request.jurisdiction} trademark fixtures\n\nAdd the smallest authority-grounded fixtures needed to prove:\n\n- source identity and native field extraction;\n- acquisition paging/cursor semantics and raw-object materialization when acquisition is remote;\n- source preflight/schema drift detection;\n- reviewed mapping contracts and native-store bundle definitions;\n- deterministic source_index ordering and native-ingest interruption/resume equivalence;\n- runtime selector normalization and pipeline routing;\n- update/delete or snapshot semantics where the source declares them;\n- malformed/unknown source input fails safely;\n- current-state projection never depends on ingestion time;\n- asset/media linkage when the source provides assets;\n- absence of a source record is not promoted to a legal conclusion.\n\nDo not fabricate a production parser/runtime/acquisition adapter from this scaffold without a real\nschema/data dictionary and representative source samples.\n'''
 
 
 def build_scaffold(request: ScaffoldRequest) -> ScaffoldPlan:
@@ -148,8 +158,10 @@ def build_scaffold(request: ScaffoldRequest) -> ScaffoldPlan:
         f"{base}/acquisition.py": _acquisition_template(request),
         f"{base}/adapter.py": _adapter_template(request),
         f"{base}/mapping.py": _mapping_template(request),
+        f"{base}/store.py": _store_template(request),
         f"{base}/schema.py": _schema_template(request),
         f"{base}/preflight.py": _preflight_template(request),
+        f"{base}/loader.py": _loader_template(request),
         f"{base}/runtime.py": _runtime_template(request),
         f"{base}/current.py": _current_template(request),
         f"{base}/assets.py": _assets_template(request),
