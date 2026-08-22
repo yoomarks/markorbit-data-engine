@@ -12,7 +12,7 @@ from app.trademark_framework.contracts import (
 )
 
 
-SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_SCAFFOLD_V4"
+SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_SCAFFOLD_V5"
 _JURISDICTION_RE = re.compile(r"^[A-Z0-9]{2,4}$")
 
 
@@ -93,11 +93,15 @@ def _country_template(request: ScaffoldRequest) -> str:
 
 
 def _mapping_template(request: ScaffoldRequest) -> str:
-    return f'''from __future__ import annotations\n\n\nMAPPING_VERSION = "{request.jurisdiction}_TRADEMARK_MAPPING_V1"\n\n\ndef map_record(native: dict[str, object]) -> dict[str, object]:\n    """Map one authority record into country-native storage fields.\n\n    Keep this mapping source-faithful. Do not invent global statuses, renewal opportunities,\n    brand families, legal conclusions or business semantics in Data Engine.\n    """\n    raise NotImplementedError("map {request.jurisdiction} authority fields")\n\n\ndef map_child_observations(native: dict[str, object]) -> dict[str, list[dict[str, object]]]:\n    """Return source-declared child observations grouped by native domain."""\n    return {{}}\n'''
+    return f'''from __future__ import annotations\n\nfrom app.trademark_factory.mapping import MappingContract\n\n\nMAPPING_VERSION = "{request.jurisdiction}_TRADEMARK_MAPPING_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef mapping_contracts() -> tuple[MappingContract, ...]:\n    """Return reviewed source-selector -> native-field contracts.\n\n    Keep selectors source-faithful. Do not invent global statuses, renewal opportunities,\n    brand families, legal conclusions or business semantics in Data Engine. Leave this empty\n    until the authority schema and representative payloads have been reviewed.\n    """\n    return ()\n'''
 
 
 def _schema_template(request: ScaffoldRequest) -> str:
-    return f'''from __future__ import annotations\n\n\nSCHEMA_VERSION = "{request.jurisdiction}_TRADEMARK_SCHEMA_V1"\nSTORE_SCHEMA = "{request.store_schema}"\n\n\ndef schema_sql() -> str:\n    """Return additive source-native DDL after the source schema has been profiled.\n\n    Keep country-native richness. Do not reduce the source to a global common table.\n    """\n    raise NotImplementedError("design {request.jurisdiction} source-native schema")\n'''
+    return f'''from __future__ import annotations\n\nfrom app.trademark_framework.native_store import ObservationTableSpec\n\n\nSCHEMA_VERSION = "{request.jurisdiction}_TRADEMARK_SCHEMA_V1"\nSTORE_SCHEMA = "{request.store_schema}"\n\n\ndef observation_table_specs() -> tuple[ObservationTableSpec, ...]:\n    """Declare source-native append-only observation tables after source profiling.\n\n    Use `NativeColumn` + `ObservationTableSpec`; preserve the authority's native vocabulary and\n    field richness. Do not reduce the source to a global common trademark table.\n    """\n    return ()\n'''
+
+
+def _store_template(request: ScaffoldRequest) -> str:
+    return f'''from __future__ import annotations\n\nimport uuid\nfrom collections.abc import Mapping\nfrom typing import Any\n\nfrom app.trademark_factory.store_bundle import (\n    BundleAppendResult,\n    NativeStoreBundle,\n    StoreBinding,\n    append_native_record_bundle,\n    install_native_store_bundle,\n)\nfrom app.trademark_factory.writer import Transform\n\nfrom .mapping import mapping_contracts\nfrom .schema import STORE_SCHEMA, observation_table_specs\n\n\nSTORE_BUNDLE_VERSION = "{request.jurisdiction}_TRADEMARK_STORE_BUNDLE_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef native_store_bundle() -> NativeStoreBundle:\n    """Bind reviewed native tables to reviewed mapping contracts.\n\n    Do not guess pairings. Define explicit `StoreBinding` objects only after the source schema,\n    observation domains and mapping targets are reviewed.\n    """\n    tables = observation_table_specs()\n    contracts = mapping_contracts()\n    _reviewed_inputs = (tables, contracts, StoreBinding, STORE_SCHEMA)\n    del _reviewed_inputs\n    raise NotImplementedError("bind {request.jurisdiction} reviewed native tables and mappings")\n\n\ndef install_store(cur) -> None:\n    """Run additive native-store DDL only from an explicit migration/operator action."""\n    install_native_store_bundle(cur, native_store_bundle())\n\n\ndef append_native_record(\n    cur,\n    *,\n    native: Mapping[str, Any],\n    record_key: str,\n    source_object_id: uuid.UUID,\n    source_index: int,\n    parser_version: str,\n    source_payload: Mapping[str, object] | None = None,\n    transforms: Mapping[str, Transform] | None = None,\n) -> BundleAppendResult:\n    """Append one reviewed source-native record family through shared provenance mechanics."""\n    return append_native_record_bundle(\n        cur,\n        native_store_bundle(),\n        native=native,\n        record_key=record_key,\n        source_object_id=source_object_id,\n        source_index=source_index,\n        parser_version=parser_version,\n        source_payload=source_payload,\n        transforms=transforms,\n    )\n'''
 
 
 def _preflight_template(request: ScaffoldRequest) -> str:
@@ -135,7 +139,7 @@ def _acceptance_template(request: ScaffoldRequest) -> str:
 
 
 def _fixture_readme(request: ScaffoldRequest) -> str:
-    return f'''# {request.jurisdiction} trademark fixtures\n\nAdd the smallest authority-grounded fixtures needed to prove:\n\n- source identity and native field extraction;\n- acquisition paging/cursor semantics and raw-object materialization when acquisition is remote;\n- source preflight/schema drift detection;\n- runtime selector normalization and pipeline routing;\n- replay idempotency;\n- interruption/resume equivalence;\n- update/delete or snapshot semantics where the source declares them;\n- malformed/unknown source input fails safely;\n- current-state projection never depends on ingestion time;\n- asset/media linkage when the source provides assets;\n- absence of a source record is not promoted to a legal conclusion.\n\nDo not fabricate a production parser/runtime/acquisition adapter from this scaffold without a real\nschema/data dictionary and representative source samples.\n'''
+    return f'''# {request.jurisdiction} trademark fixtures\n\nAdd the smallest authority-grounded fixtures needed to prove:\n\n- source identity and native field extraction;\n- acquisition paging/cursor semantics and raw-object materialization when acquisition is remote;\n- source preflight/schema drift detection;\n- mapping contracts target reviewed native observation columns;\n- native-store bundle install/write/replay behavior;\n- runtime selector normalization and pipeline routing;\n- replay idempotency;\n- interruption/resume equivalence;\n- update/delete or snapshot semantics where the source declares them;\n- malformed/unknown source input fails safely;\n- current-state projection never depends on ingestion time;\n- asset/media linkage when the source provides assets;\n- absence of a source record is not promoted to a legal conclusion.\n\nDo not fabricate a production parser/runtime/acquisition/store adapter from this scaffold without a\nreal schema/data dictionary and representative source samples.\n'''
 
 
 def build_scaffold(request: ScaffoldRequest) -> ScaffoldPlan:
@@ -149,6 +153,7 @@ def build_scaffold(request: ScaffoldRequest) -> ScaffoldPlan:
         f"{base}/adapter.py": _adapter_template(request),
         f"{base}/mapping.py": _mapping_template(request),
         f"{base}/schema.py": _schema_template(request),
+        f"{base}/store.py": _store_template(request),
         f"{base}/preflight.py": _preflight_template(request),
         f"{base}/runtime.py": _runtime_template(request),
         f"{base}/current.py": _current_template(request),

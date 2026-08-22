@@ -195,13 +195,14 @@ def main() -> int:
     plan = build_scaffold(request)
     assert plan.version == SCAFFOLD_VERSION
     assert plan.request.store_schema == "trademark_jp"
-    assert len(plan.files) == 12
+    assert len(plan.files) == 13
     expected_paths = {
         "app/trademark_jurisdictions/jp/country.py",
         "app/trademark_jurisdictions/jp/acquisition.py",
         "app/trademark_jurisdictions/jp/adapter.py",
         "app/trademark_jurisdictions/jp/mapping.py",
         "app/trademark_jurisdictions/jp/schema.py",
+        "app/trademark_jurisdictions/jp/store.py",
         "app/trademark_jurisdictions/jp/preflight.py",
         "app/trademark_jurisdictions/jp/runtime.py",
         "app/trademark_jurisdictions/jp/current.py",
@@ -211,12 +212,24 @@ def main() -> int:
     assert expected_paths.issubset(plan.files)
     country_source = plan.files["app/trademark_jurisdictions/jp/country.py"]
     acquisition_source = plan.files["app/trademark_jurisdictions/jp/acquisition.py"]
+    mapping_source = plan.files["app/trademark_jurisdictions/jp/mapping.py"]
+    schema_source = plan.files["app/trademark_jurisdictions/jp/schema.py"]
+    store_source = plan.files["app/trademark_jurisdictions/jp/store.py"]
     runtime_source = plan.files["app/trademark_jurisdictions/jp/runtime.py"]
     assert "pipeline_ready=False" in country_source
     assert "TODO_SOURCE_IDENTITY" in country_source
     assert "AcquisitionPageRequest" in acquisition_source
     assert "Never include API keys" in acquisition_source
     assert "NotImplementedError" in acquisition_source
+    assert "MappingContract" in mapping_source
+    assert "mapping_contracts" in mapping_source
+    assert "ObservationTableSpec" in schema_source
+    assert "observation_table_specs" in schema_source
+    assert "NativeStoreBundle" in store_source
+    assert "StoreBinding" in store_source
+    assert "append_native_record_bundle" in store_source
+    assert "install_native_store_bundle" in store_source
+    assert "NotImplementedError" in store_source
     assert "RuntimeRequest" in runtime_source
     assert "NotImplementedError" in runtime_source
     assert "NotImplementedError" in plan.files["app/trademark_jurisdictions/jp/preflight.py"]
@@ -260,6 +273,8 @@ def main() -> int:
             "scaffold_file_count": len(plan.files),
             "scaffold_acquisition_stub": True,
             "scaffold_runtime_stub": True,
+            "scaffold_mapping_contract_stub": True,
+            "scaffold_native_store_bundle_stub": True,
             "scaffold_default_maturity": generated_pack.maturity.value,
             "scaffold_default_pipeline_ready": False,
             "scaffold_overwrite_blocked": True,
