@@ -75,6 +75,9 @@ jobs:
       - name: Validate HTTP transport secret redaction
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_transport_security_fixture
 
+      - name: Validate reusable paginated HTTP acquisition adapter
+        run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_acquisition_adapter_fixture
+
       - name: Validate resumable source/API acquisition contracts
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_acquisition_fixture
 
