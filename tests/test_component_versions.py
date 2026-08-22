@@ -21,6 +21,7 @@ from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
 from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
+from app.trademark_factory.writer import MAPPED_OBSERVATION_WRITER_VERSION
 from app.trademark_framework.acquisition import ACQUISITION_FRAMEWORK_VERSION
 from app.trademark_framework.http_acquisition import HTTP_ACQUISITION_ADAPTER_VERSION
 from app.trademark_framework.http_transport import HTTP_TRANSPORT_VERSION
@@ -67,6 +68,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert factory["registry_version"] == FACTORY_REGISTRY_VERSION
     assert factory["capability_matrix_version"] == CAPABILITY_MATRIX_VERSION
     assert factory["mapping_contract_version"] == MAPPING_CONTRACT_VERSION
+    assert factory["mapped_observation_writer_version"] == MAPPED_OBSERVATION_WRITER_VERSION
     assert factory["readiness_audit_version"] == READINESS_AUDIT_VERSION
     assert factory["scaffold_facade_version"] == FACTORY_SCAFFOLD_VERSION
 
@@ -117,6 +119,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         FACTORY_REGISTRY_VERSION,
         CAPABILITY_MATRIX_VERSION,
         MAPPING_CONTRACT_VERSION,
+        MAPPED_OBSERVATION_WRITER_VERSION,
         READINESS_AUDIT_VERSION,
         FACTORY_SCAFFOLD_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,
