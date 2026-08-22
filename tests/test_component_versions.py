@@ -18,6 +18,7 @@ from app.storage_headroom import HEADROOM_VERSION
 from app.trademark_factory import COUNTRY_FACTORY_VERSION
 from app.trademark_factory.capabilities import CAPABILITY_MATRIX_VERSION
 from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
+from app.trademark_factory.native_ingest import NATIVE_INGEST_EXECUTOR_VERSION
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
 from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
@@ -71,6 +72,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert factory["mapping_contract_version"] == MAPPING_CONTRACT_VERSION
     assert factory["mapped_observation_writer_version"] == MAPPED_OBSERVATION_WRITER_VERSION
     assert factory["native_store_bundle_version"] == NATIVE_STORE_BUNDLE_VERSION
+    assert factory["native_ingest_executor_version"] == NATIVE_INGEST_EXECUTOR_VERSION
     assert factory["readiness_audit_version"] == READINESS_AUDIT_VERSION
     assert factory["scaffold_facade_version"] == FACTORY_SCAFFOLD_VERSION
 
@@ -123,6 +125,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         MAPPING_CONTRACT_VERSION,
         MAPPED_OBSERVATION_WRITER_VERSION,
         NATIVE_STORE_BUNDLE_VERSION,
+        NATIVE_INGEST_EXECUTOR_VERSION,
         READINESS_AUDIT_VERSION,
         FACTORY_SCAFFOLD_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,

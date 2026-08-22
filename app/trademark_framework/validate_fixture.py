@@ -195,14 +195,16 @@ def main() -> int:
     plan = build_scaffold(request)
     assert plan.version == SCAFFOLD_VERSION
     assert plan.request.store_schema == "trademark_jp"
-    assert len(plan.files) == 12
+    assert len(plan.files) == 14
     expected_paths = {
         "app/trademark_jurisdictions/jp/country.py",
         "app/trademark_jurisdictions/jp/acquisition.py",
         "app/trademark_jurisdictions/jp/adapter.py",
         "app/trademark_jurisdictions/jp/mapping.py",
+        "app/trademark_jurisdictions/jp/store.py",
         "app/trademark_jurisdictions/jp/schema.py",
         "app/trademark_jurisdictions/jp/preflight.py",
+        "app/trademark_jurisdictions/jp/loader.py",
         "app/trademark_jurisdictions/jp/runtime.py",
         "app/trademark_jurisdictions/jp/current.py",
         "app/trademark_jurisdictions/jp/assets.py",
@@ -211,13 +213,25 @@ def main() -> int:
     assert expected_paths.issubset(plan.files)
     country_source = plan.files["app/trademark_jurisdictions/jp/country.py"]
     acquisition_source = plan.files["app/trademark_jurisdictions/jp/acquisition.py"]
+    mapping_source = plan.files["app/trademark_jurisdictions/jp/mapping.py"]
+    store_source = plan.files["app/trademark_jurisdictions/jp/store.py"]
+    schema_source = plan.files["app/trademark_jurisdictions/jp/schema.py"]
+    loader_source = plan.files["app/trademark_jurisdictions/jp/loader.py"]
     runtime_source = plan.files["app/trademark_jurisdictions/jp/runtime.py"]
     assert "pipeline_ready=False" in country_source
     assert "TODO_SOURCE_IDENTITY" in country_source
     assert "AcquisitionPageRequest" in acquisition_source
     assert "Never include API keys" in acquisition_source
     assert "NotImplementedError" in acquisition_source
+    assert "MappingContract" in mapping_source
+    assert "NativeStoreBundle" in store_source
+    assert "install_native_store_bundle" in schema_source
+    assert "NativeRecordEnvelope" in loader_source
+    assert "execute_native_ingest" in loader_source
+    assert "resolve_pipeline_id" in loader_source
+    assert "register_source_object" in loader_source
     assert "RuntimeRequest" in runtime_source
+    assert "execute_materialized_source" in runtime_source
     assert "NotImplementedError" in runtime_source
     assert "NotImplementedError" in plan.files["app/trademark_jurisdictions/jp/preflight.py"]
     assert "trusted_for_silence" in plan.files["app/trademark_jurisdictions/jp/acceptance.py"]
@@ -259,7 +273,9 @@ def main() -> int:
             "country_scaffold_version": SCAFFOLD_VERSION,
             "scaffold_file_count": len(plan.files),
             "scaffold_acquisition_stub": True,
-            "scaffold_runtime_stub": True,
+            "scaffold_native_store_stub": True,
+            "scaffold_native_ingest_wired": True,
+            "scaffold_runtime_uses_generated_loader": True,
             "scaffold_default_maturity": generated_pack.maturity.value,
             "scaffold_default_pipeline_ready": False,
             "scaffold_overwrite_blocked": True,
