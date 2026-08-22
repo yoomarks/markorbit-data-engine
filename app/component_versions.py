@@ -18,6 +18,12 @@ from app.global_trademarks.migrations import GLOBAL_TRADEMARK_SCHEMA_VERSION
 from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
 from app.storage_headroom import HEADROOM_VERSION
+from app.trademark_factory import COUNTRY_FACTORY_VERSION
+from app.trademark_factory.capabilities import CAPABILITY_MATRIX_VERSION
+from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
+from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
+from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
+from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
 from app.trademark_framework.acquisition import (
     ACQUISITION_FRAMEWORK_VERSION as TRADEMARK_SOURCE_ACQUISITION_VERSION,
 )
@@ -32,6 +38,7 @@ from app.trademark_framework.pagination import (
 )
 from app.trademark_framework.registry import FRAMEWORK_VERSION as TRADEMARK_JURISDICTION_FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION as TRADEMARK_RUNTIME_ADAPTER_VERSION
+from app.trademark_framework.scaffold import SCAFFOLD_VERSION as TRADEMARK_COUNTRY_SCAFFOLD_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
@@ -95,6 +102,15 @@ def component_versions() -> dict[str, Any]:
                 "http_transport_version": TRADEMARK_HTTP_TRANSPORT_VERSION,
                 "api_pagination_version": TRADEMARK_API_PAGINATION_VERSION,
                 "http_acquisition_adapter_version": TRADEMARK_HTTP_ACQUISITION_ADAPTER_VERSION,
+                "country_scaffold_version": TRADEMARK_COUNTRY_SCAFFOLD_VERSION,
+            },
+            "trademark_country_factory": {
+                "version": COUNTRY_FACTORY_VERSION,
+                "registry_version": FACTORY_REGISTRY_VERSION,
+                "capability_matrix_version": CAPABILITY_MATRIX_VERSION,
+                "mapping_contract_version": MAPPING_CONTRACT_VERSION,
+                "readiness_audit_version": READINESS_AUDIT_VERSION,
+                "scaffold_facade_version": FACTORY_SCAFFOLD_VERSION,
             },
             "global_trademark": {
                 "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,
