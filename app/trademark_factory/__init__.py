@@ -10,7 +10,9 @@ from app.trademark_factory.capabilities import (
     CapabilityState,
     CountryCapabilityReport,
     SourceCapability,
+    SourceCapabilityReport,
     derive_country_capabilities,
+    derive_source_capabilities,
 )
 from app.trademark_factory.mapping import (
     MAPPING_CONTRACT_VERSION,
@@ -43,9 +45,11 @@ __all__ = [
     "ReadinessReport",
     "SelectorKind",
     "SourceCapability",
+    "SourceCapabilityReport",
     "SourceProfile",
     "build_country_scaffold",
     "derive_country_capabilities",
+    "derive_source_capabilities",
     "factory_registry",
     "readiness_report",
 ]
