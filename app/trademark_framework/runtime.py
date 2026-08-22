@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 
-RUNTIME_ADAPTER_VERSION = "TRADEMARK_RUNTIME_ADAPTER_V1"
+RUNTIME_ADAPTER_VERSION = "TRADEMARK_RUNTIME_ADAPTER_V2"
 
 
 class PreflightResult(Protocol):
@@ -88,6 +89,73 @@ class SourceRuntimeAdapter(Protocol):
     def execute(self, request: RuntimeRequest) -> int: ...
 
 
+RequestFromCommand = Callable[[str, Mapping[str, Any]], RuntimeRequest]
+RequestFromSource = Callable[..., RuntimeRequest]
+PreflightCallable = Callable[[RuntimeRequest, int], PreflightResult]
+ExecuteCallable = Callable[[RuntimeRequest], int]
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionalRuntimeAdapter:
+    """Reusable runtime adapter for plugin-style jurisdiction modules.
+
+    A new country needs source dispatch for the generic ``ingest-source`` path but does not need
+    a bespoke CLI command. Therefore ``commands`` may be empty while ``source_keys`` remains
+    mandatory. Legacy command adapters can still provide ``request_from_command`` explicitly.
+    """
+
+    adapter_id: str
+    source_keys: tuple[RuntimeSourceKey, ...]
+    _request_from_source: RequestFromSource
+    _preflight: PreflightCallable
+    _execute: ExecuteCallable
+    commands: tuple[str, ...] = ()
+    selector_choices: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    _request_from_command: RequestFromCommand | None = None
+
+    def request_from_command(
+        self,
+        command: str,
+        options: Mapping[str, Any],
+    ) -> RuntimeRequest:
+        normalized_command = command.strip()
+        if normalized_command not in self.commands or self._request_from_command is None:
+            raise ValueError(f"{self.adapter_id} does not support command: {command}")
+        return self._request_from_command(normalized_command, options).normalized()
+
+    def request_from_source(
+        self,
+        *,
+        jurisdiction: str,
+        source_id: str,
+        path: Path,
+        metadata: Mapping[str, object],
+        max_records: int | None,
+    ) -> RuntimeRequest:
+        request = self._request_from_source(
+            jurisdiction=jurisdiction,
+            source_id=source_id,
+            path=path,
+            metadata=metadata,
+            max_records=max_records,
+        ).normalized()
+        supported = {key.as_tuple() for key in self.source_keys}
+        if RuntimeSourceKey(request.jurisdiction, request.source_id).as_tuple() not in supported:
+            raise ValueError(
+                f"{self.adapter_id} does not support source: "
+                f"{request.jurisdiction}:{request.source_id}"
+            )
+        return request
+
+    def preflight(self, request: RuntimeRequest, *, sample_limit: int = 100) -> PreflightResult:
+        if sample_limit < 1:
+            raise ValueError("sample_limit must be positive")
+        return self._preflight(request.normalized(), sample_limit)
+
+    def execute(self, request: RuntimeRequest) -> int:
+        return self._execute(request.normalized())
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeRegistryAudit:
     version: str
@@ -127,8 +195,8 @@ class RuntimeAdapterRegistry:
                 errors.append(f"duplicate runtime adapter_id: {adapter_id}")
             adapter_ids.add(adapter_id)
 
-            if not adapter.commands:
-                errors.append(f"{adapter_id}: runtime adapter must expose at least one command")
+            # Source-only adapters are first-class for generic ingest-source onboarding.
+            # A country should not need to add a bespoke top-level CLI command merely to register.
             if not adapter.source_keys:
                 errors.append(f"{adapter_id}: runtime adapter must expose at least one source key")
 
