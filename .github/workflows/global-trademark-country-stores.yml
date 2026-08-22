@@ -5,6 +5,7 @@ on:
     paths:
       - 'app/global_trademarks/**'
       - 'app/trademark_framework/**'
+      - 'app/trademark_factory/**'
       - 'app/trademark_jurisdictions/**'
       - 'app/data_trust.py'
       - 'app/db.py'
@@ -16,6 +17,7 @@ on:
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/TRADEMARK_HTTP_TRANSPORT.md'
+      - 'docs/TRADEMARK_COUNTRY_FACTORY.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -28,6 +30,7 @@ on:
     paths:
       - 'app/global_trademarks/**'
       - 'app/trademark_framework/**'
+      - 'app/trademark_factory/**'
       - 'app/trademark_jurisdictions/**'
       - 'app/data_trust.py'
       - 'app/db.py'
@@ -39,6 +42,7 @@ on:
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/TRADEMARK_HTTP_TRANSPORT.md'
+      - 'docs/TRADEMARK_COUNTRY_FACTORY.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -68,6 +72,9 @@ jobs:
 
       - name: Validate jurisdiction framework contracts and scaffold
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_fixture
+
+      - name: Validate country factory contracts and virtual jurisdiction
+        run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_fixture
 
       - name: Validate resilient HTTP transport and pagination contracts
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_transport_fixture
