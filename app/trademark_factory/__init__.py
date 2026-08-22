@@ -27,6 +27,13 @@ from app.trademark_factory.native_ingest import (
     execute_native_ingest,
     native_ingest_lineage_sha256,
 )
+from app.trademark_factory.plugin import (
+    JURISDICTION_PLUGIN_VERSION,
+    JurisdictionPlugin,
+    JurisdictionPluginRegistry,
+    PluginRegistryAudit,
+    SourceAcquisitionBinding,
+)
 from app.trademark_factory.profile import CountryProfile, SourceProfile
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION, ReadinessReport, readiness_report
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION, FactoryRegistry, factory_registry
@@ -55,6 +62,7 @@ __all__ = [
     "COUNTRY_FACTORY_VERSION",
     "FACTORY_REGISTRY_VERSION",
     "FACTORY_SCAFFOLD_VERSION",
+    "JURISDICTION_PLUGIN_VERSION",
     "MAPPED_OBSERVATION_WRITER_VERSION",
     "MAPPING_CONTRACT_VERSION",
     "NATIVE_INGEST_EXECUTOR_VERSION",
@@ -65,13 +73,17 @@ __all__ = [
     "CountryCapabilityReport",
     "CountryProfile",
     "FactoryRegistry",
+    "JurisdictionPlugin",
+    "JurisdictionPluginRegistry",
     "MappingContract",
     "MappingRule",
     "NativeIngestResult",
     "NativeRecordEnvelope",
     "NativeStoreBundle",
+    "PluginRegistryAudit",
     "ReadinessReport",
     "SelectorKind",
+    "SourceAcquisitionBinding",
     "SourceCapability",
     "SourceCapabilityReport",
     "SourceProfile",
