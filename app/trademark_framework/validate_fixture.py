@@ -8,6 +8,7 @@ from app.global_trademarks.catalog import country_plan
 from app.trademark_framework.contracts import (
     CurrentProjectionMode,
     DataFormat,
+    JurisdictionStage,
     SourceAdapterKind,
     TransportKind,
     UpdateSemantics,
@@ -31,8 +32,10 @@ def main() -> int:
 
     assert country_pack("EM").jurisdiction == "EU"
     assert country_pack("UK").jurisdiction == "GB"
+    assert country_pack("US").maturity == JurisdictionStage.PRODUCTION_CURRENT
 
     ca = country_pack("CA")
+    assert ca.maturity == JurisdictionStage.CURRENT_PROJECTION_READY
     assert ca.identity.fields == ("application_number", "extension_counter")
     assert ca.current_projection.mode == CurrentProjectionMode.MANIFEST_ORDERED
     assert ca.current_projection.ordering_fields == (
@@ -46,11 +49,13 @@ def main() -> int:
     assert ca.source("CIPO_WEEKLY").pipeline_ready is False
 
     au = country_pack("AU")
+    assert au.maturity == JurisdictionStage.COUNTRY_STORE_READY
     assert au.identity.fields == ("application_number", "ip_right_type")
     assert au.source("IPGOD_2022").adapter_kind == SourceAdapterKind.MULTI_TABLE_FILES
     assert len(au.source("IPGOD_2022").pipeline_ids) == 6
 
     gb = country_pack("GB")
+    assert gb.maturity == JurisdictionStage.COUNTRY_STORE_READY
     assert gb.source("UKIPO_OPEN_DATA_2018").adapter_kind == SourceAdapterKind.DELIMITED_FILE
     assert gb.source("UKIPO_OPEN_DATA_2018").data_format == DataFormat.TXT
     assert len(gb.source("UKIPO_OPEN_DATA_2018").pipeline_ids) == 2
@@ -98,14 +103,21 @@ def main() -> int:
         "app/trademark_jurisdictions/jp/acceptance.py",
     }
     assert expected_paths.issubset(plan.files)
-    assert "pipeline_ready=False" in plan.files["app/trademark_jurisdictions/jp/country.py"]
-    assert "TODO_SOURCE_IDENTITY" in plan.files["app/trademark_jurisdictions/jp/country.py"]
+    country_source = plan.files["app/trademark_jurisdictions/jp/country.py"]
+    assert "pipeline_ready=False" in country_source
+    assert "TODO_SOURCE_IDENTITY" in country_source
     assert "NotImplementedError" in plan.files["app/trademark_jurisdictions/jp/preflight.py"]
     assert "trusted_for_silence" in plan.files["app/trademark_jurisdictions/jp/acceptance.py"]
 
     for relative_path, content in plan.files.items():
         if relative_path.endswith(".py"):
             ast.parse(content, filename=relative_path)
+
+    country_namespace: dict[str, object] = {}
+    exec(compile(country_source, "generated-country.py", "exec"), country_namespace)
+    generated_pack = country_namespace["COUNTRY_PACK"]
+    assert generated_pack.maturity == JurisdictionStage.SOURCE_FOUND
+    assert generated_pack.source("JPO_OFFICIAL_BULK").pipeline_ready is False
 
     with tempfile.TemporaryDirectory(prefix="trademark-country-scaffold-") as temporary:
         root = Path(temporary)
@@ -124,9 +136,11 @@ def main() -> int:
             "status": "PASS",
             "framework_version": FRAMEWORK_VERSION,
             "country_patterns_validated": [pack.jurisdiction for pack in country_packs()],
+            "maturity": {pack.jurisdiction: pack.maturity.value for pack in country_packs()},
             "catalog_single_source_of_truth": True,
             "country_scaffold_version": SCAFFOLD_VERSION,
             "scaffold_file_count": len(plan.files),
+            "scaffold_default_maturity": generated_pack.maturity.value,
             "scaffold_default_pipeline_ready": False,
             "scaffold_overwrite_blocked": True,
             "db_writes": False,
