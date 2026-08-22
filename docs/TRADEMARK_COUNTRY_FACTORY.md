@@ -25,6 +25,7 @@ projection, assets and jurisdiction acceptance rules.
 | Capability matrix | `TRADEMARK_SOURCE_CAPABILITY_MATRIX_V1` | Derives conservative country capabilities from explicit source/store contracts. |
 | Mapping contract | `TRADEMARK_SOURCE_MAPPING_CONTRACT_V1` | Validated declarative source-selector -> country-native observation-field mapping contract. |
 | Mapped observation writer | `TRADEMARK_MAPPED_OBSERVATION_WRITER_V1` | Applies safe declarative mappings into native observation rows while preserving caller-owned record identity and parser/mapping/source lineage. |
+| Native store bundle | `TRADEMARK_NATIVE_STORE_BUNDLE_V1` | Binds one source's reviewed mapping contracts to multiple country-native observation tables and reuses explicit schema install plus atomic-cursor multi-domain append mechanics. |
 | Readiness audit | `TRADEMARK_COUNTRY_FACTORY_READINESS_V1` | Projects declared engineering maturity and flags structural contradictions without auto-promoting a country. |
 | Factory scaffold facade | `TRADEMARK_COUNTRY_FACTORY_SCAFFOLD_V1` | Delegates generation to the authoritative jurisdiction scaffold rather than maintaining a second template tree. |
 | Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V4` | Generates source-aware country packages; HTTP sources receive the reusable HTTP acquisition skeleton. |
@@ -116,6 +117,32 @@ reimplementing common extraction/provenance/write glue:
 XML/XPath execution remains parser-owned in V1. The writer does not guess namespaces, cardinality,
 ordering, source identity, legal status or current-state semantics.
 
+## Native store bundle
+
+`TRADEMARK_NATIVE_STORE_BUNDLE_V1` raises the reuse boundary from one mapped table to one reviewed
+source-specific native store family.
+
+A bundle contains one or more `StoreBinding` objects. Each binding joins an
+`ObservationTableSpec` to a `MappingContract` while keeping the table's native columns and source
+vocabulary intact. The bundle validates, before mutation, that:
+
+- binding ids and target tables are unique;
+- every table belongs to the declared country store schema;
+- every mapping contract belongs to the same jurisdiction/source;
+- mapped domains and native columns are compatible;
+- every non-null native column has a mapping rule;
+- mapped targets not declared by the table fail closed.
+
+`install_native_store_bundle()` is an explicit migration-time operation. It does not run implicitly
+inside ingestion. `append_native_record_bundle()` maps one source-native record through every
+binding using one caller-owned database cursor/transaction, so record/party/goods/event families can
+be committed or rolled back together without rebuilding provenance/replay logic per jurisdiction.
+
+The bundle does not invent a universal trademark record shape. A Canada source can still choose
+Canada-native tables/fields, an Australia source can retain its own relational vocabulary, and a
+future Japan/Korea source can declare different native columns. The reusable layer is the binding,
+validation, provenance, replay and transaction mechanics—not the legal/data model semantics.
+
 ## Readiness
 
 The factory reuses the framework maturity states:
@@ -172,6 +199,10 @@ proves that the factory can:
 The mapped-writer PostgreSQL fixture extends that proof through a real native observation table: it
 verifies identical replay, same-lineage drift rejection, source-object lineage, and an intentional
 mapping-version change producing distinct historical evidence.
+
+The native-store-bundle fixture extends the proof again across record, party and goods/service
+native tables in one transaction boundary, verifying multi-domain insert, idempotent bundle replay
+and fail-closed same-lineage drift.
 
 The virtual country is test evidence only and must never appear in the production jurisdiction
 registry.
