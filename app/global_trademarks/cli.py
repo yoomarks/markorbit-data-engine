@@ -28,7 +28,7 @@ from app.global_trademarks.migrations import (
     global_trademark_migration_status,
     migrate_global_trademark_schema,
 )
-from app.global_trademarks.operator import build_ingest_plan, register_plan_source
+from app.global_trademarks.operator import IngestPlan, build_ingest_plan, register_plan_source
 from app.global_trademarks.preflight import (
     SourcePreflight,
     inspect_au_ipgod,
@@ -42,6 +42,7 @@ from app.global_trademarks.tm_link_seed import (
     ingest_tm_link_classes,
     ingest_tm_link_details,
 )
+from app.trademark_framework.registry import resolve_pipeline_id
 
 
 _TM_LINK_LOADERS = {
@@ -58,22 +59,6 @@ _AU_LOADERS = {
     "application-events": ingest_application_events,
     "application-classification": ingest_application_classification,
     "application-description": ingest_application_description,
-}
-
-_AU_PIPELINE_IDS = {
-    "application": "IPGOD_2022_APPLICATION_V1",
-    "party-activity": "IPGOD_2022_PARTY_ACTIVITY_V1",
-    "application-links": "IPGOD_2022_APPLICATION_LINKS_V1",
-    "application-events": "IPGOD_2022_APPLICATION_EVENTS_V1",
-    "application-classification": "IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
-    "application-description": "IPGOD_2022_APPLICATION_DESCRIPTION_V1",
-}
-
-_TM_LINK_PIPELINE_TOKENS = {
-    "applications": "APPLICATIONS",
-    "applicants": "APPLICANTS",
-    "details": "TRADEMARK_DETAILS",
-    "classes": "NICE_CLASS",
 }
 
 
@@ -137,7 +122,7 @@ def _preflight_for_ingest(args: argparse.Namespace) -> SourcePreflight:
     return inspect_ca_st96(args.path)
 
 
-def _plan_for_ingest(args: argparse.Namespace, preflight: SourcePreflight):
+def _plan_for_ingest(args: argparse.Namespace, preflight: SourcePreflight) -> IngestPlan:
     if args.command == "ingest-gb-2018":
         jurisdiction = "GB"
         source_id = "UKIPO_OPEN_DATA_2018"
@@ -184,15 +169,17 @@ def _ingest_metadata(args: argparse.Namespace) -> dict[str, object]:
     return {**common, "source_kind": "CIPO_ST96_CORE"}
 
 
-def _pipeline_id_for_ingest(args: argparse.Namespace) -> str:
-    if args.command == "ingest-gb-2018":
-        return f"UKIPO_2018_{args.stream}_V1"
-    if args.command == "ingest-tm-link":
-        token = _TM_LINK_PIPELINE_TOKENS[args.table]
-        return f"TM_LINK_{args.jurisdiction}_{token}_V1"
-    if args.command == "ingest-au-ipgod":
-        return _AU_PIPELINE_IDS[args.table]
-    return "CIPO_ST96_CORE_V1"
+def _pipeline_id_for_ingest(
+    plan: IngestPlan,
+    metadata: dict[str, object],
+) -> str:
+    pipeline_id = resolve_pipeline_id(plan.jurisdiction, plan.source_id, metadata)
+    if pipeline_id is None:
+        raise RuntimeError(
+            "jurisdiction framework could not resolve intended pipeline for "
+            f"{plan.jurisdiction}:{plan.source_id} metadata={metadata!r}"
+        )
+    return pipeline_id
 
 
 def _execute_ingest(args: argparse.Namespace) -> int:
@@ -254,9 +241,16 @@ def main() -> int:
     sub.add_parser("schema-status", help="Read-only audit of country-store schema and ingest state")
     sub.add_parser("migrate", help="Install or safely upgrade country-native PostgreSQL schemas")
 
-    preflight = sub.add_parser("preflight-source", help="Validate one source file without database writes")
+    preflight = sub.add_parser(
+        "preflight-source",
+        help="Validate one source file without database writes",
+    )
     preflight.add_argument("--path", required=True, type=_path)
-    preflight.add_argument("--kind", required=True, choices=("GB_2018", "CA_ST96", "TM_LINK", "AU_IPGOD"))
+    preflight.add_argument(
+        "--kind",
+        required=True,
+        choices=("GB_2018", "CA_ST96", "TM_LINK", "AU_IPGOD"),
+    )
     preflight.add_argument("--jurisdiction", choices=("EU", "NZ"))
     preflight.add_argument("--table")
     preflight.add_argument("--sample-limit", type=int, default=100)
@@ -416,11 +410,12 @@ def main() -> int:
     assert_global_trademark_schema()
     try:
         with global_trademark_execution_lock(plan.execution_scope):
+            ingest_metadata = _ingest_metadata(args)
             source_object_id, manifest = register_plan_source(
                 plan,
-                metadata=_ingest_metadata(args),
+                metadata=ingest_metadata,
             )
-            pipeline_id = _pipeline_id_for_ingest(args)
+            pipeline_id = _pipeline_id_for_ingest(plan, ingest_metadata)
             before_run = get_ingest_run_state(
                 source_object_id=source_object_id,
                 pipeline_id=pipeline_id,

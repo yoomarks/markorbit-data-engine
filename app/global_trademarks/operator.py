@@ -17,24 +17,10 @@ from app.global_trademarks.source_objects import (
     arm_registered_source_object,
     register_source_object,
 )
+from app.trademark_framework.registry import resolve_pipeline_id
 
 
-GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V3"
-
-_TM_LINK_PIPELINE_TOKENS = {
-    "applications": "APPLICATIONS",
-    "applicants": "APPLICANTS",
-    "details": "TRADEMARK_DETAILS",
-    "classes": "NICE_CLASS",
-}
-_AU_PIPELINE_IDS = {
-    "application": "IPGOD_2022_APPLICATION_V1",
-    "party-activity": "IPGOD_2022_PARTY_ACTIVITY_V1",
-    "application-links": "IPGOD_2022_APPLICATION_LINKS_V1",
-    "application-events": "IPGOD_2022_APPLICATION_EVENTS_V1",
-    "application-classification": "IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
-    "application-description": "IPGOD_2022_APPLICATION_DESCRIPTION_V1",
-}
+GLOBAL_TRADEMARK_OPERATOR_VERSION = "GLOBAL_TM_OPERATOR_V4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,19 +161,13 @@ def _intended_pipeline_id(
     plan: IngestPlan,
     metadata: dict[str, Any],
 ) -> str | None:
-    if plan.command == "ingest-gb-2018":
-        stream = str(metadata.get("source_stream") or "").strip()
-        return f"UKIPO_2018_{stream}_V1" if stream in {"DOMESTIC", "MADRID_IR"} else None
-    if plan.command == "ingest-tm-link":
-        table = str(metadata.get("source_table") or "").strip()
-        token = _TM_LINK_PIPELINE_TOKENS.get(table)
-        return f"TM_LINK_{plan.jurisdiction}_{token}_V1" if token else None
-    if plan.command == "ingest-au-ipgod":
-        table = str(metadata.get("source_table") or "").strip()
-        return _AU_PIPELINE_IDS.get(table)
-    if plan.command == "ingest-ca-st96":
-        return "CIPO_ST96_CORE_V1"
-    return None
+    """Resolve the durable pipeline identity from the reusable country/source contract.
+
+    V4 removes command-specific GB/TM-Link/AU/CA routing tables from the operator. New
+    jurisdictions declare their pipeline routing in the framework registry instead of
+    adding another branch to this function.
+    """
+    return resolve_pipeline_id(plan.jurisdiction, plan.source_id, metadata)
 
 
 def register_plan_source(

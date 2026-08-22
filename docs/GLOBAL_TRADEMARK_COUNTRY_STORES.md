@@ -10,6 +10,10 @@ Flow:
 
 `source object -> country-native store -> country current-state projection -> global projection`
 
+Reusable country/source mechanics are now declared by `TRADEMARK_JURISDICTION_FRAMEWORK_V1`.
+`app.global_trademarks.catalog` remains as a compatibility view generated from that framework
+registry rather than a second hand-maintained source list.
+
 Source lineage is mandatory. `acquisition.global_trademark_source_object` records the logical
 object key, SHA256 and source period without persisting host-specific absolute paths.
 
@@ -33,7 +37,7 @@ operator/catalog from confusing source availability with production ingestion ca
 ## Operator safety
 
 The versioned global-trademark control plane is `GLOBAL_TM_SCHEMA_V2` and the operator contract
-is `GLOBAL_TM_OPERATOR_V3`.
+is `GLOBAL_TM_OPERATOR_V4`.
 
 Schema migration is an explicit operator action:
 
@@ -46,11 +50,15 @@ explicit `--apply` flag after source preflight. The apply path registers the exa
 source object, attaches it to a dataset manifest, and acquires a PostgreSQL advisory execution
 lock so the same source scope cannot accidentally run twice on the current single-host setup.
 
-V3 additionally binds the ingest plan to the exact path that was preflighted. The preflight SHA is
-used to register the planned source object, then a one-shot source-object pin is armed. When the
-loader starts, its normal source registration call must resolve to that exact object and the file is
-SHA256-hashed again immediately before mutation. If the bytes changed after planning, apply fails
-before country rows or ingest-run checkpoints are written.
+V4 retains the V3 source-identity safety boundary: the ingest plan is bound to the exact path and
+preflight SHA, a one-shot source-object pin is armed, and the loader re-hashes the bytes immediately
+before mutation. If the bytes changed after planning, apply fails before country rows or ingest-run
+checkpoints are written.
+
+V4 also removes GB/TM-Link/AU/CA pipeline-routing maps from the operator. The intended durable
+pipeline is resolved from the jurisdiction framework's `SourceDescriptor` / `PipelineRoute`
+contract. This means a future multi-stream or multi-table source declares its routing beside its
+source contract rather than adding another command-specific `if` branch to the shared operator.
 
 Example:
 

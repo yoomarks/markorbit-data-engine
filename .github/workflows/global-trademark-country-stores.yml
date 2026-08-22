@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'app/global_trademarks/**'
+      - 'app/trademark_framework/**'
+      - 'app/trademark_jurisdictions/**'
       - 'app/data_trust.py'
       - 'app/db.py'
       - 'app/config.py'
@@ -11,6 +13,7 @@ on:
       - 'tests/test_global_trademark*'
       - 'tests/test_component_versions.py'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
+      - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -22,6 +25,8 @@ on:
       - main
     paths:
       - 'app/global_trademarks/**'
+      - 'app/trademark_framework/**'
+      - 'app/trademark_jurisdictions/**'
       - 'app/data_trust.py'
       - 'app/db.py'
       - 'app/config.py'
@@ -29,6 +34,7 @@ on:
       - 'tests/test_global_trademark*'
       - 'tests/test_component_versions.py'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
+      - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -55,6 +61,9 @@ jobs:
           cp .env.example .env
           sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
           mkdir -p raw_data
+
+      - name: Validate jurisdiction framework contracts and scaffold
+        run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_fixture
 
       - name: Validate no-write source preflight contracts
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_source_preflight_fixture
