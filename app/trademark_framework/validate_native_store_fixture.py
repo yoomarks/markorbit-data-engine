@@ -57,6 +57,10 @@ def main() -> int:
     assert "mapping_version text NOT NULL" in rendered
     assert "source_payload jsonb NOT NULL" in rendered
     assert "application_number text NOT NULL" in rendered
+    assert (
+        "UNIQUE (source_object_id, record_key, source_index, parser_version, mapping_version)"
+        in rendered
+    )
 
     invalid = ObservationTableSpec(
         schema_name="bad-schema",
@@ -147,6 +151,25 @@ def main() -> int:
                 install_observation_table(cur, spec)
                 assert append_observation(cur, spec, first) is True
                 assert append_observation(cur, spec, same_different_mapping_order) is False
+
+                nondeterministic = ObservationRow(
+                    record_key=first.record_key,
+                    source_object_id=first.source_object_id,
+                    source_index=first.source_index,
+                    parser_version=first.parser_version,
+                    mapping_version=first.mapping_version,
+                    native_values={
+                        **dict(first.native_values),
+                        "event_text": "Different output from the same parser lineage",
+                    },
+                    source_payload=first.source_payload,
+                )
+                replay_drift_blocked = False
+                try:
+                    append_observation(cur, spec, nondeterministic)
+                except RuntimeError as exc:
+                    replay_drift_blocked = "nondeterministic native observation replay" in str(exc)
+                assert replay_drift_blocked
 
                 changed = ObservationRow(
                     record_key="XX-1001",
@@ -241,6 +264,7 @@ def main() -> int:
             "provenance_columns_standardized": True,
             "parser_mapping_lineage_persisted": True,
             "deterministic_replay_idempotent": True,
+            "nondeterministic_replay_drift_blocked": True,
             "changed_mapping_version_has_distinct_identity": True,
             "changed_source_sequence_appends_history": True,
             "unknown_native_fields_blocked": True,
