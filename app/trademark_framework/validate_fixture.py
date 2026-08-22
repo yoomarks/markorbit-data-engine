@@ -60,6 +60,11 @@ def main() -> int:
         == "IPGOD_2022_APPLICATION_EVENTS_V1"
     )
     assert resolve_pipeline_id("AU", "IPGOD_2022", {"source_table": "unknown"}) is None
+    au_future = au.source("AU_FUTURE_FRESHNESS")
+    assert au_future.adapter_kind == SourceAdapterKind.UNRESOLVED
+    assert au_future.transport == TransportKind.UNRESOLVED
+    assert au_future.data_format == DataFormat.UNKNOWN
+    assert au_future.update_semantics == UpdateSemantics.UNRESOLVED
 
     gb = country_pack("GB")
     assert gb.maturity == JurisdictionStage.COUNTRY_STORE_READY
@@ -82,6 +87,11 @@ def main() -> int:
         )
         == "UKIPO_2018_MADRID_IR_V1"
     )
+    gb_detail = gb.source("UKIPO_DETAIL_PAGE")
+    assert gb_detail.adapter_kind == SourceAdapterKind.UNRESOLVED
+    assert gb_detail.transport == TransportKind.UNRESOLVED
+    assert gb_detail.data_format == DataFormat.UNKNOWN
+    assert gb_detail.update_semantics == UpdateSemantics.UNRESOLVED
 
     eu = country_pack("EU")
     nz = country_pack("NZ")
@@ -170,6 +180,7 @@ def main() -> int:
             "maturity": {pack.jurisdiction: pack.maturity.value for pack in country_packs()},
             "catalog_single_source_of_truth": True,
             "pipeline_routing_centralized": True,
+            "unprofiled_source_contracts_unresolved": True,
             "country_scaffold_version": SCAFFOLD_VERSION,
             "scaffold_file_count": len(plan.files),
             "scaffold_default_maturity": generated_pack.maturity.value,
