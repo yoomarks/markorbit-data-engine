@@ -176,12 +176,12 @@ class SourceDescriptor:
 class CountryPack:
     jurisdiction: str
     store_schema: str
-    maturity: JurisdictionStage
     identity: IdentityContract
     observation_domains: tuple[ObservationDomain, ...]
     current_projection: CurrentProjectionContract
     asset_mode: AssetMode
     sources: tuple[SourceDescriptor, ...]
+    maturity: JurisdictionStage = JurisdictionStage.SOURCE_FOUND
     native_tables: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
     notes: str = ""
