@@ -107,6 +107,7 @@ class ObservationTableSpec:
             *native,
             "    source_payload jsonb NOT NULL DEFAULT '{}'::jsonb",
             "    observed_at timestamptz NOT NULL DEFAULT now()",
+            "    UNIQUE (source_object_id, record_key, source_index, parser_version, mapping_version)",
         ]
         table_sql = (
             f"CREATE TABLE IF NOT EXISTS {self.qualified_name} (\n"
@@ -218,8 +219,9 @@ def append_observation(cur, spec: ObservationTableSpec, row: ObservationRow) -> 
     """Append one immutable observation and return whether a row was newly inserted.
 
     Replay of the same source object/record/index/parser/mapping/payload is idempotent.
-    A changed source observation or reviewed parser/mapping version becomes separate
-    evidence rather than overwriting an earlier row.
+    If the same source position under the same parser/mapping produces different mapped
+    evidence, execution fails closed instead of storing two contradictory observations.
+    A reviewed parser/mapping version can intentionally produce separate evidence.
     """
     columns, native_values = _validated_native_values(spec, row)
     source_row_hash = observation_row_hash(spec, row)
@@ -246,8 +248,31 @@ def append_observation(cur, spec: ObservationTableSpec, row: ObservationRow) -> 
     )
     cur.execute(
         f"INSERT INTO {spec.qualified_name} ({', '.join(column_names)}) "
-        f"VALUES ({placeholders}) ON CONFLICT (source_row_hash) DO NOTHING "
-        "RETURNING source_row_hash",
+        f"VALUES ({placeholders}) "
+        "ON CONFLICT (source_object_id, record_key, source_index, parser_version, mapping_version) "
+        "DO NOTHING RETURNING source_row_hash",
         values,
     )
-    return cur.fetchone() is not None
+    inserted = cur.fetchone()
+    if inserted is not None:
+        return True
+
+    cur.execute(
+        f"SELECT source_row_hash FROM {spec.qualified_name} "
+        "WHERE source_object_id = %s AND record_key = %s AND source_index = %s "
+        "AND parser_version = %s AND mapping_version = %s",
+        (
+            row.source_object_id,
+            row.record_key,
+            row.source_index,
+            row.parser_version,
+            row.mapping_version,
+        ),
+    )
+    existing = cur.fetchone()
+    if existing and existing["source_row_hash"] == source_row_hash:
+        return False
+    raise RuntimeError(
+        "nondeterministic native observation replay: identical source position and "
+        "parser/mapping lineage produced different evidence"
+    )
