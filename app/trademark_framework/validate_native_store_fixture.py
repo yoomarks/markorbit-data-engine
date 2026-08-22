@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import uuid
+from datetime import date
 from pathlib import Path
 
 from app.db import postgres_conn
@@ -52,6 +53,8 @@ def main() -> int:
         "source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object"
         in rendered
     )
+    assert "parser_version text NOT NULL" in rendered
+    assert "mapping_version text NOT NULL" in rendered
     assert "source_payload jsonb NOT NULL" in rendered
     assert "application_number text NOT NULL" in rendered
 
@@ -85,31 +88,58 @@ def main() -> int:
             record_key="XX-1001",
             source_object_id=source_object_id,
             source_index=1,
+            parser_version="XX_PARSER_V1",
+            mapping_version="XX_MAPPING_V1",
             native_values={
                 "application_number": "1001",
                 "event_code": "PUBLISHED",
                 "event_text": "Published by virtual office",
                 "class_numbers": ["9", "42"],
-                "source_meta": {"language": "en"},
+                "source_meta": {"language": "en", "event_date": date(2026, 8, 22)},
             },
-            source_payload={"event": {"code": "PUBLISHED", "sequence": 1}},
+            source_payload={
+                "event": {
+                    "code": "PUBLISHED",
+                    "sequence": 1,
+                    "event_date": date(2026, 8, 22),
+                }
+            },
         )
         same_different_mapping_order = ObservationRow(
             record_key="XX-1001",
             source_object_id=source_object_id,
             source_index=1,
+            parser_version="XX_PARSER_V1",
+            mapping_version="XX_MAPPING_V1",
             native_values={
-                "source_meta": {"language": "en"},
+                "source_meta": {"event_date": date(2026, 8, 22), "language": "en"},
                 "class_numbers": ["9", "42"],
                 "event_text": "Published by virtual office",
                 "event_code": "PUBLISHED",
                 "application_number": "1001",
             },
-            source_payload={"event": {"sequence": 1, "code": "PUBLISHED"}},
+            source_payload={
+                "event": {
+                    "event_date": date(2026, 8, 22),
+                    "sequence": 1,
+                    "code": "PUBLISHED",
+                }
+            },
         )
         assert observation_row_hash(spec, first) == observation_row_hash(
             spec, same_different_mapping_order
         )
+
+        newer_mapping = ObservationRow(
+            record_key=first.record_key,
+            source_object_id=first.source_object_id,
+            source_index=first.source_index,
+            parser_version=first.parser_version,
+            mapping_version="XX_MAPPING_V2",
+            native_values=first.native_values,
+            source_payload=first.source_payload,
+        )
+        assert observation_row_hash(spec, first) != observation_row_hash(spec, newer_mapping)
 
         with postgres_conn() as conn:
             with conn.cursor() as cur:
@@ -122,6 +152,8 @@ def main() -> int:
                     record_key="XX-1001",
                     source_object_id=source_object_id,
                     source_index=2,
+                    parser_version="XX_PARSER_V1",
+                    mapping_version="XX_MAPPING_V1",
                     native_values={
                         "application_number": "1001",
                         "event_code": "REGISTERED",
@@ -136,6 +168,7 @@ def main() -> int:
                 cur.execute(
                     f"""
                     SELECT record_key, source_object_id, source_index,
+                           parser_version, mapping_version,
                            application_number, event_code, event_text,
                            class_numbers, source_meta, source_payload
                     FROM {_SCHEMA}.event_observation
@@ -146,9 +179,15 @@ def main() -> int:
                 assert len(rows) == 2
                 assert rows[0]["record_key"] == "XX-1001"
                 assert rows[0]["source_object_id"] == source_object_id
+                assert rows[0]["parser_version"] == "XX_PARSER_V1"
+                assert rows[0]["mapping_version"] == "XX_MAPPING_V1"
                 assert rows[0]["event_code"] == "PUBLISHED"
                 assert rows[0]["class_numbers"] == ["9", "42"]
-                assert rows[0]["source_meta"] == {"language": "en"}
+                assert rows[0]["source_meta"] == {
+                    "language": "en",
+                    "event_date": "2026-08-22",
+                }
+                assert rows[0]["source_payload"]["event"]["event_date"] == "2026-08-22"
                 assert rows[1]["event_code"] == "REGISTERED"
 
                 missing_required_blocked = False
@@ -200,7 +239,9 @@ def main() -> int:
             "native_store_primitives_version": NATIVE_STORE_PRIMITIVES_VERSION,
             "country_native_columns_preserved": True,
             "provenance_columns_standardized": True,
+            "parser_mapping_lineage_persisted": True,
             "deterministic_replay_idempotent": True,
+            "changed_mapping_version_has_distinct_identity": True,
             "changed_source_sequence_appends_history": True,
             "unknown_native_fields_blocked": True,
             "current_projection_implemented": False,
