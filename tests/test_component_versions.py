@@ -16,6 +16,7 @@ from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
 from app.storage_headroom import HEADROOM_VERSION
 from app.trademark_framework.acquisition import ACQUISITION_FRAMEWORK_VERSION
+from app.trademark_framework.http_acquisition import HTTP_ACQUISITION_ADAPTER_VERSION
 from app.trademark_framework.http_transport import HTTP_TRANSPORT_VERSION
 from app.trademark_framework.pagination import PAGINATION_HELPER_VERSION
 from app.trademark_framework.registry import FRAMEWORK_VERSION
@@ -48,6 +49,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert framework["source_acquisition_version"] == ACQUISITION_FRAMEWORK_VERSION
     assert framework["http_transport_version"] == HTTP_TRANSPORT_VERSION
     assert framework["api_pagination_version"] == PAGINATION_HELPER_VERSION
+    assert framework["http_acquisition_adapter_version"] == HTTP_ACQUISITION_ADAPTER_VERSION
     assert components["global_trademark"]["schema_version"] == GLOBAL_TRADEMARK_SCHEMA_VERSION
     assert components["global_trademark"]["operator_version"] == GLOBAL_TRADEMARK_OPERATOR_VERSION
     assert (
@@ -69,6 +71,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
             (ROOT / "docs" / "COMPONENT_VERSIONS.md").read_text(encoding="utf-8"),
             (ROOT / "docs" / "TRADEMARK_JURISDICTION_FRAMEWORK.md").read_text(encoding="utf-8"),
             (ROOT / "docs" / "TRADEMARK_SOURCE_ACQUISITION.md").read_text(encoding="utf-8"),
+            (ROOT / "docs" / "TRADEMARK_HTTP_TRANSPORT.md").read_text(encoding="utf-8"),
         ]
     )
     expected = {
@@ -83,6 +86,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         ACQUISITION_FRAMEWORK_VERSION,
         HTTP_TRANSPORT_VERSION,
         PAGINATION_HELPER_VERSION,
+        HTTP_ACQUISITION_ADAPTER_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,
         GLOBAL_TRADEMARK_OPERATOR_VERSION,
         GLOBAL_TRADEMARK_ACCEPTANCE_VERSION,

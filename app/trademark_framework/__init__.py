@@ -23,6 +23,13 @@ from app.trademark_framework.contracts import (
     TransportKind,
     UpdateSemantics,
 )
+from app.trademark_framework.http_acquisition import (
+    HTTP_ACQUISITION_ADAPTER_VERSION,
+    HasMoreContinuation,
+    HttpPageInterpretation,
+    HttpPaginatedAcquisitionAdapter,
+    SourceCursorContinuation,
+)
 from app.trademark_framework.http_transport import (
     HTTP_TRANSPORT_VERSION,
     HttpRequestSpec,
@@ -65,7 +72,11 @@ __all__ = [
     "CurrentProjectionMode",
     "DataFormat",
     "FRAMEWORK_VERSION",
+    "HTTP_ACQUISITION_ADAPTER_VERSION",
     "HTTP_TRANSPORT_VERSION",
+    "HasMoreContinuation",
+    "HttpPageInterpretation",
+    "HttpPaginatedAcquisitionAdapter",
     "HttpRequestSpec",
     "HttpResponse",
     "HttpRetryPolicy",
@@ -86,6 +97,7 @@ __all__ = [
     "RuntimeSourceKey",
     "SourceAcquisitionAdapter",
     "SourceAdapterKind",
+    "SourceCursorContinuation",
     "SourceDescriptor",
     "SourceRole",
     "SourceRuntimeAdapter",

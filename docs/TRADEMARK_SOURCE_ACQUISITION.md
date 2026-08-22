@@ -127,27 +127,6 @@ The shared transport provides:
 - request URL/header values excluded from dataclass `repr()` where credentials could appear;
 - rejection of credentials embedded in URL userinfo and CR/LF header injection.
 
-Example source adapter usage:
-
-```python
-transport = ResilientHttpTransport(
-    retry_policy=HttpRetryPolicy(max_attempts=5, max_delay_seconds=30),
-)
-response = transport.fetch(
-    HttpRequestSpec(
-        url=authority_url,
-        headers={"Authorization": f"Bearer {runtime_token}"},
-        timeout_seconds=30,
-    )
-)
-```
-
-The response body is still only transient transport output. The acquisition adapter converts it to
-an `AcquisitionPage`, after which `materialize_acquisition()` owns durable raw evidence.
-
-V1 intentionally does not automatically retry arbitrary `POST`/mutation requests, does not invent a
-universal OAuth/API-key mechanism, and does not persist request headers/cookies/tokens.
-
 ## Pagination helpers
 
 `TRADEMARK_API_PAGINATION_V1` provides small deterministic query helpers for three common API shapes:
@@ -161,19 +140,60 @@ The helpers construct/advance request positions only. They do **not** guess whet
 A country adapter must derive `has_more` or the next opaque cursor from the authority's documented
 response contract. This avoids silently imposing one office's pagination semantics on another.
 
+## Paginated HTTP acquisition bridge
+
+`TRADEMARK_HTTP_ACQUISITION_ADAPTER_V1` connects the two reusable layers above directly into the
+raw-evidence executor. A normal HTTP API country adapter no longer needs to write its own request
+loop, retry loop, page advance, raw-byte conversion or acquisition-resume plumbing.
+
+The jurisdiction-specific implementation supplies only:
+
+- the verified base endpoint;
+- a pagination helper matching the authority contract;
+- optional runtime header/query providers;
+- a response interpreter that returns a stable `page_key` and either:
+  - `HasMoreContinuation(has_more=...)`, or
+  - `SourceCursorContinuation(next_cursor=...)`.
+
+Example shape:
+
+```python
+adapter = HttpPaginatedAcquisitionAdapter(
+    adapter_id="OFFICE_API_V1",
+    base_url=official_endpoint,
+    pagination=PageNumberPagination(page_param="page", page_size_param="size", page_size=100),
+    headers_provider=lambda request: {"Authorization": runtime_token()},
+    interpret_page=interpret_official_response,
+)
+
+materialize_acquisition(
+    adapter=adapter,
+    jurisdiction="XX",
+    source_id="OFFICIAL_API",
+    session_key=release_key,
+    output_root=raw_root,
+    max_pages=100,
+)
+```
+
+The interpreter remains source-native. The generic adapter never opens JSON/XML to decide whether a
+page is complete, never invents a next cursor, and never decides legal/current-state semantics. It
+only converts verified source-specific interpretation into the standard `AcquisitionPage` contract.
+
+Runtime headers are injected at request time and are not copied into acquisition ledger fields. The
+adapter representation also omits base URL/header values so normal debugging does not expose source
+credentials or endpoint query secrets.
+
 ## Country scaffold
 
-`TRADEMARK_COUNTRY_SCAFFOLD_V3` generates `acquisition.py` in addition to country declaration,
-parser adapter, mapping, schema, preflight, runtime, current projection, assets, acceptance and
-fixture guidance.
+The country scaffold keeps acquisition as a separate implementation surface in addition to country
+declaration, parser adapter, mapping, schema, preflight, runtime, current projection, assets,
+acceptance and fixture guidance.
 
-The generated acquisition adapter remains `NotImplementedError`. Finding an API endpoint is not
-enough to enable it: the developer must verify authentication, pagination, rate-limit behavior,
-response format, stable source identity, update semantics and representative samples first.
-
-HTTP/S REST-style adapters should reuse `TRADEMARK_HTTP_TRANSPORT_V1` and
-`TRADEMARK_API_PAGINATION_V1` where their verified source contract matches those primitives, rather
-than recreating retry/backoff/query mechanics per country.
+Finding an API endpoint is not enough to enable a generated pack: authentication, pagination,
+rate-limit behavior, response format, stable source identity, update semantics and representative
+samples must still be verified. Once those are known, HTTP/S REST-style adapters should reuse
+`TRADEMARK_HTTP_ACQUISITION_ADAPTER_V1` instead of recreating HTTP/pagination/acquisition mechanics.
 
 ## Acceptance boundary
 
@@ -195,9 +215,9 @@ Those remain separate downstream evidence gates.
 
 ## Current scope
 
-The acquisition stack now provides durable raw-page materialization plus a reusable read-only HTTP
-transport and page/offset/opaque-cursor query helpers. CI uses deterministic fake backends and does
-not contact any trademark authority.
+The acquisition stack now provides durable raw-page materialization, reusable read-only HTTP
+transport, standard pagination request-position helpers, and a shared HTTP-to-acquisition bridge. CI
+uses deterministic fake authority backends and does not contact any trademark authority.
 
 It still intentionally does not guess endpoints, credentials, response schemas or pagination
 termination rules for unprofiled offices, and it does not start real acquisition for any

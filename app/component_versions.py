@@ -21,6 +21,9 @@ from app.storage_headroom import HEADROOM_VERSION
 from app.trademark_framework.acquisition import (
     ACQUISITION_FRAMEWORK_VERSION as TRADEMARK_SOURCE_ACQUISITION_VERSION,
 )
+from app.trademark_framework.http_acquisition import (
+    HTTP_ACQUISITION_ADAPTER_VERSION as TRADEMARK_HTTP_ACQUISITION_ADAPTER_VERSION,
+)
 from app.trademark_framework.http_transport import (
     HTTP_TRANSPORT_VERSION as TRADEMARK_HTTP_TRANSPORT_VERSION,
 )
@@ -91,6 +94,7 @@ def component_versions() -> dict[str, Any]:
                 "source_acquisition_version": TRADEMARK_SOURCE_ACQUISITION_VERSION,
                 "http_transport_version": TRADEMARK_HTTP_TRANSPORT_VERSION,
                 "api_pagination_version": TRADEMARK_API_PAGINATION_VERSION,
+                "http_acquisition_adapter_version": TRADEMARK_HTTP_ACQUISITION_ADAPTER_VERSION,
             },
             "global_trademark": {
                 "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,
