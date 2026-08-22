@@ -5,6 +5,7 @@ from collections.abc import Callable
 from app.global_trademarks import (
     validate_acceptance_fixture,
     validate_bounded_pilot_fixture,
+    validate_cipo_ordered_current_fixture,
     validate_cipo_rich_observation_fixture,
     validate_cipo_weekly_fixture,
     validate_operator_fixture,
@@ -16,7 +17,7 @@ from app.global_trademarks import (
 )
 
 
-GLOBAL_TRADEMARK_CI_SUITE_VERSION = "GLOBAL_TM_CI_SUITE_V3"
+GLOBAL_TRADEMARK_CI_SUITE_VERSION = "GLOBAL_TM_CI_SUITE_V4"
 
 
 def _run(name: str, fixture: Callable[[], int]) -> None:
@@ -39,6 +40,7 @@ def main() -> int:
         ("durable_resume", validate_resumable_fixture.main),
         ("cipo_weekly_tombstones", validate_cipo_weekly_fixture.main),
         ("cipo_rich_observations", validate_cipo_rich_observation_fixture.main),
+        ("cipo_ordered_current", validate_cipo_ordered_current_fixture.main),
         ("readiness_audit", validate_readiness_audit.main),
         ("release_acceptance", validate_acceptance_fixture.main),
     )

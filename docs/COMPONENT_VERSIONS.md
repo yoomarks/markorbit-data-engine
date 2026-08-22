@@ -15,10 +15,11 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 | US Assignment schema | `US_ASSIGNMENT_M1.0` | USPTO recorded assignment/interest facts; not title conclusion. |
 | US TTAB schema | `US_TTAB_M1.2` | USPTO TTAB procedural facts; not outcome/substantive-rights conclusion. |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` | Read-only normalized alert/event projection. |
-| Global trademark schema | `GLOBAL_TM_SCHEMA_V1` | Versioned additive country-store control plane, dataset manifests and ingestion ledger. |
+| Global trademark schema | `GLOBAL_TM_SCHEMA_V2` | Versioned country-store control plane, manifests/ingestion ledger, and ordered Canada current-source ledger/views. |
 | Global trademark operator | `GLOBAL_TM_OPERATOR_V3` | No-write planning by default, explicit `--apply`, bounded `--max-records`, durable resume, and a one-shot source-object pin that re-verifies the preflight SHA immediately before loader mutation. |
 | Global trademark acceptance | `GLOBAL_TM_ACCEPTANCE_V2` | Fail-closed source-release acceptance requiring the exact operator-declared pipeline run for every manifest object; never jurisdiction-current or legal acceptance. |
-| CIPO ST.96 rich observations | `CIPO_ST96_RICH_OBSERVATION_V1` | Immutable source-object observations for current owner/agent/service representative, goods/services, office events and source-declared registry relationships; not a Canada current-state projection. |
+| CIPO ST.96 rich observations | `CIPO_ST96_RICH_OBSERVATION_V1` | Immutable source-object observations for current owner/agent/service representative, goods/services, office events and source-declared registry relationships. |
+| CIPO ST.96 current projection | `CIPO_ST96_CURRENT_PROJECTION_V1` | Monotonic source-current record/child projection ordered by manifest coverage date, precedence and sequence; stale ingestion remains history and cannot regress current state. |
 | Contact ingestion | `CONTACT_INGEST_V1.6` | Multi-format contact ingestion including legacy XLS, historical `.josn` JSON exports, official HTML card directories, inline/multilingual public agent lists, scanned-PDF OCR fallback, known public-register table normalization, unresolved case-linked contact evidence, and serialized/retried Postgres apply. |
 | Contact task control | `CONTACT_TASK_CONTROL_V1.1` | Incoming-folder discovery, parser-version re-evaluation, interrupted-task recovery, background admin execution, and archive workflow. |
 | Storage policy | `DATA_ENGINE_STORAGE_V2` | Current-fact + true-delta history policy. |
@@ -40,7 +41,8 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 8. **Contact task control only automates discovery and task management.** A file reaching `READY` never implies permission to import; apply remains an explicit operator action.
 9. **Global trademark operator versions describe mutation safety and manifest semantics.** V3 binds the plan path to its preflight, pins the registered source object, re-verifies its SHA immediately before loader execution, and retains V2 bounded/resumable execution semantics.
 10. **Global trademark release acceptance is narrower than jurisdiction acceptance.** V2 additionally requires the exact intended pipeline declared on each source object; a release can still pass while the jurisdiction is stale, historically seeded, non-authoritative, or not trusted for silence.
-11. **CIPO rich observations are history, not current truth.** A later source object may add a newer child snapshot and a Delete tombstone may make the source record absent without erasing prior child evidence; current projection requires a separate ordered contract.
+11. **CIPO rich observations remain history.** They preserve each source object's evidence and are never destroyed merely because a later source wins current state.
+12. **CIPO current state is ordered by source evidence, not execution time.** Manifest-backed observations compare `(source_period_end, source_precedence, source_sequence)`; stale observations remain history, equal-rank conflicts fail closed, and an unmanifested legacy source cannot overwrite an already ordered current record.
 
 ## Release process
 
