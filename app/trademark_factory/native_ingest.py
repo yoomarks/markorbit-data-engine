@@ -13,10 +13,10 @@ from app.global_trademarks.ingest_runs import (
     checkpoint_ingest_run,
     complete_ingest_run,
     fail_ingest_run,
-    get_ingest_run_state,
 )
 from app.global_trademarks.migrations import assert_global_trademark_schema
 from app.trademark_factory.store_bundle import NativeStoreBundle, append_native_record_bundle
+from app.trademark_factory.writer import Transform
 
 
 NATIVE_INGEST_RUNNER_VERSION = "TRADEMARK_NATIVE_INGEST_RUNNER_V1"
@@ -86,13 +86,48 @@ def _canonical_json(value: object) -> str:
     )
 
 
+def _mapping_semantics(binding) -> dict[str, object]:
+    contract = binding.contract
+    rules = sorted(
+        contract.rules,
+        key=lambda rule: (
+            rule.domain.value,
+            rule.target_field,
+            rule.selector_kind.value,
+            rule.source_selector,
+        ),
+    )
+    return {
+        "version": contract.version,
+        "identity_targets": sorted(contract.identity_targets),
+        "rules": [
+            {
+                "selector_kind": rule.selector_kind.value,
+                "source_selector": rule.source_selector,
+                "domain": rule.domain.value,
+                "target_field": rule.target_field,
+                "required": rule.required,
+                "repeated": rule.repeated,
+                "transform_id": rule.transform_id,
+            }
+            for rule in rules
+        ],
+    }
+
+
 def native_ingest_contract_hash(
     *,
     bundle: NativeStoreBundle,
     pipeline_id: str,
     parser_version: str,
 ) -> str:
-    """Fingerprint the reviewed parser/mapping/native-table contract for durable resume safety."""
+    """Fingerprint reviewed parser/mapping/native-table semantics for durable resume safety.
+
+    Human notes and declaration order are excluded. A transform implementation change must be
+    represented by a reviewed mapping-version/transform-id change; the framework does not hash
+    arbitrary Python callable bytecode.
+    """
+    bindings = sorted(bundle.bindings, key=lambda binding: binding.binding_id)
     material = {
         "runner_version": NATIVE_INGEST_RUNNER_VERSION,
         "jurisdiction": bundle.jurisdiction.strip().upper(),
@@ -111,11 +146,14 @@ def native_ingest_contract_hash(
                         "data_type": column.data_type.value,
                         "nullable": column.nullable,
                     }
-                    for column in binding.spec.native_columns
+                    for column in sorted(
+                        binding.spec.native_columns,
+                        key=lambda column: column.name,
+                    )
                 ],
-                "mapping": binding.contract.as_dict(),
+                "mapping": _mapping_semantics(binding),
             }
-            for binding in bundle.bindings
+            for binding in bindings
         ],
     }
     return hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
@@ -213,17 +251,25 @@ def _next_new_record(
         errors = record.validate()
         if errors:
             raise ValueError("; ".join(errors))
-        if record.source_index <= previous_index:
+
+        if previous_index == 0:
+            if record.source_index not in {1, checkpoint + 1}:
+                raise RuntimeError(
+                    "native parser must start at source_index 1 or the exact resume position "
+                    f"{checkpoint + 1}; got {record.source_index}"
+                )
+        elif record.source_index != previous_index + 1:
             raise RuntimeError(
-                "native parser source_index must be strictly increasing for deterministic resume"
+                "native parser source_index must be contiguous and strictly increasing; "
+                f"expected {previous_index + 1}, got {record.source_index}"
             )
         previous_index = record.source_index
+
         if record.source_index <= checkpoint:
             continue
-        expected = checkpoint + 1
-        if record.source_index != expected:
+        if record.source_index != checkpoint + 1:
             raise RuntimeError(
-                f"native parser resume gap: expected source_index {expected}, "
+                f"native parser resume gap: expected source_index {checkpoint + 1}, "
                 f"got {record.source_index}"
             )
         return record, previous_index
@@ -239,6 +285,7 @@ def run_native_ingest(
     batch_size: int = 500,
     max_records: int | None = None,
     metadata: Mapping[str, object] | None = None,
+    transforms: Mapping[str, Transform] | None = None,
 ) -> NativeIngestResult:
     """Durably ingest a deterministic source-native record stream through a native-store bundle.
 
@@ -301,6 +348,17 @@ def run_native_ingest(
             checkpoint=state.checkpoint,
             contract_hash=contract_hash,
         )
+    if state.rows_committed != state.checkpoint:
+        fail_ingest_run(
+            run_id=state.run_id,
+            error_text=(
+                "native ingest ledger invariant violated: rows_committed must equal contiguous "
+                "source_index checkpoint"
+            ),
+        )
+        raise RuntimeError(
+            "native ingest ledger invariant violated: rows_committed must equal checkpoint"
+        )
 
     iterator = iter(records)
     previous_index = 0
@@ -341,6 +399,7 @@ def run_native_ingest(
                                     source_index=record.source_index,
                                     parser_version=parser_version,
                                     source_payload=record.source_payload,
+                                    transforms=transforms,
                                 )
                                 batch_inserted += result.inserted_count
                                 batch_replayed += result.replay_count
