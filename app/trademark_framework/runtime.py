@@ -173,7 +173,15 @@ class RuntimeAdapterRegistry:
             raise ValueError(f"unsupported trademark runtime command: {command}") from exc
 
     def for_source(self, jurisdiction: str, source_id: str) -> SourceRuntimeAdapter:
-        key = (jurisdiction.strip().upper(), source_id.strip())
+        requested = jurisdiction.strip().upper()
+        canonical = requested
+        try:
+            from app.trademark_framework.registry import country_pack
+
+            canonical = country_pack(requested).jurisdiction
+        except ValueError:
+            pass
+        key = (canonical, source_id.strip())
         try:
             return self._by_source[key]
         except KeyError as exc:
