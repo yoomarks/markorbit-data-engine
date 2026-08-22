@@ -254,6 +254,7 @@ def execute_native_ingest(
     checkpoint = state.checkpoint
     cumulative = state.rows_committed
     last_seen_index: int | None = None
+    replay_started_at_one = False
     exhausted = True
 
     try:
@@ -271,6 +272,7 @@ def execute_native_ingest(
                                 "native parser resume must begin at source index 1 or checkpoint + 1: "
                                 f"checkpoint={state.checkpoint} first_index={envelope.source_index}"
                             )
+                        replay_started_at_one = envelope.source_index == 1
                     elif envelope.source_index != last_seen_index + 1:
                         raise RuntimeError(
                             "native parser source_index sequence is not contiguous: "
@@ -314,6 +316,17 @@ def execute_native_ingest(
                             rows_committed=cumulative,
                         )
                         conn.commit()
+
+                if (
+                    exhausted
+                    and state.checkpoint > 0
+                    and replay_started_at_one
+                    and (last_seen_index is None or last_seen_index < state.checkpoint)
+                ):
+                    raise RuntimeError(
+                        "native parser replay ended before the durable checkpoint; "
+                        f"checkpoint={state.checkpoint} last_index={last_seen_index}"
+                    )
 
                 if exhausted:
                     complete_ingest_run(
