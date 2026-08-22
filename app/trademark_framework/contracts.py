@@ -129,7 +129,7 @@ class SourceDescriptor:
     transport: TransportKind
     data_format: DataFormat
     update_semantics: UpdateSemantics
-    pipeline_id: str | None = None
+    pipeline_ids: tuple[str, ...] = ()
     parser_version: str | None = None
     mapping_version: str | None = None
     preflight_profile: str | None = None
@@ -139,8 +139,12 @@ class SourceDescriptor:
         errors: list[str] = []
         if not self.source_id.strip():
             errors.append("source_id is required")
-        if self.pipeline_ready and not self.pipeline_id:
-            errors.append(f"{self.source_id}: pipeline_ready requires pipeline_id")
+        if self.pipeline_ready and not self.pipeline_ids:
+            errors.append(f"{self.source_id}: pipeline_ready requires pipeline_ids")
+        if len(set(self.pipeline_ids)) != len(self.pipeline_ids):
+            errors.append(f"{self.source_id}: pipeline_ids must be unique")
+        if any(not pipeline_id.strip() for pipeline_id in self.pipeline_ids):
+            errors.append(f"{self.source_id}: pipeline_ids must not contain blanks")
         if self.pipeline_ready and self.adapter_kind == SourceAdapterKind.REFERENCE_ONLY:
             errors.append(f"{self.source_id}: reference-only source cannot be pipeline_ready")
         if self.role == SourceRole.REFERENCE and self.update_semantics != UpdateSemantics.REFERENCE_ONLY:
@@ -233,7 +237,7 @@ class CountryPack:
                     "transport": source.transport.value,
                     "data_format": source.data_format.value,
                     "update_semantics": source.update_semantics.value,
-                    "pipeline_id": source.pipeline_id,
+                    "pipeline_ids": list(source.pipeline_ids),
                     "parser_version": source.parser_version,
                     "mapping_version": source.mapping_version,
                     "preflight_profile": source.preflight_profile,
