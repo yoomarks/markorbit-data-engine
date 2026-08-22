@@ -32,6 +32,7 @@ from app.trademark_framework.pagination import (
 )
 from app.trademark_framework.registry import FRAMEWORK_VERSION as TRADEMARK_JURISDICTION_FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION as TRADEMARK_RUNTIME_ADAPTER_VERSION
+from app.trademark_framework.scaffold import SCAFFOLD_VERSION as TRADEMARK_COUNTRY_SCAFFOLD_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
@@ -95,6 +96,7 @@ def component_versions() -> dict[str, Any]:
                 "http_transport_version": TRADEMARK_HTTP_TRANSPORT_VERSION,
                 "api_pagination_version": TRADEMARK_API_PAGINATION_VERSION,
                 "http_acquisition_adapter_version": TRADEMARK_HTTP_ACQUISITION_ADAPTER_VERSION,
+                "country_scaffold_version": TRADEMARK_COUNTRY_SCAFFOLD_VERSION,
             },
             "global_trademark": {
                 "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,
