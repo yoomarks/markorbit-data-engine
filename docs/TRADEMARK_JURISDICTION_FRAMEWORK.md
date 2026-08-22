@@ -18,8 +18,10 @@ The framework standardizes:
 
 - source role, transport, format, adapter kind and update semantics;
 - source-declared record identity;
+- metadata-to-pipeline routing for multi-table/multi-stream sources;
 - observation-domain capabilities (record/party/goods/event/relationship/etc.);
 - current-projection mode and ordering contract;
+- jurisdiction onboarding maturity;
 - asset support state;
 - pipeline IDs, parser/mapping versions and preflight profiles;
 - country/source registry validation;
@@ -53,6 +55,7 @@ A `CountryPack` is the reusable onboarding unit. It describes:
 
 - `jurisdiction` / aliases;
 - `store_schema`;
+- `JurisdictionStage` engineering maturity;
 - `IdentityContract`;
 - supported `ObservationDomain` values;
 - `CurrentProjectionContract`;
@@ -62,24 +65,29 @@ A `CountryPack` is the reusable onboarding unit. It describes:
 
 The initial registry describes six materially different patterns already present in the project:
 
-| Jurisdiction | Reusable pattern being proven |
-|---|---|
-| US | compatibility with an existing mature subsystem |
-| GB | delimited historical baseline plus pending weekly/comparable-right sources |
-| EU | non-authoritative multi-file historical seed plus future official API |
-| CA | ST.96 snapshot + Update/Delete + manifest-ordered current projection |
-| AU | six-table source-native snowflake snapshot |
-| NZ | historical multi-file seed plus future official API |
+| Jurisdiction | Framework maturity | Reusable pattern being proven |
+|---|---|---|
+| US | `PRODUCTION_CURRENT` | compatibility with an existing mature subsystem |
+| GB | `COUNTRY_STORE_READY` | delimited historical baseline plus pending weekly/comparable-right sources |
+| EU | `COUNTRY_STORE_READY` | non-authoritative multi-file historical seed plus future official API |
+| CA | `CURRENT_PROJECTION_READY` | ST.96 snapshot + Update/Delete + manifest-ordered current projection |
+| AU | `COUNTRY_STORE_READY` | six-table source-native snowflake snapshot |
+| NZ | `COUNTRY_STORE_READY` | historical multi-file seed plus future official API |
+
+These maturity values describe **implemented engineering evidence only**. They do not promote a
+source release, historical seed or jurisdiction to accepted/current data merely by declaration.
+For example, Canada's framework maturity can be `CURRENT_PROJECTION_READY` while CIPO WEEKLY still
+remains `pipeline_ready=false` pending assets and real-package pilot validation.
 
 This reverse validation is intentional: the framework is accepted only if it can describe existing
 heterogeneous implementations without erasing their differences.
 
-## Source descriptor
+## Source descriptor and pipeline routing
 
 A source descriptor answers the questions that otherwise get redesigned for every country:
 
 - What is this source for? (`PRIMARY`, `HISTORICAL_SEED`, `INCREMENTAL`, `ENRICHMENT`, `REFERENCE`)
-- How is it acquired? (`FILE`, `HTTP_API`, `SOAP_API`, `SFTP`, existing subsystem)
+- How is it acquired? (`FILE`, `HTTP_API`, `SOAP_API`, `SFTP`, existing subsystem, or unresolved)
 - What parser family is appropriate? (delimited, ZIP/XML, multi-table, API, etc.)
 - What is its data format?
 - Is it a snapshot, historical seed, append stream, API-current source or Update/Delete feed?
@@ -88,7 +96,25 @@ A source descriptor answers the questions that otherwise get redesigned for ever
 - Which pipeline IDs/parser/mapping/preflight contract implement it?
 
 `active_now` and `pipeline_ready` remain separate. A known or available source is not considered
-production ingestible merely because it exists.
+production ingestible merely because it exists. Unverified access/format must be represented as
+unresolved rather than guessed into an API or file contract.
+
+For a source that fans out into multiple durable pipelines, `PipelineRoute` maps source metadata to
+the intended pipeline. Examples already encoded in the registry include:
+
+- GB `source_stream=DOMESTIC|MADRID_IR`;
+- EU/NZ TM-Link `source_table=applications|applicants|details|classes`;
+- AU IPGOD six `source_table` values.
+
+The shared resolver is:
+
+```python
+resolve_pipeline_id(jurisdiction, source_id, metadata)
+```
+
+`GLOBAL_TM_OPERATOR_V4` now uses this registry resolver. As a result, adding another multi-table or
+multi-stream jurisdiction does not require adding another country-specific `if` branch to the
+operator merely to determine durable pipeline identity.
 
 ## Current projection
 
@@ -115,9 +141,10 @@ contract is proven.
 now generated from the framework registry. This removes a second manually maintained list of
 jurisdictions and source readiness flags.
 
-Existing loaders are **not** rewritten in V1. This is deliberate. Framework adoption should be
-incremental: first make contracts and registry authoritative, then move shared operator/preflight/
-acceptance behavior behind reusable adapters without destabilizing working country parsers.
+Existing loaders are **not** rewritten in V1. This is deliberate. Framework adoption is
+incremental: first make contracts/registry/routing authoritative, then move repeated
+operator/preflight/acceptance behavior behind reusable adapters without destabilizing working
+country parsers.
 
 ## Framework audit
 
@@ -127,8 +154,8 @@ Run:
 python -m app.trademark_framework.cli audit
 ```
 
-The audit is read-only and checks country/source contract consistency, aliases and pipeline-ID
-ownership.
+The audit is read-only and checks country/source contract consistency, aliases, pipeline routes and
+pipeline-ID ownership.
 
 Inspect packs with:
 
@@ -155,13 +182,15 @@ It plans a skeleton under:
 
 `app/trademark_jurisdictions/<jurisdiction>/`
 
-The generated country pack intentionally contains:
+The generated pack starts at `SOURCE_FOUND` and the 10-file skeleton covers country declaration,
+source adapter, native mapping, schema, no-write preflight, current projection, assets, acceptance
+and fixture guidance. It intentionally contains:
 
 - `pipeline_ready=False`;
 - `TODO_SOURCE_IDENTITY`;
 - no current-state claim;
 - no legal inference;
-- parser/schema stubs that require official schema/sample evidence.
+- parser/schema/preflight/mapping stubs that require official schema/sample evidence.
 
 Use `--write` only when intentionally creating those files. Existing files are never overwritten.
 
@@ -179,7 +208,7 @@ For a new jurisdiction, the desired engineering work eventually becomes mostly:
 4. implement only the source-native identity/parser/mapping and country-specific rules;
 5. reuse shared source-object/manifest/preflight/resume/operator/acceptance infrastructure;
 6. run adversarial fixtures and bounded real-data pilot;
-7. promote source/pipeline readiness only after evidence passes.
+7. promote source/pipeline maturity only after evidence passes.
 
 The framework is successful when adding jurisdiction N+1 requires less infrastructure code than
 jurisdiction N, without reducing source fidelity.
