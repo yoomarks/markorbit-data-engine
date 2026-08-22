@@ -29,12 +29,21 @@ def test_native_store_ddl_preserves_native_columns_and_provenance() -> None:
     statements = "\n".join(_spec().create_statements())
     assert "source_row_hash text PRIMARY KEY" in statements
     assert "record_key text NOT NULL" in statements
-    assert "source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object" in statements
+    assert (
+        "source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object"
+        in statements
+    )
     assert "source_index integer NOT NULL" in statements
+    assert "parser_version text NOT NULL" in statements
+    assert "mapping_version text NOT NULL" in statements
     assert "application_number text NOT NULL" in statements
     assert "party_name text" in statements
     assert "source_meta jsonb" in statements
     assert "source_payload jsonb NOT NULL" in statements
+    assert (
+        "UNIQUE (source_object_id, record_key, source_index, parser_version, mapping_version)"
+        in statements
+    )
 
 
 def test_native_store_identifiers_and_reserved_columns_fail_closed() -> None:
@@ -79,6 +88,8 @@ def test_observation_hash_is_canonical_but_source_identity_sensitive() -> None:
             "source_meta": {"language": "en", "sequence": 1},
         },
         source_payload={"owner": {"name": "Example Owner", "sequence": 1}},
+        parser_version="XX_PARSER_V1",
+        mapping_version="XX_MAPPING_V1",
     )
     reordered = ObservationRow(
         record_key="XX-1",
@@ -90,6 +101,8 @@ def test_observation_hash_is_canonical_but_source_identity_sensitive() -> None:
             "application_number": "1",
         },
         source_payload={"owner": {"sequence": 1, "name": "Example Owner"}},
+        parser_version="XX_PARSER_V1",
+        mapping_version="XX_MAPPING_V1",
     )
     changed_source = ObservationRow(
         record_key="XX-1",
@@ -97,10 +110,22 @@ def test_observation_hash_is_canonical_but_source_identity_sensitive() -> None:
         source_index=1,
         native_values=first.native_values,
         source_payload=first.source_payload,
+        parser_version=first.parser_version,
+        mapping_version=first.mapping_version,
+    )
+    changed_mapping = ObservationRow(
+        record_key=first.record_key,
+        source_object_id=first.source_object_id,
+        source_index=first.source_index,
+        native_values=first.native_values,
+        source_payload=first.source_payload,
+        parser_version=first.parser_version,
+        mapping_version="XX_MAPPING_V2",
     )
 
     assert observation_row_hash(spec, first) == observation_row_hash(spec, reordered)
     assert observation_row_hash(spec, first) != observation_row_hash(spec, changed_source)
+    assert observation_row_hash(spec, first) != observation_row_hash(spec, changed_mapping)
 
 
 def test_invalid_spec_refuses_ddl_rendering() -> None:
