@@ -93,6 +93,9 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
             (ROOT / "docs" / "TRADEMARK_SOURCE_ACQUISITION.md").read_text(encoding="utf-8"),
             (ROOT / "docs" / "TRADEMARK_HTTP_TRANSPORT.md").read_text(encoding="utf-8"),
             (ROOT / "docs" / "TRADEMARK_COUNTRY_FACTORY.md").read_text(encoding="utf-8"),
+            (ROOT / "docs" / "TRADEMARK_NATIVE_STORE_PRIMITIVES.md").read_text(
+                encoding="utf-8"
+            ),
         ]
     )
     expected = {
