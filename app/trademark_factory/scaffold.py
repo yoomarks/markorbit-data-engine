@@ -1,49 +1,55 @@
-"""Generate a safe skeleton for a new trademark jurisdiction.
+from __future__ import annotations
 
-Generation creates development scaffolding only. It never marks a country as
-ready or production-current.
-"""
-
-from dataclasses import dataclass
-from pathlib import Path
-
-
-@dataclass(frozen=True)
-class ScaffoldPlan:
-    jurisdiction: str
-    files: tuple[str, ...]
-
-
-DEFAULT_FILES = (
-    "country.yaml",
-    "source.yaml",
-    "identity.py",
-    "acquisition.py",
-    "parser.py",
-    "mapping.py",
-    "schema.py",
-    "current.py",
-    "assets.py",
-    "acceptance.py",
-    "fixtures/.gitkeep",
+from app.trademark_framework.contracts import (
+    DataFormat,
+    SourceAdapterKind,
+    TransportKind,
+    UpdateSemantics,
+)
+from app.trademark_framework.scaffold import (
+    SCAFFOLD_VERSION,
+    ScaffoldPlan,
+    ScaffoldRequest,
+    build_scaffold,
 )
 
 
-def build_plan(jurisdiction: str) -> ScaffoldPlan:
-    code = jurisdiction.lower()
-    return ScaffoldPlan(
-        jurisdiction=code,
-        files=tuple(f"jurisdictions/{code}/{name}" for name in DEFAULT_FILES),
+FACTORY_SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_FACTORY_SCAFFOLD_V1"
+
+
+def build_country_scaffold(
+    *,
+    jurisdiction: str,
+    source_id: str,
+    adapter_kind: SourceAdapterKind,
+    data_format: DataFormat,
+    update_semantics: UpdateSemantics,
+    transport: TransportKind,
+    store_schema: str | None = None,
+) -> ScaffoldPlan:
+    """Build the authoritative framework scaffold through the factory facade.
+
+    The factory deliberately does not maintain another generator/template tree. This keeps
+    new-country scaffolding aligned with the same acquisition/runtime/current/acceptance
+    contracts used by existing jurisdictions.
+    """
+    return build_scaffold(
+        ScaffoldRequest(
+            jurisdiction=jurisdiction,
+            source_id=source_id,
+            adapter_kind=adapter_kind,
+            data_format=data_format,
+            update_semantics=update_semantics,
+            transport=transport,
+            store_schema=store_schema,
+        )
     )
 
 
-def write_plan(root: Path, plan: ScaffoldPlan) -> tuple[Path, ...]:
-    created: list[Path] = []
-    for relative in plan.files:
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            raise FileExistsError(path)
-        path.write_text("# generated scaffold\n", encoding="utf-8")
-        created.append(path)
-    return tuple(created)
+__all__ = [
+    "FACTORY_SCAFFOLD_VERSION",
+    "SCAFFOLD_VERSION",
+    "ScaffoldPlan",
+    "ScaffoldRequest",
+    "build_country_scaffold",
+]
