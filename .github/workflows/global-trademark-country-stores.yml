@@ -69,6 +69,9 @@ jobs:
       - name: Validate jurisdiction framework contracts and scaffold
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_fixture
 
+      - name: Validate HTTP-aware country scaffold templates
+        run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_scaffold_fixture
+
       - name: Validate resilient HTTP transport and pagination contracts
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_transport_fixture
 
