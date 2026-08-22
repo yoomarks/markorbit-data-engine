@@ -154,6 +154,36 @@ def main() -> int:
         assert loop_blocked is True
         assert not list(loop_root.rglob("*.raw"))
 
+        orphan_root = root / "orphan-case"
+        orphan_object = (
+            orphan_root
+            / "JP"
+            / "JPO_FAKE_API"
+            / "orphan-fixture"
+            / "objects"
+            / "00000001-deadbeefdeadbeef.raw"
+        )
+        orphan_object.parent.mkdir(parents=True, exist_ok=True)
+        orphan_object.write_bytes(b"old-unledgered-response")
+        orphan_adapter = FakeCursorApi()
+        orphan_blocked = False
+        try:
+            materialize_acquisition(
+                adapter=orphan_adapter,
+                jurisdiction="JP",
+                source_id="JPO_FAKE_API",
+                session_key="orphan-fixture",
+                output_root=orphan_root,
+                max_pages=1,
+            )
+        except RuntimeError as exc:
+            orphan_blocked = "unledgered" in str(exc)
+        assert orphan_blocked is True
+        assert len(orphan_adapter.calls) == 1
+        assert not (
+            orphan_object.parent.parent / "acquisition-ledger.json"
+        ).exists()
+
     print(
         {
             "status": "PASS",
@@ -163,6 +193,7 @@ def main() -> int:
             "complete_replay_no_fetch": True,
             "tamper_detection": True,
             "cursor_loop_fail_closed": True,
+            "unledgered_source_drift_fail_closed": True,
             "auth_material_serialized": False,
             "network_used": False,
             "database_writes": False,
