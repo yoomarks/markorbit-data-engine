@@ -15,6 +15,7 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 | US Assignment schema | `US_ASSIGNMENT_M1.0` | USPTO recorded assignment/interest facts; not title conclusion. |
 | US TTAB schema | `US_TTAB_M1.2` | USPTO TTAB procedural facts; not outcome/substantive-rights conclusion. |
 | US Alert Engine | `US_ALERT_ENGINE_M1.0` | Read-only normalized alert/event projection. |
+| Trademark jurisdiction framework | `TRADEMARK_JURISDICTION_FRAMEWORK_V1` | Reusable source, identity, country-store, current-projection and scaffold contracts; existing Global Trademark catalog is derived from this registry. |
 | Global trademark schema | `GLOBAL_TM_SCHEMA_V2` | Versioned country-store control plane, manifests/ingestion ledger, and ordered Canada current-source ledger/views. |
 | Global trademark operator | `GLOBAL_TM_OPERATOR_V3` | No-write planning by default, explicit `--apply`, bounded `--max-records`, durable resume, and a one-shot source-object pin that re-verifies the preflight SHA immediately before loader mutation. |
 | Global trademark acceptance | `GLOBAL_TM_ACCEPTANCE_V2` | Fail-closed source-release acceptance requiring the exact operator-declared pipeline run for every manifest object; never jurisdiction-current or legal acceptance. |
@@ -39,10 +40,12 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 6. **Operational telemetry versions do not redefine source facts.** Replay telemetry is an observability contract over runs, not a new fact-model authority.
 7. **Contact ingestion versions describe the external-contact ingestion contract.** They do not authorize marketing execution or redefine trademark source facts.
 8. **Contact task control only automates discovery and task management.** A file reaching `READY` never implies permission to import; apply remains an explicit operator action.
-9. **Global trademark operator versions describe mutation safety and manifest semantics.** V3 binds the plan path to its preflight, pins the registered source object, re-verifies its SHA immediately before loader execution, and retains V2 bounded/resumable execution semantics.
-10. **Global trademark release acceptance is narrower than jurisdiction acceptance.** V2 additionally requires the exact intended pipeline declared on each source object; a release can still pass while the jurisdiction is stale, historically seeded, non-authoritative, or not trusted for silence.
-11. **CIPO rich observations remain history.** They preserve each source object's evidence and are never destroyed merely because a later source wins current state.
-12. **CIPO current state is ordered by source evidence, not execution time.** Manifest-backed observations compare `(source_period_end, source_precedence, source_sequence)`; stale observations remain history, equal-rank conflicts fail closed, and an unmanifested legacy source cannot overwrite an already ordered current record.
+9. **The jurisdiction framework standardizes mechanics, not legal semantics.** Country-native identity, source fields, events, relationships and status remain source-faithful; the framework must not force them into a lowest-common-denominator global schema.
+10. **A generated country scaffold is intentionally disabled.** New source packs start `pipeline_ready=false` and keep placeholder identity/current rules until official schema/sample evidence is reviewed.
+11. **Global trademark operator versions describe mutation safety and manifest semantics.** V3 binds the plan path to its preflight, pins the registered source object, re-verifies its SHA immediately before loader execution, and retains V2 bounded/resumable execution semantics.
+12. **Global trademark release acceptance is narrower than jurisdiction acceptance.** V2 additionally requires the exact intended pipeline declared on each source object; a release can still pass while the jurisdiction is stale, historically seeded, non-authoritative, or not trusted for silence.
+13. **CIPO rich observations remain history.** They preserve each source object's evidence and are never destroyed merely because a later source wins current state.
+14. **CIPO current state is ordered by source evidence, not execution time.** Manifest-backed observations compare `(source_period_end, source_precedence, source_sequence)`; stale observations remain history, equal-rank conflicts fail closed, and an unmanifested legacy source cannot overwrite an already ordered current record.
 
 ## Release process
 
