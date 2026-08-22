@@ -113,6 +113,9 @@ jobs:
       - name: Validate durable native ingest executor
         run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_native_ingest_fixture
 
+      - name: Validate native ingest replay truncation
+        run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_native_ingest_truncation_fixture
+
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
