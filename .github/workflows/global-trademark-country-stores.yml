@@ -16,6 +16,7 @@ on:
       - 'tests/test_trademark_*'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
+      - 'docs/TRADEMARK_JURISDICTION_PLUGIN.md'
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/TRADEMARK_HTTP_TRANSPORT.md'
       - 'docs/TRADEMARK_COUNTRY_FACTORY.md'
@@ -43,6 +44,7 @@ on:
       - 'tests/test_trademark_*'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
+      - 'docs/TRADEMARK_JURISDICTION_PLUGIN.md'
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/TRADEMARK_HTTP_TRANSPORT.md'
       - 'docs/TRADEMARK_COUNTRY_FACTORY.md'
@@ -79,6 +81,9 @@ jobs:
 
       - name: Validate country factory contracts and virtual jurisdiction
         run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_fixture
+
+      - name: Validate jurisdiction plugin registry
+        run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_plugin_fixture
 
       - name: Validate resilient HTTP transport and pagination contracts
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_http_transport_fixture
