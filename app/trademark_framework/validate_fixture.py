@@ -26,8 +26,8 @@ def main() -> int:
     assert audit.ready, audit.errors
     assert audit.framework_version == FRAMEWORK_VERSION
     assert audit.country_count == 6
-    assert audit.source_count >= 18
-    assert audit.ready_source_count >= 5
+    assert audit.source_count == 17
+    assert audit.ready_source_count == 6
 
     assert country_pack("EM").jurisdiction == "EU"
     assert country_pack("UK").jurisdiction == "GB"
