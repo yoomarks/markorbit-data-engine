@@ -24,6 +24,7 @@ projection, assets and jurisdiction acceptance rules.
 | Factory registry | `TRADEMARK_COUNTRY_FACTORY_REGISTRY_V1` | Read-only projection of framework `CountryPack` objects; supports isolated virtual-pack fixtures without mutating production registry. |
 | Capability matrix | `TRADEMARK_SOURCE_CAPABILITY_MATRIX_V1` | Derives conservative country capabilities from explicit source/store contracts. |
 | Mapping contract | `TRADEMARK_SOURCE_MAPPING_CONTRACT_V1` | Validated declarative source-selector -> country-native observation-field mapping contract. |
+| Mapped observation writer | `TRADEMARK_MAPPED_OBSERVATION_WRITER_V1` | Applies safe declarative mappings into native observation rows while preserving caller-owned record identity and parser/mapping/source lineage. |
 | Readiness audit | `TRADEMARK_COUNTRY_FACTORY_READINESS_V1` | Projects declared engineering maturity and flags structural contradictions without auto-promoting a country. |
 | Factory scaffold facade | `TRADEMARK_COUNTRY_FACTORY_SCAFFOLD_V1` | Delegates generation to the authoritative jurisdiction scaffold rather than maintaining a second template tree. |
 | Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V4` | Generates source-aware country packages; HTTP sources receive the reusable HTTP acquisition skeleton. |
@@ -82,8 +83,38 @@ are declared by that pack. V1 provides deterministic extraction only for simple 
 JSON Pointer selectors. XML/XPath extraction remains parser-owned because namespace, cardinality and
 ordering semantics must be verified against each authority schema.
 
+V1 also fails closed when two rules target the same observation-domain field. Fallback, merge and
+coalesce semantics are not implicit; a later framework version must model them explicitly before
+multiple selectors may write one target.
+
 The mapping layer is not a legal/semantic normalizer. It must not create generic validity statuses,
 renewal opportunities, inferred brand families, lead scores or legal conclusions.
+
+## Mapped observation writer
+
+`TRADEMARK_MAPPED_OBSERVATION_WRITER_V1` connects reviewed declarative JSON/tabular mappings to the
+reusable native-store primitives.
+
+The writer:
+
+- executes only selectors supported by the mapping contract;
+- treats missing required selectors as errors and skips missing optional selectors;
+- requires named transforms to be explicitly supplied by the jurisdiction adapter;
+- preserves repeated values as source-native lists rather than inventing joins/flattening;
+- requires the jurisdiction adapter to supply `record_key` instead of constructing a generic key;
+- persists the mapping contract version and caller-supplied parser version on every observation;
+- preserves the source payload by default;
+- refuses mapped fields that do not exist in the declared native observation table;
+- delegates replay identity and nondeterministic replay protection to
+  `TRADEMARK_NATIVE_STORE_PRIMITIVES_V1`.
+
+A source adapter can therefore move from raw JSON to a native append-only observation without
+reimplementing common extraction/provenance/write glue:
+
+`raw source -> MappingContract -> mapped native values -> ObservationRow -> native observation table`
+
+XML/XPath execution remains parser-owned in V1. The writer does not guess namespaces, cardinality,
+ordering, source identity, legal status or current-state semantics.
 
 ## Readiness
 
@@ -137,6 +168,10 @@ proves that the factory can:
 - generate HTTP and file country scaffolds through one factory interface;
 - keep generated packs disabled by default;
 - run without DB writes or network calls.
+
+The mapped-writer PostgreSQL fixture extends that proof through a real native observation table: it
+verifies identical replay, same-lineage drift rejection, source-object lineage, and an intentional
+mapping-version change producing distinct historical evidence.
 
 The virtual country is test evidence only and must never appear in the production jurisdiction
 registry.

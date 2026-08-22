@@ -69,6 +69,7 @@ class MappingContract:
         if not self.rules:
             errors.append("mapping requires at least one rule")
         seen: set[tuple[SelectorKind, str, ObservationDomain, str]] = set()
+        target_owners: set[tuple[ObservationDomain, str]] = set()
         targets: set[str] = set()
         for rule in self.rules:
             errors.extend(rule.validate())
@@ -80,6 +81,14 @@ class MappingContract:
                     f"{rule.domain.value}.{rule.target_field}"
                 )
             seen.add(key)
+
+            target_key = (rule.domain, rule.target_field)
+            if target_key in target_owners:
+                errors.append(
+                    "ambiguous mapping target without fallback/merge semantics: "
+                    f"{rule.domain.value}.{rule.target_field}"
+                )
+            target_owners.add(target_key)
             targets.add(rule.target_field)
         missing_identity_targets = sorted(set(self.identity_targets) - targets)
         if missing_identity_targets:
