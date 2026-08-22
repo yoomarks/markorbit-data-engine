@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.trademark_framework.contracts import CountryPack, JurisdictionStage
+from app.trademark_framework.contracts import CountryPack, JurisdictionStage, SourceAdapterKind
 
 
 READINESS_AUDIT_VERSION = "TRADEMARK_COUNTRY_FACTORY_READINESS_V1"
@@ -60,19 +60,25 @@ def readiness_report(pack: CountryPack) -> ReadinessReport:
     current_index = stage_index(pack.maturity)
     warnings: list[str] = []
     ready_sources = tuple(source for source in pack.sources if source.pipeline_ready)
+    external_subsystem = bool(ready_sources) and all(
+        source.adapter_kind == SourceAdapterKind.EXISTING_SUBSYSTEM for source in ready_sources
+    )
 
     if stage_reached(pack.maturity, JurisdictionStage.SOURCE_PROFILED):
-        if all(source.adapter_kind.value == "UNRESOLVED" for source in pack.sources):
+        if all(source.adapter_kind == SourceAdapterKind.UNRESOLVED for source in pack.sources):
             warnings.append("SOURCE_PROFILED declared but every source adapter is UNRESOLVED")
     if stage_reached(pack.maturity, JurisdictionStage.PREFLIGHT_READY):
-        if ready_sources and not any(source.preflight_profile for source in ready_sources):
+        if ready_sources and not external_subsystem and not any(
+            source.preflight_profile for source in ready_sources
+        ):
             warnings.append("PREFLIGHT_READY-or-later declared but no ready source has preflight_profile")
     if stage_reached(pack.maturity, JurisdictionStage.PARSER_READY):
-        if ready_sources and not any(source.parser_version for source in ready_sources):
+        if ready_sources and not external_subsystem and not any(
+            source.parser_version for source in ready_sources
+        ):
             warnings.append("PARSER_READY-or-later declared but no ready source has parser_version")
     if stage_reached(pack.maturity, JurisdictionStage.COUNTRY_STORE_READY) and not pack.native_tables:
-        # Existing subsystems may deliberately keep native tables outside this country-store list.
-        if pack.jurisdiction != "US":
+        if not external_subsystem:
             warnings.append("COUNTRY_STORE_READY-or-later declared but native_tables is empty")
     if stage_reached(pack.maturity, JurisdictionStage.CURRENT_PROJECTION_READY):
         if pack.current_projection.mode.value in {"NOT_IMPLEMENTED", "HISTORICAL_ONLY"}:
