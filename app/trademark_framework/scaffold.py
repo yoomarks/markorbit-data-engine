@@ -12,7 +12,7 @@ from app.trademark_framework.contracts import (
 )
 
 
-SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_SCAFFOLD_V3"
+SCAFFOLD_VERSION = "TRADEMARK_COUNTRY_SCAFFOLD_V4"
 _JURISDICTION_RE = re.compile(r"^[A-Z0-9]{2,4}$")
 
 
@@ -104,8 +104,18 @@ def _preflight_template(request: ScaffoldRequest) -> str:
     return f'''from __future__ import annotations\n\nfrom pathlib import Path\n\n\nPREFLIGHT_VERSION = "{request.jurisdiction}_TRADEMARK_PREFLIGHT_V1"\n\n\ndef validate_source(path: Path) -> dict[str, object]:\n    """No-write validation of authority/source shape before any ingestion mutation."""\n    raise NotImplementedError("validate {request.jurisdiction} source headers/schema/sample identity")\n'''
 
 
-def _acquisition_template(request: ScaffoldRequest) -> str:
+def _generic_acquisition_template(request: ScaffoldRequest) -> str:
     return f'''from __future__ import annotations\n\nfrom app.trademark_framework.acquisition import AcquisitionPage, AcquisitionPageRequest\n\n\nACQUISITION_ADAPTER_ID = "{request.jurisdiction}_TRADEMARK_ACQUISITION_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef initial_cursor() -> str | None:\n    """Return the authority's initial page/cursor token, or None for a single-object source."""\n    return None\n\n\ndef fetch_page(request: AcquisitionPageRequest) -> AcquisitionPage:\n    """Acquire one raw authority response and return only source-native pagination facts.\n\n    Keep credentials in the transport/runtime environment. Never include API keys, authorization\n    headers or passwords in page keys/cursors/ledger metadata. The shared acquisition executor\n    materializes raw bytes atomically with SHA256 and resumable lineage.\n    """\n    raise NotImplementedError("connect {request.jurisdiction} official source/API acquisition")\n'''
+
+
+def _http_acquisition_template(request: ScaffoldRequest) -> str:
+    return f'''from __future__ import annotations\n\nfrom collections.abc import Mapping\n\nfrom app.trademark_framework.acquisition import AcquisitionPageRequest\nfrom app.trademark_framework.http_acquisition import (\n    HttpPageInterpretation,\n    HttpPaginatedAcquisitionAdapter,\n)\nfrom app.trademark_framework.http_transport import HttpResponse\nfrom app.trademark_framework.pagination import (\n    OffsetLimitPagination,\n    OpaqueCursorPagination,\n    PageNumberPagination,\n)\n\n\nACQUISITION_ADAPTER_ID = "{request.jurisdiction}_TRADEMARK_HTTP_ACQUISITION_V1"\nSOURCE_ID = "{request.source_id}"\n\n\ndef runtime_headers(request: AcquisitionPageRequest) -> Mapping[str, str]:\n    """Load runtime credentials from the approved secret mechanism only.\n\n    Do not persist API keys, bearer tokens, cookies or passwords in page keys, cursors, source\n    metadata or acquisition-ledger fields.\n    """\n    return {{}}\n\n\ndef runtime_query(request: AcquisitionPageRequest) -> Mapping[str, str]:\n    """Return verified non-pagination query parameters required by the official endpoint."""\n    return {{}}\n\n\ndef interpret_page(\n    request: AcquisitionPageRequest,\n    response: HttpResponse,\n) -> HttpPageInterpretation:\n    """Interpret stable page identity and official continuation semantics.\n\n    Parse the authority response only after reviewing its documented schema and representative\n    samples. Return HasMoreContinuation or SourceCursorContinuation from the shared framework; do\n    not infer termination from a generic rule.\n    """\n    raise NotImplementedError("interpret {request.jurisdiction} official API page semantics")\n\n\ndef build_acquisition_adapter() -> HttpPaginatedAcquisitionAdapter:\n    """Build the shared HTTP acquisition bridge after the official API contract is verified.\n\n    Choose exactly one pagination helper that matches the authority:\n    PageNumberPagination, OffsetLimitPagination, or OpaqueCursorPagination.\n    """\n    _pagination_examples = (PageNumberPagination, OffsetLimitPagination, OpaqueCursorPagination)\n    del _pagination_examples\n    raise NotImplementedError("select {request.jurisdiction} official endpoint and pagination contract")\n'''
+
+
+def _acquisition_template(request: ScaffoldRequest) -> str:
+    if request.transport == TransportKind.HTTP_API:
+        return _http_acquisition_template(request)
+    return _generic_acquisition_template(request)
 
 
 def _runtime_template(request: ScaffoldRequest) -> str:
