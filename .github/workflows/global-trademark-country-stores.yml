@@ -13,6 +13,7 @@ on:
       - 'app/component_versions.py'
       - 'tests/test_global_trademark*'
       - 'tests/test_component_versions.py'
+      - 'tests/test_trademark_*'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
@@ -39,6 +40,7 @@ on:
       - 'app/component_versions.py'
       - 'tests/test_global_trademark*'
       - 'tests/test_component_versions.py'
+      - 'tests/test_trademark_*'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
@@ -104,6 +106,9 @@ jobs:
 
       - name: Validate mapped observation writer
         run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_mapped_writer_fixture
+
+      - name: Validate native store bundle
+        run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_store_bundle_fixture
 
       - name: Tear down fixture database
         if: always()
