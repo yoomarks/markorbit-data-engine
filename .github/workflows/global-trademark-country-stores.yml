@@ -18,6 +18,7 @@ on:
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/TRADEMARK_HTTP_TRANSPORT.md'
       - 'docs/TRADEMARK_COUNTRY_FACTORY.md'
+      - 'docs/TRADEMARK_NATIVE_STORE_PRIMITIVES.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -43,6 +44,7 @@ on:
       - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/TRADEMARK_HTTP_TRANSPORT.md'
       - 'docs/TRADEMARK_COUNTRY_FACTORY.md'
+      - 'docs/TRADEMARK_NATIVE_STORE_PRIMITIVES.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -96,6 +98,9 @@ jobs:
 
       - name: Run consolidated country-store PostgreSQL fixture suite
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_ci_suite
+
+      - name: Validate native observation store primitives
+        run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_native_store_fixture
 
       - name: Tear down fixture database
         if: always()

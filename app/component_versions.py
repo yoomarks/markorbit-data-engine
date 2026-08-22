@@ -33,6 +33,9 @@ from app.trademark_framework.http_acquisition import (
 from app.trademark_framework.http_transport import (
     HTTP_TRANSPORT_VERSION as TRADEMARK_HTTP_TRANSPORT_VERSION,
 )
+from app.trademark_framework.native_store import (
+    NATIVE_STORE_PRIMITIVES_VERSION as TRADEMARK_NATIVE_STORE_PRIMITIVES_VERSION,
+)
 from app.trademark_framework.pagination import (
     PAGINATION_HELPER_VERSION as TRADEMARK_API_PAGINATION_VERSION,
 )
@@ -103,6 +106,7 @@ def component_versions() -> dict[str, Any]:
                 "api_pagination_version": TRADEMARK_API_PAGINATION_VERSION,
                 "http_acquisition_adapter_version": TRADEMARK_HTTP_ACQUISITION_ADAPTER_VERSION,
                 "country_scaffold_version": TRADEMARK_COUNTRY_SCAFFOLD_VERSION,
+                "native_store_primitives_version": TRADEMARK_NATIVE_STORE_PRIMITIVES_VERSION,
             },
             "trademark_country_factory": {
                 "version": COUNTRY_FACTORY_VERSION,
