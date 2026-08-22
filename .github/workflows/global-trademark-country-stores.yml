@@ -5,6 +5,7 @@ on:
     paths:
       - 'app/global_trademarks/**'
       - 'app/trademark_framework/**'
+      - 'app/trademark_jurisdictions/**'
       - 'app/data_trust.py'
       - 'app/db.py'
       - 'app/config.py'
@@ -25,6 +26,7 @@ on:
     paths:
       - 'app/global_trademarks/**'
       - 'app/trademark_framework/**'
+      - 'app/trademark_jurisdictions/**'
       - 'app/data_trust.py'
       - 'app/db.py'
       - 'app/config.py'
