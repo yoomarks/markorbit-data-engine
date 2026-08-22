@@ -6,6 +6,7 @@ from app.trademark_framework.contracts import (
     IdentityContract,
     JurisdictionStage,
     ObservationDomain,
+    PipelineRoute,
     SourceAdapterKind,
     SourceDescriptor,
     SourceRole,
@@ -17,6 +18,7 @@ from app.trademark_framework.registry import (
     country_pack,
     country_packs,
     framework_audit,
+    resolve_pipeline_id,
 )
 
 __all__ = [
@@ -28,6 +30,7 @@ __all__ = [
     "IdentityContract",
     "JurisdictionStage",
     "ObservationDomain",
+    "PipelineRoute",
     "SourceAdapterKind",
     "SourceDescriptor",
     "SourceRole",
@@ -36,4 +39,5 @@ __all__ = [
     "country_pack",
     "country_packs",
     "framework_audit",
+    "resolve_pipeline_id",
 ]
