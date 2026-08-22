@@ -7,7 +7,7 @@ into a reusable platform capability.
 
 The target onboarding flow for a new jurisdiction is:
 
-`official source/API -> source profile -> country pack -> runtime adapter -> parser/mapping -> country-native store -> current projection -> acceptance -> bounded pilot`
+`official source/API -> source profile -> country pack -> acquisition adapter -> immutable raw objects -> runtime adapter -> parser/mapping -> country-native store -> current projection -> acceptance -> bounded pilot`
 
 The framework deliberately **does not** make every country look the same. It standardizes the
 mechanics that should be reusable while preserving source-native legal/registry facts.
@@ -19,6 +19,7 @@ The framework standardizes:
 - source role, transport, format, adapter kind and update semantics;
 - source-declared record identity;
 - metadata-to-pipeline routing for multi-table/multi-stream sources;
+- paginated/cursor source acquisition and resumable raw-object materialization;
 - runtime request normalization, source selector validation, preflight and loader dispatch;
 - observation-domain capabilities (record/party/goods/event/relationship/etc.);
 - current-projection mode and ordering contract;
@@ -45,6 +46,7 @@ The following must not be guessed or flattened simply to satisfy the framework:
 - procedural events and dates;
 - source-declared related marks/applications;
 - source Update/Delete semantics;
+- acquisition authentication/pagination interpretation;
 - images/assets and document semantics;
 - country-specific acceptance checks.
 
@@ -119,13 +121,14 @@ durable pipeline identity.
 
 ## Runtime adapter layer
 
-`TRADEMARK_RUNTIME_ADAPTER_V1` is the next reuse layer above the source registry.
+`TRADEMARK_RUNTIME_ADAPTER_V1` is the reuse layer between materialized source objects and the
+country-native loader.
 
 The shared runtime contract separates generic ingestion orchestration from country-specific source
 execution. A runtime adapter normalizes one source invocation into a `RuntimeRequest` containing:
 
 - jurisdiction and source ID;
-- exact source path;
+- exact materialized source path;
 - parser version;
 - source selector metadata;
 - bounded `max_records` when requested;
@@ -156,7 +159,7 @@ The old country-specific CLI commands are retained as compatibility entrypoints,
 preflight/execute dispatch now resolves through the runtime registry. Loader maps live behind the
 source adapters rather than in the top-level CLI.
 
-A new generic entrypoint is also available:
+A generic entrypoint is also available:
 
 ```bash
 python -m app.global_trademarks.cli ingest-source \
@@ -182,6 +185,36 @@ compatibility commands.
 
 This is the intended pattern for jurisdiction N+1: the top-level CLI should not need a new country
 `if/elif` execution branch merely because a new parser exists.
+
+## Source acquisition layer
+
+`TRADEMARK_SOURCE_ACQUISITION_V1` adds the reusable boundary in front of runtime parsing for remote
+or paginated sources.
+
+The source-specific acquisition adapter only needs to expose an initial pagination position and
+fetch one authority page. The shared executor then owns:
+
+- bounded page execution and resume;
+- opaque cursor lineage;
+- atomic raw-byte materialization;
+- SHA256 evidence per page;
+- durable local acquisition ledger;
+- complete-session replay without re-fetching;
+- tamper detection;
+- non-advancing/repeated cursor detection;
+- repeated page-key detection;
+- fail-closed unledgered source drift after an interrupted object write.
+
+This deliberately produces raw evidence before parsing:
+
+`API/SFTP/remote source -> acquisition ledger + raw objects -> RuntimeRequest -> parser/store`
+
+Authentication remains source-specific runtime configuration and is not accepted by the generic
+ledger API. API keys, authorization headers and passwords must not become provenance metadata.
+
+The acquisition executor does not itself guess HTTP endpoints, OAuth behavior, rate limits,
+pagination parameter names or response semantics. Those details become very small country/source
+adapter code after the official data contract is known. See `docs/TRADEMARK_SOURCE_ACQUISITION.md`.
 
 ## Current projection
 
@@ -223,7 +256,8 @@ python -m app.trademark_framework.cli audit
 The audit is read-only and checks country/source contract consistency, aliases, pipeline routes and
 pipeline-ID ownership. The CI framework fixture additionally audits the runtime registry and proves
 that compatibility commands and generic source requests resolve to the same source/pipeline
-identity.
+identity. The acquisition fixture independently proves bounded/resumable raw materialization with
+no network or database writes.
 
 Inspect packs with:
 
@@ -250,14 +284,14 @@ It plans a skeleton under:
 
 `app/trademark_jurisdictions/<jurisdiction>/`
 
-`TRADEMARK_COUNTRY_SCAFFOLD_V2` generates an 11-file skeleton covering country declaration,
-source adapter, native mapping, schema, no-write preflight, runtime adapter, current projection,
-assets, acceptance and fixture guidance. The generated pack starts at `SOURCE_FOUND` and
-intentionally contains:
+`TRADEMARK_COUNTRY_SCAFFOLD_V3` generates a 12-file skeleton covering country declaration,
+source acquisition, source-native parser adapter, mapping, schema, no-write preflight, runtime
+adapter, current projection, assets, acceptance and fixture guidance. The generated pack starts at
+`SOURCE_FOUND` and intentionally contains:
 
 - `pipeline_ready=False`;
 - `TODO_SOURCE_IDENTITY`;
-- runtime/preflight/loader `NotImplementedError` gates;
+- acquisition/runtime/preflight/loader `NotImplementedError` gates;
 - no current-state claim;
 - no legal inference;
 - parser/schema/preflight/mapping stubs that require official schema/sample evidence.
@@ -265,28 +299,29 @@ intentionally contains:
 Use `--write` only when intentionally creating those files. Existing files are never overwritten.
 
 The generator is a development accelerator, not an authority-discovery substitute. Finding an API
-or download endpoint is not enough: identity, update semantics, ordering, historical coverage and
-sample payload shape must still be verified.
+or download endpoint is not enough: authentication, pagination, identity, update semantics,
+ordering, historical coverage and sample payload shape must still be verified.
 
 ## Expected future onboarding workflow
 
 For a new jurisdiction, the desired engineering work becomes mostly:
 
 1. locate and verify the official source/API and license/access terms;
-2. profile real schema/data dictionary and representative samples;
+2. profile real schema/data dictionary, authentication/pagination and representative samples;
 3. create/complete the generated Country Pack;
-4. implement source-native identity/parser/mapping and runtime adapter;
-5. reuse shared source-object/manifest/preflight/resume/operator/acceptance infrastructure;
-6. prove selector/pipeline routing, replay idempotency and interruption equivalence;
-7. run adversarial fixtures and bounded real-data pilot;
-8. promote source/pipeline maturity only after evidence passes.
+4. implement the source acquisition adapter when remote acquisition is needed;
+5. implement source-native identity/parser/mapping and runtime adapter;
+6. reuse shared raw materialization/source-object/manifest/preflight/resume/operator/acceptance infrastructure;
+7. prove acquisition resume, selector/pipeline routing, replay idempotency and interruption equivalence;
+8. run adversarial fixtures and bounded real-data pilot;
+9. promote source/pipeline maturity only after evidence passes.
 
 The framework is successful when adding jurisdiction N+1 requires less infrastructure code than
 jurisdiction N, without reducing source fidelity.
 
 ## Current boundary
 
-The framework/runtime layer intentionally does **not**:
+The framework/runtime/acquisition layer intentionally does **not**:
 
 - create a Global Trademark Index;
 - force common legal statuses across jurisdictions;
@@ -295,8 +330,10 @@ The framework/runtime layer intentionally does **not**:
 - decide PostgreSQL vs ClickHouse for all future native stores;
 - declare CA/GB/AU/EU/NZ production-current merely because they have a Country Pack/runtime;
 - turn an unresolved future source into a guessed API contract;
+- perform live acquisition for a jurisdiction without a verified source adapter;
 - rebuild or restart the live CN worker.
 
-Next framework steps should be driven by demonstrated duplication after runtime dispatch:
+Next framework steps should be driven by demonstrated duplication after real source adapters exist:
+HTTP retry/rate-limit helpers, page-number/offset/cursor transport helpers, SFTP/download helpers,
 reusable native observation writers, generic manifest-ordered current-projection primitives, asset
-pipeline primitives, API pagination/cursor acquisition adapters and country acceptance extensions.
+pipeline primitives and country acceptance extensions.
