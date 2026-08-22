@@ -24,6 +24,7 @@ from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
 from app.trademark_framework.acquisition import ACQUISITION_FRAMEWORK_VERSION
 from app.trademark_framework.http_acquisition import HTTP_ACQUISITION_ADAPTER_VERSION
 from app.trademark_framework.http_transport import HTTP_TRANSPORT_VERSION
+from app.trademark_framework.native_store import NATIVE_STORE_PRIMITIVES_VERSION
 from app.trademark_framework.pagination import PAGINATION_HELPER_VERSION
 from app.trademark_framework.registry import FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION
@@ -59,6 +60,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert framework["api_pagination_version"] == PAGINATION_HELPER_VERSION
     assert framework["http_acquisition_adapter_version"] == HTTP_ACQUISITION_ADAPTER_VERSION
     assert framework["country_scaffold_version"] == SCAFFOLD_VERSION
+    assert framework["native_store_primitives_version"] == NATIVE_STORE_PRIMITIVES_VERSION
 
     factory = components["trademark_country_factory"]
     assert factory["version"] == COUNTRY_FACTORY_VERSION
@@ -107,6 +109,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         PAGINATION_HELPER_VERSION,
         HTTP_ACQUISITION_ADAPTER_VERSION,
         SCAFFOLD_VERSION,
+        NATIVE_STORE_PRIMITIVES_VERSION,
         COUNTRY_FACTORY_VERSION,
         FACTORY_REGISTRY_VERSION,
         CAPABILITY_MATRIX_VERSION,
