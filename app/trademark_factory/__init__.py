@@ -24,6 +24,14 @@ from app.trademark_factory.profile import CountryProfile, SourceProfile
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION, ReadinessReport, readiness_report
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION, FactoryRegistry, factory_registry
 from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION, build_country_scaffold
+from app.trademark_factory.store_bundle import (
+    NATIVE_STORE_BUNDLE_VERSION,
+    BundleAppendResult,
+    NativeStoreBundle,
+    StoreBinding,
+    append_native_record_bundle,
+    install_native_store_bundle,
+)
 from app.trademark_factory.writer import (
     MAPPED_OBSERVATION_WRITER_VERSION,
     append_mapped_observation,
@@ -42,24 +50,30 @@ __all__ = [
     "FACTORY_SCAFFOLD_VERSION",
     "MAPPED_OBSERVATION_WRITER_VERSION",
     "MAPPING_CONTRACT_VERSION",
+    "NATIVE_STORE_BUNDLE_VERSION",
     "READINESS_AUDIT_VERSION",
+    "BundleAppendResult",
     "CapabilityState",
     "CountryCapabilityReport",
     "CountryProfile",
     "FactoryRegistry",
     "MappingContract",
     "MappingRule",
+    "NativeStoreBundle",
     "ReadinessReport",
     "SelectorKind",
     "SourceCapability",
     "SourceCapabilityReport",
     "SourceProfile",
+    "StoreBinding",
     "append_mapped_observation",
+    "append_native_record_bundle",
     "build_country_scaffold",
     "build_observation_row",
     "derive_country_capabilities",
     "derive_source_capabilities",
     "extract_domain_values",
     "factory_registry",
+    "install_native_store_bundle",
     "readiness_report",
 ]
