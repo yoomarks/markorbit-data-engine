@@ -58,6 +58,7 @@ class UpdateSemantics(StrEnum):
     UPDATE_DELETE = "UPDATE_DELETE"
     API_CURRENT = "API_CURRENT"
     REFERENCE_ONLY = "REFERENCE_ONLY"
+    UNRESOLVED = "UNRESOLVED"
 
 
 class CurrentProjectionMode(StrEnum):
@@ -220,8 +221,13 @@ class SourceDescriptor:
             errors.append(f"{self.source_id}: SOAP_API requires SOAP_API transport")
         if self.adapter_kind == SourceAdapterKind.SFTP_BULK and self.transport != TransportKind.SFTP:
             errors.append(f"{self.source_id}: SFTP_BULK requires SFTP transport")
-        if self.adapter_kind == SourceAdapterKind.UNRESOLVED and self.transport != TransportKind.UNRESOLVED:
-            errors.append(f"{self.source_id}: UNRESOLVED adapter requires UNRESOLVED transport")
+        if self.adapter_kind == SourceAdapterKind.UNRESOLVED:
+            if self.transport != TransportKind.UNRESOLVED:
+                errors.append(f"{self.source_id}: UNRESOLVED adapter requires UNRESOLVED transport")
+            if self.data_format != DataFormat.UNKNOWN:
+                errors.append(f"{self.source_id}: UNRESOLVED adapter requires UNKNOWN data format")
+            if self.update_semantics != UpdateSemantics.UNRESOLVED:
+                errors.append(f"{self.source_id}: UNRESOLVED adapter requires UNRESOLVED semantics")
         return tuple(errors)
 
     def resolve_pipeline_id(self, metadata: Mapping[str, object]) -> str | None:
