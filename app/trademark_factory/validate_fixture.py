@@ -223,7 +223,8 @@ def main() -> int:
         update_semantics=UpdateSemantics.API_CURRENT,
         transport=TransportKind.HTTP_API,
     )
-    assert http_plan.version == "TRADEMARK_COUNTRY_SCAFFOLD_V4"
+    assert http_plan.version == SCAFFOLD_VERSION
+    assert len(http_plan.files) == 14
     http_acquisition = http_plan.files["app/trademark_jurisdictions/kr/acquisition.py"]
     assert "HttpPaginatedAcquisitionAdapter" in http_acquisition
     assert "PageNumberPagination" in http_acquisition
@@ -231,6 +232,15 @@ def main() -> int:
     assert "OpaqueCursorPagination" in http_acquisition
     assert "runtime_headers" in http_acquisition
     assert "NotImplementedError" in http_acquisition
+    http_store = http_plan.files["app/trademark_jurisdictions/kr/store.py"]
+    http_loader = http_plan.files["app/trademark_jurisdictions/kr/loader.py"]
+    http_runtime = http_plan.files["app/trademark_jurisdictions/kr/runtime.py"]
+    assert "NativeStoreBundle" in http_store
+    assert "NativeRecordEnvelope" in http_loader
+    assert "execute_native_ingest" in http_loader
+    assert "register_source_object" in http_loader
+    assert "resolve_pipeline_id" in http_loader
+    assert "execute_materialized_source" in http_runtime
 
     file_plan = build_country_scaffold(
         jurisdiction="JP",
@@ -240,9 +250,12 @@ def main() -> int:
         update_semantics=UpdateSemantics.SNAPSHOT,
         transport=TransportKind.FILE,
     )
+    assert len(file_plan.files) == 14
     file_acquisition = file_plan.files["app/trademark_jurisdictions/jp/acquisition.py"]
     assert "AcquisitionPageRequest" in file_acquisition
     assert "HttpPaginatedAcquisitionAdapter" not in file_acquisition
+    file_schema = file_plan.files["app/trademark_jurisdictions/jp/schema.py"]
+    assert "install_native_store_bundle" in file_schema
 
     for plan in (http_plan, file_plan):
         for relative_path, content in plan.files.items():
@@ -267,6 +280,8 @@ def main() -> int:
             "virtual_registry_ready": virtual_audit.ready,
             "virtual_mapping_valid": True,
             "http_scaffold_uses_shared_acquisition": True,
+            "scaffold_uses_native_store_bundle": True,
+            "scaffold_uses_native_ingest_executor": True,
             "file_scaffold_preserved": True,
             "production_registry_mutated": False,
             "db_writes": False,
