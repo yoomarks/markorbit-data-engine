@@ -21,6 +21,8 @@ _STANDARD_COLUMNS = frozenset(
         "record_key",
         "source_object_id",
         "source_index",
+        "parser_version",
+        "mapping_version",
         "source_payload",
         "observed_at",
     }
@@ -100,6 +102,8 @@ class ObservationTableSpec:
             "    record_key text NOT NULL",
             "    source_object_id uuid NOT NULL REFERENCES acquisition.global_trademark_source_object(object_id)",
             "    source_index integer NOT NULL CHECK (source_index >= 1)",
+            "    parser_version text NOT NULL DEFAULT ''",
+            "    mapping_version text NOT NULL DEFAULT ''",
             *native,
             "    source_payload jsonb NOT NULL DEFAULT '{}'::jsonb",
             "    observed_at timestamptz NOT NULL DEFAULT now()",
@@ -132,6 +136,8 @@ class ObservationRow:
     source_index: int
     native_values: Mapping[str, object]
     source_payload: Mapping[str, object]
+    parser_version: str = ""
+    mapping_version: str = ""
 
 
 def _index_name(table_name: str, suffix: str) -> str:
@@ -152,13 +158,21 @@ def _canonical_json(value: object) -> str:
     )
 
 
+def _jsonb(value: object) -> Jsonb:
+    # Normalize dates/UUIDs/other source-native scalar wrappers through the same
+    # deterministic JSON representation used by the source-row hash.
+    return Jsonb(json.loads(_canonical_json(value)))
+
+
 def observation_row_hash(spec: ObservationTableSpec, row: ObservationRow) -> str:
-    """Return deterministic identity for one immutable source observation."""
+    """Return deterministic identity for one immutable mapped source observation."""
     material = {
         "domain": spec.domain.value,
         "source_object_id": str(row.source_object_id),
         "record_key": row.record_key,
         "source_index": row.source_index,
+        "parser_version": row.parser_version,
+        "mapping_version": row.mapping_version,
         "native_values": dict(row.native_values),
         "source_payload": dict(row.source_payload),
     }
@@ -195,7 +209,7 @@ def _validated_native_values(
         if value is None and not column.nullable:
             raise ValueError(f"required native observation column missing: {column.name}")
         if value is not None and column.data_type == NativeSqlType.JSONB:
-            value = Jsonb(value)
+            value = _jsonb(value)
         values.append(value)
     return spec.native_columns, tuple(values)
 
@@ -203,9 +217,9 @@ def _validated_native_values(
 def append_observation(cur, spec: ObservationTableSpec, row: ObservationRow) -> bool:
     """Append one immutable observation and return whether a row was newly inserted.
 
-    Replay of the same source object/record/index/payload is idempotent because the
-    deterministic source-row hash is the primary key. A changed payload becomes a new
-    historical observation rather than overwriting source evidence.
+    Replay of the same source object/record/index/parser/mapping/payload is idempotent.
+    A changed source observation or reviewed parser/mapping version becomes separate
+    evidence rather than overwriting an earlier row.
     """
     columns, native_values = _validated_native_values(spec, row)
     source_row_hash = observation_row_hash(spec, row)
@@ -214,6 +228,8 @@ def append_observation(cur, spec: ObservationTableSpec, row: ObservationRow) -> 
         "record_key",
         "source_object_id",
         "source_index",
+        "parser_version",
+        "mapping_version",
         *(column.name for column in columns),
         "source_payload",
     ]
@@ -223,8 +239,10 @@ def append_observation(cur, spec: ObservationTableSpec, row: ObservationRow) -> 
         row.record_key,
         row.source_object_id,
         row.source_index,
+        row.parser_version,
+        row.mapping_version,
         *native_values,
-        Jsonb(dict(row.source_payload)),
+        _jsonb(dict(row.source_payload)),
     )
     cur.execute(
         f"INSERT INTO {spec.qualified_name} ({', '.join(column_names)}) "
