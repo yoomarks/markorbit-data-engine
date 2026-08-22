@@ -15,12 +15,19 @@ from app.global_trademarks.migrations import GLOBAL_TRADEMARK_SCHEMA_VERSION
 from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
 from app.storage_headroom import HEADROOM_VERSION
+from app.trademark_factory import COUNTRY_FACTORY_VERSION
+from app.trademark_factory.capabilities import CAPABILITY_MATRIX_VERSION
+from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
+from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
+from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
+from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
 from app.trademark_framework.acquisition import ACQUISITION_FRAMEWORK_VERSION
 from app.trademark_framework.http_acquisition import HTTP_ACQUISITION_ADAPTER_VERSION
 from app.trademark_framework.http_transport import HTTP_TRANSPORT_VERSION
 from app.trademark_framework.pagination import PAGINATION_HELPER_VERSION
 from app.trademark_framework.registry import FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION
+from app.trademark_framework.scaffold import SCAFFOLD_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
@@ -43,6 +50,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert components["us_assignment"]["schema_version"] == ASSIGNMENT_SCHEMA_VERSION
     assert components["us_ttab"]["schema_version"] == TTAB_SCHEMA_VERSION
     assert components["us_alert_engine"]["version"] == ALERT_ENGINE_VERSION
+
     framework = components["trademark_jurisdiction_framework"]
     assert framework["version"] == FRAMEWORK_VERSION
     assert framework["runtime_adapter_version"] == RUNTIME_ADAPTER_VERSION
@@ -50,6 +58,16 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert framework["http_transport_version"] == HTTP_TRANSPORT_VERSION
     assert framework["api_pagination_version"] == PAGINATION_HELPER_VERSION
     assert framework["http_acquisition_adapter_version"] == HTTP_ACQUISITION_ADAPTER_VERSION
+    assert framework["country_scaffold_version"] == SCAFFOLD_VERSION
+
+    factory = components["trademark_country_factory"]
+    assert factory["version"] == COUNTRY_FACTORY_VERSION
+    assert factory["registry_version"] == FACTORY_REGISTRY_VERSION
+    assert factory["capability_matrix_version"] == CAPABILITY_MATRIX_VERSION
+    assert factory["mapping_contract_version"] == MAPPING_CONTRACT_VERSION
+    assert factory["readiness_audit_version"] == READINESS_AUDIT_VERSION
+    assert factory["scaffold_facade_version"] == FACTORY_SCAFFOLD_VERSION
+
     assert components["global_trademark"]["schema_version"] == GLOBAL_TRADEMARK_SCHEMA_VERSION
     assert components["global_trademark"]["operator_version"] == GLOBAL_TRADEMARK_OPERATOR_VERSION
     assert (
@@ -72,6 +90,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
             (ROOT / "docs" / "TRADEMARK_JURISDICTION_FRAMEWORK.md").read_text(encoding="utf-8"),
             (ROOT / "docs" / "TRADEMARK_SOURCE_ACQUISITION.md").read_text(encoding="utf-8"),
             (ROOT / "docs" / "TRADEMARK_HTTP_TRANSPORT.md").read_text(encoding="utf-8"),
+            (ROOT / "docs" / "TRADEMARK_COUNTRY_FACTORY.md").read_text(encoding="utf-8"),
         ]
     )
     expected = {
@@ -87,6 +106,13 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         HTTP_TRANSPORT_VERSION,
         PAGINATION_HELPER_VERSION,
         HTTP_ACQUISITION_ADAPTER_VERSION,
+        SCAFFOLD_VERSION,
+        COUNTRY_FACTORY_VERSION,
+        FACTORY_REGISTRY_VERSION,
+        CAPABILITY_MATRIX_VERSION,
+        MAPPING_CONTRACT_VERSION,
+        READINESS_AUDIT_VERSION,
+        FACTORY_SCAFFOLD_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,
         GLOBAL_TRADEMARK_OPERATOR_VERSION,
         GLOBAL_TRADEMARK_ACCEPTANCE_VERSION,
