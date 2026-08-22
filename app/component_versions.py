@@ -22,6 +22,7 @@ from app.trademark_factory import COUNTRY_FACTORY_VERSION
 from app.trademark_factory.capabilities import CAPABILITY_MATRIX_VERSION
 from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
 from app.trademark_factory.native_ingest import NATIVE_INGEST_EXECUTOR_VERSION
+from app.trademark_factory.plugin import JURISDICTION_PLUGIN_VERSION
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
 from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
@@ -107,6 +108,7 @@ def component_versions() -> dict[str, Any]:
                 "mapped_observation_writer_version": MAPPED_OBSERVATION_WRITER_VERSION,
                 "native_store_bundle_version": NATIVE_STORE_BUNDLE_VERSION,
                 "native_ingest_executor_version": NATIVE_INGEST_EXECUTOR_VERSION,
+                "jurisdiction_plugin_version": JURISDICTION_PLUGIN_VERSION,
                 "readiness_audit_version": READINESS_AUDIT_VERSION,
                 "scaffold_facade_version": FACTORY_SCAFFOLD_VERSION,
             },
