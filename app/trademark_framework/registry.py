@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from app.trademark_framework.contracts import (
     AssetMode,
@@ -11,6 +12,7 @@ from app.trademark_framework.contracts import (
     IdentityContract,
     JurisdictionStage,
     ObservationDomain,
+    PipelineRoute,
     SourceAdapterKind,
     SourceDescriptor,
     SourceRole,
@@ -20,6 +22,17 @@ from app.trademark_framework.contracts import (
 
 
 FRAMEWORK_VERSION = "TRADEMARK_JURISDICTION_FRAMEWORK_V1"
+
+
+def _routes(metadata_key: str, mapping: Mapping[str, str]) -> tuple[PipelineRoute, ...]:
+    return tuple(
+        PipelineRoute(
+            pipeline_id=pipeline_id,
+            metadata_key=metadata_key,
+            metadata_value=metadata_value,
+        )
+        for metadata_value, pipeline_id in mapping.items()
+    )
 
 
 _US = CountryPack(
@@ -104,6 +117,13 @@ _GB = CountryPack(
             data_format=DataFormat.TXT,
             update_semantics=UpdateSemantics.HISTORICAL_SEED,
             pipeline_ids=("UKIPO_2018_DOMESTIC_V1", "UKIPO_2018_MADRID_IR_V1"),
+            pipeline_routes=_routes(
+                "source_stream",
+                {
+                    "DOMESTIC": "UKIPO_2018_DOMESTIC_V1",
+                    "MADRID_IR": "UKIPO_2018_MADRID_IR_V1",
+                },
+            ),
             parser_version="UKIPO_2018_V1",
             mapping_version="COUNTRY_NATIVE_V1",
             preflight_profile="GB_2018_PIPE",
@@ -194,6 +214,15 @@ _EU = CountryPack(
                 "TM_LINK_EU_APPLICANTS_V1",
                 "TM_LINK_EU_TRADEMARK_DETAILS_V1",
                 "TM_LINK_EU_NICE_CLASS_V1",
+            ),
+            pipeline_routes=_routes(
+                "source_table",
+                {
+                    "applications": "TM_LINK_EU_APPLICATIONS_V1",
+                    "applicants": "TM_LINK_EU_APPLICANTS_V1",
+                    "details": "TM_LINK_EU_TRADEMARK_DETAILS_V1",
+                    "classes": "TM_LINK_EU_NICE_CLASS_V1",
+                },
             ),
             parser_version="TM_LINK_SEED_V1",
             mapping_version="COUNTRY_NATIVE_V1",
@@ -342,6 +371,17 @@ _AU = CountryPack(
                 "IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
                 "IPGOD_2022_APPLICATION_DESCRIPTION_V1",
             ),
+            pipeline_routes=_routes(
+                "source_table",
+                {
+                    "application": "IPGOD_2022_APPLICATION_V1",
+                    "party-activity": "IPGOD_2022_PARTY_ACTIVITY_V1",
+                    "application-links": "IPGOD_2022_APPLICATION_LINKS_V1",
+                    "application-events": "IPGOD_2022_APPLICATION_EVENTS_V1",
+                    "application-classification": "IPGOD_2022_APPLICATION_CLASSIFICATION_V1",
+                    "application-description": "IPGOD_2022_APPLICATION_DESCRIPTION_V1",
+                },
+            ),
             parser_version="IPGOD_2022_V1",
             mapping_version="COUNTRY_NATIVE_V1",
             preflight_profile="AU_IPGOD",
@@ -415,6 +455,15 @@ _NZ = CountryPack(
                 "TM_LINK_NZ_TRADEMARK_DETAILS_V1",
                 "TM_LINK_NZ_NICE_CLASS_V1",
             ),
+            pipeline_routes=_routes(
+                "source_table",
+                {
+                    "applications": "TM_LINK_NZ_APPLICATIONS_V1",
+                    "applicants": "TM_LINK_NZ_APPLICANTS_V1",
+                    "details": "TM_LINK_NZ_TRADEMARK_DETAILS_V1",
+                    "classes": "TM_LINK_NZ_NICE_CLASS_V1",
+                },
+            ),
             parser_version="TM_LINK_SEED_V1",
             mapping_version="COUNTRY_NATIVE_V1",
             preflight_profile="TM_LINK",
@@ -485,6 +534,14 @@ def country_pack(jurisdiction: str) -> CountryPack:
         return _alias_map()[key]
     except KeyError as exc:
         raise ValueError(f"unsupported trademark jurisdiction: {jurisdiction}") from exc
+
+
+def resolve_pipeline_id(
+    jurisdiction: str,
+    source_id: str,
+    metadata: Mapping[str, object],
+) -> str | None:
+    return country_pack(jurisdiction).source(source_id).resolve_pipeline_id(metadata)
 
 
 def framework_audit() -> FrameworkAudit:
