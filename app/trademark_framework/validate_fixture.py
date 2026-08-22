@@ -86,10 +86,22 @@ def main() -> int:
     plan = build_scaffold(request)
     assert plan.version == SCAFFOLD_VERSION
     assert plan.request.store_schema == "trademark_jp"
-    assert len(plan.files) == 6
-    assert "app/trademark_jurisdictions/jp/country.py" in plan.files
+    assert len(plan.files) == 10
+    expected_paths = {
+        "app/trademark_jurisdictions/jp/country.py",
+        "app/trademark_jurisdictions/jp/adapter.py",
+        "app/trademark_jurisdictions/jp/mapping.py",
+        "app/trademark_jurisdictions/jp/schema.py",
+        "app/trademark_jurisdictions/jp/preflight.py",
+        "app/trademark_jurisdictions/jp/current.py",
+        "app/trademark_jurisdictions/jp/assets.py",
+        "app/trademark_jurisdictions/jp/acceptance.py",
+    }
+    assert expected_paths.issubset(plan.files)
     assert "pipeline_ready=False" in plan.files["app/trademark_jurisdictions/jp/country.py"]
     assert "TODO_SOURCE_IDENTITY" in plan.files["app/trademark_jurisdictions/jp/country.py"]
+    assert "NotImplementedError" in plan.files["app/trademark_jurisdictions/jp/preflight.py"]
+    assert "trusted_for_silence" in plan.files["app/trademark_jurisdictions/jp/acceptance.py"]
 
     for relative_path, content in plan.files.items():
         if relative_path.endswith(".py"):
@@ -114,6 +126,7 @@ def main() -> int:
             "country_patterns_validated": [pack.jurisdiction for pack in country_packs()],
             "catalog_single_source_of_truth": True,
             "country_scaffold_version": SCAFFOLD_VERSION,
+            "scaffold_file_count": len(plan.files),
             "scaffold_default_pipeline_ready": False,
             "scaffold_overwrite_blocked": True,
             "db_writes": False,
