@@ -106,6 +106,61 @@ from the approved runtime secret mechanism, but it must not place those values i
 If an authority conflates pagination state with a sensitive credential, the country adapter must
 persist a non-secret resumable position instead of handing the credential to the generic ledger.
 
+## Shared HTTP transport
+
+`TRADEMARK_HTTP_TRANSPORT_V1` supplies the common read-only HTTP mechanics that concrete authority
+adapters would otherwise repeat. It is deliberately transport-only: endpoint paths, authentication,
+response parsing, record identity and next-page semantics remain source-specific.
+
+The shared transport provides:
+
+- HTTPS by default; insecure HTTP requires an explicit per-request opt-in;
+- read-only `GET`/`HEAD` methods only in V1;
+- configurable per-request timeout;
+- configurable maximum response size with both `Content-Length` and actual-byte enforcement;
+- retry for `429`, `500`, `502`, `503` and `504` by default;
+- bounded exponential retry for transient network failures;
+- `Retry-After` support for both seconds and HTTP-date values;
+- configurable attempt/delay caps;
+- fail-fast behavior for non-retryable 4xx responses;
+- query-string redaction from transport errors and final-URL metadata;
+- request URL/header values excluded from dataclass `repr()` where credentials could appear;
+- rejection of credentials embedded in URL userinfo and CR/LF header injection.
+
+Example source adapter usage:
+
+```python
+transport = ResilientHttpTransport(
+    retry_policy=HttpRetryPolicy(max_attempts=5, max_delay_seconds=30),
+)
+response = transport.fetch(
+    HttpRequestSpec(
+        url=authority_url,
+        headers={"Authorization": f"Bearer {runtime_token}"},
+        timeout_seconds=30,
+    )
+)
+```
+
+The response body is still only transient transport output. The acquisition adapter converts it to
+an `AcquisitionPage`, after which `materialize_acquisition()` owns durable raw evidence.
+
+V1 intentionally does not automatically retry arbitrary `POST`/mutation requests, does not invent a
+universal OAuth/API-key mechanism, and does not persist request headers/cookies/tokens.
+
+## Pagination helpers
+
+`TRADEMARK_API_PAGINATION_V1` provides small deterministic query helpers for three common API shapes:
+
+- `PageNumberPagination` for `page=1`, `page=2`, ... style APIs;
+- `OffsetLimitPagination` for `offset=0&limit=N` style APIs;
+- `OpaqueCursorPagination` for source-declared opaque next-cursor APIs;
+- `append_query()` for deterministic query merging.
+
+The helpers construct/advance request positions only. They do **not** guess whether more pages exist.
+A country adapter must derive `has_more` or the next opaque cursor from the authority's documented
+response contract. This avoids silently imposing one office's pagination semantics on another.
+
 ## Country scaffold
 
 `TRADEMARK_COUNTRY_SCAFFOLD_V3` generates `acquisition.py` in addition to country declaration,
@@ -115,6 +170,10 @@ fixture guidance.
 The generated acquisition adapter remains `NotImplementedError`. Finding an API endpoint is not
 enough to enable it: the developer must verify authentication, pagination, rate-limit behavior,
 response format, stable source identity, update semantics and representative samples first.
+
+HTTP/S REST-style adapters should reuse `TRADEMARK_HTTP_TRANSPORT_V1` and
+`TRADEMARK_API_PAGINATION_V1` where their verified source contract matches those primitives, rather
+than recreating retry/backoff/query mechanics per country.
 
 ## Acceptance boundary
 
@@ -134,12 +193,13 @@ acquisition COMPLETE
 
 Those remain separate downstream evidence gates.
 
-## V1 scope
+## Current scope
 
-V1 provides the durable page/cursor/materialization primitive and a deterministic fake-API
-regression fixture. It intentionally does not ship a generic live HTTP client, guess endpoint or
-pagination semantics for unprofiled offices, or start real acquisition for any jurisdiction.
+The acquisition stack now provides durable raw-page materialization plus a reusable read-only HTTP
+transport and page/offset/opaque-cursor query helpers. CI uses deterministic fake backends and does
+not contact any trademark authority.
 
-A live authority adapter should be added only after its official source contract is known. The next
-reusable layer can add transport helpers (HTTP retry/rate-limit, cursor/page-number/offset helpers,
-SFTP/download helpers) when concrete source implementations demonstrate the common requirements.
+It still intentionally does not guess endpoints, credentials, response schemas or pagination
+termination rules for unprofiled offices, and it does not start real acquisition for any
+jurisdiction. SOAP/SFTP/signed-download helpers should be added only when concrete verified sources
+demonstrate reusable requirements.
