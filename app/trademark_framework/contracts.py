@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Mapping
 
 
 class SourceRole(StrEnum):
@@ -133,6 +134,31 @@ class CurrentProjectionContract:
 
 
 @dataclass(frozen=True, slots=True)
+class PipelineRoute:
+    pipeline_id: str
+    metadata_key: str | None = None
+    metadata_value: str | None = None
+
+    def validate(self) -> tuple[str, ...]:
+        errors: list[str] = []
+        if not self.pipeline_id.strip():
+            errors.append("pipeline route requires pipeline_id")
+        if (self.metadata_key is None) != (self.metadata_value is None):
+            errors.append("pipeline route metadata_key/metadata_value must be set together")
+        if self.metadata_key is not None and not self.metadata_key.strip():
+            errors.append("pipeline route metadata_key must not be blank")
+        if self.metadata_value is not None and not self.metadata_value.strip():
+            errors.append("pipeline route metadata_value must not be blank")
+        return tuple(errors)
+
+    def matches(self, metadata: Mapping[str, object]) -> bool:
+        if self.metadata_key is None:
+            return True
+        actual = str(metadata.get(self.metadata_key) or "").strip()
+        return actual == self.metadata_value
+
+
+@dataclass(frozen=True, slots=True)
 class SourceDescriptor:
     source_id: str
     role: SourceRole
@@ -144,6 +170,7 @@ class SourceDescriptor:
     data_format: DataFormat
     update_semantics: UpdateSemantics
     pipeline_ids: tuple[str, ...] = ()
+    pipeline_routes: tuple[PipelineRoute, ...] = ()
     parser_version: str | None = None
     mapping_version: str | None = None
     preflight_profile: str | None = None
@@ -159,6 +186,23 @@ class SourceDescriptor:
             errors.append(f"{self.source_id}: pipeline_ids must be unique")
         if any(not pipeline_id.strip() for pipeline_id in self.pipeline_ids):
             errors.append(f"{self.source_id}: pipeline_ids must not contain blanks")
+        route_keys: set[tuple[str | None, str | None]] = set()
+        routed_ids: set[str] = set()
+        for route in self.pipeline_routes:
+            errors.extend(f"{self.source_id}: {error}" for error in route.validate())
+            key = (route.metadata_key, route.metadata_value)
+            if key in route_keys:
+                errors.append(f"{self.source_id}: duplicate pipeline route {key!r}")
+            route_keys.add(key)
+            routed_ids.add(route.pipeline_id)
+            if route.pipeline_id not in self.pipeline_ids:
+                errors.append(
+                    f"{self.source_id}: route pipeline {route.pipeline_id} missing from pipeline_ids"
+                )
+        if len(self.pipeline_ids) > 1 and routed_ids != set(self.pipeline_ids):
+            errors.append(
+                f"{self.source_id}: multi-pipeline source requires routes covering every pipeline_id"
+            )
         if self.pipeline_ready and self.adapter_kind == SourceAdapterKind.REFERENCE_ONLY:
             errors.append(f"{self.source_id}: reference-only source cannot be pipeline_ready")
         if self.role == SourceRole.REFERENCE and self.update_semantics != UpdateSemantics.REFERENCE_ONLY:
@@ -170,6 +214,20 @@ class SourceDescriptor:
         if self.adapter_kind == SourceAdapterKind.SFTP_BULK and self.transport != TransportKind.SFTP:
             errors.append(f"{self.source_id}: SFTP_BULK requires SFTP transport")
         return tuple(errors)
+
+    def resolve_pipeline_id(self, metadata: Mapping[str, object]) -> str | None:
+        if not self.pipeline_ids:
+            return None
+        if self.pipeline_routes:
+            matched = [route.pipeline_id for route in self.pipeline_routes if route.matches(metadata)]
+            if len(matched) > 1:
+                raise RuntimeError(
+                    f"ambiguous pipeline routing for {self.source_id}: matched {matched!r}"
+                )
+            return matched[0] if matched else None
+        if len(self.pipeline_ids) == 1:
+            return self.pipeline_ids[0]
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +312,14 @@ class CountryPack:
                     "data_format": source.data_format.value,
                     "update_semantics": source.update_semantics.value,
                     "pipeline_ids": list(source.pipeline_ids),
+                    "pipeline_routes": [
+                        {
+                            "pipeline_id": route.pipeline_id,
+                            "metadata_key": route.metadata_key,
+                            "metadata_value": route.metadata_value,
+                        }
+                        for route in source.pipeline_routes
+                    ],
                     "parser_version": source.parser_version,
                     "mapping_version": source.mapping_version,
                     "preflight_profile": source.preflight_profile,
