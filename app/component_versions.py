@@ -18,6 +18,9 @@ from app.global_trademarks.migrations import GLOBAL_TRADEMARK_SCHEMA_VERSION
 from app.global_trademarks.operator import GLOBAL_TRADEMARK_OPERATOR_VERSION
 from app.integration_contract import CONTRACT_VERSION
 from app.storage_headroom import HEADROOM_VERSION
+from app.trademark_framework.acquisition import (
+    ACQUISITION_FRAMEWORK_VERSION as TRADEMARK_SOURCE_ACQUISITION_VERSION,
+)
 from app.trademark_framework.registry import FRAMEWORK_VERSION as TRADEMARK_JURISDICTION_FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION as TRADEMARK_RUNTIME_ADAPTER_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
@@ -79,6 +82,7 @@ def component_versions() -> dict[str, Any]:
             "trademark_jurisdiction_framework": {
                 "version": TRADEMARK_JURISDICTION_FRAMEWORK_VERSION,
                 "runtime_adapter_version": TRADEMARK_RUNTIME_ADAPTER_VERSION,
+                "source_acquisition_version": TRADEMARK_SOURCE_ACQUISITION_VERSION,
             },
             "global_trademark": {
                 "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,

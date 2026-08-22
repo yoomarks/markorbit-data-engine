@@ -14,6 +14,7 @@ on:
       - 'tests/test_component_versions.py'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
+      - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -35,6 +36,7 @@ on:
       - 'tests/test_component_versions.py'
       - 'docs/GLOBAL_TRADEMARK_COUNTRY_STORES.md'
       - 'docs/TRADEMARK_JURISDICTION_FRAMEWORK.md'
+      - 'docs/TRADEMARK_SOURCE_ACQUISITION.md'
       - 'docs/COMPONENT_VERSIONS.md'
       - '.github/workflows/global-trademark-country-stores.yml'
       - 'api.Dockerfile'
@@ -64,6 +66,9 @@ jobs:
 
       - name: Validate jurisdiction framework contracts and scaffold
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_fixture
+
+      - name: Validate resumable source/API acquisition contracts
+        run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_acquisition_fixture
 
       - name: Validate no-write source preflight contracts
         run: docker compose run --rm --no-deps worker python -m app.global_trademarks.validate_source_preflight_fixture

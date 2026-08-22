@@ -195,9 +195,10 @@ def main() -> int:
     plan = build_scaffold(request)
     assert plan.version == SCAFFOLD_VERSION
     assert plan.request.store_schema == "trademark_jp"
-    assert len(plan.files) == 11
+    assert len(plan.files) == 12
     expected_paths = {
         "app/trademark_jurisdictions/jp/country.py",
+        "app/trademark_jurisdictions/jp/acquisition.py",
         "app/trademark_jurisdictions/jp/adapter.py",
         "app/trademark_jurisdictions/jp/mapping.py",
         "app/trademark_jurisdictions/jp/schema.py",
@@ -209,9 +210,13 @@ def main() -> int:
     }
     assert expected_paths.issubset(plan.files)
     country_source = plan.files["app/trademark_jurisdictions/jp/country.py"]
+    acquisition_source = plan.files["app/trademark_jurisdictions/jp/acquisition.py"]
     runtime_source = plan.files["app/trademark_jurisdictions/jp/runtime.py"]
     assert "pipeline_ready=False" in country_source
     assert "TODO_SOURCE_IDENTITY" in country_source
+    assert "AcquisitionPageRequest" in acquisition_source
+    assert "Never include API keys" in acquisition_source
+    assert "NotImplementedError" in acquisition_source
     assert "RuntimeRequest" in runtime_source
     assert "NotImplementedError" in runtime_source
     assert "NotImplementedError" in plan.files["app/trademark_jurisdictions/jp/preflight.py"]
@@ -253,6 +258,7 @@ def main() -> int:
             "unprofiled_source_contracts_unresolved": True,
             "country_scaffold_version": SCAFFOLD_VERSION,
             "scaffold_file_count": len(plan.files),
+            "scaffold_acquisition_stub": True,
             "scaffold_runtime_stub": True,
             "scaffold_default_maturity": generated_pack.maturity.value,
             "scaffold_default_pipeline_ready": False,

@@ -1,3 +1,13 @@
+from app.trademark_framework.acquisition import (
+    ACQUISITION_FRAMEWORK_VERSION,
+    AcquisitionPage,
+    AcquisitionPageRequest,
+    AcquisitionResult,
+    AcquisitionStatus,
+    MaterializedPage,
+    SourceAcquisitionAdapter,
+    materialize_acquisition,
+)
 from app.trademark_framework.contracts import (
     AssetMode,
     CountryPack,
@@ -29,6 +39,11 @@ from app.trademark_framework.runtime import (
 )
 
 __all__ = [
+    "ACQUISITION_FRAMEWORK_VERSION",
+    "AcquisitionPage",
+    "AcquisitionPageRequest",
+    "AcquisitionResult",
+    "AcquisitionStatus",
     "AssetMode",
     "CountryPack",
     "CurrentProjectionMode",
@@ -36,12 +51,14 @@ __all__ = [
     "FRAMEWORK_VERSION",
     "IdentityContract",
     "JurisdictionStage",
+    "MaterializedPage",
     "ObservationDomain",
     "PipelineRoute",
     "RUNTIME_ADAPTER_VERSION",
     "RuntimeAdapterRegistry",
     "RuntimeRequest",
     "RuntimeSourceKey",
+    "SourceAcquisitionAdapter",
     "SourceAdapterKind",
     "SourceDescriptor",
     "SourceRole",
@@ -51,5 +68,6 @@ __all__ = [
     "country_pack",
     "country_packs",
     "framework_audit",
+    "materialize_acquisition",
     "resolve_pipeline_id",
 ]
