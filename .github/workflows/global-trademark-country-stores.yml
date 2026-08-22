@@ -102,6 +102,9 @@ jobs:
       - name: Validate native observation store primitives
         run: docker compose run --rm --no-deps worker python -m app.trademark_framework.validate_native_store_fixture
 
+      - name: Validate mapped observation writer
+        run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_mapped_writer_fixture
+
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
