@@ -110,6 +110,9 @@ jobs:
       - name: Validate native store bundle
         run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_store_bundle_fixture
 
+      - name: Validate resumable native ingest runner
+        run: docker compose run --rm --no-deps worker python -m app.trademark_factory.validate_native_ingest_fixture
+
       - name: Tear down fixture database
         if: always()
         run: docker compose down -v --remove-orphans
