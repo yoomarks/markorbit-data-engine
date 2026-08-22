@@ -24,6 +24,7 @@ from app.trademark_factory.mapping import MAPPING_CONTRACT_VERSION
 from app.trademark_factory.readiness import READINESS_AUDIT_VERSION
 from app.trademark_factory.registry import FACTORY_REGISTRY_VERSION
 from app.trademark_factory.scaffold import FACTORY_SCAFFOLD_VERSION
+from app.trademark_factory.store_bundle import NATIVE_STORE_BUNDLE_VERSION
 from app.trademark_factory.writer import MAPPED_OBSERVATION_WRITER_VERSION
 from app.trademark_framework.acquisition import (
     ACQUISITION_FRAMEWORK_VERSION as TRADEMARK_SOURCE_ACQUISITION_VERSION,
@@ -73,9 +74,7 @@ def component_versions() -> dict[str, Any]:
                 "model_version": CN_MODEL_VERSION,
                 "final_checkpoint_version": CN_CHECKPOINT_VERSION,
             },
-            "cn_mark_image": {
-                "source_version": CN_MARK_IMAGE_SOURCE_VERSION,
-            },
+            "cn_mark_image": {"source_version": CN_MARK_IMAGE_SOURCE_VERSION},
             "cn_qcc": {
                 "source_version": CN_QCC_SOURCE_VERSION,
                 "acquisition_policy_version": CN_QCC_POLICY_VERSION,
@@ -105,6 +104,7 @@ def component_versions() -> dict[str, Any]:
                 "capability_matrix_version": CAPABILITY_MATRIX_VERSION,
                 "mapping_contract_version": MAPPING_CONTRACT_VERSION,
                 "mapped_observation_writer_version": MAPPED_OBSERVATION_WRITER_VERSION,
+                "native_store_bundle_version": NATIVE_STORE_BUNDLE_VERSION,
                 "readiness_audit_version": READINESS_AUDIT_VERSION,
                 "scaffold_facade_version": FACTORY_SCAFFOLD_VERSION,
             },
