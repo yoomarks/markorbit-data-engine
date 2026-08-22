@@ -223,7 +223,8 @@ def main() -> int:
         update_semantics=UpdateSemantics.API_CURRENT,
         transport=TransportKind.HTTP_API,
     )
-    assert http_plan.version == "TRADEMARK_COUNTRY_SCAFFOLD_V4"
+    assert http_plan.version == "TRADEMARK_COUNTRY_SCAFFOLD_V5"
+    assert len(http_plan.files) == 13
     http_acquisition = http_plan.files["app/trademark_jurisdictions/kr/acquisition.py"]
     assert "HttpPaginatedAcquisitionAdapter" in http_acquisition
     assert "PageNumberPagination" in http_acquisition
@@ -240,19 +241,31 @@ def main() -> int:
         update_semantics=UpdateSemantics.SNAPSHOT,
         transport=TransportKind.FILE,
     )
+    assert len(file_plan.files) == 13
     file_acquisition = file_plan.files["app/trademark_jurisdictions/jp/acquisition.py"]
     assert "AcquisitionPageRequest" in file_acquisition
     assert "HttpPaginatedAcquisitionAdapter" not in file_acquisition
 
     for plan in (http_plan, file_plan):
+        base = f"app/trademark_jurisdictions/{plan.request.jurisdiction.lower()}"
         for relative_path, content in plan.files.items():
             if relative_path.endswith(".py"):
                 ast.parse(content, filename=relative_path)
-        country_source = plan.files[
-            f"app/trademark_jurisdictions/{plan.request.jurisdiction.lower()}/country.py"
-        ]
+        country_source = plan.files[f"{base}/country.py"]
+        mapping_source = plan.files[f"{base}/mapping.py"]
+        schema_source = plan.files[f"{base}/schema.py"]
+        store_source = plan.files[f"{base}/store.py"]
         assert "pipeline_ready=False" in country_source
         assert "TODO_SOURCE_IDENTITY" in country_source
+        assert "MappingContract" in mapping_source
+        assert "mapping_contracts" in mapping_source
+        assert "ObservationTableSpec" in schema_source
+        assert "observation_table_specs" in schema_source
+        assert "NativeStoreBundle" in store_source
+        assert "StoreBinding" in store_source
+        assert "install_native_store_bundle" in store_source
+        assert "append_native_record_bundle" in store_source
+        assert "NotImplementedError" in store_source
 
     print(
         {
@@ -268,6 +281,7 @@ def main() -> int:
             "virtual_mapping_valid": True,
             "http_scaffold_uses_shared_acquisition": True,
             "file_scaffold_preserved": True,
+            "scaffold_native_store_bundle_ready": True,
             "production_registry_mutated": False,
             "db_writes": False,
             "network_calls": False,
