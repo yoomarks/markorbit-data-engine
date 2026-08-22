@@ -21,6 +21,12 @@ from app.storage_headroom import HEADROOM_VERSION
 from app.trademark_framework.acquisition import (
     ACQUISITION_FRAMEWORK_VERSION as TRADEMARK_SOURCE_ACQUISITION_VERSION,
 )
+from app.trademark_framework.http_transport import (
+    HTTP_TRANSPORT_VERSION as TRADEMARK_HTTP_TRANSPORT_VERSION,
+)
+from app.trademark_framework.pagination import (
+    PAGINATION_HELPER_VERSION as TRADEMARK_API_PAGINATION_VERSION,
+)
 from app.trademark_framework.registry import FRAMEWORK_VERSION as TRADEMARK_JURISDICTION_FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION as TRADEMARK_RUNTIME_ADAPTER_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
@@ -83,6 +89,8 @@ def component_versions() -> dict[str, Any]:
                 "version": TRADEMARK_JURISDICTION_FRAMEWORK_VERSION,
                 "runtime_adapter_version": TRADEMARK_RUNTIME_ADAPTER_VERSION,
                 "source_acquisition_version": TRADEMARK_SOURCE_ACQUISITION_VERSION,
+                "http_transport_version": TRADEMARK_HTTP_TRANSPORT_VERSION,
+                "api_pagination_version": TRADEMARK_API_PAGINATION_VERSION,
             },
             "global_trademark": {
                 "schema_version": GLOBAL_TRADEMARK_SCHEMA_VERSION,
