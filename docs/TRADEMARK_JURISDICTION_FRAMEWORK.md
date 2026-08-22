@@ -5,161 +5,89 @@
 `TRADEMARK_JURISDICTION_FRAMEWORK_V1` turns repeated country-by-country trademark ingestion work
 into a reusable platform capability.
 
-The target onboarding flow for a new jurisdiction is:
+The target onboarding flow is:
 
-`official source/API -> source profile -> country pack -> acquisition adapter -> immutable raw objects -> runtime adapter -> parser/mapping -> country-native store -> current projection -> acceptance -> bounded pilot`
+`official source/API -> source profile -> CountryPack -> acquisition -> immutable raw evidence -> runtime -> parser/mapping -> native store -> current projection -> acceptance -> bounded pilot`
 
-The framework deliberately **does not** make every country look the same. It standardizes the
-mechanics that should be reusable while preserving source-native legal/registry facts.
+The framework deliberately **does not** make every country look the same. It standardizes mechanics
+that should be reusable while preserving source-native legal/registry facts.
 
-## What is reusable
+## Reusable platform layers
 
-The framework standardizes:
+The current reusable stack includes:
 
 - source role, transport, format, adapter kind and update semantics;
-- source-declared record identity;
-- metadata-to-pipeline routing for multi-table/multi-stream sources;
-- paginated/cursor source acquisition and resumable raw-object materialization;
-- runtime request normalization, source selector validation, preflight and loader dispatch;
-- observation-domain capabilities (record/party/goods/event/relationship/etc.);
-- current-projection mode and ordering contract;
-- jurisdiction onboarding maturity;
-- asset support state;
-- pipeline IDs, parser/mapping versions and preflight profiles;
-- country/source registry validation;
-- a safe new-country scaffold that starts disabled;
-- compatibility projection into the existing `app.global_trademarks.catalog` API.
+- source-declared record identity and pipeline routing;
+- paginated/cursor acquisition and resumable raw-object materialization;
+- resilient read-only HTTP transport and page/offset/cursor helpers;
+- runtime request normalization, preflight and generic source dispatch;
+- source-native observation-table primitives and provenance;
+- declarative mapping contracts plus mapped observation writer;
+- multi-domain native-store bundles;
+- deterministic native-record ingest with bounded apply and durable checkpoint/resume;
+- current-projection mode/order contracts;
+- jurisdiction maturity/capability/readiness contracts;
+- source-release acceptance and Data Trust boundaries;
+- disabled-by-default country scaffolding;
+- jurisdiction implementation plugin registration.
 
-Existing shared Global Trademark infrastructure remains responsible for SHA-backed source objects,
-dataset manifests, no-write preflight, explicit apply, bounded pilots, checkpoints/resume,
-execution locks and release acceptance.
+Existing Global Trademark infrastructure remains responsible for SHA-backed source objects, dataset
+manifests, no-write planning, explicit apply, execution locks and source-release acceptance.
 
-## What remains country-native
+## Country-native boundary
 
-The following must not be guessed or flattened simply to satisfy the framework:
+The framework must not guess or flatten:
 
-- native record identity;
-- source status vocabulary;
+- source record identity;
+- official status vocabulary;
 - application/registration/extension relationships;
-- parties and party roles;
-- goods/services structure and classification details;
+- parties and source-declared roles;
+- goods/services and classification detail;
 - procedural events and dates;
-- source-declared related marks/applications;
-- source Update/Delete semantics;
-- acquisition authentication/pagination interpretation;
-- images/assets and document semantics;
-- country-specific acceptance checks.
+- related marks/applications;
+- Update/Delete semantics;
+- API authentication and response continuation semantics;
+- image/document semantics;
+- country-specific current-state and acceptance rules.
 
 `No source observation != legal nonexistence` remains a platform invariant.
 
-## Country pack
+## CountryPack and source routing
 
-A `CountryPack` is the reusable onboarding unit. It describes:
+A `CountryPack` declares jurisdiction/aliases, country store schema, engineering maturity, identity,
+observation domains, current projection, asset mode, sources, native tables and optional extension
+metadata.
 
-- `jurisdiction` / aliases;
-- `store_schema`;
-- `JurisdictionStage` engineering maturity;
-- `IdentityContract`;
-- supported `ObservationDomain` values;
-- `CurrentProjectionContract`;
-- `AssetMode`;
-- one or more `SourceDescriptor` objects;
-- optional native-table and extension metadata.
+The production registry currently describes six heterogeneous patterns: US existing mature
+subsystems; GB historical baseline; EU/NZ historical multi-file seeds plus future official sources;
+CA ST.96 snapshot + Update/Delete + ordered current; and AU six-table IPGOD. These packs prove that
+one reusable framework can preserve materially different source models.
 
-The initial registry describes six materially different patterns already present in the project:
-
-| Jurisdiction | Framework maturity | Reusable pattern being proven |
-|---|---|---|
-| US | `PRODUCTION_CURRENT` | compatibility with an existing mature subsystem |
-| GB | `COUNTRY_STORE_READY` | delimited historical baseline plus pending weekly/comparable-right sources |
-| EU | `COUNTRY_STORE_READY` | non-authoritative multi-file historical seed plus future official API |
-| CA | `CURRENT_PROJECTION_READY` | ST.96 snapshot + Update/Delete + manifest-ordered current projection |
-| AU | `COUNTRY_STORE_READY` | six-table source-native snowflake snapshot |
-| NZ | `COUNTRY_STORE_READY` | historical multi-file seed plus future official API |
-
-These maturity values describe **implemented engineering evidence only**. They do not promote a
-source release, historical seed or jurisdiction to accepted/current data merely by declaration.
-For example, Canada's framework maturity can be `CURRENT_PROJECTION_READY` while CIPO WEEKLY still
-remains `pipeline_ready=false` pending assets and real-package pilot validation.
-
-This reverse validation is intentional: the framework is accepted only if it can describe existing
-heterogeneous implementations without erasing their differences.
-
-## Source descriptor and pipeline routing
-
-A source descriptor answers the questions that otherwise get redesigned for every country:
-
-- What is this source for? (`PRIMARY`, `HISTORICAL_SEED`, `INCREMENTAL`, `ENRICHMENT`, `REFERENCE`)
-- How is it acquired? (`FILE`, `HTTP_API`, `SOAP_API`, `SFTP`, existing subsystem, or unresolved)
-- What parser family is appropriate? (delimited, ZIP/XML, multi-table, API, etc.)
-- What is its data format?
-- Is it a snapshot, historical seed, append stream, API-current source or Update/Delete feed?
-- Is the source available now?
-- Is the Data Engine pipeline actually ready now?
-- Which pipeline IDs/parser/mapping/preflight contract implement it?
-
-`active_now` and `pipeline_ready` remain separate. A known or available source is not considered
-production ingestible merely because it exists. Unverified access/format must be represented as
-unresolved rather than guessed into an API or file contract.
-
-For a source that fans out into multiple durable pipelines, `PipelineRoute` maps source metadata to
-the intended pipeline. Examples already encoded in the registry include:
-
-- GB `source_stream=DOMESTIC|MADRID_IR`;
-- EU/NZ TM-Link `source_table=applications|applicants|details|classes`;
-- AU IPGOD six `source_table` values.
-
+For multi-stream/table sources, `PipelineRoute` maps source metadata to exact durable pipeline ids.
 The shared resolver is:
 
 ```python
 resolve_pipeline_id(jurisdiction, source_id, metadata)
 ```
 
-`GLOBAL_TM_OPERATOR_V4` uses this registry resolver. Adding another multi-table or multi-stream
-jurisdiction therefore does not require another country-specific operator branch merely to decide
-durable pipeline identity.
+`GLOBAL_TM_OPERATOR_V4` uses this resolver instead of country-specific pipeline maps.
 
-## Runtime adapter layer
+## Runtime adapter V2
 
-`TRADEMARK_RUNTIME_ADAPTER_V1` is the reuse layer between materialized source objects and the
+`TRADEMARK_RUNTIME_ADAPTER_V2` is the boundary between a materialized source object and a
 country-native loader.
 
-The shared runtime contract separates generic ingestion orchestration from country-specific source
-execution. A runtime adapter normalizes one source invocation into a `RuntimeRequest` containing:
+A `RuntimeRequest` carries jurisdiction/source, exact materialized path, parser version, selector
+metadata, optional `max_records` and optional compatibility command identity. A runtime adapter
+provides source-specific preflight and execute hooks while shared orchestration remains outside.
 
-- jurisdiction and source ID;
-- exact materialized source path;
-- parser version;
-- source selector metadata;
-- bounded `max_records` when requested;
-- optional compatibility command identity.
+V2 adds reusable `FunctionalRuntimeAdapter` and makes **source-only adapters** first-class. An
+adapter may expose `commands=()` as long as it exposes at least one exact source key. New
+jurisdictions therefore do not need bespoke top-level commands such as `ingest-jp` or `ingest-kr`;
+they can use generic `ingest-source` dispatch. Existing GB/TM-Link/AU/CIPO compatibility commands
+remain supported.
 
-It then provides only two source-specific hooks:
-
-```text
-preflight(RuntimeRequest) -> SourcePreflight
-execute(RuntimeRequest) -> durable source-native loader
-```
-
-Everything around those hooks remains shared: source-object SHA registration, manifest attachment,
-execution lock, intended-pipeline resolution, ingest-run checkpoints, bounded resume, release
-acceptance and Data Trust.
-
-The initial runtime registry wraps four existing execution families without rewriting their native
-parsers:
-
-| Runtime adapter | Sources covered |
-|---|---|
-| `UKIPO_2018_RUNTIME_V1` | GB `UKIPO_OPEN_DATA_2018` |
-| `TM_LINK_RUNTIME_V1` | EU `TM_LINK_EU`, NZ `TM_LINK_NZ` |
-| `IPGOD_2022_RUNTIME_V1` | AU `IPGOD_2022` |
-| `CIPO_ST96_RUNTIME_V1` | CA GLOBAL baseline and WEEKLY source |
-
-The old country-specific CLI commands are retained as compatibility entrypoints, but their
-preflight/execute dispatch now resolves through the runtime registry. Loader maps live behind the
-source adapters rather than in the top-level CLI.
-
-A generic entrypoint is also available:
+Generic invocation remains no-write by default:
 
 ```bash
 python -m app.global_trademarks.cli ingest-source \
@@ -169,106 +97,80 @@ python -m app.global_trademarks.cli ingest-source \
   --selector source_stream=DOMESTIC
 ```
 
-Multi-table examples use the same mechanism:
+## Source acquisition and HTTP transport
 
-```bash
-python -m app.global_trademarks.cli ingest-source \
-  --jurisdiction AU \
-  --source-id IPGOD_2022 \
-  --path <file.csv> \
-  --selector source_table=application-events
-```
+`TRADEMARK_SOURCE_ACQUISITION_V1` owns bounded page execution, cursor resume, atomic raw-byte
+materialization, SHA256 evidence, durable acquisition ledger, complete-session replay, tamper
+checks, cursor-loop detection and fail-closed source drift.
 
-The generic command is still **no-write by default**. `--apply` does not create a new safety path;
-it enters the same existing source-object/manifest/checkpoint execution boundary as the
-compatibility commands.
+Remote evidence is materialized before parsing:
 
-This is the intended pattern for jurisdiction N+1: the top-level CLI should not need a new country
-`if/elif` execution branch merely because a new parser exists.
+`official API/remote source -> acquisition ledger + immutable raw objects -> runtime/parser/store`
 
-## Source acquisition layer
+`TRADEMARK_HTTP_TRANSPORT_V1`, `TRADEMARK_API_PAGINATION_V1` and
+`TRADEMARK_HTTP_ACQUISITION_ADAPTER_V1` remove repeated GET/retry/429/5xx/pagination machinery while
+keeping endpoint, authentication, page identity and continuation interpretation source-specific.
+Credentials are runtime secrets, never provenance metadata.
 
-`TRADEMARK_SOURCE_ACQUISITION_V1` adds the reusable boundary in front of runtime parsing for remote
-or paginated sources.
+## Native store and mapping reuse
 
-The source-specific acquisition adapter only needs to expose an initial pagination position and
-fetch one authority page. The shared executor then owns:
+`TRADEMARK_NATIVE_STORE_PRIMITIVES_V1` standardizes append-only provenance mechanics without
+standardizing country fields. Jurisdictions still declare their own observation tables/columns.
 
-- bounded page execution and resume;
-- opaque cursor lineage;
-- atomic raw-byte materialization;
-- SHA256 evidence per page;
-- durable local acquisition ledger;
-- complete-session replay without re-fetching;
-- tamper detection;
-- non-advancing/repeated cursor detection;
-- repeated page-key detection;
-- fail-closed unledgered source drift after an interrupted object write.
+`TRADEMARK_SOURCE_MAPPING_CONTRACT_V1` describes reviewed source selectors to country-native fields.
+Simple field/column/JSON-pointer extraction is reusable; XML namespace/cardinality semantics remain
+parser-owned when generic extraction would be unsafe.
 
-This deliberately produces raw evidence before parsing:
+`TRADEMARK_MAPPED_OBSERVATION_WRITER_V1` persists reviewed mappings with parser/mapping/source
+lineage. `TRADEMARK_NATIVE_STORE_BUNDLE_V1` groups multiple native observation tables for one source
+and writes one source record through the bundle in one caller-owned transaction.
 
-`API/SFTP/remote source -> acquisition ledger + raw objects -> RuntimeRequest -> parser/store`
-
-Authentication remains source-specific runtime configuration and is not accepted by the generic
-ledger API. API keys, authorization headers and passwords must not become provenance metadata.
-
-The acquisition executor does not itself guess HTTP endpoints, OAuth behavior, rate limits,
-pagination parameter names or response semantics. Those details become very small country/source
-adapter code after the official data contract is known. See `docs/TRADEMARK_SOURCE_ACQUISITION.md`.
+`TRADEMARK_NATIVE_INGEST_EXECUTOR_V1` then owns the ordinary durable source-record loop: exact source
+identity validation, parser/mapping/schema lineage hash, deterministic 1-based `source_index`,
+bounded `max_records`, checkpoint/resume, interruption recovery, and fail-closed gaps/reordering or
+truncated full replay. It does not download data, install DDL, parse authority formats or decide
+current state.
 
 ## Current projection
 
-History and current state are separate concepts.
+History and current state are separate. Supported modes include existing subsystem,
+source-native current, manifest-ordered current, historical-only and not-implemented.
 
-The framework supports multiple current modes rather than imposing one algorithm on all offices:
-
-- `EXISTING_SUBSYSTEM`: already implemented outside this framework layer;
-- `SOURCE_NATIVE_CURRENT`: source itself declares a reliable current representation;
-- `MANIFEST_ORDERED`: source releases compete using explicit manifest ordering;
-- `HISTORICAL_ONLY`: useful seed, not verified current state;
-- `NOT_IMPLEMENTED`: native ingestion can exist before current reconstruction is ready.
-
-Canada proves the manifest-ordered pattern using:
+Canada proves manifest ordering by explicit source evidence:
 
 `(source_period_end, source_precedence, source_sequence)`
 
-The framework does not assume this ordering is correct for another jurisdiction until that source
-contract is proven.
+No other jurisdiction inherits that order unless its source contract proves it.
 
-## Compatibility boundary
+## Jurisdiction plugin
 
-`app.global_trademarks.catalog` is retained for existing callers, but its country/source plans are
-now generated from the framework registry. This removes a second manually maintained list of
-jurisdictions and source readiness flags.
+`TRADEMARK_JURISDICTION_PLUGIN_V1` packages one CountryPack with its optional source runtime,
+acquisition and native-store implementations behind a validated registration boundary. Runtime
+source keys, acquisition bindings and store bundles must refer only to sources declared by that
+CountryPack.
 
-Existing country parsers are **not** rewritten merely to satisfy the framework. Runtime adapters
-wrap proven parsers/loaders and move repeated orchestration outward. Source-native parsing and
-country-specific current-state rules stay where their semantics are explicit.
+Plugin construction/audit is side-effect free: it does not discover arbitrary modules, call the
+network, install schema, ingest data or advance maturity. See
+`docs/TRADEMARK_JURISDICTION_PLUGIN.md`.
 
-## Framework audit
+## Country scaffold V5
 
-Run:
+The scaffold is no-write by default. `TRADEMARK_COUNTRY_SCAFFOLD_V5` generates a 14-file country
+package covering:
 
-```bash
-python -m app.trademark_framework.cli audit
-```
+- `country.py` source/profile contract;
+- `acquisition.py` transport-aware acquisition skeleton;
+- `adapter.py` deterministic native parser boundary;
+- `mapping.py` reviewed MappingContract skeleton;
+- `store.py` NativeStoreBundle skeleton;
+- `schema.py` explicit native-store install boundary;
+- `preflight.py` no-write source validation;
+- `loader.py` NativeRecordEnvelope + durable native-ingest wiring;
+- `runtime.py` generic runtime execution bridge;
+- `current.py`, `assets.py`, `acceptance.py`;
+- package/fixture guidance.
 
-The audit is read-only and checks country/source contract consistency, aliases, pipeline routes and
-pipeline-ID ownership. The CI framework fixture additionally audits the runtime registry and proves
-that compatibility commands and generic source requests resolve to the same source/pipeline
-identity. The acquisition fixture independently proves bounded/resumable raw materialization with
-no network or database writes.
-
-Inspect packs with:
-
-```bash
-python -m app.trademark_framework.cli show
-python -m app.trademark_framework.cli show --jurisdiction CA
-```
-
-## New-country scaffold
-
-The scaffold command is no-write by default:
+Example:
 
 ```bash
 python -m app.trademark_framework.cli scaffold \
@@ -280,60 +182,40 @@ python -m app.trademark_framework.cli scaffold \
   --update-semantics SNAPSHOT
 ```
 
-It plans a skeleton under:
+Generated sources remain `pipeline_ready=False`, start at `SOURCE_FOUND`, retain
+`TODO_SOURCE_IDENTITY`, and contain no guessed endpoint, parser, mapping, native column, current
+state or acceptance rule. Existing files are never overwritten.
 
-`app/trademark_jurisdictions/<jurisdiction>/`
+## Framework audit and acceptance boundary
 
-`TRADEMARK_COUNTRY_SCAFFOLD_V3` generates a 12-file skeleton covering country declaration,
-source acquisition, source-native parser adapter, mapping, schema, no-write preflight, runtime
-adapter, current projection, assets, acceptance and fixture guidance. The generated pack starts at
-`SOURCE_FOUND` and intentionally contains:
+`python -m app.trademark_framework.cli audit` validates source/alias/pipeline contracts. CI also
+validates runtime, acquisition, HTTP, Country Factory, native-store, native-ingest and virtual
+jurisdiction contracts.
 
-- `pipeline_ready=False`;
-- `TODO_SOURCE_IDENTITY`;
-- acquisition/runtime/preflight/loader `NotImplementedError` gates;
-- no current-state claim;
-- no legal inference;
-- parser/schema/preflight/mapping stubs that require official schema/sample evidence.
+Engineering layers remain distinct:
 
-Use `--write` only when intentionally creating those files. Existing files are never overwritten.
+`source found != pipeline ready != ingest complete != release accepted != jurisdiction current != trusted for silence != legal conclusion`
 
-The generator is a development accelerator, not an authority-discovery substitute. Finding an API
-or download endpoint is not enough: authentication, pagination, identity, update semantics,
-ordering, historical coverage and sample payload shape must still be verified.
+## Expected N+1 onboarding
 
-## Expected future onboarding workflow
+For a new jurisdiction the intended work is now mostly:
 
-For a new jurisdiction, the desired engineering work becomes mostly:
+1. verify official source/API and access/license terms;
+2. profile schema, representative payloads, authentication/pagination and update semantics;
+3. complete the generated CountryPack/source identity;
+4. implement the small source acquisition/parser/preflight boundaries;
+5. declare reviewed mapping contracts and native-store bundle;
+6. reuse generic source registration, manifest, runtime, native ingest and acceptance mechanics;
+7. prove interruption/replay/current semantics with source-specific fixtures;
+8. run a bounded real-data pilot;
+9. explicitly promote maturity only after evidence passes.
 
-1. locate and verify the official source/API and license/access terms;
-2. profile real schema/data dictionary, authentication/pagination and representative samples;
-3. create/complete the generated Country Pack;
-4. implement the source acquisition adapter when remote acquisition is needed;
-5. implement source-native identity/parser/mapping and runtime adapter;
-6. reuse shared raw materialization/source-object/manifest/preflight/resume/operator/acceptance infrastructure;
-7. prove acquisition resume, selector/pipeline routing, replay idempotency and interruption equivalence;
-8. run adversarial fixtures and bounded real-data pilot;
-9. promote source/pipeline maturity only after evidence passes.
-
-The framework is successful when adding jurisdiction N+1 requires less infrastructure code than
-jurisdiction N, without reducing source fidelity.
+The framework is successful when jurisdiction N+1 requires mainly source research and source-native
+mapping rather than another ingestion platform implementation.
 
 ## Current boundary
 
-The framework/runtime/acquisition layer intentionally does **not**:
-
-- create a Global Trademark Index;
-- force common legal statuses across jurisdictions;
-- replace proven country-native parsers with a lowest-common-denominator parser;
-- infer entity/brand families from registry relationships;
-- decide PostgreSQL vs ClickHouse for all future native stores;
-- declare CA/GB/AU/EU/NZ production-current merely because they have a Country Pack/runtime;
-- turn an unresolved future source into a guessed API contract;
-- perform live acquisition for a jurisdiction without a verified source adapter;
-- rebuild or restart the live CN worker.
-
-Next framework steps should be driven by demonstrated duplication after real source adapters exist:
-HTTP retry/rate-limit helpers, page-number/offset/cursor transport helpers, SFTP/download helpers,
-reusable native observation writers, generic manifest-ordered current-projection primitives, asset
-pipeline primitives and country acceptance extensions.
+This framework does **not** create a Global Trademark Index, force common legal statuses, infer
+brand/entity families, declare historical data current, auto-enable real acquisition, or rebuild the
+live CN worker. Automatic filesystem plugin discovery is also deferred; V1 plugin registration is
+explicit until import trust/deployment rules are proven.
