@@ -26,9 +26,10 @@ projection, assets and jurisdiction acceptance rules.
 | Mapping contract | `TRADEMARK_SOURCE_MAPPING_CONTRACT_V1` | Validated declarative source-selector -> country-native observation-field mapping contract. |
 | Mapped observation writer | `TRADEMARK_MAPPED_OBSERVATION_WRITER_V1` | Applies safe declarative mappings into native observation rows while preserving caller-owned record identity and parser/mapping/source lineage. |
 | Native store bundle | `TRADEMARK_NATIVE_STORE_BUNDLE_V1` | Binds one source's reviewed mapping contracts to multiple country-native observation tables and reuses explicit schema install plus atomic-cursor multi-domain append mechanics. |
+| Native ingest executor | `TRADEMARK_NATIVE_INGEST_EXECUTOR_V1` | Reuses deterministic source-index replay, versioned parser/mapping/schema lineage, bounded pilots, durable checkpoint/resume and atomic native-store bundle writes. |
 | Readiness audit | `TRADEMARK_COUNTRY_FACTORY_READINESS_V1` | Projects declared engineering maturity and flags structural contradictions without auto-promoting a country. |
 | Factory scaffold facade | `TRADEMARK_COUNTRY_FACTORY_SCAFFOLD_V1` | Delegates generation to the authoritative jurisdiction scaffold rather than maintaining a second template tree. |
-| Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V4` | Generates source-aware country packages; HTTP sources receive the reusable HTTP acquisition skeleton. |
+| Jurisdiction scaffold | `TRADEMARK_COUNTRY_SCAFFOLD_V5` | Generates source-aware country packages including native store and durable loader skeletons; HTTP sources also receive reusable HTTP acquisition scaffolding. |
 
 ## Single source of truth
 
@@ -143,6 +144,32 @@ Canada-native tables/fields, an Australia source can retain its own relational v
 future Japan/Korea source can declare different native columns. The reusable layer is the binding,
 validation, provenance, replay and transaction mechanics—not the legal/data model semantics.
 
+## Durable native ingest executor
+
+`TRADEMARK_NATIVE_INGEST_EXECUTOR_V1` raises reuse one step further: country adapters no longer need
+to reimplement the ordinary source-record loop, durable checkpoint ledger or bounded-pilot logic.
+
+The jurisdiction parser emits `NativeRecordEnvelope` objects with a deterministic 1-based
+`source_index`, source-native `record_key`, native payload and optional raw source payload. The
+executor then:
+
+- verifies the registered source object's jurisdiction and `source_id` against the bundle;
+- computes a deterministic lineage SHA over parser version, native table definitions and mapping
+  contracts;
+- refuses to resume an existing `(source_object_id, pipeline_id)` when parser/mapping/schema lineage
+  changed, requiring an intentionally versioned new pipeline instead;
+- accepts parser replay either from source index 1 or directly from `checkpoint + 1`;
+- rejects gaps/reordering in source indices;
+- writes every bundle binding for a source record in one caller transaction;
+- checkpoints the shared `global_trademark_ingest_run` ledger in the same commit boundary;
+- supports `max_records` bounded pilots without marking a partial run complete;
+- preserves committed checkpoints across interruption/failure and resumes from them;
+- returns `ALREADY_COMPLETE` without rewriting a completed source/pipeline run.
+
+The executor does **not** download remote data, install DDL, parse authority formats, choose a
+current-state winner or infer legal/business meaning. Those remain separate acquisition, migration,
+parser and current-projection contracts.
+
 ## Readiness
 
 The factory reuses the framework maturity states:
@@ -156,10 +183,10 @@ obvious structural contradictions such as a current-ready country whose current 
 Engineering maturity is not equivalent to source freshness, release acceptance, trusted-for-silence
 or any legal conclusion.
 
-## Country scaffold V4
+## Country scaffold V5
 
 For file/bulk sources, the scaffold continues to generate the generic acquisition adapter skeleton.
-For `TransportKind.HTTP_API`, V4 generates an acquisition module that imports and expects the shared:
+For `TransportKind.HTTP_API`, V5 keeps the reusable HTTP acquisition imports from V4:
 
 - `HttpPaginatedAcquisitionAdapter`;
 - `PageNumberPagination`;
@@ -167,8 +194,14 @@ For `TransportKind.HTTP_API`, V4 generates an acquisition module that imports an
 - `OpaqueCursorPagination`;
 - resilient HTTP transport and source-specific `interpret_page()` boundary.
 
+V5 additionally generates `store.py` and `loader.py`. The store module is the reviewed boundary for
+`NativeStoreBundle`; the loader wraps deterministic parser output into `NativeRecordEnvelope`,
+registers/consumes the exact source-object pin, resolves the versioned pipeline from `CountryPack`
+and delegates durable apply to `execute_native_ingest()`. `schema.py` delegates explicit migration
+to `install_native_store_bundle()` and `runtime.py` delegates execute to the generated loader.
+
 The generated source remains `pipeline_ready=False`, retains `TODO_SOURCE_IDENTITY`, and contains no
-guessed endpoint, credential or pagination rule.
+guessed endpoint, credential, pagination rule, native table or mapping rule.
 
 Example no-write plan:
 
@@ -203,6 +236,10 @@ mapping-version change producing distinct historical evidence.
 The native-store-bundle fixture extends the proof again across record, party and goods/service
 native tables in one transaction boundary, verifying multi-domain insert, idempotent bundle replay
 and fail-closed same-lineage drift.
+
+The native-ingest fixture then proves bounded partial apply, full-source replay resume, interrupted
+run recovery, parser source-index drift rejection, source-object identity enforcement and pipeline
+lineage drift rejection across real PostgreSQL checkpoint state.
 
 The virtual country is test evidence only and must never appear in the production jurisdiction
 registry.
