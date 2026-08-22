@@ -21,6 +21,7 @@ from app.trademark_framework.http_transport import HTTP_TRANSPORT_VERSION
 from app.trademark_framework.pagination import PAGINATION_HELPER_VERSION
 from app.trademark_framework.registry import FRAMEWORK_VERSION
 from app.trademark_framework.runtime import RUNTIME_ADAPTER_VERSION
+from app.trademark_framework.scaffold import SCAFFOLD_VERSION
 from app.us.alert_engine import ALERT_ENGINE_VERSION
 from app.us.migrations import US_SCHEMA_VERSION
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
@@ -50,6 +51,7 @@ def test_component_matrix_is_derived_from_owner_constants() -> None:
     assert framework["http_transport_version"] == HTTP_TRANSPORT_VERSION
     assert framework["api_pagination_version"] == PAGINATION_HELPER_VERSION
     assert framework["http_acquisition_adapter_version"] == HTTP_ACQUISITION_ADAPTER_VERSION
+    assert framework["country_scaffold_version"] == SCAFFOLD_VERSION
     assert components["global_trademark"]["schema_version"] == GLOBAL_TRADEMARK_SCHEMA_VERSION
     assert components["global_trademark"]["operator_version"] == GLOBAL_TRADEMARK_OPERATOR_VERSION
     assert (
@@ -87,6 +89,7 @@ def test_readme_and_component_version_doc_track_current_versions() -> None:
         HTTP_TRANSPORT_VERSION,
         PAGINATION_HELPER_VERSION,
         HTTP_ACQUISITION_ADAPTER_VERSION,
+        SCAFFOLD_VERSION,
         GLOBAL_TRADEMARK_SCHEMA_VERSION,
         GLOBAL_TRADEMARK_OPERATOR_VERSION,
         GLOBAL_TRADEMARK_ACCEPTANCE_VERSION,
