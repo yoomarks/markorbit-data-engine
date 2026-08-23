@@ -1,54 +1,100 @@
 schema_version: 1
 integration:
   name: markorbit-data-engine
-  stage: G0
-  stage_name: Contract Freeze
-  provider_status: frozen_in_provider_pr
-  consumer_status: awaiting_markorbit_acceptance
-  provider_pr: yoomarks/markorbit-data-engine#209
+  stage: G1
+  stage_name: Protected Query Runtime
+  provider_status: acceptance_proven
+  consumer_status: runtime_merged
+  provider_g0_pr: yoomarks/markorbit-data-engine#209
+  consumer_g1_pr: yoomarks/markorbit#177
   updated_at: 2026-08-23
 baselines:
   markorbit:
     repository: yoomarks/markorbit
     role: consumer-authority
-    baseline_sha: 149b0de8568fe3e82b81e6eb006030426cc0f5aa
+    g0_acceptance_merge_sha: a8035efff46a2e71a4613abd1927b18dadff086b
+    g1_consumer_head_sha: 75cae91b88fc1b3587076f3e8b10cadd7e2e6d90
+    g1_consumer_merge_sha: 20bd9710e4af02e92fcfaa737ef67a9e58479145
   data_engine:
     repository: yoomarks/markorbit-data-engine
     role: provider-authority
-    baseline_sha: e1776dcceaef571e7e4ffc9cbb22688c04bc5015
+    g0_provider_merge_sha: 42637eec302b1e2feeb6825e4f7b5208f4d00b9e
+    g1_runtime_baseline_sha: 42637eec302b1e2feeb6825e4f7b5208f4d00b9e
 canonical_artifacts:
   runtime_descriptor: GET /api/v1/contract
   machine_contract: docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json
   provider_contract: docs/integrations/markorbit/provider-contract.md
   runtime_semantics: docs/integrations/markorbit/runtime-semantics.md
-  tests: tests/test_mo_de_g0_contract.py
+  g0_tests: tests/test_mo_de_g0_contract.py
+  g1_evidence: docs/integrations/markorbit/MO-DE-G1-ACCEPTANCE-2026-08-23.md
+g1_execution:
+  requirement: MO-DE-006
+  consumer_pr: yoomarks/markorbit#177
+  consumer_head_sha: 75cae91b88fc1b3587076f3e8b10cadd7e2e6d90
+  consumer_merge_sha: 20bd9710e4af02e92fcfaa737ef67a9e58479145
+  provider_runtime_sha: 42637eec302b1e2feeb6825e4f7b5208f4d00b9e
+  authenticated_cross_repo_acceptance:
+    workflow: MO-DE-006 Cross-Repo Acceptance
+    workflow_run_id: 32617003421
+    run_number: 23
+    status: success
+    gateway_tests: 16_passed
+  required_checks_at_consumer_head:
+    validation:
+      run_id: 32617003361
+      status: success
+    cross_repo_acceptance:
+      run_id: 32617003421
+      status: success
+    commercial_runtime_reliability:
+      run_id: 32617003386
+      status: success
+  matrix:
+    authenticated_200: proven
+    unauthenticated_401: proven
+    forbidden_403: contract_reserved_not_applicable_no_scope_role_layer
+    not_found_404: proven_preserves_unknown_coverage
+    not_covered: contract_reserved_not_currently_emitted
+    no_observation: contract_reserved_not_currently_emitted
+    tombstone: contract_reserved_not_currently_emitted
+    rate_limit_429_retry_after: proven
+    timeout: proven_real_stalled_transport
+    provider_5xx: proven_via_required_mode_invalid_configuration_503
+    schema_version_mismatch: proven_fail_closed
+    request_correlation_propagation: proven
 requirements:
   MO-DE-001:
-    status: provider_frozen
+    status: accepted_frozen
     evidence: [app/integration_g0_contract.py, app/integration_api.py, docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json, tests/test_mo_de_g0_contract.py]
   MO-DE-002:
-    status: provider_frozen
+    status: accepted_frozen
     evidence: [docs/integrations/markorbit/provider-contract.md, app/integration_runtime.py, tests/test_mo_de_g0_contract.py]
   MO-DE-003:
-    status: provider_frozen
+    status: accepted_frozen
     evidence: [app/integration_security.py, docs/integrations/markorbit/runtime-semantics.md, tests/test_mo_de_g0_contract.py]
   MO-DE-004:
-    status: provider_frozen
+    status: accepted_frozen
     evidence: [app/integration_transport.py, docs/integrations/markorbit/runtime-semantics.md, tests/test_mo_de_g0_contract.py]
   MO-DE-005:
-    status: provider_frozen
+    status: accepted_frozen
     evidence: [app/integration_runtime.py, app/config.py, docs/integrations/markorbit/runtime-semantics.md, tests/test_mo_de_g0_contract.py]
   MO-DE-006:
-    status: ready_after_consumer_g0_acceptance
-    prerequisites: [auth_required_runtime_profile, real_cross_repo_runtime_lane, consumer_contract_validation]
+    status: acceptance_proven
+    evidence:
+      - yoomarks/markorbit#177
+      - markorbit_merge:20bd9710e4af02e92fcfaa737ef67a9e58479145
+      - markorbit_workflow_run:32617003421
+      - docs/integrations/markorbit/MO-DE-G1-ACCEPTANCE-2026-08-23.md
   MO-DE-007:
     status: deferred_no_implementation
   MO-DE-008:
     status: deferred_no_implementation
-cross_repo_decisions:
-  - MarkOrbit must accept that current V1 does not generically emit not_covered/no_observation/tombstone; consumers preserve unknown unless Data Engine explicitly emits a future additive state.
-  - MarkOrbit must accept x-correlation-id as end-to-end correlation and X-Request-ID as the provider hop/request and current provider trace identifier.
+cross_repo_decisions_accepted:
+  - preserve_unknown_until_data_engine_explicitly_emits_evidence_backed_not_covered_no_observation_or_tombstone
+  - accept_x_correlation_id_as_end_to_end_and_x_request_id_as_provider_hop_request_trace
 rules:
   g1_requires_consumer_g0_acceptance: true
+  g1_requires_real_cross_repo_runtime_evidence: true
+  g1_global_closeout_requires_both_ledgers_to_reference_final_evidence: true
   breaking_change_requires_cross_repo_rfc: true
   production_authorization: false
