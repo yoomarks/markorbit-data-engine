@@ -29,6 +29,7 @@ def test_singapore_activation_docs_preserve_snapshot_first_storage_boundary():
 def test_singapore_activation_docs_record_native_facts_without_overclaiming():
     activation = ACTIVATION_DOC.read_text(encoding="utf-8")
 
-    assert "first field-level native fact extraction slice is implemented" in activation
+    assert "current 39-column IPOS source schema" in activation
     assert "Malformed JSON families fail closed" in activation
-    assert "does not introduce legal interpretation" in activation
+    assert "without introducing legal interpretation" in activation
+    assert "datastore `_id` field is treated as provider metadata" in activation
