@@ -1,5 +1,6 @@
 import pytest
 
+from app.jurisdictions.singapore.source import JURISDICTION
 from app.snapshot_delta.ipos_sg_observation import (
     observation_from_ipos_row,
     observations_from_ipos_snapshot,
@@ -14,6 +15,7 @@ def test_observation_uses_csv_application_number():
 
     assert observation.entity_type == "application"
     assert observation.entity_id == "T0123456A"
+    assert observation.jurisdiction == JURISDICTION
     assert observation.payload == row
 
 
@@ -23,6 +25,7 @@ def test_observation_accepts_official_api_column_name():
     )
 
     assert observation.entity_id == "40202600001A"
+    assert observation.jurisdiction == JURISDICTION
 
 
 def test_observation_rejects_missing_application_number():
@@ -40,6 +43,7 @@ def test_snapshot_schema_accepts_official_api_field_names(tmp_path):
     observations = list(observations_from_ipos_snapshot(SnapshotCsvLoader(snapshot)))
 
     assert [observation.entity_id for observation in observations] == ["40202600001A"]
+    assert [observation.jurisdiction for observation in observations] == [JURISDICTION]
 
 
 def test_snapshot_schema_rejects_missing_mark_status(tmp_path):

@@ -5,6 +5,13 @@ Keeps provider-specific acquisition metadata out of generic snapshot primitives.
 
 from dataclasses import dataclass
 
+from app.jurisdictions.singapore.source import (
+    DATASET_ID as IPOS_DATASET_ID,
+    FILE_NAME as IPOS_FILE_NAME,
+    SOURCE_ID as IPOS_SOURCE_ID,
+    SOURCE_TYPE as IPOS_SOURCE_TYPE,
+)
+
 from .source import SnapshotSource
 
 
@@ -16,18 +23,20 @@ class DataGovSgSnapshotSource(SnapshotSource):
     poll_download_url: str
 
 
-_DATASET_ID = "d_6145acb2130bf781165258e76a584383"
-_DOWNLOAD_API_BASE = f"https://api-open.data.gov.sg/v1/public/api/datasets/{_DATASET_ID}"
+_DOWNLOAD_API_BASE = (
+    "https://api-open.data.gov.sg/v1/public/api/datasets/"
+    f"{IPOS_DATASET_ID}"
+)
 
 IPOS_SG_TRADEMARK_APPLICATIONS = DataGovSgSnapshotSource(
-    source_id="IPOS_SG_TRADEMARK_APPLICATIONS",
-    dataset_id=_DATASET_ID,
-    filename="IPOSTradeMarkApplications.csv",
-    source_type="current_snapshot",
-    dataset_url=f"https://data.gov.sg/datasets/{_DATASET_ID}/view",
+    source_id=IPOS_SOURCE_ID,
+    dataset_id=IPOS_DATASET_ID,
+    filename=IPOS_FILE_NAME,
+    source_type=IPOS_SOURCE_TYPE,
+    dataset_url=f"https://data.gov.sg/datasets/{IPOS_DATASET_ID}/view",
     api_url=(
         "https://data.gov.sg/api/action/datastore_search?resource_id="
-        f"{_DATASET_ID}"
+        f"{IPOS_DATASET_ID}"
     ),
     initiate_download_url=f"{_DOWNLOAD_API_BASE}/initiate-download",
     poll_download_url=f"{_DOWNLOAD_API_BASE}/poll-download",

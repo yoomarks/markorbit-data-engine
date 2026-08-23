@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from app.jurisdictions.singapore.source import JURISDICTION
+
 from .detector import Observation
 from .loader import SnapshotCsvLoader
 
@@ -45,7 +47,7 @@ def observation_from_ipos_row(row: Mapping[str, Any]) -> Observation:
         entity_type="application",
         entity_id=entity_id,
         payload=dict(row),
-        jurisdiction="SG",
+        jurisdiction=JURISDICTION,
     )
 
 
