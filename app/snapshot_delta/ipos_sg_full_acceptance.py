@@ -55,6 +55,10 @@ def _validate_committed_state(
     result: SnapshotCycleResult,
     acquired: AcquiredSnapshot,
 ) -> tuple[int, int]:
+    if result.cleanup_pending_paths:
+        pending = ", ".join(str(path) for path in result.cleanup_pending_paths)
+        raise FullCorpusAcceptanceError(f"snapshot cleanup remains pending: {pending}")
+
     snapshots_directory = state / "snapshots"
     full_snapshots = list(snapshots_directory.glob("*.csv"))
     if len(full_snapshots) != 1:
