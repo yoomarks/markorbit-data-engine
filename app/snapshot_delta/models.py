@@ -29,3 +29,5 @@ class DeltaEvent:
     detected_at: datetime
     before: dict[str, Any] | None = None
     after: dict[str, Any] | None = None
+    before_evidence_reference: str | None = None
+    after_evidence_reference: str | None = None
