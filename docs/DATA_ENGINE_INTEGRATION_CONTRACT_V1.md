@@ -1,48 +1,21 @@
 # MarkOrbit Data Engine Integration Contract V1
 
-## Status
+Contract ID: `MARKORBIT_DATA_ENGINE_INTEGRATION_V1`
 
-`MARKORBIT_DATA_ENGINE_INTEGRATION_V1`
+The canonical G0 machine-readable contract is `docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json`; runtime self-description is `GET /api/v1/contract`.
 
-This contract defines the service boundary between MarkOrbit Data Engine and MarkOrbit products/services. It is additive and does not change ingestion, replay, database schemas, source precedence, or legal-semantics rules.
+## Service role and ownership
 
-## Service role
+Data Engine is a **Source Fact Service**. It owns source acquisition, observations, normalized factual read models, provider query runtime and provider-side factual change detection. MarkOrbit consumers own product interpretation, business state and product degradation.
 
-MarkOrbit Data Engine is a **Source Fact Service**. It owns ingestion and read models derived from authoritative public trademark data sources.
+Consumers may use versioned HTTP contracts only. Direct SQL, direct database-volume/file access and mutation of Data Engine source-fact tables by Core/Gateway/Lite/Brain are prohibited.
 
-Consumers may use versioned API contracts. They must not depend on Data Engine storage implementation.
+## V1 query plane — MO-DE-001
 
-Permanent boundary:
-
-```text
-MarkOrbit consumer
-    -> versioned HTTP API / change feed
-    -> MarkOrbit Data Engine
-    -> Data Engine-owned PostgreSQL / ClickHouse / raw source storage
-```
-
-The following is prohibited:
-
-```text
-Core / Gateway / MarkReg / Lite
-    -> direct SQL to Data Engine PostgreSQL or ClickHouse
-    -> direct database-volume or database-file reads
-    -> direct mutation of Data Engine source-fact tables
-```
-
-## Consumer Query Plane
-
-The stable V1 consumer prefix is:
-
-```text
-/api/v1
-```
-
-All routes under `/api/v1` are read-only `GET` routes. No ingestion, replay, retry, reset, repair, audit mutation, or source-package mutation may be added under this prefix.
-
-V1 resources:
+The stable prefix is `/api/v1`. V1 is read-only GET. Canonical resources are:
 
 - `GET /api/v1/contract`
+- `GET /api/v1/health`
 - `GET /api/v1/cn/cases/{application_number}`
 - `GET /api/v1/us/cases/{serial_number}`
 - `GET /api/v1/us/cases/{serial_number}/360`
@@ -51,36 +24,41 @@ V1 resources:
 - `GET /api/v1/us/cases/{serial_number}/ttab`
 - `GET /api/v1/us/changes`
 
-The V1 layer delegates to existing domain implementations. It does not duplicate SQL or create a second fact model.
+Exact query fields, bounds and pagination/cursor behavior are frozen in the machine contract. Additive compatibility is the V1 default. Breaking changes require cross-repository migration/RFC or a new contract version.
 
-## Service authentication
+## Fact-state semantics — MO-DE-002
 
-The V1 consumer plane supports service-to-service bearer-key authentication without changing source-fact semantics or storage ownership.
+`observed`, `not_found`, `not_covered`, `no_observation`, `tombstone`, and `service_unavailable` are distinct. Current V1 explicitly represents `observed`, `not_found` and `service_unavailable`. The other states are reserved and must not be inferred until Data Engine has evidence sufficient to emit them. In particular, 404 does not prove coverage and 5xx/timeout never means factual absence.
 
-Configuration:
+See `docs/integrations/markorbit/provider-contract.md`.
+
+## Service authentication — MO-DE-003
+
+Actual mechanism is service-to-service bearer API key:
 
 ```text
 INTEGRATION_AUTH_MODE=disabled|required
 INTEGRATION_API_KEYS=<key>[,<rotation-key>...]
+Authorization: Bearer <key>
 ```
 
-Rules:
+G1 target is `required`. Keys are at least 32 characters and may overlap for rotation. Invalid request credentials are 401; invalid required-mode provider configuration is 503. 403 is reserved for a future authenticated-but-forbidden condition; V1 currently has no scope/role authorization layer. Secrets remain environment-isolated and out of source control. TLS is required across non-loopback/shared service boundaries.
 
-- `disabled` is the default so existing local development and CI remain compatible.
-- production/private-service deployments should use `required` before exposing `/api/v1` to another service or network boundary;
-- requests use `Authorization: Bearer <key>`;
-- every configured key must contain at least 32 characters;
-- multiple comma-separated keys are supported so a new key can overlap with the old key during rotation;
-- when `required`, missing keys, weak keys, or an invalid auth mode fail closed instead of silently disabling authentication;
-- missing or invalid request credentials return `401` with `WWW-Authenticate: Bearer`;
-- invalid required-mode configuration returns `503` so operators can distinguish service configuration failure from caller authentication failure;
-- `/api/v1/contract` reports authentication mode and policy but never exposes key material.
+## Correlation — MO-DE-004
 
-This authentication boundary applies only to the versioned consumer plane. It does **not** make `/api/admin`, `/api/jobs`, ingestion, replay, retry, reset, or repair part of the consumer contract, and it must not be treated as the security policy for those control-plane surfaces.
+`X-Request-ID` is the provider hop/request identifier and current provider trace identifier. `x-correlation-id` is the end-to-end operation identifier. Valid incoming values are preserved; missing request ID is generated, and missing correlation ID defaults to the request ID. Both are echoed on `/api/v1` responses along with contract/source-owner provenance headers.
+
+## Runtime failures/backpressure — MO-DE-005
+
+V1 error responses use stable top-level `code`, `message`, `retryable`, and optional `detail` / `fact_state`. Query validation maps to 400. 404 is `not_found` with coverage still unknown. 429 is retryable and includes `Retry-After`. 5xx/503 and network timeouts are retryable and never become factual negatives.
+
+Rate-limit enforcement is opt-in. When enabled, defaults are 120 requests per 60 seconds per source IP per provider process. Consumers must honor 429/`Retry-After` rather than hard-code those defaults.
+
+See `docs/integrations/markorbit/runtime-semantics.md`.
 
 ## Response authority
 
-V1 responses use a common owner envelope:
+Fact responses use the owner envelope:
 
 ```json
 {
@@ -91,102 +69,21 @@ V1 responses use a common owner envelope:
   "resource_kind": "TRADEMARK_CASE",
   "authority": "DATA_ENGINE_FACT_READ_MODEL",
   "legal_conclusion": false,
+  "fact_state": "observed",
   "payload": {}
 }
 ```
 
-The envelope establishes owner and contract provenance. Domain payload semantics remain authoritative:
+Raw/normalized Data Engine facts are not legal conclusions, do not authorize filing/execution, and do not transfer business-state ownership to Data Engine.
 
-- US application raw status/event/statement facts are not MarkOrbit legal-status conclusions.
-- Assignment data is recorded-assignment fact evidence, not a legal-title determination.
-- TTAB data is procedural fact evidence, not a substantive-rights or legal-outcome determination.
-- Data Engine normalization or aggregation does not authorize downstream business action.
+## Change feed and deferred scope
 
-## Change Feed Plane
+`GET /api/v1/us/changes` preserves lossless factual observation cursor semantics. G0 does not implement or freeze the later `MO-DE-007` / `MO-DE-008` ownership decisions beyond recording them as deferred.
 
-The V1 change feed is:
+## Control plane and writeback
 
-```text
-GET /api/v1/us/changes
-```
-
-It preserves the existing lossless observation cursor model. A change-feed item means Data Engine observed a source-fact change. It does not mean:
-
-- a legal conclusion changed;
-- a MarkOrbit Matter changed;
-- a task/reminder must be created;
-- customer outreach is authorized;
-- a filing or provider action is authorized.
-
-Consumers own those decisions in their own service boundaries.
-
-The V1 feed is pull-based HTTP. A future event transport may publish the same owner-produced semantics, but event transport must not create a second authority model.
-
-## Control/Admin Plane
-
-Existing operational endpoints remain outside the consumer contract, including prefixes such as:
-
-```text
-/api/admin
-/api/jobs
-```
-
-These endpoints are for Data Engine operations. Core, Gateway, Lite, MarkReg, Knowledge, or other business consumers must not use them as business integration contracts.
-
-In particular, consumer services must not trigger Data Engine ingestion, replay, retry, reset, or repair as a consequence of normal product behavior.
-
-## Writeback policy
-
-There is **no consumer writeback into source facts**.
-
-Examples that must stay outside Data Engine official/source-fact tables:
-
-- user-confirmed client/entity mapping;
-- portfolio membership;
-- user annotations;
-- legal analysis;
-- recommended action;
-- Opportunity, Intake, Order, Matter, Task, Reminder, Execution, Payment, provider or filing state.
-
-Those records belong to their proper MarkOrbit Owning Service and may retain Data Engine provenance references.
-
-If a user believes an official/source fact is wrong, MarkOrbit may store a separate user/business annotation or correction claim. It must not silently overwrite the Data Engine source observation.
-
-## Consumer ownership
-
-Data Engine answers questions about source facts. It does not become a universal business-state service.
-
-Typical composition:
-
-```text
-Gateway / Product
-    -> Core for semantic identity / permission references
-    -> Data Engine for trademark source facts
-    -> owning business service for workflow state
-```
-
-Core is not required to proxy all Data Engine traffic. Gateway or an owning service may consume the V1 API where the product contract requires it.
+`/api/admin`, `/api/jobs`, ingestion, replay, retry, reset, repair and source-package mutation are outside the consumer contract. There is no consumer writeback into Data Engine source facts.
 
 ## Storage independence
 
-Consumers must know service connection configuration, not storage location. Moving Data Engine PostgreSQL/ClickHouse from a Windows Docker volume to another disk, Linux host, NAS, or managed database must not require changes to Core business semantics.
-
-## Versioning
-
-Breaking consumer-contract changes require a new versioned integration surface. Existing unversioned `/api/...` routes remain implementation/legacy surfaces unless explicitly admitted into a versioned contract.
-
-V1 does not authorize removal of existing routes.
-
-## Non-goals
-
-This contract does not:
-
-- change live CN/US replay state;
-- mutate existing databases;
-- introduce cross-service SQL;
-- create Core-side canonical trademark copies;
-- add business writeback to Data Engine;
-- infer Assignment legal title;
-- infer TTAB substantive rights or legal outcome;
-- authorize external execution;
-- define public-network exposure, TLS termination, firewalling, service discovery, or deployment topology.
+Provider storage topology is an implementation detail. Moving PostgreSQL/ClickHouse/raw storage must not require MarkOrbit business-semantic changes.
