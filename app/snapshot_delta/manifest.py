@@ -6,9 +6,9 @@ import hashlib
 from datetime import datetime
 
 from .fingerprint import fingerprint
-from .ipos_sg import SnapshotSource
 from .loader import SnapshotCsvLoader
 from .models import SnapshotManifest
+from .source import SnapshotSource
 
 
 def _file_sha256(loader: SnapshotCsvLoader) -> str:
