@@ -18,6 +18,9 @@ from .manifest import build_snapshot_manifest
 from .models import DeltaEvent, SnapshotManifest
 from .runtime import detect_snapshot_deltas
 
+_PENDING_CYCLE_FILE = "pending-cycle.json"
+_PENDING_CYCLE_VERSION = 1
+
 
 class SnapshotDownloader(Protocol):
     def download(self, destination_directory: str | Path) -> AcquiredSnapshot: ...
@@ -87,13 +90,18 @@ def _version_paths(state_directory: Path, content_hash: str) -> tuple[Path, Path
     )
 
 
-def _current_manifest(state_directory: Path) -> tuple[SnapshotManifest, Path, Path] | None:
+def _current_pointer_hash(state_directory: Path) -> str | None:
     pointer_path = state_directory / "current.json"
     if not pointer_path.exists():
         return None
+    return str(_read_json(pointer_path)["content_hash"])
 
-    pointer = _read_json(pointer_path)
-    content_hash = str(pointer["content_hash"])
+
+def _current_manifest(state_directory: Path) -> tuple[SnapshotManifest, Path, Path] | None:
+    content_hash = _current_pointer_hash(state_directory)
+    if content_hash is None:
+        return None
+
     snapshot_path, manifest_path = _version_paths(state_directory, content_hash)
     if not snapshot_path.exists() or not manifest_path.exists():
         raise ValueError("current snapshot pointer references missing state files")
@@ -112,6 +120,112 @@ def _publish_pointer(state_directory: Path, manifest: SnapshotManifest) -> None:
             "storage_reference": manifest.storage_reference,
         },
     )
+
+
+def _pending_cycle_path(state_directory: Path) -> Path:
+    return state_directory / _PENDING_CYCLE_FILE
+
+
+def _relative_state_path(state_directory: Path, path: Path | None) -> str | None:
+    if path is None:
+        return None
+    return path.relative_to(state_directory).as_posix()
+
+
+def _write_pending_cycle(
+    state_directory: Path,
+    *,
+    previous_content_hash: str | None,
+    candidate_content_hash: str,
+    events_path: Path | None,
+) -> None:
+    candidate_snapshot, candidate_manifest = _version_paths(
+        state_directory,
+        candidate_content_hash,
+    )
+    existing_manifest = (
+        _read_json(candidate_manifest) if candidate_manifest.exists() else None
+    )
+    _atomic_write_json(
+        _pending_cycle_path(state_directory),
+        {
+            "version": _PENDING_CYCLE_VERSION,
+            "previous_content_hash": previous_content_hash,
+            "candidate_content_hash": candidate_content_hash,
+            "events_reference": _relative_state_path(state_directory, events_path),
+            "candidate_snapshot_preexisting": candidate_snapshot.exists(),
+            "candidate_manifest_preexisting": existing_manifest,
+        },
+    )
+
+
+def _clear_pending_cycle(state_directory: Path) -> None:
+    pending = _pending_cycle_path(state_directory)
+    pending.unlink(missing_ok=True)
+    pending.with_name(f".{pending.name}.part").unlink(missing_ok=True)
+
+
+def _retire_previous_snapshot(previous_snapshot: Path) -> None:
+    previous_snapshot.unlink(missing_ok=True)
+
+
+def _recover_pending_cycle(state_directory: Path) -> None:
+    """Finish or roll back an interrupted cycle before any new acquisition."""
+    pending = _pending_cycle_path(state_directory)
+    partial = pending.with_name(f".{pending.name}.part")
+    if not pending.exists():
+        # A partial journal can only precede candidate persistence because the
+        # durable journal is written first. It is therefore safe to discard.
+        partial.unlink(missing_ok=True)
+        return
+
+    payload = _read_json(pending)
+    if int(payload.get("version", 0)) != _PENDING_CYCLE_VERSION:
+        raise ValueError("unsupported pending snapshot cycle version")
+
+    previous_hash_value = payload.get("previous_content_hash")
+    previous_hash = str(previous_hash_value) if previous_hash_value else None
+    candidate_hash = str(payload["candidate_content_hash"])
+    events_reference = payload.get("events_reference")
+    events_path = (
+        state_directory / str(events_reference) if events_reference else None
+    )
+    candidate_snapshot, candidate_manifest = _version_paths(
+        state_directory,
+        candidate_hash,
+    )
+    pointer_hash = _current_pointer_hash(state_directory)
+
+    if pointer_hash == candidate_hash:
+        if not candidate_snapshot.exists() or not candidate_manifest.exists():
+            raise ValueError("committed snapshot cycle is missing candidate evidence")
+        if events_path is not None and not events_path.exists():
+            raise ValueError("committed snapshot cycle is missing delta event evidence")
+        if previous_hash is not None and previous_hash != candidate_hash:
+            previous_snapshot, _ = _version_paths(state_directory, previous_hash)
+            _retire_previous_snapshot(previous_snapshot)
+        _clear_pending_cycle(state_directory)
+        return
+
+    if pointer_hash != previous_hash:
+        raise ValueError("pending snapshot cycle disagrees with current pointer")
+
+    snapshot_preexisting = bool(payload.get("candidate_snapshot_preexisting", False))
+    if not snapshot_preexisting:
+        candidate_snapshot.unlink(missing_ok=True)
+
+    previous_manifest_payload = payload.get("candidate_manifest_preexisting")
+    if previous_manifest_payload is None:
+        candidate_manifest.unlink(missing_ok=True)
+    elif isinstance(previous_manifest_payload, dict):
+        _atomic_write_json(candidate_manifest, previous_manifest_payload)
+    else:
+        raise ValueError("pending snapshot cycle has invalid manifest backup")
+
+    if events_path is not None:
+        events_path.unlink(missing_ok=True)
+        events_path.with_name(f".{events_path.name}.part").unlink(missing_ok=True)
+    _clear_pending_cycle(state_directory)
 
 
 def _persist_version(
@@ -175,9 +289,11 @@ def run_ipos_snapshot_cycle(
     *,
     downloader: SnapshotDownloader | None = None,
 ) -> SnapshotCycleResult:
-    """Acquire one IPOS snapshot and commit only a new authoritative source version."""
+    """Acquire one IPOS snapshot and atomically advance authoritative state."""
     state = Path(state_directory)
     state.mkdir(parents=True, exist_ok=True)
+    _recover_pending_cycle(state)
+
     incoming = state / "incoming"
     active_downloader = downloader or DataGovSgSnapshotDownloader()
     acquired = active_downloader.download(incoming)
@@ -199,6 +315,22 @@ def run_ipos_snapshot_cycle(
         acquired.path.unlink(missing_ok=True)
         return SnapshotCycleResult(status="UNCHANGED", manifest=current[0])
 
+    previous_manifest = current[0] if current is not None else None
+    events_path = None
+    if previous_manifest is not None:
+        events_path = state / "events" / (
+            f"{previous_manifest.content_hash}__{candidate.content_hash}.jsonl"
+        )
+
+    _write_pending_cycle(
+        state,
+        previous_content_hash=(
+            previous_manifest.content_hash if previous_manifest is not None else None
+        ),
+        candidate_content_hash=candidate.content_hash,
+        events_path=events_path,
+    )
+
     candidate, candidate_snapshot, _ = _persist_version(
         state,
         acquired,
@@ -207,12 +339,11 @@ def run_ipos_snapshot_cycle(
 
     if current is None:
         _publish_pointer(state, candidate)
+        _clear_pending_cycle(state)
         return SnapshotCycleResult(status="BOOTSTRAPPED", manifest=candidate)
 
     previous_manifest, previous_snapshot, _ = current
-    events_path = state / "events" / (
-        f"{previous_manifest.content_hash}__{candidate.content_hash}.jsonl"
-    )
+    assert events_path is not None
     event_count = _write_events(
         events_path,
         previous_manifest,
@@ -222,9 +353,10 @@ def run_ipos_snapshot_cycle(
     )
     _publish_pointer(state, candidate)
 
-    # Full source rows are intentionally single-current-version storage, but
-    # manifests are durable source evidence and must survive CSV rotation.
-    previous_snapshot.unlink(missing_ok=True)
+    # Pointer publication is the commit boundary. Recovery will finish this
+    # rotation if the process stops between commit and cleanup.
+    _retire_previous_snapshot(previous_snapshot)
+    _clear_pending_cycle(state)
 
     return SnapshotCycleResult(
         status="CHANGED",
