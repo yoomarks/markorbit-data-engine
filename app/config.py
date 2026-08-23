@@ -64,10 +64,17 @@ class Settings(BaseSettings):
     us_mark_image_idle_sleep_seconds: int = 60
 
     # Consumer-facing /api/v1 authentication is disabled by default for local
-    # compatibility. Production deployments can switch to required and provide
-    # comma-separated bearer keys to support overlap during key rotation.
+    # compatibility. G1 uses required mode with environment-scoped bearer keys.
     integration_auth_mode: str = "disabled"
     integration_api_keys: str = ""
+
+    # MO-DE-005 backpressure is opt-in so G0 changes no live runtime defaults.
+    # When enabled, the default envelope is 120 requests per 60 seconds for each
+    # source IP as observed by a provider process; consumers must honor 429 and
+    # Retry-After rather than assuming these defaults are universal.
+    integration_rate_limit_enabled: bool = False
+    integration_rate_limit_max_requests: int = 120
+    integration_rate_limit_window_seconds: int = 60
 
     log_level: str = "INFO"
 

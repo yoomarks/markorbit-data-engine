@@ -1,0 +1,54 @@
+schema_version: 1
+integration:
+  name: markorbit-data-engine
+  stage: G0
+  stage_name: Contract Freeze
+  provider_status: frozen_in_provider_pr
+  consumer_status: awaiting_markorbit_acceptance
+  provider_pr: yoomarks/markorbit-data-engine#209
+  updated_at: 2026-08-23
+baselines:
+  markorbit:
+    repository: yoomarks/markorbit
+    role: consumer-authority
+    baseline_sha: 149b0de8568fe3e82b81e6eb006030426cc0f5aa
+  data_engine:
+    repository: yoomarks/markorbit-data-engine
+    role: provider-authority
+    baseline_sha: e1776dcceaef571e7e4ffc9cbb22688c04bc5015
+canonical_artifacts:
+  runtime_descriptor: GET /api/v1/contract
+  machine_contract: docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json
+  provider_contract: docs/integrations/markorbit/provider-contract.md
+  runtime_semantics: docs/integrations/markorbit/runtime-semantics.md
+  tests: tests/test_mo_de_g0_contract.py
+requirements:
+  MO-DE-001:
+    status: provider_frozen
+    evidence: [app/integration_g0_contract.py, app/integration_api.py, docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json, tests/test_mo_de_g0_contract.py]
+  MO-DE-002:
+    status: provider_frozen
+    evidence: [docs/integrations/markorbit/provider-contract.md, app/integration_runtime.py, tests/test_mo_de_g0_contract.py]
+  MO-DE-003:
+    status: provider_frozen
+    evidence: [app/integration_security.py, docs/integrations/markorbit/runtime-semantics.md, tests/test_mo_de_g0_contract.py]
+  MO-DE-004:
+    status: provider_frozen
+    evidence: [app/integration_transport.py, docs/integrations/markorbit/runtime-semantics.md, tests/test_mo_de_g0_contract.py]
+  MO-DE-005:
+    status: provider_frozen
+    evidence: [app/integration_runtime.py, app/config.py, docs/integrations/markorbit/runtime-semantics.md, tests/test_mo_de_g0_contract.py]
+  MO-DE-006:
+    status: ready_after_consumer_g0_acceptance
+    prerequisites: [auth_required_runtime_profile, real_cross_repo_runtime_lane, consumer_contract_validation]
+  MO-DE-007:
+    status: deferred_no_implementation
+  MO-DE-008:
+    status: deferred_no_implementation
+cross_repo_decisions:
+  - MarkOrbit must accept that current V1 does not generically emit not_covered/no_observation/tombstone; consumers preserve unknown unless Data Engine explicitly emits a future additive state.
+  - MarkOrbit must accept x-correlation-id as end-to-end correlation and X-Request-ID as the provider hop/request and current provider trace identifier.
+rules:
+  g1_requires_consumer_g0_acceptance: true
+  breaking_change_requires_cross_repo_rfc: true
+  production_authorization: false
