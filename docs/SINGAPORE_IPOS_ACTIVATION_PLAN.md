@@ -2,7 +2,7 @@
 
 ## Status
 
-Source/lifecycle activation is accepted on the real public corpus. Generic snapshot/delta behavior and current projection plumbing are implemented. Source-native fact extraction now covers the current 39-column IPOS source schema at the source-fact carriage layer; deeper family-specific semantic normalization remains follow-on work.
+Source/lifecycle activation is accepted on the real public corpus. Generic snapshot/delta behavior and current projection plumbing are implemented. Source-native fact extraction covers the current 39-column IPOS source schema, and updated applications can now be decomposed into deterministic neutral source-family changes; deeper semantic normalization remains follow-on work.
 
 A recurring production acquisition schedule is not asserted by this record.
 
@@ -65,6 +65,14 @@ Malformed JSON families fail closed instead of being silently dropped or interpr
 
 Derived or interpreted legal meaning must remain separate from source-native facts.
 
+### Neutral Native Family Changes
+
+For an application that already exists in both snapshots, native facts can be decomposed into deterministic source families such as status, journal, international data, mark data, transformation, replacement, priority, cases, licence, security interest, transfer, goods/services, applicants and agents.
+
+A native family change records only the exact before/after source payload and changed field names. Family ordering is deterministic, application identity must match, and nested source values are preserved. This layer does not convert source phrases such as transfer, licence, case or status values into legal conclusions or dedicated semantic event types.
+
+Creation and deletion remain responsibilities of the generic snapshot/delta layer; family decomposition is for updates to the same source identity.
+
 ## Phase 3 — Snapshot Delta and Projection
 
 Implemented at the generic/source-observation layer:
@@ -75,6 +83,7 @@ Implemented at the generic/source-observation layer:
 - explicit jurisdiction propagation
 - rejection of cross-jurisdiction or cross-identity comparisons
 - durable source-observation event evidence
+- deterministic neutral source-family decomposition for updated Singapore applications
 - current projection plumbing
 - deterministic replay tests
 
@@ -109,4 +118,4 @@ Source/lifecycle activation is accepted only when:
 
 ## Remaining Activation Work
 
-Continue Phase 2 by adding product/runtime-driven normalization for selected source families while preserving the complete raw source-fact contract. Dedicated semantic event families should be introduced separately from raw fact extraction. Schema-drift checks may be wired into operator acceptance after the downloaded CSV header contract is explicitly verified. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.
+The next source-runtime step is to wire schema-drift verification into a lightweight authoritative schema acceptance path and, where consumers need it, connect neutral native-family changes to durable evidence without prematurely introducing interpreted legal events. Dedicated semantic events remain a separate reviewed layer. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.

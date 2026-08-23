@@ -33,3 +33,12 @@ def test_singapore_activation_docs_record_native_facts_without_overclaiming():
     assert "Malformed JSON families fail closed" in activation
     assert "without introducing legal interpretation" in activation
     assert "datastore `_id` field is treated as provider metadata" in activation
+
+
+def test_singapore_activation_docs_keep_family_changes_neutral():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "deterministic neutral source-family changes" in activation
+    assert "does not convert source phrases" in activation
+    assert "Creation and deletion remain responsibilities of the generic snapshot/delta layer" in activation
+    assert "Dedicated semantic events remain a separate reviewed layer" in activation
