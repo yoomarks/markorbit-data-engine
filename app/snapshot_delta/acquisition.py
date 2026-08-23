@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
-from .ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS, SnapshotSource
+from .ipos_sg import DataGovSgSnapshotSource, IPOS_SG_TRADEMARK_APPLICATIONS
 from .ipos_sg_observation import validate_ipos_snapshot_schema
 from .loader import SnapshotCsvLoader
 
@@ -34,7 +34,7 @@ class DataGovSgSnapshotDownloader:
 
     def __init__(
         self,
-        source: SnapshotSource = IPOS_SG_TRADEMARK_APPLICATIONS,
+        source: DataGovSgSnapshotSource = IPOS_SG_TRADEMARK_APPLICATIONS,
         *,
         opener: Callable[..., Any] = urlopen,
         sleeper: Callable[[float], None] = time.sleep,
