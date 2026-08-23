@@ -79,6 +79,8 @@ For identities already classified as `UPDATE_DETECTED`, the lifecycle now perfor
 
 Generic delta evidence and required native-family evidence are both durable before the accepted-current pointer advances and before the old full CSV is rotated away. If native evidence persistence fails, the pointer remains on the previously accepted snapshot and the just-written generic event file is removed so partially committed lifecycle evidence is not published.
 
+A failure at any pre-pointer commit step also removes the unaccepted candidate full CSV, its candidate manifest, and candidate sidecars. The previously accepted version therefore remains the sole authoritative full snapshot instead of leaving an orphan candidate that could be mistaken for committed lifecycle state.
+
 Creation and deletion remain responsibilities of the generic snapshot/delta layer; family decomposition is for updates to the same source identity. A create/delete-only cycle therefore does not create an empty native-family sidecar.
 
 ## Phase 3 — Snapshot Delta and Projection
@@ -122,11 +124,12 @@ Source/lifecycle activation is accepted only when:
 5. provenance and accepted-current pointers are internally consistent;
 6. changed runs retain durable generic delta evidence;
 7. updated identities retain durable neutral native-family evidence before snapshot rotation;
-8. source-native facts remain separated from interpretation;
-9. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
-10. the full-corpus lifecycle validates non-empty authoritative source data;
-11. Data Engine CI remains green;
-12. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
+8. failed pre-pointer runs leave no unaccepted candidate snapshot, candidate manifest or candidate sidecars;
+9. source-native facts remain separated from interpretation;
+10. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
+11. the full-corpus lifecycle validates non-empty authoritative source data;
+12. Data Engine CI remains green;
+13. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
 
 ## Remaining Activation Work
 
