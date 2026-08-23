@@ -90,6 +90,18 @@ def _version_paths(state_directory: Path, content_hash: str) -> tuple[Path, Path
     )
 
 
+def _events_path(
+    state_directory: Path,
+    previous_content_hash: str | None,
+    candidate_content_hash: str,
+) -> Path | None:
+    if previous_content_hash is None:
+        return None
+    return state_directory / "events" / (
+        f"{previous_content_hash}__{candidate_content_hash}.jsonl"
+    )
+
+
 def _current_pointer_hash(state_directory: Path) -> str | None:
     pointer_path = state_directory / "current.json"
     if not pointer_path.exists():
@@ -126,18 +138,11 @@ def _pending_cycle_path(state_directory: Path) -> Path:
     return state_directory / _PENDING_CYCLE_FILE
 
 
-def _relative_state_path(state_directory: Path, path: Path | None) -> str | None:
-    if path is None:
-        return None
-    return path.relative_to(state_directory).as_posix()
-
-
 def _write_pending_cycle(
     state_directory: Path,
     *,
     previous_content_hash: str | None,
     candidate_content_hash: str,
-    events_path: Path | None,
 ) -> None:
     candidate_snapshot, candidate_manifest = _version_paths(
         state_directory,
@@ -152,7 +157,6 @@ def _write_pending_cycle(
             "version": _PENDING_CYCLE_VERSION,
             "previous_content_hash": previous_content_hash,
             "candidate_content_hash": candidate_content_hash,
-            "events_reference": _relative_state_path(state_directory, events_path),
             "candidate_snapshot_preexisting": candidate_snapshot.exists(),
             "candidate_manifest_preexisting": existing_manifest,
         },
@@ -186,20 +190,17 @@ def _recover_pending_cycle(state_directory: Path) -> None:
     previous_hash_value = payload.get("previous_content_hash")
     previous_hash = str(previous_hash_value) if previous_hash_value else None
     candidate_hash = str(payload["candidate_content_hash"])
-    events_reference = payload.get("events_reference")
-    events_path = (
-        state_directory / str(events_reference) if events_reference else None
-    )
     candidate_snapshot, candidate_manifest = _version_paths(
         state_directory,
         candidate_hash,
     )
+    event_path = _events_path(state_directory, previous_hash, candidate_hash)
     pointer_hash = _current_pointer_hash(state_directory)
 
     if pointer_hash == candidate_hash:
         if not candidate_snapshot.exists() or not candidate_manifest.exists():
             raise ValueError("committed snapshot cycle is missing candidate evidence")
-        if events_path is not None and not events_path.exists():
+        if event_path is not None and not event_path.exists():
             raise ValueError("committed snapshot cycle is missing delta event evidence")
         if previous_hash is not None and previous_hash != candidate_hash:
             previous_snapshot, _ = _version_paths(state_directory, previous_hash)
@@ -222,9 +223,9 @@ def _recover_pending_cycle(state_directory: Path) -> None:
     else:
         raise ValueError("pending snapshot cycle has invalid manifest backup")
 
-    if events_path is not None:
-        events_path.unlink(missing_ok=True)
-        events_path.with_name(f".{events_path.name}.part").unlink(missing_ok=True)
+    if event_path is not None:
+        event_path.unlink(missing_ok=True)
+        event_path.with_name(f".{event_path.name}.part").unlink(missing_ok=True)
     _clear_pending_cycle(state_directory)
 
 
@@ -235,6 +236,9 @@ def _persist_version(
 ) -> tuple[SnapshotManifest, Path, Path]:
     snapshot_path, manifest_path = _version_paths(state_directory, manifest.content_hash)
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if snapshot_path.exists() and not manifest_path.exists():
+        raise ValueError("snapshot version exists without its manifest")
 
     if manifest_path.exists() and snapshot_path.exists():
         existing = _manifest_from_payload(_read_json(manifest_path))
@@ -316,19 +320,15 @@ def run_ipos_snapshot_cycle(
         return SnapshotCycleResult(status="UNCHANGED", manifest=current[0])
 
     previous_manifest = current[0] if current is not None else None
-    events_path = None
-    if previous_manifest is not None:
-        events_path = state / "events" / (
-            f"{previous_manifest.content_hash}__{candidate.content_hash}.jsonl"
-        )
+    previous_hash = (
+        previous_manifest.content_hash if previous_manifest is not None else None
+    )
+    event_path = _events_path(state, previous_hash, candidate.content_hash)
 
     _write_pending_cycle(
         state,
-        previous_content_hash=(
-            previous_manifest.content_hash if previous_manifest is not None else None
-        ),
+        previous_content_hash=previous_hash,
         candidate_content_hash=candidate.content_hash,
-        events_path=events_path,
     )
 
     candidate, candidate_snapshot, _ = _persist_version(
@@ -343,9 +343,9 @@ def run_ipos_snapshot_cycle(
         return SnapshotCycleResult(status="BOOTSTRAPPED", manifest=candidate)
 
     previous_manifest, previous_snapshot, _ = current
-    assert events_path is not None
+    assert event_path is not None
     event_count = _write_events(
-        events_path,
+        event_path,
         previous_manifest,
         candidate,
         previous_snapshot,
@@ -362,5 +362,5 @@ def run_ipos_snapshot_cycle(
         status="CHANGED",
         manifest=candidate,
         event_count=event_count,
-        events_path=events_path,
+        events_path=event_path,
     )
