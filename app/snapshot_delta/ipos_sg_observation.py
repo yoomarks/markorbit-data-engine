@@ -28,6 +28,7 @@ def observation_from_ipos_row(row: Mapping[str, Any]) -> Observation:
         entity_type="application",
         entity_id=entity_id,
         payload=dict(row),
+        jurisdiction="SG",
     )
 
 
