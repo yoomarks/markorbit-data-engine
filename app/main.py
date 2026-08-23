@@ -10,6 +10,7 @@ from app.admin_system_api import router as admin_system_router
 from app.admin_task_api import router as admin_task_router
 from app.contact_ingest.admin_api import router as contact_admin_router
 from app.integration_api import router as integration_router
+from app.integration_runtime import install_integration_runtime
 from app.integration_transport import install_integration_transport
 from app.us.alert_api import router as us_alert_router
 from app.us.case360_api import router as us_case_360_router
@@ -25,6 +26,7 @@ _core.app.description = (
     f"MarkOrbit trademark data engine {_core.ENGINE_VERSION} with US M1.4 + "
     "US Assignment M1.0 + US TTAB M1.1 + US Case 360 M1.0 + US Alert Engine M1.0"
 )
+install_integration_runtime(_core.app)
 install_integration_transport(_core.app)
 _core.app.include_router(admin_pages_router)
 _core.app.include_router(admin_router)
