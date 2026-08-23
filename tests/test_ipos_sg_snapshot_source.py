@@ -15,3 +15,11 @@ def test_ipos_sg_snapshot_source_contract():
         "https://data.gov.sg/api/action/datastore_search?resource_id="
         "d_6145acb2130bf781165258e76a584383"
     )
+    assert source.initiate_download_url == (
+        "https://api-open.data.gov.sg/v1/public/api/datasets/"
+        "d_6145acb2130bf781165258e76a584383/initiate-download"
+    )
+    assert source.poll_download_url == (
+        "https://api-open.data.gov.sg/v1/public/api/datasets/"
+        "d_6145acb2130bf781165258e76a584383/poll-download"
+    )
