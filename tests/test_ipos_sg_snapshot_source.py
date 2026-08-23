@@ -1,3 +1,4 @@
+from app.jurisdictions.singapore.source import source_metadata
 from app.snapshot_delta.ipos_sg import (
     DataGovSgSnapshotSource,
     IPOS_SG_TRADEMARK_APPLICATIONS,
@@ -7,13 +8,21 @@ from app.snapshot_delta.source import SnapshotSource
 
 def test_ipos_sg_snapshot_source_contract():
     source = IPOS_SG_TRADEMARK_APPLICATIONS
+    metadata = source_metadata()
 
+    assert metadata == {
+        "jurisdiction": "SG",
+        "source_id": "IPOS_SG_TRADEMARK_APPLICATIONS",
+        "dataset_id": "d_6145acb2130bf781165258e76a584383",
+        "file_name": "IPOSTradeMarkApplications.csv",
+        "source_type": "current_snapshot",
+    }
     assert isinstance(source, SnapshotSource)
     assert isinstance(source, DataGovSgSnapshotSource)
-    assert source.source_id == "IPOS_SG_TRADEMARK_APPLICATIONS"
-    assert source.dataset_id == "d_6145acb2130bf781165258e76a584383"
-    assert source.filename == "IPOSTradeMarkApplications.csv"
-    assert source.source_type == "current_snapshot"
+    assert source.source_id == metadata["source_id"]
+    assert source.dataset_id == metadata["dataset_id"]
+    assert source.filename == metadata["file_name"]
+    assert source.source_type == metadata["source_type"]
     assert source.dataset_url == (
         "https://data.gov.sg/datasets/d_6145acb2130bf781165258e76a584383/view"
     )
