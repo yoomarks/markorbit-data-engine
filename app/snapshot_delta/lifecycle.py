@@ -209,7 +209,7 @@ def run_ipos_snapshot_cycle(
         _publish_pointer(state, candidate)
         return SnapshotCycleResult(status="BOOTSTRAPPED", manifest=candidate)
 
-    previous_manifest, previous_snapshot, previous_manifest_path = current
+    previous_manifest, previous_snapshot, _ = current
     events_path = state / "events" / (
         f"{previous_manifest.content_hash}__{candidate.content_hash}.jsonl"
     )
@@ -222,8 +222,9 @@ def run_ipos_snapshot_cycle(
     )
     _publish_pointer(state, candidate)
 
+    # Full source rows are intentionally single-current-version storage, but
+    # manifests are durable source evidence and must survive CSV rotation.
     previous_snapshot.unlink(missing_ok=True)
-    previous_manifest_path.unlink(missing_ok=True)
 
     return SnapshotCycleResult(
         status="CHANGED",
