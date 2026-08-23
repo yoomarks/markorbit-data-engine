@@ -1,0 +1,96 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.snapshot_delta.acquisition import AcquiredSnapshot
+from app.snapshot_delta.ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
+from app.snapshot_delta.ipos_sg_full_acceptance import (
+    run_ipos_full_corpus_acceptance,
+    write_acceptance_report,
+)
+
+
+class FakeDownloader:
+    def __init__(self, payload: str, day: int) -> None:
+        self.payload = payload
+        self.retrieved_at = datetime(2026, 8, day, 2, 0, tzinfo=timezone.utc)
+
+    def download(self, destination_directory: str | Path) -> AcquiredSnapshot:
+        destination = Path(destination_directory)
+        destination.mkdir(parents=True, exist_ok=True)
+        path = destination / IPOS_SG_TRADEMARK_APPLICATIONS.filename
+        path.write_text(self.payload, encoding="utf-8")
+        return AcquiredSnapshot(
+            path=path,
+            source_uri="https://download.example/ipos.csv",
+            retrieved_at=self.retrieved_at,
+            bytes_written=path.stat().st_size,
+        )
+
+
+def clock(*values: float):
+    iterator = iter(values)
+    return lambda: next(iterator)
+
+
+def test_full_corpus_acceptance_bootstraps_and_reports_runtime_evidence(tmp_path: Path):
+    payload = "Application Number,Mark Status\nSG1,Pending\nSG2,Registered\n"
+
+    report = run_ipos_full_corpus_acceptance(
+        tmp_path,
+        downloader=FakeDownloader(payload, 22),
+        clock=clock(10.0, 12.5),
+    )
+
+    assert report.status == "BOOTSTRAPPED"
+    assert report.dataset_id == "d_6145acb2130bf781165258e76a584383"
+    assert report.row_count == 2
+    assert report.bytes_downloaded == len(payload.encode("utf-8"))
+    assert report.current_snapshot_bytes == report.bytes_downloaded
+    assert report.retained_full_snapshot_count == 1
+    assert report.elapsed_seconds == 2.5
+    assert report.event_count == 0
+    assert report.events_path is None
+    assert len(report.content_hash) == 64
+    assert len(report.schema_hash) == 64
+
+
+def test_full_corpus_acceptance_changed_cycle_retains_one_snapshot_and_events(tmp_path: Path):
+    first = "Application Number,Mark Status\nSG1,Pending\nSG2,Registered\n"
+    second = "Application Number,Mark Status\nSG1,Registered\nSG3,Pending\n"
+    run_ipos_full_corpus_acceptance(
+        tmp_path,
+        downloader=FakeDownloader(first, 22),
+        clock=clock(1.0, 2.0),
+    )
+
+    report = run_ipos_full_corpus_acceptance(
+        tmp_path,
+        downloader=FakeDownloader(second, 23),
+        clock=clock(3.0, 5.0),
+    )
+
+    assert report.status == "CHANGED"
+    assert report.event_count == 3
+    assert report.events_path is not None
+    assert Path(report.events_path).exists()
+    assert report.retained_full_snapshot_count == 1
+    assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
+
+
+def test_acceptance_report_is_machine_readable_and_atomic(tmp_path: Path):
+    report = run_ipos_full_corpus_acceptance(
+        tmp_path / "state",
+        downloader=FakeDownloader("Application Number,Mark Status\nSG1,Pending\n", 22),
+        clock=clock(4.0, 4.75),
+    )
+    report_path = tmp_path / "evidence" / "acceptance.json"
+
+    write_acceptance_report(report_path, report)
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert payload["content_hash"] == report.content_hash
+    assert payload["row_count"] == 1
+    assert payload["elapsed_seconds"] == 0.75
+    assert payload["completed_at"].endswith("+00:00")
+    assert not (report_path.parent / ".acceptance.json.part").exists()
