@@ -11,6 +11,10 @@ from typing import Any, Protocol
 
 from .acquisition import AcquiredSnapshot, DataGovSgSnapshotDownloader
 from .ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
+from .ipos_sg_native_evidence import (
+    IposNativeFamilyEvidence,
+    native_family_evidence_for_updates,
+)
 from .ipos_sg_observation import (
     observations_from_ipos_snapshot,
     validate_ipos_snapshot_schema,
@@ -33,6 +37,8 @@ class SnapshotCycleResult:
     manifest: SnapshotManifest
     event_count: int = 0
     events_path: Path | None = None
+    native_change_count: int = 0
+    native_changes_path: Path | None = None
 
 
 def _manifest_payload(manifest: SnapshotManifest) -> dict[str, Any]:
@@ -58,6 +64,12 @@ def _manifest_from_payload(payload: dict[str, Any]) -> SnapshotManifest:
 def _event_payload(event: DeltaEvent) -> dict[str, Any]:
     payload = asdict(event)
     payload["detected_at"] = event.detected_at.isoformat()
+    return payload
+
+
+def _native_evidence_payload(evidence: IposNativeFamilyEvidence) -> dict[str, Any]:
+    payload = asdict(evidence)
+    payload["detected_at"] = evidence.detected_at.isoformat()
     return payload
 
 
@@ -144,11 +156,12 @@ def _write_events(
     current_manifest: SnapshotManifest,
     previous_snapshot: Path,
     current_snapshot: Path,
-) -> int:
+) -> tuple[int, frozenset[str]]:
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(f".{path.name}.part")
     partial.unlink(missing_ok=True)
     count = 0
+    updated_application_numbers: set[str] = set()
 
     events = detect_snapshot_deltas(
         observations_from_ipos_snapshot(SnapshotCsvLoader(previous_snapshot)),
@@ -164,9 +177,58 @@ def _write_events(
                 json.dump(_event_payload(event), target, ensure_ascii=False, sort_keys=True)
                 target.write("\n")
                 count += 1
+                if event.event_type == "UPDATE_DETECTED":
+                    updated_application_numbers.add(event.entity_id)
             target.flush()
             os.fsync(target.fileno())
         os.replace(partial, path)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+
+    return count, frozenset(updated_application_numbers)
+
+
+def _write_native_changes(
+    path: Path,
+    updated_application_numbers: frozenset[str],
+    previous_manifest: SnapshotManifest,
+    current_manifest: SnapshotManifest,
+    previous_snapshot: Path,
+    current_snapshot: Path,
+) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f".{path.name}.part")
+    partial.unlink(missing_ok=True)
+    count = 0
+
+    evidence = native_family_evidence_for_updates(
+        observations_from_ipos_snapshot(SnapshotCsvLoader(previous_snapshot)),
+        observations_from_ipos_snapshot(SnapshotCsvLoader(current_snapshot)),
+        updated_application_numbers,
+        detected_at=current_manifest.retrieved_at,
+        before_evidence_reference=manifest_evidence_reference(previous_manifest),
+        after_evidence_reference=manifest_evidence_reference(current_manifest),
+    )
+
+    try:
+        with partial.open("w", encoding="utf-8", newline="\n") as target:
+            for item in evidence:
+                json.dump(
+                    _native_evidence_payload(item),
+                    target,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                target.write("\n")
+                count += 1
+            target.flush()
+            os.fsync(target.fileno())
+        if count:
+            os.replace(partial, path)
+        else:
+            partial.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
     except Exception:
         partial.unlink(missing_ok=True)
         raise
@@ -219,20 +281,38 @@ def run_ipos_snapshot_cycle(
         return SnapshotCycleResult(status="BOOTSTRAPPED", manifest=candidate)
 
     previous_manifest, previous_snapshot, _ = current
-    events_path = state / "events" / (
-        f"{previous_manifest.content_hash}__{candidate.content_hash}.jsonl"
-    )
-    event_count = _write_events(
+    evidence_stem = f"{previous_manifest.content_hash}__{candidate.content_hash}"
+    events_path = state / "events" / f"{evidence_stem}.jsonl"
+    event_count, updated_application_numbers = _write_events(
         events_path,
         previous_manifest,
         candidate,
         previous_snapshot,
         candidate_snapshot,
     )
+    native_changes_path = state / "native_changes" / f"{evidence_stem}.jsonl"
+    try:
+        native_change_count = _write_native_changes(
+            native_changes_path,
+            updated_application_numbers,
+            previous_manifest,
+            candidate,
+            previous_snapshot,
+            candidate_snapshot,
+        )
+    except Exception:
+        # Generic events describe the candidate comparison but are not committed
+        # lifecycle evidence until all required native evidence is durable.
+        events_path.unlink(missing_ok=True)
+        raise
+
+    if native_change_count == 0:
+        native_changes_path = None
+
     _publish_pointer(state, candidate)
 
     # Full source rows are intentionally single-current-version storage, but
-    # manifests are durable source evidence and must survive CSV rotation.
+    # manifests and derived source evidence survive CSV rotation.
     previous_snapshot.unlink(missing_ok=True)
 
     return SnapshotCycleResult(
@@ -240,4 +320,6 @@ def run_ipos_snapshot_cycle(
         manifest=candidate,
         event_count=event_count,
         events_path=events_path,
+        native_change_count=native_change_count,
+        native_changes_path=native_changes_path,
     )

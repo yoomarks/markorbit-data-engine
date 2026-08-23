@@ -63,11 +63,15 @@ def test_full_corpus_acceptance_bootstraps_and_reports_runtime_evidence(tmp_path
     assert report.elapsed_seconds == 2.5
     assert report.event_count == 0
     assert report.events_path is None
+    assert report.native_change_count == 0
+    assert report.native_changes_path is None
     assert len(report.content_hash) == 64
     assert len(report.schema_hash) == 64
 
 
-def test_full_corpus_acceptance_changed_cycle_retains_one_snapshot_and_events(tmp_path: Path):
+def test_full_corpus_acceptance_changed_cycle_retains_durable_delta_and_native_evidence(
+    tmp_path: Path,
+):
     first = snapshot_csv([("SG1", "Pending"), ("SG2", "Registered")])
     second = snapshot_csv([("SG1", "Registered"), ("SG3", "Pending")])
     run_ipos_full_corpus_acceptance(
@@ -86,6 +90,9 @@ def test_full_corpus_acceptance_changed_cycle_retains_one_snapshot_and_events(tm
     assert report.event_count == 3
     assert report.events_path is not None
     assert Path(report.events_path).exists()
+    assert report.native_change_count == 1
+    assert report.native_changes_path is not None
+    assert Path(report.native_changes_path).exists()
     assert report.retained_full_snapshot_count == 1
     assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
 
@@ -103,6 +110,8 @@ def test_acceptance_report_is_machine_readable_and_atomic(tmp_path: Path):
 
     assert payload["content_hash"] == report.content_hash
     assert payload["row_count"] == 1
+    assert payload["native_change_count"] == 0
+    assert payload["native_changes_path"] is None
     assert payload["elapsed_seconds"] == 0.75
     assert payload["completed_at"].endswith("+00:00")
     assert not (report_path.parent / ".acceptance.json.part").exists()

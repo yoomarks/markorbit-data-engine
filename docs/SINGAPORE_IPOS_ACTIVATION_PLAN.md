@@ -2,7 +2,7 @@
 
 ## Status
 
-Source/lifecycle activation is accepted on the real public corpus. Generic snapshot/delta behavior and current projection plumbing are implemented. Source-native fact extraction covers the current 39-column IPOS source schema, and updated applications can now be decomposed into deterministic neutral source-family changes; deeper semantic normalization remains follow-on work.
+Source/lifecycle activation is accepted on the real public corpus. Generic snapshot/delta behavior and current projection plumbing are implemented. Source-native fact extraction covers the current 39-column IPOS source schema, and updated applications can now be decomposed into deterministic neutral source-family changes with durable source evidence; deeper semantic normalization remains follow-on work.
 
 A recurring production acquisition schedule is not asserted by this record.
 
@@ -71,11 +71,15 @@ Derived or interpreted legal meaning must remain separate from source-native fac
 
 ### Neutral Native Family Changes
 
-For an application that already exists in both snapshots, native facts can be decomposed into deterministic source families such as status, journal, international data, mark data, transformation, replacement, priority, cases, licence, security interest, transfer, goods/services, applicants and agents.
+For an application that already exists in both snapshots, native facts are decomposed into deterministic source families such as status, journal, international data, mark data, transformation, replacement, priority, cases, licence, security interest, transfer, goods/services, applicants and agents.
 
 A native family change records only the exact before/after source payload and changed field names. Family ordering is deterministic, application identity must match, and nested source values are preserved. This layer does not convert source phrases such as transfer, licence, case or status values into legal conclusions or dedicated semantic event types.
 
-Creation and deletion remain responsibilities of the generic snapshot/delta layer; family decomposition is for updates to the same source identity.
+For identities already classified as `UPDATE_DETECTED`, the lifecycle now performs bounded-memory follow-up scans: it retains previous native facts only for the update identities, then streams the current snapshot in source order and writes neutral family-change evidence atomically. Each record carries the previous/current snapshot evidence references and the deterministic detection timestamp. This avoids retaining the full multi-gigabyte previous payload corpus in memory.
+
+Generic delta evidence and required native-family evidence are both durable before the accepted-current pointer advances and before the old full CSV is rotated away. If native evidence persistence fails, the pointer remains on the previously accepted snapshot and the just-written generic event file is removed so partially committed lifecycle evidence is not published.
+
+Creation and deletion remain responsibilities of the generic snapshot/delta layer; family decomposition is for updates to the same source identity. A create/delete-only cycle therefore does not create an empty native-family sidecar.
 
 ## Phase 3 — Snapshot Delta and Projection
 
@@ -88,6 +92,7 @@ Implemented at the generic/source-observation layer:
 - rejection of cross-jurisdiction or cross-identity comparisons
 - durable source-observation event evidence
 - deterministic neutral source-family decomposition for updated Singapore applications
+- durable neutral native-family evidence with snapshot lineage
 - current projection plumbing
 - deterministic replay tests
 
@@ -100,10 +105,11 @@ Do not keep daily 3GB+ CSV snapshots as permanent history by default.
 Durably preserve:
 
 - source evidence manifests and provenance
-- durable delta/event evidence
+- durable generic delta/event evidence
+- durable neutral native-family evidence for source updates
 - current projections
 
-The operational lifecycle retains the accepted current full snapshot. Older full CSVs may leave the hot lifecycle after replacement is durably committed; explicit audit, schema-change or evidence policy may retain/archive additional snapshots when required.
+The operational lifecycle retains the accepted current full snapshot. Older full CSVs may leave the hot lifecycle after replacement and all required source evidence are durably committed; explicit audit, schema-change or evidence policy may retain/archive additional snapshots when required.
 
 ## Acceptance Gates
 
@@ -114,13 +120,14 @@ Source/lifecycle activation is accepted only when:
 3. fixed prior/current fixtures produce expected create/update/delete behavior;
 4. replay behavior is deterministic;
 5. provenance and accepted-current pointers are internally consistent;
-6. changed runs retain durable delta evidence;
-7. source-native facts remain separated from interpretation;
-8. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
-9. the full-corpus lifecycle validates non-empty authoritative source data;
-10. Data Engine CI remains green;
-11. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
+6. changed runs retain durable generic delta evidence;
+7. updated identities retain durable neutral native-family evidence before snapshot rotation;
+8. source-native facts remain separated from interpretation;
+9. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
+10. the full-corpus lifecycle validates non-empty authoritative source data;
+11. Data Engine CI remains green;
+12. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
 
 ## Remaining Activation Work
 
-The next source-runtime step is to connect neutral native-family changes to durable evidence where consumers need that granularity, without prematurely introducing interpreted legal events. Dedicated semantic events remain a separate reviewed layer. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.
+The next product/runtime step is to decide which neutral source-family evidence should feed projection or reviewed semantic-event consumers. Any dedicated semantic event remains a separate reviewed layer and must preserve the source evidence references rather than reinterpret raw provider changes implicitly. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.

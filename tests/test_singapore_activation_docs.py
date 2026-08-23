@@ -23,7 +23,7 @@ def test_singapore_activation_docs_preserve_snapshot_first_storage_boundary():
 
     assert "daily identical full csv files are not permanent history by default" in architecture.lower()
     assert "accepted current full snapshot" in activation
-    assert "durable delta/event evidence" in activation
+    assert "durable generic delta/event evidence" in activation
 
 
 def test_singapore_activation_docs_record_native_facts_without_overclaiming():
@@ -41,7 +41,7 @@ def test_singapore_activation_docs_keep_family_changes_neutral():
     assert "deterministic neutral source-family changes" in activation
     assert "does not convert source phrases" in activation
     assert "Creation and deletion remain responsibilities of the generic snapshot/delta layer" in activation
-    assert "Dedicated semantic events remain a separate reviewed layer" in activation
+    assert "dedicated semantic event remains a separate reviewed layer" in activation
 
 
 def test_singapore_activation_docs_record_authoritative_schema_gate():
@@ -60,3 +60,12 @@ def test_singapore_activation_docs_record_lifecycle_and_live_probe_schema_bounda
     assert "alternate or custom downloader" in activation
     assert "prevents an incomplete schema from advancing the accepted-current pointer" in activation
     assert "lightweight live-source probe applies the same complete contract" in activation
+
+
+def test_singapore_activation_docs_record_durable_native_family_evidence_boundary():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "bounded-memory follow-up scans" in activation
+    assert "durable neutral native-family evidence with snapshot lineage" in activation
+    assert "before the accepted-current pointer advances" in activation
+    assert "create/delete-only cycle therefore does not create an empty native-family sidecar" in activation
