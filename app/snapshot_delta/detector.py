@@ -3,7 +3,7 @@
 Changes represent source observations only and do not assert legal conclusions.
 """
 
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from datetime import datetime, timezone
 
 from .fingerprint import record_fingerprint
@@ -15,7 +15,12 @@ class Observation:
     entity_type: str
     entity_id: str
     payload: dict
-    jurisdiction: str = "SG"
+    _: KW_ONLY
+    jurisdiction: str
+
+    def __post_init__(self) -> None:
+        if not self.jurisdiction.strip():
+            raise ValueError("jurisdiction must be non-empty")
 
 
 def _event_time(now: datetime | None = None) -> datetime:
