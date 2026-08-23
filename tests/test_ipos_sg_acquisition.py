@@ -30,12 +30,11 @@ def json_response(payload: dict) -> FakeResponse:
     return FakeResponse(json.dumps(payload).encode("utf-8"))
 
 
-def test_resolve_download_url_polls_until_ready():
+def test_anonymous_resolve_download_url_polls_until_ready():
     calls: list[str] = []
     sleeps: list[float] = []
     responses = iter(
         [
-            json_response({"code": 0, "data": {}}),
             json_response({"code": 1, "errMsg": "Preparing download"}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
         ]
@@ -54,7 +53,6 @@ def test_resolve_download_url_polls_until_ready():
 
     assert downloader.resolve_download_url() == "https://download.example/ipos.csv"
     assert calls == [
-        IPOS_SG_TRADEMARK_APPLICATIONS.initiate_download_url,
         IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
         IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
     ]
@@ -65,7 +63,6 @@ def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path
     csv_payload = b"Application Number,Mark Status\nSG1,Pending\n"
     responses = iter(
         [
-            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(csv_payload),
         ]
@@ -78,13 +75,13 @@ def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path
 
     assert acquired.path == tmp_path / "IPOSTradeMarkApplications.csv"
     assert acquired.path.read_bytes() == csv_payload
-    assert acquired.source_uri == "https://download.example/ipos.csv"
+    assert acquired.source_uri == IPOS_SG_TRADEMARK_APPLICATIONS.dataset_url
     assert acquired.bytes_written == len(csv_payload)
     assert acquired.retrieved_at.tzinfo is not None
     assert not (tmp_path / ".IPOSTradeMarkApplications.csv.part").exists()
 
 
-def test_api_key_is_used_for_data_gov_api_but_not_signed_download(tmp_path: Path):
+def test_api_key_initiates_refresh_and_is_not_forwarded_to_signed_download(tmp_path: Path):
     csv_payload = b"Application Number,Mark Status\nSG1,Pending\n"
     responses = iter(
         [
@@ -101,6 +98,10 @@ def test_api_key_is_used_for_data_gov_api_but_not_signed_download(tmp_path: Path
 
     DataGovSgSnapshotDownloader(opener=opener, api_key="secret-key").download(tmp_path)
 
+    assert [request.full_url for request in requests[:2]] == [
+        IPOS_SG_TRADEMARK_APPLICATIONS.initiate_download_url,
+        IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
+    ]
     api_headers = [dict(request.header_items()) for request in requests[:2]]
     signed_headers = {key.lower(): value for key, value in requests[2].header_items()}
     assert all(
@@ -116,7 +117,6 @@ def test_download_rejects_schema_drift_without_replacing_existing_snapshot(tmp_p
     invalid_payload = b"Application Number,Unexpected Status\nSG1,Pending\n"
     responses = iter(
         [
-            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(invalid_payload),
         ]
@@ -135,7 +135,6 @@ def test_download_rejects_schema_drift_without_replacing_existing_snapshot(tmp_p
 def test_resolve_download_url_fails_after_bounded_polls():
     responses = iter(
         [
-            json_response({"code": 0, "data": {}}),
             json_response({"code": 1, "errMsg": "still preparing"}),
             json_response({"code": 1, "errMsg": "still preparing"}),
         ]
