@@ -162,7 +162,7 @@ def test_create_delete_only_change_does_not_create_native_family_sidecar(tmp_pat
     assert not list((tmp_path / "native_changes").glob("*.jsonl"))
 
 
-def test_native_evidence_failure_does_not_advance_accepted_pointer(
+def test_native_evidence_failure_restores_single_accepted_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     first = run_ipos_snapshot_cycle(
@@ -185,7 +185,56 @@ def test_native_evidence_failure_does_not_advance_accepted_pointer(
 
     assert read_pointer(tmp_path) == pointer_before
     assert accepted_snapshot.exists()
+    assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
+    assert len(list((tmp_path / "snapshots").glob("*.manifest.json"))) == 1
     assert not list((tmp_path / "events").glob("*.jsonl"))
+    assert not list((tmp_path / "native_changes").glob("*.jsonl"))
+
+
+def test_event_failure_removes_unaccepted_candidate_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    first = run_ipos_snapshot_cycle(
+        tmp_path,
+        downloader=downloader(snapshot_csv([("SG1", "Pending")]), 22),
+    )
+    pointer_before = read_pointer(tmp_path)
+
+    def fail_events(*args, **kwargs):
+        raise RuntimeError("event write failed")
+
+    monkeypatch.setattr(lifecycle, "_write_events", fail_events)
+
+    with pytest.raises(RuntimeError, match="event write failed"):
+        run_ipos_snapshot_cycle(
+            tmp_path,
+            downloader=downloader(snapshot_csv([("SG1", "Registered")]), 23),
+        )
+
+    assert read_pointer(tmp_path) == pointer_before
+    assert (tmp_path / first.manifest.storage_reference).exists()
+    assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
+    assert len(list((tmp_path / "snapshots").glob("*.manifest.json"))) == 1
+    assert not list((tmp_path / "events").glob("*.jsonl"))
+
+
+def test_bootstrap_pointer_failure_leaves_no_unaccepted_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fail_pointer(*args, **kwargs):
+        raise RuntimeError("pointer write failed")
+
+    monkeypatch.setattr(lifecycle, "_publish_pointer", fail_pointer)
+
+    with pytest.raises(RuntimeError, match="pointer write failed"):
+        run_ipos_snapshot_cycle(
+            tmp_path,
+            downloader=downloader(snapshot_csv([("SG1", "Pending")]), 22),
+        )
+
+    assert not (tmp_path / "current.json").exists()
+    assert not list((tmp_path / "snapshots").glob("*.csv"))
+    assert not list((tmp_path / "snapshots").glob("*.manifest.json"))
 
 
 def test_lifecycle_rejects_custom_downloader_that_bypasses_full_schema_gate(tmp_path: Path):

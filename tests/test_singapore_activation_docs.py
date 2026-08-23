@@ -69,3 +69,12 @@ def test_singapore_activation_docs_record_durable_native_family_evidence_boundar
     assert "durable neutral native-family evidence with snapshot lineage" in activation
     assert "before the accepted-current pointer advances" in activation
     assert "create/delete-only cycle therefore does not create an empty native-family sidecar" in activation
+
+
+def test_singapore_activation_docs_record_pre_pointer_rollback_boundary():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "failure at any pre-pointer commit step" in activation
+    assert "unaccepted candidate full CSV" in activation
+    assert "previously accepted version therefore remains the sole authoritative full snapshot" in activation
+    assert "failed pre-pointer runs leave no unaccepted candidate snapshot" in activation
