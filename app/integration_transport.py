@@ -27,9 +27,10 @@ def normalize_request_id(value: str | None) -> str:
 
 
 def response_headers(path: str, request_id: str, correlation_id: str | None = None) -> dict[str, str]:
-    correlation = normalize_request_id(correlation_id) if correlation_id else request_id
-    headers = {REQUEST_ID_HEADER: request_id, CORRELATION_ID_HEADER: correlation}
+    headers = {REQUEST_ID_HEADER: request_id}
     if path == "/api/v1" or path.startswith("/api/v1/"):
+        correlation = normalize_request_id(correlation_id) if correlation_id else request_id
+        headers[CORRELATION_ID_HEADER] = correlation
         headers[CONTRACT_VERSION_HEADER] = CONTRACT_VERSION
         headers[SOURCE_OWNER_HEADER] = SOURCE_OWNER
     return headers
