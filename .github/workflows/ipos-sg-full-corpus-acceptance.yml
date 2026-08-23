@@ -8,16 +8,13 @@ on:
         required: true
         default: false
         type: boolean
-  pull_request:
-    paths:
-      - ".github/acceptance/ipos-sg-full-corpus.trigger"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ipos-sg-full-corpus-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ipos-sg-full-corpus-manual
+  cancel-in-progress: false
 
 jobs:
   full-corpus-acceptance:
@@ -30,14 +27,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          event="${{ github.event_name }}"
-          if [[ "$event" == "workflow_dispatch" ]]; then
-            if [[ "${{ inputs.confirm_full_corpus }}" != "true" ]]; then
-              echo "Full-corpus acceptance requires confirm_full_corpus=true" >&2
-              exit 2
-            fi
-          elif [[ "$event" != "pull_request" ]]; then
-            echo "Unsupported full-corpus acceptance trigger: $event" >&2
+          if [[ "${{ inputs.confirm_full_corpus }}" != "true" ]]; then
+            echo "Full-corpus acceptance requires confirm_full_corpus=true" >&2
             exit 2
           fi
       - uses: actions/checkout@v4
