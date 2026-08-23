@@ -20,7 +20,7 @@ def manifest() -> SnapshotManifest:
     )
 
 
-def test_cycle_result_payload_exposes_native_family_evidence():
+def test_cycle_result_payload_exposes_native_family_evidence_and_cleanup_state():
     result = SnapshotCycleResult(
         status="CHANGED",
         manifest=manifest(),
@@ -28,6 +28,7 @@ def test_cycle_result_payload_exposes_native_family_evidence():
         events_path=Path("events/previous__current.jsonl"),
         native_change_count=7,
         native_changes_path=Path("native_changes/previous__current.jsonl"),
+        cleanup_pending_paths=(Path("snapshots/previous.csv"),),
     )
 
     payload = cycle_result_payload(result)
@@ -40,10 +41,11 @@ def test_cycle_result_payload_exposes_native_family_evidence():
     assert payload["events_path"] == "events/previous__current.jsonl"
     assert payload["native_change_count"] == 7
     assert payload["native_changes_path"] == "native_changes/previous__current.jsonl"
+    assert payload["cleanup_pending_paths"] == ["snapshots/previous.csv"]
     assert payload["storage_reference"] == f"snapshots/{'b' * 64}.csv"
 
 
-def test_cycle_result_payload_preserves_empty_evidence_paths():
+def test_cycle_result_payload_preserves_empty_evidence_and_cleanup_paths():
     payload = cycle_result_payload(
         SnapshotCycleResult(status="BOOTSTRAPPED", manifest=manifest())
     )
@@ -52,3 +54,4 @@ def test_cycle_result_payload_preserves_empty_evidence_paths():
     assert payload["events_path"] is None
     assert payload["native_change_count"] == 0
     assert payload["native_changes_path"] is None
+    assert payload["cleanup_pending_paths"] == []
