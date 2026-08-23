@@ -1,0 +1,55 @@
+name: Singapore IPOS Full Corpus Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_full_corpus:
+        description: "Confirm the multi-GB official IPOS corpus download and validation run"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  full-corpus-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DATA_GOV_SG_API_KEY: ${{ secrets.DATA_GOV_SG_API_KEY }}
+    steps:
+      - name: Require explicit full-corpus confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.confirm_full_corpus }}" != "true" ]]; then
+            echo "Full-corpus acceptance requires confirm_full_corpus=true" >&2
+            exit 2
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Record runner capacity before acquisition
+        shell: bash
+        run: df -h .
+      - name: Run full official IPOS corpus acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ipos-sg-state"
+          python -m app.snapshot_delta.ipos_sg_full_acceptance \
+            --state-dir "$RUNNER_TEMP/ipos-sg-state" \
+            --report-path "$GITHUB_WORKSPACE/ipos-sg-full-corpus-acceptance.json"
+      - name: Record runner capacity after acceptance
+        if: always()
+        shell: bash
+        run: df -h .
+      - name: Upload acceptance evidence only
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipos-sg-full-corpus-acceptance
+          path: ipos-sg-full-corpus-acceptance.json
+          if-no-files-found: error
+          retention-days: 30
