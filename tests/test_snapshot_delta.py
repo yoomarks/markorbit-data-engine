@@ -3,9 +3,15 @@ import pytest
 from app.snapshot_delta.detector import Observation, compare_observations
 
 
-def observation(entity_id: str, payload: dict, *, jurisdiction: str = "SG") -> Observation:
+def observation(
+    entity_id: str,
+    payload: dict,
+    *,
+    jurisdiction: str = "SG",
+    entity_type: str = "application",
+) -> Observation:
     return Observation(
-        "application",
+        entity_type,
         entity_id,
         payload,
         jurisdiction=jurisdiction,
@@ -63,3 +69,19 @@ def test_cross_jurisdiction_comparison_is_rejected():
 
     with pytest.raises(ValueError, match="different jurisdictions"):
         compare_observations(old, new)
+
+
+def test_cross_identity_comparison_is_rejected():
+    old = observation("X1", {"status": "PENDING"})
+    new_id = observation("X2", {"status": "REGISTERED"})
+    new_type = observation(
+        "X1",
+        {"status": "REGISTERED"},
+        entity_type="registration",
+    )
+
+    with pytest.raises(ValueError, match="different identities"):
+        compare_observations(old, new_id)
+
+    with pytest.raises(ValueError, match="different identities"):
+        compare_observations(old, new_type)
