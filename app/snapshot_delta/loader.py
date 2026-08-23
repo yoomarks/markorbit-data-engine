@@ -17,6 +17,11 @@ class SnapshotCsvLoader:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
+    def fieldnames(self) -> tuple[str, ...]:
+        with self.path.open("r", encoding="utf-8-sig", newline="") as source:
+            reader = csv.DictReader(source)
+            return tuple(reader.fieldnames or ())
+
     def rows(self) -> Iterator[dict[str, Any]]:
         with self.path.open("r", encoding="utf-8-sig", newline="") as source:
             reader = csv.DictReader(source)
