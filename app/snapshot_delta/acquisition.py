@@ -58,7 +58,13 @@ class DataGovSgSnapshotDownloader:
         self.api_key = api_key
 
     def _request_json(self, url: str) -> dict[str, Any]:
-        headers = {"Accept": "application/json"}
+        # api-open.data.gov.sg rejects the default Python urllib user agent even
+        # though the endpoint is public. Send an explicit product identifier,
+        # matching the live datastore acceptance probe behavior.
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "markorbit-data-engine/ipos-snapshot-acquisition",
+        }
         if self.api_key:
             headers["x-api-key"] = self.api_key
         request = Request(url, headers=headers)
