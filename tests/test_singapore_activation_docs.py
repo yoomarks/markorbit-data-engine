@@ -42,3 +42,12 @@ def test_singapore_activation_docs_keep_family_changes_neutral():
     assert "does not convert source phrases" in activation
     assert "Creation and deletion remain responsibilities of the generic snapshot/delta layer" in activation
     assert "Dedicated semantic events remain a separate reviewed layer" in activation
+
+
+def test_singapore_activation_docs_record_authoritative_schema_gate():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "complete authoritative 39-column source contract" in activation
+    assert "before the partial file can replace the accepted snapshot" in activation
+    assert "Missing or newly introduced source columns fail closed" in activation
+    assert "authoritative source-column contract" in activation
