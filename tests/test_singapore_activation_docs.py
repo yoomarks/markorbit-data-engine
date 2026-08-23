@@ -51,3 +51,12 @@ def test_singapore_activation_docs_record_authoritative_schema_gate():
     assert "before the partial file can replace the accepted snapshot" in activation
     assert "Missing or newly introduced source columns fail closed" in activation
     assert "authoritative source-column contract" in activation
+
+
+def test_singapore_activation_docs_record_lifecycle_and_live_probe_schema_boundaries():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "snapshot lifecycle is also an explicit acceptance boundary" in activation
+    assert "alternate or custom downloader" in activation
+    assert "prevents an incomplete schema from advancing the accepted-current pointer" in activation
+    assert "lightweight live-source probe applies the same complete contract" in activation
