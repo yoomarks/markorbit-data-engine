@@ -52,7 +52,10 @@ def _request_json(
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
 
-    headers = {"Accept": "application/json", "User-Agent": "markorbit-data-engine/ipos-acceptance"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "markorbit-data-engine/ipos-acceptance",
+    }
     if api_key:
         headers["x-api-key"] = api_key
 
@@ -141,6 +144,7 @@ def probe_ipos_live_source(
             opener=opener,
             sleeper=sleeper,
             timeout_seconds=timeout_seconds,
+            api_key=api_key,
         )
         download_resolved = bool(downloader.resolve_download_url())
 
