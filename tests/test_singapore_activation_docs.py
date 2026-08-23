@@ -78,3 +78,12 @@ def test_singapore_activation_docs_record_pre_pointer_rollback_boundary():
     assert "unaccepted candidate full CSV" in activation
     assert "previously accepted version therefore remains the sole authoritative full snapshot" in activation
     assert "failed pre-pointer runs leave no unaccepted candidate snapshot" in activation
+
+
+def test_singapore_activation_docs_record_post_commit_cleanup_boundary():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "Pointer publication is the lifecycle commit boundary" in activation
+    assert "cleanup_pending_paths" in activation
+    assert "later cycles retry all unreferenced full CSVs" in activation
+    assert "full-corpus acceptance has no pending snapshot cleanup" in activation
