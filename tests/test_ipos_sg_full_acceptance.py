@@ -4,9 +4,13 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+import app.snapshot_delta.lifecycle as lifecycle
 from app.snapshot_delta.acquisition import AcquiredSnapshot
 from app.snapshot_delta.ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
 from app.snapshot_delta.ipos_sg_full_acceptance import (
+    FullCorpusAcceptanceError,
     run_ipos_full_corpus_acceptance,
     write_acceptance_report,
 )
@@ -95,6 +99,38 @@ def test_full_corpus_acceptance_changed_cycle_retains_durable_delta_and_native_e
     assert Path(report.native_changes_path).exists()
     assert report.retained_full_snapshot_count == 1
     assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
+
+
+def test_full_corpus_acceptance_rejects_pending_post_commit_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    first_payload = snapshot_csv([("SG1", "Pending")])
+    second_payload = snapshot_csv([("SG1", "Registered")])
+    run_ipos_full_corpus_acceptance(
+        tmp_path,
+        downloader=FakeDownloader(first_payload, 22),
+        clock=clock(1.0, 2.0),
+    )
+    original_remove_snapshot = lifecycle._remove_snapshot
+    failures = 0
+
+    def fail_first_removal(path: Path) -> None:
+        nonlocal failures
+        if failures == 0:
+            failures += 1
+            raise PermissionError("snapshot temporarily locked")
+        original_remove_snapshot(path)
+
+    monkeypatch.setattr(lifecycle, "_remove_snapshot", fail_first_removal)
+
+    with pytest.raises(FullCorpusAcceptanceError, match="snapshot cleanup remains pending"):
+        run_ipos_full_corpus_acceptance(
+            tmp_path,
+            downloader=FakeDownloader(second_payload, 23),
+            clock=clock(3.0, 5.0),
+        )
+
+    assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 2
 
 
 def test_acceptance_report_is_machine_readable_and_atomic(tmp_path: Path):
