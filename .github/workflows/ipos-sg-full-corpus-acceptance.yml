@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ipos-sg-full-corpus-manual
+  cancel-in-progress: false
+
 jobs:
   full-corpus-acceptance:
     runs-on: ubuntu-latest

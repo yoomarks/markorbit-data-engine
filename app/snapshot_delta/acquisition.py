@@ -58,7 +58,10 @@ class DataGovSgSnapshotDownloader:
         self.api_key = api_key
 
     def _request_json(self, url: str) -> dict[str, Any]:
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "markorbit-data-engine/ipos-snapshot-acquisition",
+        }
         if self.api_key:
             headers["x-api-key"] = self.api_key
         request = Request(url, headers=headers)
@@ -79,10 +82,16 @@ class DataGovSgSnapshotDownloader:
         return str(url) if url else None
 
     def resolve_download_url(self) -> str:
-        """Initiate dataset materialization and poll for the signed download URL."""
-        self._request_json(self.source.initiate_download_url)
-        last_payload: dict[str, Any] | None = None
+        """Resolve the current whole-dataset export with bounded polling.
 
+        Authenticated operators explicitly initiate materialization before polling.
+        Anonymous public acceptance uses the already-materialized poll endpoint,
+        because data.gov.sg rejects anonymous initiate calls while permitting poll.
+        """
+        if self.api_key:
+            self._request_json(self.source.initiate_download_url)
+
+        last_payload: dict[str, Any] | None = None
         for attempt in range(self.max_poll_attempts):
             payload = self._request_json(self.source.poll_download_url)
             last_payload = payload
@@ -108,8 +117,14 @@ class DataGovSgSnapshotDownloader:
         partial_path = destination / f".{self.source.filename}.part"
         download_url = self.resolve_download_url()
         retrieved_at = datetime.now(timezone.utc)
-        # Do not forward the data.gov.sg API key to the signed object-storage URL.
-        request = Request(download_url, headers={"Accept": "text/csv,application/octet-stream"})
+        # Never forward the data.gov.sg API key to signed object storage.
+        request = Request(
+            download_url,
+            headers={
+                "Accept": "text/csv,application/octet-stream",
+                "User-Agent": "markorbit-data-engine/ipos-snapshot-acquisition",
+            },
+        )
         bytes_written = 0
 
         try:
@@ -135,7 +150,9 @@ class DataGovSgSnapshotDownloader:
 
         return AcquiredSnapshot(
             path=final_path,
-            source_uri=download_url,
+            # Persist a stable official source URL in manifests, not an expiring
+            # signed object-storage URL that may contain temporary credentials.
+            source_uri=self.source.dataset_url,
             retrieved_at=retrieved_at,
             bytes_written=bytes_written,
         )
