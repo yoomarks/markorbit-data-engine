@@ -8,6 +8,7 @@ from app.integration_contract import (
     SOURCE_OWNER,
     SOURCE_OWNER_HEADER,
 )
+from app.integration_g0_contract import CORRELATION_ID_HEADER
 from app.integration_transport import normalize_request_id, response_headers
 
 
@@ -26,6 +27,7 @@ def test_contract_headers_are_scoped_to_api_v1():
     headers = response_headers("/api/v1/contract", request_id)
     assert headers == {
         REQUEST_ID_HEADER: request_id,
+        CORRELATION_ID_HEADER: request_id,
         CONTRACT_VERSION_HEADER: CONTRACT_VERSION,
         SOURCE_OWNER_HEADER: SOURCE_OWNER,
     }
@@ -34,6 +36,12 @@ def test_contract_headers_are_scoped_to_api_v1():
         REQUEST_ID_HEADER: request_id
     }
     assert response_headers("/api/health", request_id) == {REQUEST_ID_HEADER: request_id}
+
+
+def test_mo_de_004_preserves_explicit_correlation_id_on_api_v1():
+    headers = response_headers("/api/v1/health", "req-123", "corr-456")
+    assert headers[REQUEST_ID_HEADER] == "req-123"
+    assert headers[CORRELATION_ID_HEADER] == "corr-456"
 
 
 def test_versioned_health_reports_ok_without_changing_legacy_health(monkeypatch):
@@ -70,12 +78,19 @@ def test_versioned_health_degrades_when_a_dependency_is_unavailable(monkeypatch)
 
 
 def test_contract_advertises_health_and_transport_headers(monkeypatch):
-    monkeypatch.setattr(integration_api, "integration_security_contract", lambda: {"auth_mode": "disabled"})
+    monkeypatch.setattr(
+        integration_api,
+        "integration_security_contract",
+        lambda: {"auth_mode": "disabled"},
+    )
     payload = integration_api.integration_contract()
     assert "/api/v1/health" in payload["stable_resources"]
+    assert "/api/v1/contract" in payload["stable_resources"]
     assert payload["transport"] == {
         "request_id_header": REQUEST_ID_HEADER,
+        "correlation_id_header": CORRELATION_ID_HEADER,
         "request_id_echoed": True,
+        "correlation_id_echoed": True,
         "contract_version_header": CONTRACT_VERSION_HEADER,
         "source_owner_header": SOURCE_OWNER_HEADER,
     }
