@@ -84,6 +84,32 @@ def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path
     assert not (tmp_path / ".IPOSTradeMarkApplications.csv.part").exists()
 
 
+def test_api_key_is_used_for_data_gov_api_but_not_signed_download(tmp_path: Path):
+    csv_payload = b"Application Number,Mark Status\nSG1,Pending\n"
+    responses = iter(
+        [
+            json_response({"code": 0, "data": {}}),
+            json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
+            FakeResponse(csv_payload),
+        ]
+    )
+    requests: list[Request] = []
+
+    def opener(request: Request, **kwargs):
+        requests.append(request)
+        return next(responses)
+
+    DataGovSgSnapshotDownloader(opener=opener, api_key="secret-key").download(tmp_path)
+
+    api_headers = [dict(request.header_items()) for request in requests[:2]]
+    signed_headers = {key.lower(): value for key, value in requests[2].header_items()}
+    assert all(
+        any(key.lower() == "x-api-key" and value == "secret-key" for key, value in headers.items())
+        for headers in api_headers
+    )
+    assert "x-api-key" not in signed_headers
+
+
 def test_download_rejects_schema_drift_without_replacing_existing_snapshot(tmp_path: Path):
     final_path = tmp_path / "IPOSTradeMarkApplications.csv"
     final_path.write_text("Application Number,Mark Status\nSG0,Registered\n", encoding="utf-8")

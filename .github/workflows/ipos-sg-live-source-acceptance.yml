@@ -1,0 +1,47 @@
+name: Singapore IPOS Live Source Acceptance
+
+on:
+  pull_request:
+    paths:
+      - "app/snapshot_delta/ipos_sg.py"
+      - "app/snapshot_delta/ipos_sg_acceptance.py"
+      - "tests/test_ipos_sg_acceptance.py"
+      - ".github/workflows/ipos-sg-live-source-acceptance.yml"
+  workflow_dispatch:
+    inputs:
+      resolve_download_url:
+        description: "Also exercise initiate/poll download URL resolution without downloading the CSV"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  live-source-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DATA_GOV_SG_API_KEY: ${{ secrets.DATA_GOV_SG_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Probe live IPOS datastore contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          extra=""
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.resolve_download_url }}" == "true" ]]; then
+            extra="--resolve-download-url"
+          fi
+          python -m app.snapshot_delta.ipos_sg_acceptance ${extra} | tee ipos-sg-live-source-acceptance.json
+      - name: Upload acceptance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipos-sg-live-source-acceptance
+          path: ipos-sg-live-source-acceptance.json
+          if-no-files-found: error
+          retention-days: 14

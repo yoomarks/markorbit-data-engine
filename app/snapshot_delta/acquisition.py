@@ -42,6 +42,7 @@ class DataGovSgSnapshotDownloader:
         poll_interval_seconds: float = 15.0,
         max_poll_attempts: int = 40,
         chunk_size: int = 1024 * 1024,
+        api_key: str | None = None,
     ) -> None:
         if max_poll_attempts < 1:
             raise ValueError("max_poll_attempts must be positive")
@@ -54,9 +55,13 @@ class DataGovSgSnapshotDownloader:
         self.poll_interval_seconds = poll_interval_seconds
         self.max_poll_attempts = max_poll_attempts
         self.chunk_size = chunk_size
+        self.api_key = api_key
 
     def _request_json(self, url: str) -> dict[str, Any]:
-        request = Request(url, headers={"Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+        request = Request(url, headers=headers)
         with self._opener(request, timeout=self.timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if not isinstance(payload, dict):
@@ -103,6 +108,7 @@ class DataGovSgSnapshotDownloader:
         partial_path = destination / f".{self.source.filename}.part"
         download_url = self.resolve_download_url()
         retrieved_at = datetime.now(timezone.utc)
+        # Do not forward the data.gov.sg API key to the signed object-storage URL.
         request = Request(download_url, headers={"Accept": "text/csv,application/octet-stream"})
         bytes_written = 0
 
