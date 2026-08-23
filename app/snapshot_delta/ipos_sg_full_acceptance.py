@@ -31,10 +31,12 @@ class FullCorpusAcceptanceReport:
     bytes_downloaded: int
     current_snapshot_bytes: int
     event_count: int
+    native_change_count: int
     retained_full_snapshot_count: int
     elapsed_seconds: float
     storage_reference: str
     events_path: str | None
+    native_changes_path: str | None
 
 
 class _CapturingDownloader:
@@ -83,8 +85,24 @@ def _validate_committed_state(
     if result.status == "CHANGED":
         if result.events_path is None or not result.events_path.exists():
             raise FullCorpusAcceptanceError("changed corpus is missing durable delta evidence")
-    elif result.events_path is not None:
-        raise FullCorpusAcceptanceError("non-changed corpus unexpectedly produced an event path")
+        if result.native_change_count > 0:
+            if result.native_changes_path is None or not result.native_changes_path.exists():
+                raise FullCorpusAcceptanceError(
+                    "changed corpus is missing durable native-family evidence"
+                )
+        elif result.native_changes_path is not None:
+            raise FullCorpusAcceptanceError(
+                "zero native-family changes unexpectedly produced an evidence path"
+            )
+    else:
+        if result.events_path is not None:
+            raise FullCorpusAcceptanceError(
+                "non-changed corpus unexpectedly produced an event path"
+            )
+        if result.native_change_count or result.native_changes_path is not None:
+            raise FullCorpusAcceptanceError(
+                "non-changed corpus unexpectedly produced native-family evidence"
+            )
 
     return current_snapshot.stat().st_size, len(full_snapshots)
 
@@ -126,10 +144,14 @@ def run_ipos_full_corpus_acceptance(
         bytes_downloaded=acquired.bytes_written,
         current_snapshot_bytes=current_snapshot_bytes,
         event_count=result.event_count,
+        native_change_count=result.native_change_count,
         retained_full_snapshot_count=retained_count,
         elapsed_seconds=round(elapsed, 6),
         storage_reference=result.manifest.storage_reference,
         events_path=str(result.events_path) if result.events_path else None,
+        native_changes_path=(
+            str(result.native_changes_path) if result.native_changes_path else None
+        ),
     )
 
 
