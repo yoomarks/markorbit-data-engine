@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from .ipos_sg import DataGovSgSnapshotSource, IPOS_SG_TRADEMARK_APPLICATIONS
 from .ipos_sg_observation import validate_ipos_snapshot_schema
+from .ipos_sg_schema_contract import validate_ipos_native_snapshot_schema
 from .loader import SnapshotCsvLoader
 
 
@@ -142,7 +143,9 @@ class DataGovSgSnapshotDownloader:
             if bytes_written == 0:
                 raise SnapshotDownloadError("data.gov.sg returned an empty snapshot")
 
-            validate_ipos_snapshot_schema(SnapshotCsvLoader(partial_path))
+            loader = SnapshotCsvLoader(partial_path)
+            validate_ipos_snapshot_schema(loader)
+            validate_ipos_native_snapshot_schema(loader.fieldnames())
             os.replace(partial_path, final_path)
         except Exception:
             partial_path.unlink(missing_ok=True)

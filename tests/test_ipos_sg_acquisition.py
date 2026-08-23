@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ from app.snapshot_delta.acquisition import (
     SnapshotDownloadError,
 )
 from app.snapshot_delta.ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
+from app.snapshot_delta.ipos_sg_schema_contract import IPOS_NATIVE_CSV_SOURCE_FIELDS
 
 
 class FakeResponse:
@@ -28,6 +30,21 @@ class FakeResponse:
 
 def json_response(payload: dict) -> FakeResponse:
     return FakeResponse(json.dumps(payload).encode("utf-8"))
+
+
+def valid_snapshot_bytes(
+    application_number: str = "SG1", mark_status: str = "Pending"
+) -> bytes:
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=IPOS_NATIVE_CSV_SOURCE_FIELDS)
+    writer.writeheader()
+    writer.writerow(
+        {
+            "Application Number": application_number,
+            "Mark Status": mark_status,
+        }
+    )
+    return stream.getvalue().encode("utf-8")
 
 
 def test_anonymous_resolve_download_url_polls_until_ready():
@@ -60,7 +77,7 @@ def test_anonymous_resolve_download_url_polls_until_ready():
 
 
 def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path):
-    csv_payload = b"Application Number,Mark Status\nSG1,Pending\n"
+    csv_payload = valid_snapshot_bytes()
     responses = iter(
         [
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
@@ -82,7 +99,7 @@ def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path
 
 
 def test_api_key_initiates_refresh_and_is_not_forwarded_to_signed_download(tmp_path: Path):
-    csv_payload = b"Application Number,Mark Status\nSG1,Pending\n"
+    csv_payload = valid_snapshot_bytes()
     responses = iter(
         [
             json_response({"code": 0, "data": {}}),
@@ -129,6 +146,39 @@ def test_download_rejects_schema_drift_without_replacing_existing_snapshot(tmp_p
         DataGovSgSnapshotDownloader(opener=opener).download(tmp_path)
 
     assert final_path.read_text(encoding="utf-8").startswith("Application Number,Mark Status")
+    assert not (tmp_path / ".IPOSTradeMarkApplications.csv.part").exists()
+
+
+def test_download_rejects_new_unknown_source_column_before_atomic_publish(tmp_path: Path):
+    final_path = tmp_path / "IPOSTradeMarkApplications.csv"
+    final_path.write_bytes(valid_snapshot_bytes("SG0", "Registered"))
+
+    stream = io.StringIO(newline="")
+    fieldnames = (*IPOS_NATIVE_CSV_SOURCE_FIELDS, "Future Source Field")
+    writer = csv.DictWriter(stream, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerow(
+        {
+            "Application Number": "SG1",
+            "Mark Status": "Pending",
+            "Future Source Field": "new evidence",
+        }
+    )
+    invalid_payload = stream.getvalue().encode("utf-8")
+    responses = iter(
+        [
+            json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
+            FakeResponse(invalid_payload),
+        ]
+    )
+
+    def opener(request: Request, **kwargs):
+        return next(responses)
+
+    with pytest.raises(ValueError, match="unknown=Future Source Field"):
+        DataGovSgSnapshotDownloader(opener=opener).download(tmp_path)
+
+    assert final_path.read_bytes() == valid_snapshot_bytes("SG0", "Registered")
     assert not (tmp_path / ".IPOSTradeMarkApplications.csv.part").exists()
 
 
