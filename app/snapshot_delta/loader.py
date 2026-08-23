@@ -7,8 +7,23 @@ Persistence and projection are handled by later pipeline stages.
 from __future__ import annotations
 
 import csv
+import sys
 from pathlib import Path
 from typing import Any, Iterator
+
+
+def _allow_large_csv_fields() -> None:
+    """Raise the parser field limit for authoritative snapshots with large JSON cells."""
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
+
+
+_allow_large_csv_fields()
 
 
 class SnapshotCsvLoader:
