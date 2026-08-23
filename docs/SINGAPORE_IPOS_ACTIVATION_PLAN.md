@@ -77,9 +77,11 @@ A native family change records only the exact before/after source payload and ch
 
 For identities already classified as `UPDATE_DETECTED`, the lifecycle now performs bounded-memory follow-up scans: it retains previous native facts only for the update identities, then streams the current snapshot in source order and writes neutral family-change evidence atomically. Each record carries the previous/current snapshot evidence references and the deterministic detection timestamp. This avoids retaining the full multi-gigabyte previous payload corpus in memory.
 
-Generic delta evidence and required native-family evidence are both durable before the accepted-current pointer advances and before the old full CSV is rotated away. If native evidence persistence fails, the pointer remains on the previously accepted snapshot and the just-written generic event file is removed so partially committed lifecycle evidence is not published.
+Generic delta evidence and required native-family evidence are both durable before the accepted-current pointer advances. If native evidence persistence fails, the pointer remains on the previously accepted snapshot and the just-written generic event file is removed so partially committed lifecycle evidence is not published.
 
 A failure at any pre-pointer commit step also removes the unaccepted candidate full CSV, its candidate manifest, and candidate sidecars. The previously accepted version therefore remains the sole authoritative full snapshot instead of leaving an orphan candidate that could be mistaken for committed lifecycle state.
+
+Pointer publication is the lifecycle commit boundary. Removal of superseded full CSVs is post-commit housekeeping: a transient filesystem lock cannot turn an already committed source version into a reported transaction failure. Failed removals are returned as `cleanup_pending_paths`, and later cycles retry all unreferenced full CSVs. Full-corpus acceptance remains stricter and fails while any snapshot cleanup is pending, preserving the one-retained-full-snapshot acceptance invariant.
 
 Creation and deletion remain responsibilities of the generic snapshot/delta layer; family decomposition is for updates to the same source identity. A create/delete-only cycle therefore does not create an empty native-family sidecar.
 
@@ -111,7 +113,7 @@ Durably preserve:
 - durable neutral native-family evidence for source updates
 - current projections
 
-The operational lifecycle retains the accepted current full snapshot. Older full CSVs may leave the hot lifecycle after replacement and all required source evidence are durably committed; explicit audit, schema-change or evidence policy may retain/archive additional snapshots when required.
+The operational lifecycle retains the accepted current full snapshot. Superseded full CSVs are removed after replacement and required source evidence are durably committed. A temporary cleanup failure is explicit and retryable rather than changing the accepted-current pointer; explicit audit, schema-change or evidence policy may retain/archive additional snapshots when required.
 
 ## Acceptance Gates
 
@@ -125,11 +127,13 @@ Source/lifecycle activation is accepted only when:
 6. changed runs retain durable generic delta evidence;
 7. updated identities retain durable neutral native-family evidence before snapshot rotation;
 8. failed pre-pointer runs leave no unaccepted candidate snapshot, candidate manifest or candidate sidecars;
-9. source-native facts remain separated from interpretation;
-10. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
-11. the full-corpus lifecycle validates non-empty authoritative source data;
-12. Data Engine CI remains green;
-13. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
+9. post-commit snapshot cleanup failures remain observable and retryable without invalidating the committed pointer;
+10. full-corpus acceptance has no pending snapshot cleanup and retains exactly one full CSV;
+11. source-native facts remain separated from interpretation;
+12. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
+13. the full-corpus lifecycle validates non-empty authoritative source data;
+14. Data Engine CI remains green;
+15. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
 
 ## Remaining Activation Work
 

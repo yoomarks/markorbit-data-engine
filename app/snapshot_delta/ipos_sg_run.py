@@ -23,6 +23,7 @@ def cycle_result_payload(result: SnapshotCycleResult) -> dict[str, Any]:
         "native_changes_path": (
             str(result.native_changes_path) if result.native_changes_path else None
         ),
+        "cleanup_pending_paths": [str(path) for path in result.cleanup_pending_paths],
         "storage_reference": result.manifest.storage_reference,
     }
 

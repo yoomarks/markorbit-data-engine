@@ -39,6 +39,7 @@ class SnapshotCycleResult:
     events_path: Path | None = None
     native_change_count: int = 0
     native_changes_path: Path | None = None
+    cleanup_pending_paths: tuple[Path, ...] = ()
 
 
 def _manifest_payload(manifest: SnapshotManifest) -> dict[str, Any]:
@@ -164,6 +165,31 @@ def _discard_unaccepted_version(
     manifest_path.unlink(missing_ok=True)
 
 
+def _remove_snapshot(path: Path) -> None:
+    path.unlink(missing_ok=True)
+
+
+def _cleanup_unreferenced_snapshots(
+    state_directory: Path,
+    *,
+    current_content_hash: str,
+) -> tuple[Path, ...]:
+    """Best-effort cleanup after commit; failed removals remain observable and retryable."""
+    snapshots = state_directory / "snapshots"
+    current_snapshot, _ = _version_paths(state_directory, current_content_hash)
+    pending: list[Path] = []
+
+    for snapshot_path in sorted(snapshots.glob("*.csv")):
+        if snapshot_path == current_snapshot:
+            continue
+        try:
+            _remove_snapshot(snapshot_path)
+        except OSError:
+            pending.append(snapshot_path)
+
+    return tuple(pending)
+
+
 def _write_events(
     path: Path,
     previous_manifest: SnapshotManifest,
@@ -282,7 +308,15 @@ def run_ipos_snapshot_cycle(
     current = _current_manifest(state)
     if current is not None and current[0].content_hash == candidate.content_hash:
         acquired.path.unlink(missing_ok=True)
-        return SnapshotCycleResult(status="UNCHANGED", manifest=current[0])
+        cleanup_pending_paths = _cleanup_unreferenced_snapshots(
+            state,
+            current_content_hash=current[0].content_hash,
+        )
+        return SnapshotCycleResult(
+            status="UNCHANGED",
+            manifest=current[0],
+            cleanup_pending_paths=cleanup_pending_paths,
+        )
 
     candidate, candidate_snapshot, _ = _persist_version(
         state,
@@ -301,7 +335,15 @@ def run_ipos_snapshot_cycle(
                 protected_content_hash=protected_content_hash,
             )
             raise
-        return SnapshotCycleResult(status="BOOTSTRAPPED", manifest=candidate)
+        cleanup_pending_paths = _cleanup_unreferenced_snapshots(
+            state,
+            current_content_hash=candidate.content_hash,
+        )
+        return SnapshotCycleResult(
+            status="BOOTSTRAPPED",
+            manifest=candidate,
+            cleanup_pending_paths=cleanup_pending_paths,
+        )
 
     previous_manifest, previous_snapshot, _ = current
     evidence_stem = f"{previous_manifest.content_hash}__{candidate.content_hash}"
@@ -340,9 +382,13 @@ def run_ipos_snapshot_cycle(
         )
         raise
 
-    # Full source rows are intentionally single-current-version storage, but
-    # manifests and derived source evidence survive CSV rotation.
-    previous_snapshot.unlink(missing_ok=True)
+    # Pointer publication is the commit boundary. Old full snapshots are
+    # best-effort post-commit cleanup: a filesystem failure must not report the
+    # already-committed source version as failed or roll back durable evidence.
+    cleanup_pending_paths = _cleanup_unreferenced_snapshots(
+        state,
+        current_content_hash=candidate.content_hash,
+    )
 
     return SnapshotCycleResult(
         status="CHANGED",
@@ -351,4 +397,5 @@ def run_ipos_snapshot_cycle(
         events_path=events_path,
         native_change_count=native_change_count,
         native_changes_path=native_changes_path,
+        cleanup_pending_paths=cleanup_pending_paths,
     )
