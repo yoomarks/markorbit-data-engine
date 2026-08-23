@@ -10,7 +10,6 @@ from .fingerprint import record_fingerprint
 from .models import DeltaEvent
 
 ObservationKey = tuple[str, str, str]
-PreviousFingerprint = tuple[str, str, str]
 
 
 def _key(observation: Observation) -> ObservationKey:
@@ -39,17 +38,13 @@ def detect_snapshot_deltas(
 ) -> Iterator[DeltaEvent]:
     """Compare two snapshots while retaining only previous record fingerprints."""
     event_time = detected_at or datetime.now(timezone.utc)
-    previous_index: dict[ObservationKey, PreviousFingerprint] = {}
+    previous_index: dict[ObservationKey, str] = {}
 
     for observation in previous:
         key = _key(observation)
         if key in previous_index:
             raise ValueError(f"duplicate observation identity in previous snapshot: {key}")
-        previous_index[key] = (
-            observation.entity_type,
-            observation.jurisdiction,
-            _fingerprint(observation),
-        )
+        previous_index[key] = _fingerprint(observation)
 
     current_seen: set[ObservationKey] = set()
     for observation in current:
@@ -58,9 +53,9 @@ def detect_snapshot_deltas(
             raise ValueError(f"duplicate observation identity in current snapshot: {key}")
         current_seen.add(key)
 
-        previous_record = previous_index.pop(key, None)
+        previous_fingerprint = previous_index.pop(key, None)
         current_fingerprint = _fingerprint(observation)
-        if previous_record is None:
+        if previous_fingerprint is None:
             yield DeltaEvent(
                 jurisdiction=observation.jurisdiction,
                 entity_type=observation.entity_type,
@@ -72,7 +67,7 @@ def detect_snapshot_deltas(
             )
             continue
 
-        if previous_record[2] != current_fingerprint:
+        if previous_fingerprint != current_fingerprint:
             yield DeltaEvent(
                 jurisdiction=observation.jurisdiction,
                 entity_type=observation.entity_type,
@@ -84,7 +79,7 @@ def detect_snapshot_deltas(
                 after_evidence_reference=current_evidence_reference,
             )
 
-    for (jurisdiction, entity_type, entity_id) in previous_index:
+    for jurisdiction, entity_type, entity_id in previous_index:
         yield DeltaEvent(
             jurisdiction=jurisdiction,
             entity_type=entity_type,
