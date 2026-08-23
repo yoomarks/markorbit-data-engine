@@ -1,8 +1,11 @@
+import csv
+import io
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.snapshot_delta.acquisition import AcquiredSnapshot
 from app.snapshot_delta.ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
+from app.snapshot_delta.ipos_sg_schema_contract import IPOS_NATIVE_CSV_SOURCE_FIELDS
 from app.snapshot_delta.lifecycle import run_ipos_snapshot_cycle
 
 
@@ -24,16 +27,21 @@ class FakeDownloader:
         )
 
 
+def snapshot_csv(status: str) -> str:
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=IPOS_NATIVE_CSV_SOURCE_FIELDS)
+    writer.writeheader()
+    writer.writerow({"Application Number": "SG1", "Mark Status": status})
+    return stream.getvalue()
+
+
 def test_rotations_keep_historical_manifests_but_only_one_full_csv(tmp_path: Path):
     results = []
     for day, status in [(21, "Pending"), (22, "Registered"), (23, "Removed")]:
         results.append(
             run_ipos_snapshot_cycle(
                 tmp_path,
-                downloader=FakeDownloader(
-                    f"Application Number,Mark Status\nSG1,{status}\n",
-                    day,
-                ),
+                downloader=FakeDownloader(snapshot_csv(status), day),
             )
         )
 

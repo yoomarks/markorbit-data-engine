@@ -38,6 +38,8 @@ The operator-grade full-corpus acceptance requires exactly one accepted current 
 
 Downloaded snapshots are validated against both the critical application/status columns and the complete authoritative 39-column source contract before the partial file can replace the accepted snapshot. Both official datastore field ids and official CSV display headings normalize to the same contract. Missing or newly introduced source columns fail closed, while data.gov.sg datastore `_id` remains provider metadata rather than an IPOS native fact.
 
+The snapshot lifecycle is also an explicit acceptance boundary: it re-validates the complete source contract even when acquisition is supplied by an alternate or custom downloader. This prevents a caller from bypassing adapter-level validation and prevents an incomplete schema from advancing the accepted-current pointer or replacing persisted source evidence. The lightweight live-source probe applies the same complete contract to the authoritative datastore field list, so source drift can be detected without downloading the multi-gigabyte corpus.
+
 ## Phase 2 — Native Semantic Extraction
 
 Current source schema coverage is implemented without introducing legal interpretation.
@@ -114,9 +116,10 @@ Source/lifecycle activation is accepted only when:
 5. provenance and accepted-current pointers are internally consistent;
 6. changed runs retain durable delta evidence;
 7. source-native facts remain separated from interpretation;
-8. the full-corpus lifecycle validates non-empty authoritative source data and the authoritative source-column contract;
-9. Data Engine CI remains green;
-10. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
+8. the acquisition adapter, lifecycle acceptance boundary and lightweight live-source probe validate the authoritative source-column contract;
+9. the full-corpus lifecycle validates non-empty authoritative source data;
+10. Data Engine CI remains green;
+11. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
 
 ## Remaining Activation Work
 

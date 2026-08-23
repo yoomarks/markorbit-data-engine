@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +10,7 @@ from app.snapshot_delta.ipos_sg_full_acceptance import (
     run_ipos_full_corpus_acceptance,
     write_acceptance_report,
 )
+from app.snapshot_delta.ipos_sg_schema_contract import IPOS_NATIVE_CSV_SOURCE_FIELDS
 
 
 class FakeDownloader:
@@ -28,13 +31,22 @@ class FakeDownloader:
         )
 
 
+def snapshot_csv(rows: list[tuple[str, str]]) -> str:
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=IPOS_NATIVE_CSV_SOURCE_FIELDS)
+    writer.writeheader()
+    for entity_id, status in rows:
+        writer.writerow({"Application Number": entity_id, "Mark Status": status})
+    return stream.getvalue()
+
+
 def clock(*values: float):
     iterator = iter(values)
     return lambda: next(iterator)
 
 
 def test_full_corpus_acceptance_bootstraps_and_reports_runtime_evidence(tmp_path: Path):
-    payload = "Application Number,Mark Status\nSG1,Pending\nSG2,Registered\n"
+    payload = snapshot_csv([("SG1", "Pending"), ("SG2", "Registered")])
 
     report = run_ipos_full_corpus_acceptance(
         tmp_path,
@@ -56,8 +68,8 @@ def test_full_corpus_acceptance_bootstraps_and_reports_runtime_evidence(tmp_path
 
 
 def test_full_corpus_acceptance_changed_cycle_retains_one_snapshot_and_events(tmp_path: Path):
-    first = "Application Number,Mark Status\nSG1,Pending\nSG2,Registered\n"
-    second = "Application Number,Mark Status\nSG1,Registered\nSG3,Pending\n"
+    first = snapshot_csv([("SG1", "Pending"), ("SG2", "Registered")])
+    second = snapshot_csv([("SG1", "Registered"), ("SG3", "Pending")])
     run_ipos_full_corpus_acceptance(
         tmp_path,
         downloader=FakeDownloader(first, 22),
@@ -81,7 +93,7 @@ def test_full_corpus_acceptance_changed_cycle_retains_one_snapshot_and_events(tm
 def test_acceptance_report_is_machine_readable_and_atomic(tmp_path: Path):
     report = run_ipos_full_corpus_acceptance(
         tmp_path / "state",
-        downloader=FakeDownloader("Application Number,Mark Status\nSG1,Pending\n", 22),
+        downloader=FakeDownloader(snapshot_csv([("SG1", "Pending")]), 22),
         clock=clock(4.0, 4.75),
     )
     report_path = tmp_path / "evidence" / "acceptance.json"

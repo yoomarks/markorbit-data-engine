@@ -1,9 +1,14 @@
+import csv
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from app.snapshot_delta.acquisition import AcquiredSnapshot
 from app.snapshot_delta.ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
+from app.snapshot_delta.ipos_sg_schema_contract import IPOS_NATIVE_CSV_SOURCE_FIELDS
 from app.snapshot_delta.lifecycle import run_ipos_snapshot_cycle
 
 
@@ -32,6 +37,15 @@ def downloader(payload: str, day: int) -> FakeDownloader:
     )
 
 
+def snapshot_csv(rows: list[tuple[str, str]]) -> str:
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=IPOS_NATIVE_CSV_SOURCE_FIELDS)
+    writer.writeheader()
+    for entity_id, status in rows:
+        writer.writerow({"Application Number": entity_id, "Mark Status": status})
+    return stream.getvalue()
+
+
 def read_pointer(state: Path) -> dict:
     return json.loads((state / "current.json").read_text(encoding="utf-8"))
 
@@ -39,7 +53,7 @@ def read_pointer(state: Path) -> dict:
 def test_first_snapshot_bootstraps_current_version_without_events(tmp_path: Path):
     result = run_ipos_snapshot_cycle(
         tmp_path,
-        downloader=downloader("Application Number,Mark Status\nSG1,Pending\n", 22),
+        downloader=downloader(snapshot_csv([("SG1", "Pending")]), 22),
     )
 
     assert result.status == "BOOTSTRAPPED"
@@ -54,7 +68,7 @@ def test_first_snapshot_bootstraps_current_version_without_events(tmp_path: Path
 
 
 def test_unchanged_snapshot_keeps_existing_authoritative_version(tmp_path: Path):
-    payload = "Application Number,Mark Status\nSG1,Pending\n"
+    payload = snapshot_csv([("SG1", "Pending")])
     first = run_ipos_snapshot_cycle(tmp_path, downloader=downloader(payload, 22))
     second = run_ipos_snapshot_cycle(tmp_path, downloader=downloader(payload, 23))
 
@@ -66,16 +80,8 @@ def test_unchanged_snapshot_keeps_existing_authoritative_version(tmp_path: Path)
 
 
 def test_changed_snapshot_emits_deltas_then_discards_old_full_snapshot(tmp_path: Path):
-    previous = (
-        "Application Number,Mark Status\n"
-        "SG1,Pending\n"
-        "SG2,Registered\n"
-    )
-    current = (
-        "Application Number,Mark Status\n"
-        "SG1,Registered\n"
-        "SG3,Pending\n"
-    )
+    previous = snapshot_csv([("SG1", "Pending"), ("SG2", "Registered")])
+    current = snapshot_csv([("SG1", "Registered"), ("SG3", "Pending")])
     first = run_ipos_snapshot_cycle(tmp_path, downloader=downloader(previous, 22))
     second = run_ipos_snapshot_cycle(tmp_path, downloader=downloader(current, 23))
 
@@ -97,11 +103,11 @@ def test_changed_snapshot_emits_deltas_then_discards_old_full_snapshot(tmp_path:
 def test_changed_cycle_keeps_manifest_and_event_evidence_after_snapshot_rotation(tmp_path: Path):
     first = run_ipos_snapshot_cycle(
         tmp_path,
-        downloader=downloader("Application Number,Mark Status\nSG1,Pending\n", 22),
+        downloader=downloader(snapshot_csv([("SG1", "Pending")]), 22),
     )
     second = run_ipos_snapshot_cycle(
         tmp_path,
-        downloader=downloader("Application Number,Mark Status\nSG1,Registered\n", 23),
+        downloader=downloader(snapshot_csv([("SG1", "Registered")]), 23),
     )
 
     assert second.events_path is not None
@@ -112,3 +118,25 @@ def test_changed_cycle_keeps_manifest_and_event_evidence_after_snapshot_rotation
         f"{second.manifest.content_hash}.manifest.json"
     )
     assert current_manifest_path.exists()
+
+
+def test_lifecycle_rejects_custom_downloader_that_bypasses_full_schema_gate(tmp_path: Path):
+    first = run_ipos_snapshot_cycle(
+        tmp_path,
+        downloader=downloader(snapshot_csv([("SG1", "Registered")]), 22),
+    )
+    pointer_before = read_pointer(tmp_path)
+    accepted_snapshot = tmp_path / first.manifest.storage_reference
+    accepted_bytes = accepted_snapshot.read_bytes()
+
+    incomplete = "Application Number,Mark Status\nSG2,Pending\n"
+    with pytest.raises(ValueError, match="IPOS snapshot schema drift: missing="):
+        run_ipos_snapshot_cycle(
+            tmp_path,
+            downloader=downloader(incomplete, 23),
+        )
+
+    assert read_pointer(tmp_path) == pointer_before
+    assert accepted_snapshot.read_bytes() == accepted_bytes
+    assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
+    assert not list((tmp_path / "events").glob("*.jsonl"))

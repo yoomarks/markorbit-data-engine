@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .acquisition import DataGovSgSnapshotDownloader
 from .ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS, SnapshotSource
+from .ipos_sg_schema_contract import validate_ipos_native_snapshot_schema
 
 
 class IposSourceAcceptanceError(RuntimeError):
@@ -91,7 +92,7 @@ def probe_ipos_live_source(
     api_key: str | None = None,
     resolve_download_url: bool = False,
 ) -> IposSourceAcceptance:
-    """Probe one live row and critical schema without downloading the multi-GB snapshot."""
+    """Probe one live row and the authoritative schema without downloading the corpus."""
     query_url = f"{source.api_url}&{urlencode({'limit': 1})}"
     payload = _request_json(
         query_url,
@@ -118,6 +119,10 @@ def probe_ipos_live_source(
         raise IposSourceAcceptanceError(
             f"IPOS live schema missing required fields: {', '.join(missing)}"
         )
+    try:
+        validate_ipos_native_snapshot_schema(field_names)
+    except ValueError as exc:
+        raise IposSourceAcceptanceError(str(exc)) from exc
 
     records = result.get("records")
     if not isinstance(records, list) or not records or not isinstance(records[0], dict):

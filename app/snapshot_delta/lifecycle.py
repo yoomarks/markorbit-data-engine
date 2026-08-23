@@ -11,8 +11,12 @@ from typing import Any, Protocol
 
 from .acquisition import AcquiredSnapshot, DataGovSgSnapshotDownloader
 from .ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
-from .ipos_sg_observation import observations_from_ipos_snapshot
+from .ipos_sg_observation import (
+    observations_from_ipos_snapshot,
+    validate_ipos_snapshot_schema,
+)
 from .ipos_sg_pipeline import manifest_evidence_reference
+from .ipos_sg_schema_contract import validate_ipos_native_snapshot_schema
 from .loader import SnapshotCsvLoader
 from .manifest import build_snapshot_manifest
 from .models import DeltaEvent, SnapshotManifest
@@ -182,7 +186,12 @@ def run_ipos_snapshot_cycle(
     active_downloader = downloader or DataGovSgSnapshotDownloader()
     acquired = active_downloader.download(incoming)
 
+    # The lifecycle is the acceptance boundary, so alternate/custom downloaders
+    # cannot bypass the source contract enforced by the default network adapter.
     loader = SnapshotCsvLoader(acquired.path)
+    validate_ipos_snapshot_schema(loader)
+    validate_ipos_native_snapshot_schema(loader.fieldnames())
+
     provisional = build_snapshot_manifest(
         loader,
         IPOS_SG_TRADEMARK_APPLICATIONS,
