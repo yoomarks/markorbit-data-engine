@@ -5,6 +5,7 @@ integration:
   stage_name: Contract Freeze
   provider_status: frozen_in_provider_pr
   consumer_status: awaiting_markorbit_acceptance
+  provider_pr: yoomarks/markorbit-data-engine#209
   updated_at: 2026-08-23
 baselines:
   markorbit:
