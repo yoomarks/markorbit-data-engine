@@ -10,6 +10,15 @@ from app.snapshot_delta.projection import (
 )
 
 
+def _observation(entity_id: str, payload: dict) -> Observation:
+    return Observation(
+        "application",
+        entity_id,
+        payload,
+        jurisdiction="SG",
+    )
+
+
 def _event(
     entity_id: str,
     event_type: str,
@@ -31,8 +40,8 @@ def _event(
 def test_projection_replays_create_update_delete_and_is_idempotent():
     base = projection_from_observations(
         [
-            Observation("application", "SG1", {"status": "Pending"}),
-            Observation("application", "SG2", {"status": "Registered"}),
+            _observation("SG1", {"status": "Pending"}),
+            _observation("SG2", {"status": "Registered"}),
         ],
         evidence_reference="snapshot:previous",
     )
@@ -70,8 +79,8 @@ def test_projection_replays_create_update_delete_and_is_idempotent():
 
 def test_projection_rejects_duplicate_snapshot_identity():
     observations = [
-        Observation("application", "SG1", {"status": "Pending"}),
-        Observation("application", "SG1", {"status": "Registered"}),
+        _observation("SG1", {"status": "Pending"}),
+        _observation("SG1", {"status": "Registered"}),
     ]
 
     with pytest.raises(ValueError, match="duplicate observation identity"):

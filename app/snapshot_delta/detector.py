@@ -3,7 +3,7 @@
 Changes represent source observations only and do not assert legal conclusions.
 """
 
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from datetime import datetime, timezone
 
 from .fingerprint import record_fingerprint
@@ -15,7 +15,12 @@ class Observation:
     entity_type: str
     entity_id: str
     payload: dict
-    jurisdiction: str = "SG"
+    _: KW_ONLY
+    jurisdiction: str
+
+    def __post_init__(self) -> None:
+        if not self.jurisdiction.strip():
+            raise ValueError("jurisdiction must be non-empty")
 
 
 def _event_time(now: datetime | None = None) -> datetime:
@@ -72,7 +77,23 @@ def compare_observations(
     if previous.jurisdiction != current.jurisdiction:
         raise ValueError("cannot compare observations from different jurisdictions")
 
-    if record_fingerprint(previous.entity_type, previous.entity_id, previous.payload) != record_fingerprint(current.entity_type, current.entity_id, current.payload):
+    if (
+        previous.entity_type != current.entity_type
+        or previous.entity_id != current.entity_id
+    ):
+        raise ValueError("cannot compare observations with different identities")
+
+    previous_fingerprint = record_fingerprint(
+        previous.entity_type,
+        previous.entity_id,
+        previous.payload,
+    )
+    current_fingerprint = record_fingerprint(
+        current.entity_type,
+        current.entity_id,
+        current.payload,
+    )
+    if previous_fingerprint != current_fingerprint:
         return DeltaEvent(
             jurisdiction=current.jurisdiction,
             entity_type=current.entity_type,
