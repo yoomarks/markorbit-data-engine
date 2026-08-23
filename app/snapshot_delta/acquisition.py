@@ -85,8 +85,7 @@ class DataGovSgSnapshotDownloader:
         return str(url) if url else None
 
     def resolve_download_url(self) -> str:
-        """Initiate dataset materialization and poll for the signed download URL."""
-        self._request_json(self.source.initiate_download_url)
+        """Poll data.gov.sg until the signed whole-dataset download URL is ready."""
         last_payload: dict[str, Any] | None = None
 
         for attempt in range(self.max_poll_attempts):
