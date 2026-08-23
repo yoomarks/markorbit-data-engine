@@ -109,10 +109,13 @@ def _json_object_array(
     row: Mapping[str, Any], aliases: FieldAliases, *, label: str
 ) -> tuple[dict[str, Any], ...]:
     value = _first_value(row, aliases)
-    if value is None or value == "":
+    if value is None:
         return ()
 
     if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return ()
         try:
             decoded = json.loads(value)
         except json.JSONDecodeError as exc:
