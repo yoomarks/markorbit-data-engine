@@ -150,6 +150,20 @@ def _persist_version(
     return manifest, snapshot_path, manifest_path
 
 
+def _discard_unaccepted_version(
+    state_directory: Path,
+    manifest: SnapshotManifest,
+    *,
+    protected_content_hash: str | None,
+) -> None:
+    """Remove a candidate version that never became the accepted current pointer."""
+    if manifest.content_hash == protected_content_hash:
+        return
+    snapshot_path, manifest_path = _version_paths(state_directory, manifest.content_hash)
+    snapshot_path.unlink(missing_ok=True)
+    manifest_path.unlink(missing_ok=True)
+
+
 def _write_events(
     path: Path,
     previous_manifest: SnapshotManifest,
@@ -275,23 +289,33 @@ def run_ipos_snapshot_cycle(
         acquired,
         candidate,
     )
+    protected_content_hash = current[0].content_hash if current is not None else None
 
     if current is None:
-        _publish_pointer(state, candidate)
+        try:
+            _publish_pointer(state, candidate)
+        except Exception:
+            _discard_unaccepted_version(
+                state,
+                candidate,
+                protected_content_hash=protected_content_hash,
+            )
+            raise
         return SnapshotCycleResult(status="BOOTSTRAPPED", manifest=candidate)
 
     previous_manifest, previous_snapshot, _ = current
     evidence_stem = f"{previous_manifest.content_hash}__{candidate.content_hash}"
     events_path = state / "events" / f"{evidence_stem}.jsonl"
-    event_count, updated_application_numbers = _write_events(
-        events_path,
-        previous_manifest,
-        candidate,
-        previous_snapshot,
-        candidate_snapshot,
-    )
     native_changes_path = state / "native_changes" / f"{evidence_stem}.jsonl"
+
     try:
+        event_count, updated_application_numbers = _write_events(
+            events_path,
+            previous_manifest,
+            candidate,
+            previous_snapshot,
+            candidate_snapshot,
+        )
         native_change_count = _write_native_changes(
             native_changes_path,
             updated_application_numbers,
@@ -300,16 +324,21 @@ def run_ipos_snapshot_cycle(
             previous_snapshot,
             candidate_snapshot,
         )
+        if native_change_count == 0:
+            native_changes_path = None
+        _publish_pointer(state, candidate)
     except Exception:
-        # Generic events describe the candidate comparison but are not committed
-        # lifecycle evidence until all required native evidence is durable.
+        # Candidate evidence is committed only with the accepted-current pointer.
+        # A pre-pointer failure must leave exactly the previously accepted version.
         events_path.unlink(missing_ok=True)
+        if native_changes_path is not None:
+            native_changes_path.unlink(missing_ok=True)
+        _discard_unaccepted_version(
+            state,
+            candidate,
+            protected_content_hash=protected_content_hash,
+        )
         raise
-
-    if native_change_count == 0:
-        native_changes_path = None
-
-    _publish_pointer(state, candidate)
 
     # Full source rows are intentionally single-current-version storage, but
     # manifests and derived source evidence survive CSV rotation.
