@@ -199,7 +199,7 @@ def run_ipos_snapshot_cycle(
         acquired.path.unlink(missing_ok=True)
         return SnapshotCycleResult(status="UNCHANGED", manifest=current[0])
 
-    candidate, candidate_snapshot, candidate_manifest_path = _persist_version(
+    candidate, candidate_snapshot, _ = _persist_version(
         state,
         acquired,
         candidate,
