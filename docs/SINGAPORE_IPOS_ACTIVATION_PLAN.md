@@ -2,7 +2,7 @@
 
 ## Status
 
-Source/lifecycle activation is accepted on the real public corpus. Generic snapshot/delta behavior and current projection plumbing are implemented. Field-level native semantic extraction remains a separate follow-on scope and must not be inferred from whole-row source observations.
+Source/lifecycle activation is accepted on the real public corpus. Generic snapshot/delta behavior and current projection plumbing are implemented. The first field-level native fact extraction slice is implemented for selected authoritative IPOS fields; broader semantic-family coverage remains follow-on work.
 
 A recurring production acquisition schedule is not asserted by this record.
 
@@ -38,20 +38,28 @@ The operator-grade full-corpus acceptance requires exactly one accepted current 
 
 ## Phase 2 — Native Semantic Extraction
 
-Separate follow-on scope; not marked complete by source activation.
+Foundation implemented for selected source-native fields. This remains separate from source/lifecycle acceptance and does not introduce legal interpretation.
 
-The current Singapore observation adapter validates critical application-number and mark-status source columns and carries the authoritative row payload into a jurisdiction-tagged source observation. Additional native semantic extraction must be introduced explicitly and tested before it is considered active.
+The extractor requires authoritative application identity and mark status, preserves source date values as source strings, and parses the source JSON-array families without changing their nested source structure. It accepts both official API field names and the corresponding CSV display headings.
 
-Candidate source-native facts include, where the authoritative source actually provides them:
+The first slice covers:
 
-- application identity
+- application number and filing date
+- application/trade mark type
+- mark status and source status/update dates
+- registration completion, expiry, publication and last-modified dates
+- international-registration details
 - mark data
-- applicant/proprietor
-- goods and services
-- status observations
-- agent correspondence
-- Madrid-related observations
-- transfer/license observations
+- goods and services specifications
+- priority claims
+- current applicant/proprietor details
+- agent correspondence details
+- transfer and licence data
+- source documents
+
+Malformed JSON families fail closed instead of being silently dropped or interpreted. Null/absent optional source fields remain absent.
+
+Broader native semantic-family extraction may be added where the authoritative source provides it, including additional journal, case, security-interest, transformation/replacement and related source families.
 
 Derived or interpreted legal meaning must remain separate from source-native facts.
 
@@ -68,7 +76,7 @@ Implemented at the generic/source-observation layer:
 - current projection plumbing
 - deterministic replay tests
 
-This phase does not imply that every candidate Phase 2 field has a dedicated semantic event type.
+This phase does not imply that every Phase 2 source family has a dedicated semantic event type.
 
 ## Storage Decision
 
@@ -99,4 +107,4 @@ Source/lifecycle activation is accepted only when:
 
 ## Remaining Activation Work
 
-The next Singapore work should focus on explicit Phase 2 native semantic extraction and its source-backed tests. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.
+Continue Phase 2 by adding source-backed extraction/tests for additional authoritative families only when product/runtime consumers need them. Dedicated semantic event families should be introduced separately from raw fact extraction. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.

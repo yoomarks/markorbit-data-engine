@@ -13,7 +13,7 @@ def test_singapore_activation_docs_reflect_accepted_source_lifecycle():
     assert "Future SG adapter MUST implement" not in architecture
     assert "Singapore IPOS is the first activated source" in architecture
     assert "Source/lifecycle activation is accepted" in activation
-    assert "Field-level native semantic extraction remains a separate follow-on scope" in activation
+    assert "source-native facts remain separated from interpretation" in activation
     assert "recurring production" in activation.lower()
 
 
@@ -24,3 +24,11 @@ def test_singapore_activation_docs_preserve_snapshot_first_storage_boundary():
     assert "daily identical full csv files are not permanent history by default" in architecture.lower()
     assert "accepted current full snapshot" in activation
     assert "durable delta/event evidence" in activation
+
+
+def test_singapore_activation_docs_record_native_facts_without_overclaiming():
+    activation = ACTIVATION_DOC.read_text(encoding="utf-8")
+
+    assert "first field-level native fact extraction slice is implemented" in activation
+    assert "Malformed JSON families fail closed" in activation
+    assert "does not introduce legal interpretation" in activation
