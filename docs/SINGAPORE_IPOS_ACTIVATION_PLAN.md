@@ -36,6 +36,8 @@ Implemented and accepted:
 
 The operator-grade full-corpus acceptance requires exactly one accepted current full CSV in the lifecycle state, a matching manifest/current pointer, non-empty row and byte counts, and durable event evidence whenever the lifecycle reports `CHANGED`.
 
+Downloaded snapshots are validated against both the critical application/status columns and the complete authoritative 39-column source contract before the partial file can replace the accepted snapshot. Both official datastore field ids and official CSV display headings normalize to the same contract. Missing or newly introduced source columns fail closed, while data.gov.sg datastore `_id` remains provider metadata rather than an IPOS native fact.
+
 ## Phase 2 — Native Semantic Extraction
 
 Current source schema coverage is implemented without introducing legal interpretation.
@@ -59,7 +61,7 @@ The current 39-column source contract covers:
 - current applicant/proprietor details
 - agent correspondence details
 
-The data.gov.sg datastore `_id` field is treated as provider metadata, not as an IPOS native fact. A schema-drift helper records missing or newly introduced source fields so future source changes can be surfaced explicitly rather than silently ignored.
+The data.gov.sg datastore `_id` field is treated as provider metadata, not as an IPOS native fact. Schema-drift checks report missing or newly introduced source fields so future source changes are surfaced explicitly rather than silently ignored.
 
 Malformed JSON families fail closed instead of being silently dropped or interpreted. Null/absent optional source fields remain absent.
 
@@ -112,10 +114,10 @@ Source/lifecycle activation is accepted only when:
 5. provenance and accepted-current pointers are internally consistent;
 6. changed runs retain durable delta evidence;
 7. source-native facts remain separated from interpretation;
-8. the full-corpus lifecycle validates non-empty authoritative source data;
+8. the full-corpus lifecycle validates non-empty authoritative source data and the authoritative source-column contract;
 9. Data Engine CI remains green;
 10. activation does not require rebuilding, recreating or restarting unrelated CN live workers.
 
 ## Remaining Activation Work
 
-The next source-runtime step is to wire schema-drift verification into a lightweight authoritative schema acceptance path and, where consumers need it, connect neutral native-family changes to durable evidence without prematurely introducing interpreted legal events. Dedicated semantic events remain a separate reviewed layer. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.
+The next source-runtime step is to connect neutral native-family changes to durable evidence where consumers need that granularity, without prematurely introducing interpreted legal events. Dedicated semantic events remain a separate reviewed layer. Recurring production scheduling, if introduced, requires its own operational acceptance and must not be inferred from the source/lifecycle acceptance described here.
