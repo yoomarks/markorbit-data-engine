@@ -3,20 +3,7 @@
 Keeps source metadata separate from ingestion and projection layers.
 """
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class SnapshotSource:
-    source_id: str
-    dataset_id: str
-    filename: str
-    dataset_url: str
-    api_url: str
-    initiate_download_url: str
-    poll_download_url: str
-    source_type: str = "current_snapshot"
-
+from .source import SnapshotSource
 
 _DATASET_ID = "d_6145acb2130bf781165258e76a584383"
 _DOWNLOAD_API_BASE = f"https://api-open.data.gov.sg/v1/public/api/datasets/{_DATASET_ID}"
