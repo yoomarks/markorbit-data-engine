@@ -77,7 +77,23 @@ def compare_observations(
     if previous.jurisdiction != current.jurisdiction:
         raise ValueError("cannot compare observations from different jurisdictions")
 
-    if record_fingerprint(previous.entity_type, previous.entity_id, previous.payload) != record_fingerprint(current.entity_type, current.entity_id, current.payload):
+    if (
+        previous.entity_type != current.entity_type
+        or previous.entity_id != current.entity_id
+    ):
+        raise ValueError("cannot compare observations with different identities")
+
+    previous_fingerprint = record_fingerprint(
+        previous.entity_type,
+        previous.entity_id,
+        previous.payload,
+    )
+    current_fingerprint = record_fingerprint(
+        current.entity_type,
+        current.entity_id,
+        current.payload,
+    )
+    if previous_fingerprint != current_fingerprint:
         return DeltaEvent(
             jurisdiction=current.jurisdiction,
             entity_type=current.entity_type,
