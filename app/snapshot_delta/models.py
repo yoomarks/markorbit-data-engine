@@ -13,9 +13,11 @@ class SnapshotManifest:
     source_id: str
     dataset_id: str
     retrieved_at: datetime
+    source_uri: str
     schema_hash: str
     content_hash: str
     row_count: int
+    storage_reference: str
 
 
 @dataclass(frozen=True)
