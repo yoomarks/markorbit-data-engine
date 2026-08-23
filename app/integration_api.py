@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, Query
 
 from app.component_versions import component_versions
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
+from app.integration_g0_contract import g0_contract_descriptor
+from app.integration_runtime import enforce_integration_rate_limit
 from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, health, us_case
 from app.platform_contract import platform_contract
@@ -20,7 +22,7 @@ from app.version import engine_version
 router = APIRouter(
     prefix="/api/v1",
     tags=["MarkOrbit integration V1"],
-    dependencies=[Depends(require_integration_auth)],
+    dependencies=[Depends(require_integration_auth), Depends(enforce_integration_rate_limit)],
 )
 
 
@@ -38,6 +40,7 @@ def _envelope(
         "resource_kind": resource_kind,
         "authority": "DATA_ENGINE_FACT_READ_MODEL",
         "legal_conclusion": False,
+        "fact_state": "observed",
         "payload": payload,
     }
 
@@ -60,6 +63,7 @@ def integration_health() -> dict[str, Any]:
 
 @router.get("/contract")
 def integration_contract() -> dict[str, Any]:
+    descriptor = g0_contract_descriptor()
     return {
         "contract_version": CONTRACT_VERSION,
         "engine_version": engine_version(),
@@ -77,15 +81,14 @@ def integration_contract() -> dict[str, Any]:
         "security": integration_security_contract(),
         "transport": {
             "request_id_header": "X-Request-ID",
+            "correlation_id_header": "x-correlation-id",
             "request_id_echoed": True,
+            "correlation_id_echoed": True,
             "contract_version_header": "X-MarkOrbit-Contract-Version",
             "source_owner_header": "X-MarkOrbit-Source-Owner",
         },
         "planes": {
-            "query": {
-                "prefix": "/api/v1",
-                "methods": ["GET"],
-            },
+            "query": {"prefix": "/api/v1", "methods": ["GET"]},
             "change_feed": {
                 "path": "/api/v1/us/changes",
                 "methods": ["GET"],
@@ -97,15 +100,9 @@ def integration_contract() -> dict[str, Any]:
             },
         },
         "stable_resources": [
-            "/api/v1/health",
-            "/api/v1/cn/cases/{application_number}",
-            "/api/v1/us/cases/{serial_number}",
-            "/api/v1/us/cases/{serial_number}/360",
-            "/api/v1/us/cases/{serial_number}/history",
-            "/api/v1/us/cases/{serial_number}/assignments",
-            "/api/v1/us/cases/{serial_number}/ttab",
-            "/api/v1/us/changes",
+            resource["path"] for resource in descriptor["query_contract"]["resources"]
         ],
+        "g0_contract": descriptor,
     }
 
 
