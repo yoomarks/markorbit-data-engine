@@ -7,17 +7,18 @@ from app.work_engine import DurableWorkUnitStore, WorkUnitIdentity, work_engine_
 
 class _MemoryPersistence:
     def __init__(self) -> None:
-        self.rows: dict[str, dict] = {}
+        self.rows: dict[tuple[str, str], dict] = {}
         self.last_running_spec = None
 
-    def read(self, task_key: str):
-        row = self.rows.get(task_key)
+    def read(self, job_id: str, task_key: str):
+        row = self.rows.get((job_id, task_key))
         return None if row is None else dict(row)
 
     def running(self, spec) -> None:
         self.last_running_spec = spec
-        previous = self.rows.get(spec.task_key) or {}
-        self.rows[spec.task_key] = {
+        row_key = (spec.job_id, spec.task_key)
+        previous = self.rows.get(row_key) or {}
+        self.rows[row_key] = {
             "status": "RUNNING",
             "job_id": spec.job_id,
             "operation_hash": spec.operation_hash,
@@ -27,16 +28,18 @@ class _MemoryPersistence:
             "upper": spec.partition_upper,
         }
 
-    def success(self, task_key: str) -> None:
-        self.rows[task_key]["status"] = "SUCCESS"
+    def success(self, job_id: str, task_key: str) -> None:
+        self.rows[(job_id, task_key)]["status"] = "SUCCESS"
 
-    def failed(self, task_key: str, error: str) -> None:
-        self.rows[task_key]["status"] = "FAILED"
-        self.rows[task_key]["error"] = error
+    def failed(self, job_id: str, task_key: str, error: str) -> None:
+        self.rows[(job_id, task_key)]["status"] = "FAILED"
+        self.rows[(job_id, task_key)]["error"] = error
 
-    def summary(self):
+    def summary(self, job_id: str):
         result: dict[str, int] = {}
-        for row in self.rows.values():
+        for (row_job_id, _), row in self.rows.items():
+            if row_job_id != job_id:
+                continue
             status = row["status"]
             result[status] = result.get(status, 0) + 1
         return result
@@ -118,6 +121,54 @@ def test_job_id_is_outer_scope_without_rekeying_v1_tasks() -> None:
     assert first.task_key() == second.task_key()
 
 
+def test_jobs_with_same_v1_task_key_are_persisted_independently() -> None:
+    memory = _MemoryPersistence()
+    first = _store(memory, job_id="job-001")
+    second = _store(memory, job_id="job-002")
+    first_key = first.task_key(
+        operation_hash="op",
+        partition_kind="FILE_PART",
+        lower="part-001",
+        upper="part-002",
+    )
+    second_key = second.task_key(
+        operation_hash="op",
+        partition_kind="FILE_PART",
+        lower="part-001",
+        upper="part-002",
+    )
+    assert first_key == second_key
+
+    first.mark_running(
+        task_key=first_key,
+        task_group="PARSE",
+        task_index=1,
+        task_total=1,
+        partition_kind="FILE_PART",
+        lower="part-001",
+        upper="part-002",
+        operation_hash="op",
+    )
+    first.mark_success(first_key)
+
+    second.mark_running(
+        task_key=second_key,
+        task_group="PARSE",
+        task_index=1,
+        task_total=1,
+        partition_kind="FILE_PART",
+        lower="part-001",
+        upper="part-002",
+        operation_hash="op",
+    )
+    second.mark_failed(second_key, "second job failed")
+
+    assert first.is_success(first_key, "op") is True
+    assert second.is_success(second_key, "op") is False
+    assert first.summary() == {"RUNNING": 0, "SUCCESS": 1, "FAILED": 0}
+    assert second.summary() == {"RUNNING": 0, "SUCCESS": 0, "FAILED": 1}
+
+
 def test_job_id_is_exposed_to_domain_persistence() -> None:
     memory = _MemoryPersistence()
     store = _store(memory, job_id="source-package-123")
@@ -141,7 +192,7 @@ def test_job_id_is_exposed_to_domain_persistence() -> None:
 
     assert memory.last_running_spec is not None
     assert memory.last_running_spec.job_id == "source-package-123"
-    assert memory.rows[key]["job_id"] == "source-package-123"
+    assert memory.rows[("source-package-123", key)]["job_id"] == "source-package-123"
 
 
 def test_blank_job_id_is_rejected() -> None:
@@ -185,6 +236,7 @@ def test_failed_work_unit_is_rerunnable_and_attempts_increment() -> None:
         lower="part-001",
         upper="part-002",
     )
+    row_key = (store.job_id, key)
 
     for attempt in (1, 2):
         store.mark_running(
@@ -197,7 +249,7 @@ def test_failed_work_unit_is_rerunnable_and_attempts_increment() -> None:
             upper="part-002",
             operation_hash="op",
         )
-        assert memory.rows[key]["attempts"] == attempt
+        assert memory.rows[row_key]["attempts"] == attempt
         store.mark_failed(key, "boom")
 
     store.mark_running(
@@ -212,7 +264,7 @@ def test_failed_work_unit_is_rerunnable_and_attempts_increment() -> None:
     )
     store.mark_success(key)
 
-    assert memory.rows[key]["attempts"] == 3
+    assert memory.rows[row_key]["attempts"] == 3
     assert store.assert_complete() == {"RUNNING": 0, "SUCCESS": 1, "FAILED": 0}
 
 
@@ -275,8 +327,10 @@ def test_contract_freezes_resume_and_legal_semantics() -> None:
         "task_key",
     ]
     assert contract["persistence_identity"] == ["job_id", "task_key"]
+    assert contract["task_identity"] == contract["task_key_identity"]
     assert "job_id" not in contract["task_key_identity"]
     assert contract["task_key_job_local"] is True
+    assert contract["persistence_callbacks_job_scoped"] is True
     assert contract["resume_policy"]["skip_only_matching_success"] is True
     assert contract["resume_policy"]["checkpoint_artifact_validation_required"] is True
     assert contract["resume_policy"]["cleanup_only_after_job_success"] is True
