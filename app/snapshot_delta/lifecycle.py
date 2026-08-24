@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .acquisition import AcquiredSnapshot, DataGovSgSnapshotDownloader
 from .ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
@@ -29,6 +29,9 @@ from .runtime import detect_snapshot_deltas
 
 class SnapshotDownloader(Protocol):
     def download(self, destination_directory: str | Path) -> AcquiredSnapshot: ...
+
+
+SnapshotCandidateValidator = Callable[[SnapshotManifest], None]
 
 
 @dataclass(frozen=True)
@@ -280,32 +283,40 @@ def run_ipos_snapshot_cycle(
     state_directory: str | Path,
     *,
     downloader: SnapshotDownloader | None = None,
+    candidate_validator: SnapshotCandidateValidator | None = None,
 ) -> SnapshotCycleResult:
-    """Acquire one IPOS snapshot and commit only a new authoritative source version."""
+    """Acquire one IPOS snapshot and commit only a validated authoritative version."""
     state = Path(state_directory)
     state.mkdir(parents=True, exist_ok=True)
     incoming = state / "incoming"
     active_downloader = downloader or DataGovSgSnapshotDownloader()
     acquired = active_downloader.download(incoming)
 
-    # The lifecycle is the acceptance boundary, so alternate/custom downloaders
-    # cannot bypass the source contract enforced by the default network adapter.
-    loader = SnapshotCsvLoader(acquired.path)
-    validate_ipos_snapshot_schema(loader)
-    validate_ipos_native_snapshot_schema(loader.fieldnames())
+    # Everything before _persist_version is still unaccepted incoming state. If a
+    # lifecycle-level schema/manifest/candidate check fails, remove that owned input
+    # so a failed run cannot masquerade as a durable candidate on the next attempt.
+    try:
+        loader = SnapshotCsvLoader(acquired.path)
+        validate_ipos_snapshot_schema(loader)
+        validate_ipos_native_snapshot_schema(loader.fieldnames())
 
-    provisional = build_snapshot_manifest(
-        loader,
-        IPOS_SG_TRADEMARK_APPLICATIONS,
-        jurisdiction="SG",
-        retrieved_at=acquired.retrieved_at,
-        source_uri=acquired.source_uri,
-        storage_reference="pending",
-    )
-    storage_reference = f"snapshots/{provisional.content_hash}.csv"
-    candidate = replace(provisional, storage_reference=storage_reference)
+        provisional = build_snapshot_manifest(
+            loader,
+            IPOS_SG_TRADEMARK_APPLICATIONS,
+            jurisdiction="SG",
+            retrieved_at=acquired.retrieved_at,
+            source_uri=acquired.source_uri,
+            storage_reference="pending",
+        )
+        storage_reference = f"snapshots/{provisional.content_hash}.csv"
+        candidate = replace(provisional, storage_reference=storage_reference)
+        if candidate_validator is not None:
+            candidate_validator(candidate)
+        current = _current_manifest(state)
+    except Exception:
+        acquired.path.unlink(missing_ok=True)
+        raise
 
-    current = _current_manifest(state)
     if current is not None and current[0].content_hash == candidate.content_hash:
         acquired.path.unlink(missing_ok=True)
         cleanup_pending_paths = _cleanup_unreferenced_snapshots(

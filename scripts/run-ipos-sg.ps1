@@ -1,5 +1,6 @@
 param(
-    [string]$StateDir = "raw_data\ipos_sg"
+    [string]$StateDir = "raw_data\ipos_sg",
+    [switch]$RecoverStaleLock
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,31 +25,31 @@ try {
 
     $appMount = "${repoRoot}\app:/app/app:ro"
     $stateMount = "${hostState}:/app/ipos_sg_state"
-
-    Write-Host "Running authenticated Singapore IPOS live-source acceptance..."
-    docker compose run --rm --no-deps -T `
-        --env DATA_GOV_SG_API_KEY `
-        --volume $appMount `
-        worker python -m app.snapshot_delta.ipos_sg_acceptance --resolve-download-url
-    if ($LASTEXITCODE -ne 0) {
-        throw "Singapore IPOS live-source acceptance failed; full-corpus acquisition was not started."
+    $operatorArgs = @(
+        "-m",
+        "app.snapshot_delta.ipos_sg_operator",
+        "--state-dir",
+        "/app/ipos_sg_state"
+    )
+    if ($RecoverStaleLock) {
+        $operatorArgs += "--recover-stale-lock"
     }
 
-    Write-Host "Running authenticated Singapore IPOS full-corpus lifecycle..."
+    Write-Host "Running leased authenticated Singapore IPOS operator cycle..."
+    Write-Host "The same one-shot worker remains alive for preflight, source authentication, full corpus, and postflight."
     docker compose run --rm --no-deps -T `
         --env DATA_GOV_SG_API_KEY `
         --volume $appMount `
         --volume $stateMount `
-        worker python -m app.snapshot_delta.ipos_sg_full_acceptance `
-            --state-dir /app/ipos_sg_state `
-            --report-path /app/ipos_sg_state/acceptance/latest.json
+        worker python @operatorArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Singapore IPOS full-corpus acceptance failed. Accepted state, if any, remains in $hostState for safe recovery."
+        throw "Singapore IPOS operator cycle failed. Accepted state, failure evidence, and any recoverable lifecycle artifacts remain in $hostState."
     }
 
-    Write-Host "Singapore IPOS authenticated source + full-corpus acceptance: PASS"
+    Write-Host "Singapore IPOS authenticated operator acceptance: PASS"
     Write-Host "State: $hostState"
-    Write-Host "Report: $(Join-Path $hostState 'acceptance\latest.json')"
+    Write-Host "Corpus report: $(Join-Path $hostState 'acceptance\latest.json')"
+    Write-Host "Operator report: $(Join-Path $hostState 'acceptance\operator_latest.json')"
 }
 finally {
     Pop-Location

@@ -2,6 +2,7 @@ import csv
 import io
 import json
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 import pytest
@@ -74,6 +75,74 @@ def test_anonymous_resolve_download_url_polls_until_ready():
         IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
     ]
     assert sleeps == [2.5]
+
+
+def test_control_plane_request_retries_transient_network_failure():
+    sleeps: list[float] = []
+    calls = 0
+
+    def opener(request: Request, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise URLError("temporary provider network failure")
+        return json_response(
+            {"code": 0, "data": {"url": "https://download.example/ipos.csv"}}
+        )
+
+    downloader = DataGovSgSnapshotDownloader(
+        opener=opener,
+        sleeper=sleeps.append,
+        api_request_attempts=3,
+        api_retry_base_seconds=0.25,
+        max_poll_attempts=1,
+    )
+
+    assert downloader.resolve_download_url() == "https://download.example/ipos.csv"
+    assert calls == 2
+    assert sleeps == [0.25]
+
+
+def test_control_plane_request_does_not_retry_nontransient_http_error():
+    calls = 0
+    sleeps: list[float] = []
+
+    def opener(request: Request, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise HTTPError(request.full_url, 401, "Unauthorized", None, None)
+
+    downloader = DataGovSgSnapshotDownloader(
+        opener=opener,
+        sleeper=sleeps.append,
+        api_request_attempts=3,
+        api_retry_base_seconds=0.25,
+    )
+
+    with pytest.raises(SnapshotDownloadError, match="HTTP 401"):
+        downloader.resolve_download_url()
+
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_authenticated_initiate_provider_rejection_fails_before_polling():
+    calls: list[str] = []
+
+    def opener(request: Request, **kwargs):
+        calls.append(request.full_url)
+        return json_response({"code": 2, "errMsg": "API key not authorized for export"})
+
+    downloader = DataGovSgSnapshotDownloader(
+        opener=opener,
+        api_key="secret-key",
+        max_poll_attempts=1,
+    )
+
+    with pytest.raises(SnapshotDownloadError, match="initiate-download rejected"):
+        downloader.resolve_download_url()
+
+    assert calls == [IPOS_SG_TRADEMARK_APPLICATIONS.initiate_download_url]
 
 
 def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path):

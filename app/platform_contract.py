@@ -8,6 +8,7 @@ from app.data_trust import data_trust_contract
 from app.domain_adapter import domain_adapter_contract
 from app.fact_event_envelope import fact_event_envelope_contract
 from app.operations_v2 import operations_contract
+from app.snapshot_delta.ipos_sg_tasks import ipos_sg_operator_task_contract
 from app.work_dag import work_dag_contract
 from app.work_engine import work_engine_contract
 
@@ -24,6 +25,9 @@ def platform_contract() -> dict[str, Any]:
         "work_dag": work_dag_contract(),
         "active_publish_dags": {
             "cn_final_publish": cn_final_publish_dag_contract(),
+        },
+        "active_source_dags": {
+            "sg_ipos_authenticated_operator": ipos_sg_operator_task_contract(),
         },
         "cn_native_cutover": cn_native_cutover_completion_contract(),
         "domain_adapter": domain_adapter_contract(),
