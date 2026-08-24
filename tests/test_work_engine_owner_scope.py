@@ -5,24 +5,26 @@ class _Memory:
     def __init__(self):
         self.rows = {}
 
-    def read(self, key):
-        return self.rows.get(key)
+    def read(self, job_id, key):
+        return self.rows.get((job_id, key))
 
     def running(self, spec):
-        self.rows[spec.task_key] = {
+        self.rows[(spec.job_id, spec.task_key)] = {
             "status": "RUNNING",
             "operation_hash": spec.operation_hash,
         }
 
-    def success(self, key):
-        self.rows[key]["status"] = "SUCCESS"
+    def success(self, job_id, key):
+        self.rows[(job_id, key)]["status"] = "SUCCESS"
 
-    def failed(self, key, error):
-        self.rows[key]["status"] = "FAILED"
+    def failed(self, job_id, key, error):
+        self.rows[(job_id, key)]["status"] = "FAILED"
 
-    def summary(self):
+    def summary(self, job_id):
         result = {}
-        for row in self.rows.values():
+        for (row_job_id, _), row in self.rows.items():
+            if row_job_id != job_id:
+                continue
             result[row["status"]] = result.get(row["status"], 0) + 1
         return result
 
@@ -30,6 +32,7 @@ class _Memory:
 def _store(memory, owner):
     return DurableWorkUnitStore(
         owner_scope=owner,
+        job_id="owner-scope-fixture",
         checkpoint_version="V1",
         read_task=memory.read,
         upsert_running=memory.running,
