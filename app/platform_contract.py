@@ -11,6 +11,7 @@ from app.operations_v2 import operations_contract
 from app.snapshot_delta.ipos_sg_tasks import ipos_sg_operator_task_contract
 from app.work_dag import work_dag_contract
 from app.work_engine import work_engine_contract
+from app.work_engine_owners import work_engine_owner_registry
 
 
 PLATFORMIZATION_VERSION = "MARKORBIT_PLATFORMIZATION_M1.7"
@@ -22,6 +23,7 @@ def platform_contract() -> dict[str, Any]:
         "status": "CODE_READY_PENDING_RUNTIME_ACCEPTANCE",
         "goal": "GLOBAL_SOURCE_FACT_PLATFORM_BEFORE_NEXT_JURISDICTION",
         "work_engine": work_engine_contract(),
+        "work_engine_owners": work_engine_owner_registry(),
         "work_dag": work_dag_contract(),
         "active_publish_dags": {
             "cn_final_publish": cn_final_publish_dag_contract(),

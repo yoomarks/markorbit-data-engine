@@ -11,6 +11,7 @@ from app.platform_contract import platform_contract
 PLATFORMIZATION_CHECKPOINT_VERSION = "MARKORBIT_PLATFORMIZATION_CHECKPOINT_V1"
 _EXPECTED_PLATFORM_VERSION = "MARKORBIT_PLATFORMIZATION_M1.7"
 _EXPECTED_PLATFORM_STATUS = "CODE_READY_PENDING_RUNTIME_ACCEPTANCE"
+_EXPECTED_WORK_ENGINE_OWNER_REGISTRY_VERSION = "MARKORBIT_WORK_ENGINE_OWNER_REGISTRY_V1"
 _PRE_ACCEPTANCE_ENGINE_RELEASE = "M1.6"
 _REQUIRED_RUNTIME_ACCEPTANCE = "CN_M16_FINAL_CHECKPOINT_V1"
 
@@ -24,7 +25,7 @@ def build_platformization_checkpoint(
     """Evaluate M1.7 code readiness without claiming real-corpus acceptance.
 
     This checkpoint is deliberately static. It may run in CI and source checkouts,
-    so it must never infer that a local CN replay or the real 2023_4 package has
+    so it must never infer that a local CN replay or real target-host package has
     passed. Real data promotion remains owned by the existing read-only CN final
     checkpoint executed against the operator's actual PostgreSQL/ClickHouse state.
     """
@@ -34,6 +35,13 @@ def build_platformization_checkpoint(
     native_cutover = native_cutover_builder()
     engine_release = str(versions.get("engine_release") or "")
     runtime_boundary = platform.get("runtime_acceptance_boundary") or {}
+    owner_registry = platform.get("work_engine_owners") or {}
+    owners = owner_registry.get("owners") or []
+    owner_scopes = {
+        str(owner.get("owner_scope") or "").strip()
+        for owner in owners
+        if str(owner.get("owner_scope") or "").strip()
+    }
 
     reasons: list[dict[str, Any]] = []
     if platform.get("version") != _EXPECTED_PLATFORM_VERSION:
@@ -54,6 +62,30 @@ def build_platformization_checkpoint(
         )
     if platform.get("foundation_contracts_complete") is not True:
         reasons.append({"code": "FOUNDATION_CONTRACTS_INCOMPLETE"})
+    if owner_registry.get("version") != _EXPECTED_WORK_ENGINE_OWNER_REGISTRY_VERSION:
+        reasons.append(
+            {
+                "code": "WORK_ENGINE_OWNER_REGISTRY_VERSION_MISMATCH",
+                "expected": _EXPECTED_WORK_ENGINE_OWNER_REGISTRY_VERSION,
+                "actual": owner_registry.get("version"),
+            }
+        )
+    if len(owner_scopes) < 2 or int(owner_registry.get("owner_count") or 0) < 2:
+        reasons.append(
+            {
+                "code": "WORK_ENGINE_SECOND_OWNER_NOT_REGISTERED",
+                "distinct_owner_scopes": sorted(owner_scopes),
+                "owner_count": int(owner_registry.get("owner_count") or 0),
+            }
+        )
+    if owner_registry.get("second_owner_is_non_cn") is not True:
+        reasons.append({"code": "WORK_ENGINE_SECOND_OWNER_MUST_BE_NON_CN"})
+    if owner_registry.get("second_owner_runtime_fixture_proof") is not True:
+        reasons.append({"code": "WORK_ENGINE_SECOND_OWNER_RUNTIME_PROOF_MISSING"})
+    if owner_registry.get("target_host_acceptance_claimed") is not False:
+        reasons.append({"code": "WORK_ENGINE_OWNER_REGISTRY_OVERCLAIMS_TARGET_HOST_ACCEPTANCE"})
+    if owner_registry.get("release_promotion_authorized") is not False:
+        reasons.append({"code": "WORK_ENGINE_OWNER_REGISTRY_AUTHORIZES_EARLY_PROMOTION"})
     if runtime_boundary.get("required") is not True:
         reasons.append({"code": "RUNTIME_ACCEPTANCE_BOUNDARY_NOT_REQUIRED"})
     if runtime_boundary.get("evaluated_by_platform_contract") is not False:
@@ -120,6 +152,13 @@ def build_platformization_checkpoint(
         "expected_pre_acceptance_engine_release": _PRE_ACCEPTANCE_ENGINE_RELEASE,
         "platform_version": platform.get("version"),
         "platform_status": platform.get("status"),
+        "work_engine_owner_registry_version": owner_registry.get("version"),
+        "work_engine_owner_count": len(owner_scopes),
+        "work_engine_owner_scopes": sorted(owner_scopes),
+        "work_engine_second_owner_scope": owner_registry.get("second_owner_scope"),
+        "work_engine_second_owner_runtime_fixture_proof": owner_registry.get(
+            "second_owner_runtime_fixture_proof"
+        ),
         "cn_native_cutover_status": native_cutover.get("status"),
         "cn_native_business_node_count": native_cutover.get("native_business_node_count"),
         "cn_intentional_compatibility_node_count": native_cutover.get(

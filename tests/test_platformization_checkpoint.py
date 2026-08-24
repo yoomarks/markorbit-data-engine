@@ -8,11 +8,30 @@ from app.platformization_checkpoint import (
 )
 
 
+def _owners(**overrides):
+    value = {
+        "version": "MARKORBIT_WORK_ENGINE_OWNER_REGISTRY_V1",
+        "owner_count": 2,
+        "owners": [
+            {"owner_scope": "CN_FINAL_PUBLISH"},
+            {"owner_scope": "CONTACT_COUNTRY_INFERENCE"},
+        ],
+        "second_owner_scope": "CONTACT_COUNTRY_INFERENCE",
+        "second_owner_is_non_cn": True,
+        "second_owner_runtime_fixture_proof": True,
+        "target_host_acceptance_claimed": False,
+        "release_promotion_authorized": False,
+    }
+    value.update(overrides)
+    return value
+
+
 def _platform(**overrides):
     value = {
         "version": "MARKORBIT_PLATFORMIZATION_M1.7",
         "status": "CODE_READY_PENDING_RUNTIME_ACCEPTANCE",
         "foundation_contracts_complete": True,
+        "work_engine_owners": _owners(),
         "runtime_acceptance_boundary": {
             "required": True,
             "evaluated_by_platform_contract": False,
@@ -59,6 +78,17 @@ def test_static_checkpoint_is_code_ready_without_claiming_runtime_acceptance() -
     assert checkpoint["release_promotion_allowed"] is False
     assert checkpoint["engine_release"] == "M1.6"
     assert checkpoint["platform_status"] == "CODE_READY_PENDING_RUNTIME_ACCEPTANCE"
+    assert (
+        checkpoint["work_engine_owner_registry_version"]
+        == "MARKORBIT_WORK_ENGINE_OWNER_REGISTRY_V1"
+    )
+    assert checkpoint["work_engine_owner_count"] == 2
+    assert checkpoint["work_engine_owner_scopes"] == [
+        "CN_FINAL_PUBLISH",
+        "CONTACT_COUNTRY_INFERENCE",
+    ]
+    assert checkpoint["work_engine_second_owner_scope"] == "CONTACT_COUNTRY_INFERENCE"
+    assert checkpoint["work_engine_second_owner_runtime_fixture_proof"] is True
     assert checkpoint["next_action"] == "RUN_REAL_CN_RUNTIME_ACCEPTANCE_SEPARATELY"
     assert checkpoint["reasons"] == []
 
@@ -106,6 +136,45 @@ def test_static_checkpoint_blocks_foundation_or_node_count_drift() -> None:
     assert "CN_INTENTIONAL_COMPATIBILITY_NODE_COUNT_DRIFT" in codes
 
 
+def test_static_checkpoint_blocks_missing_second_owner_proof() -> None:
+    checkpoint = build_platformization_checkpoint(
+        platform_builder=lambda: _platform(
+            work_engine_owners=_owners(
+                owner_count=1,
+                owners=[{"owner_scope": "CN_FINAL_PUBLISH"}],
+                second_owner_is_non_cn=False,
+                second_owner_runtime_fixture_proof=False,
+            )
+        ),
+        version_builder=_versions,
+        native_cutover_builder=_native,
+    )
+
+    codes = {reason["code"] for reason in checkpoint["reasons"]}
+    assert checkpoint["code_ready"] is False
+    assert "WORK_ENGINE_SECOND_OWNER_NOT_REGISTERED" in codes
+    assert "WORK_ENGINE_SECOND_OWNER_MUST_BE_NON_CN" in codes
+    assert "WORK_ENGINE_SECOND_OWNER_RUNTIME_PROOF_MISSING" in codes
+
+
+def test_static_checkpoint_blocks_owner_registry_overclaim() -> None:
+    checkpoint = build_platformization_checkpoint(
+        platform_builder=lambda: _platform(
+            work_engine_owners=_owners(
+                target_host_acceptance_claimed=True,
+                release_promotion_authorized=True,
+            )
+        ),
+        version_builder=_versions,
+        native_cutover_builder=_native,
+    )
+
+    codes = {reason["code"] for reason in checkpoint["reasons"]}
+    assert checkpoint["code_ready"] is False
+    assert "WORK_ENGINE_OWNER_REGISTRY_OVERCLAIMS_TARGET_HOST_ACCEPTANCE" in codes
+    assert "WORK_ENGINE_OWNER_REGISTRY_AUTHORIZES_EARLY_PROMOTION" in codes
+
+
 def test_static_checkpoint_blocks_runtime_boundary_overclaim() -> None:
     platform = _platform()
     platform["runtime_acceptance_boundary"] = {
@@ -134,6 +203,8 @@ def test_repository_state_passes_static_checkpoint() -> None:
     checkpoint = assert_platformization_code_ready()
     assert checkpoint["code_ready"] is True
     assert checkpoint["runtime_acceptance_evaluated"] is False
+    assert checkpoint["work_engine_owner_count"] >= 2
+    assert checkpoint["work_engine_second_owner_runtime_fixture_proof"] is True
 
 
 def test_assertion_raises_on_blocked_checkpoint(monkeypatch) -> None:
