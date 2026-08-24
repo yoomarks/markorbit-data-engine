@@ -181,6 +181,14 @@ class DurableWorkUnitStore:
 
 
 def work_engine_contract() -> dict[str, Any]:
+    task_key_identity = [
+        "owner_scope",
+        "checkpoint_version",
+        "operation_hash",
+        "partition_kind",
+        "partition_lower",
+        "partition_upper",
+    ]
     return {
         "version": WORK_ENGINE_VERSION,
         "role": "DURABLE_IDEMPOTENT_RESUMABLE_WORK_UNITS",
@@ -192,14 +200,9 @@ def work_engine_contract() -> dict[str, Any]:
             "task_key",
         ],
         "persistence_identity": ["job_id", "task_key"],
-        "task_key_identity": [
-            "owner_scope",
-            "checkpoint_version",
-            "operation_hash",
-            "partition_kind",
-            "partition_lower",
-            "partition_upper",
-        ],
+        # Compatibility alias retained for existing V1 contract consumers.
+        "task_identity": list(task_key_identity),
+        "task_key_identity": list(task_key_identity),
         "task_key_job_local": True,
         "resume_policy": {
             "skip_only_matching_success": True,
