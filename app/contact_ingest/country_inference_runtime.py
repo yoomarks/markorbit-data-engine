@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import argparse
 from collections import Counter, defaultdict
 import json
 import re
-import sys
 import time
 import uuid
 
 from app.contact_ingest import country_inference as engine
+from app.contact_ingest import country_inference_work as work
 from app.db import postgres_conn
 
 
-CONTACT_COUNTRY_RUNTIME_MODEL_VERSION = "CONTACT_COUNTRY_RUNTIME_MODEL_V3"
+CONTACT_COUNTRY_RUNTIME_MODEL_VERSION = "CONTACT_COUNTRY_RUNTIME_MODEL_V4"
 
 # The original V1 city learner included every entity.entity_mention row. That is
 # acceptable for small fixtures but unsafe on a real trademark corpus: millions of
@@ -60,6 +61,12 @@ def _emit(event: str, **payload: object) -> None:
         ),
         flush=True,
     )
+
+
+def _emit_engine(payload: dict[str, object]) -> None:
+    event = str(payload.get("event") or "CONTACT_COUNTRY_INFERENCE_PROGRESS")
+    body = {key: value for key, value in payload.items() if key != "event"}
+    _emit(event, **body)
 
 
 def build_contact_scoped_city_model() -> dict[str, tuple[str, float, int]]:
@@ -145,7 +152,7 @@ def _unknown_contact_count_with_commit(cur) -> int:
 def _country_inference_run(run_id: str) -> dict[str, object] | None:
     """Read one persisted inference run without re-evaluating contacts."""
     normalized_run_id = str(uuid.UUID(run_id))
-    engine.ensure_country_inference_schema()
+    work.ensure_country_inference_work_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -159,7 +166,11 @@ def _country_inference_run(run_id: str) -> dict[str, object] | None:
                 (normalized_run_id,),
             )
             row = cur.fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    result = dict(row)
+    result["work_units"] = work.work_summary_for_run(normalized_run_id)
+    return result
 
 
 def _show_run(run_id: str) -> int:
@@ -175,20 +186,40 @@ def _show_run(run_id: str) -> int:
     return 0
 
 
-def main() -> int:
-    if len(sys.argv) >= 2 and sys.argv[1] == "--show-run":
-        if len(sys.argv) != 3:
-            _emit(
-                "CONTACT_COUNTRY_INFERENCE_RUN_LOOKUP_ERROR",
-                error="usage: country_inference_runtime --show-run <run-id>",
-            )
-            return 2
-        return _show_run(sys.argv[2])
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Infer missing contact countries with durable Work Engine entity-range batches"
+        )
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--show-run", metavar="RUN_ID")
+    mode.add_argument(
+        "--resume-run",
+        metavar="RUN_ID",
+        help="Resume an interrupted Work Engine-backed country inference run",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Activate only ACCEPTED high-confidence inferred countries as a view overlay",
+    )
+    parser.add_argument("--min-confidence", type=float, default=engine.DEFAULT_MIN_CONFIDENCE)
+    parser.add_argument("--min-margin", type=float, default=engine.DEFAULT_MIN_MARGIN)
+    parser.add_argument("--batch-size", type=int, default=engine.DEFAULT_BATCH_SIZE)
+    parser.add_argument("--max-entities", type=int, default=None)
+    return parser
 
-    # V1 remains the scoring/audit/apply authority. Only the unbounded reference
-    # model builder and the long-lived count transaction are replaced at the
-    # operator boundary. The session-level advisory lock remains held across the
-    # explicit COMMIT performed by _unknown_contact_count_with_commit.
+
+def main() -> int:
+    args = _parser().parse_args()
+    if args.show_run:
+        return _show_run(args.show_run)
+
+    # V1 remains the scoring/audit/apply authority. The operator runtime replaces
+    # only the unbounded reference-model builder, the long-lived count transaction,
+    # and the execution owner. Durable Work Engine state is stored per run_id and
+    # entity UUID range; no official trademark fact semantics are changed.
     engine.build_reference_models = build_runtime_reference_models
     engine._unknown_contact_count = _unknown_contact_count_with_commit
     _emit(
@@ -197,8 +228,30 @@ def main() -> int:
         city_training_scope="CONTACT_ENTITIES_ONLY",
         global_entity_mention_training_scan=False,
         long_run_transaction_policy="COMMIT_COUNT_TRANSACTION_KEEP_SESSION_LOCK",
+        work_engine_owner_scope=work.WORK_OWNER_SCOPE,
+        work_engine_checkpoint_version=work.CHECKPOINT_VERSION,
+        work_engine_partition_kind=work.PARTITION_KIND,
+        resume_run_id=args.resume_run,
     )
-    return engine.main()
+    try:
+        result = work.run_country_inference_resumable(
+            apply=args.apply,
+            min_confidence=args.min_confidence,
+            min_margin=args.min_margin,
+            batch_size=args.batch_size,
+            max_entities=args.max_entities,
+            resume_run_id=args.resume_run,
+            emit=_emit_engine,
+        )
+    except Exception as exc:
+        _emit(
+            "CONTACT_COUNTRY_INFERENCE_FATAL",
+            resume_run_id=args.resume_run,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return 2
+    _emit("CONTACT_COUNTRY_INFERENCE_COMPLETE", **result)
+    return 0 if result.get("status") in {"SUCCESS", "BUSY"} else 2
 
 
 if __name__ == "__main__":
