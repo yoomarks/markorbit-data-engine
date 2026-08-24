@@ -8,6 +8,7 @@ from app.snapshot_delta.ipos_sg_tasks import (
 def test_singapore_operator_dag_is_explicit_and_ordered():
     assert IPOS_SG_OPERATOR_DAG.topological_order() == (
         "STATE_PREFLIGHT",
+        "RESOURCE_PREFLIGHT",
         "LIVE_SOURCE_AUTHENTICATION",
         "FULL_CORPUS_LIFECYCLE",
         "STATE_POSTFLIGHT",
