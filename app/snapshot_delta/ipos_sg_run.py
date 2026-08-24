@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
+from .acquisition import DataGovSgSnapshotDownloader
 from .lifecycle import SnapshotCycleResult, run_ipos_snapshot_cycle
 
 
@@ -38,7 +40,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    result = run_ipos_snapshot_cycle(args.state_dir)
+    downloader = DataGovSgSnapshotDownloader(
+        api_key=os.getenv("DATA_GOV_SG_API_KEY") or None
+    )
+    result = run_ipos_snapshot_cycle(args.state_dir, downloader=downloader)
     print(json.dumps(cycle_result_payload(result), sort_keys=True))
     return 0
 
