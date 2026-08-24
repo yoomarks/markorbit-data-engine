@@ -33,6 +33,7 @@ from .ipos_sg_state import (
     audit_ipos_state,
     audit_payload,
 )
+from .ipos_sg_tasks import IPOS_SG_OPERATOR_DAG, IPOS_SG_OPERATOR_DAG_VERSION
 
 
 IPOS_SG_OPERATOR_RUN_VERSION = "IPOS_SG_OPERATOR_RUN_V1"
@@ -51,10 +52,12 @@ class IposOperatorStateError(RuntimeError):
 @dataclass(frozen=True)
 class IposOperatorReport:
     version: str
+    task_dag_version: str
     run_id: str
     started_at: datetime
     completed_at: datetime
     status: str
+    completed_tasks: tuple[str, ...]
     state_before: dict[str, Any]
     storage_preflight: dict[str, Any]
     live_source: dict[str, Any]
@@ -179,6 +182,7 @@ def operator_report_payload(report: IposOperatorReport) -> dict[str, Any]:
     payload = asdict(report)
     payload["started_at"] = report.started_at.isoformat()
     payload["completed_at"] = report.completed_at.isoformat()
+    payload["completed_tasks"] = list(report.completed_tasks)
     return payload
 
 
@@ -221,6 +225,7 @@ def run_ipos_operator(
         run_id = lease["run_id"]
         started_at = datetime.fromisoformat(lease["started_at"])
         phase = "STATE_PREFLIGHT"
+        completed_tasks: list[str] = []
         try:
             before = state_auditor(state)
             if not before.safe_to_run:
@@ -228,6 +233,7 @@ def run_ipos_operator(
                     "Singapore IPOS preflight state is blocked: "
                     + json.dumps(audit_payload(before), ensure_ascii=False, sort_keys=True)
                 )
+            completed_tasks.append("STATE_PREFLIGHT")
 
             phase = "RESOURCE_PREFLIGHT"
             storage = storage_builder(state)
@@ -240,6 +246,7 @@ def run_ipos_operator(
                         sort_keys=True,
                     )
                 )
+            completed_tasks.append("RESOURCE_PREFLIGHT")
 
             phase = "LIVE_SOURCE_AUTHENTICATION"
             live = live_probe(
@@ -248,6 +255,7 @@ def run_ipos_operator(
             )
             if live.dataset_id != IPOS_SG_TRADEMARK_APPLICATIONS.dataset_id:
                 raise RuntimeError("Singapore live-source probe returned the wrong dataset identity")
+            completed_tasks.append("LIVE_SOURCE_AUTHENTICATION")
 
             phase = "FULL_CORPUS_LIFECYCLE"
             downloader = downloader_factory(api_key=secret)
@@ -255,18 +263,25 @@ def run_ipos_operator(
             if corpus.dataset_id != IPOS_SG_TRADEMARK_APPLICATIONS.dataset_id:
                 raise RuntimeError("Singapore full-corpus run returned the wrong dataset identity")
             acceptance_writer(acceptance_dir / "latest.json", corpus)
+            completed_tasks.append("FULL_CORPUS_LIFECYCLE")
 
             phase = "STATE_POSTFLIGHT"
             after = state_auditor(state)
             assert_ipos_state_ready(after)
+            completed_tasks.append("STATE_POSTFLIGHT")
 
+            phase = "ACCEPTANCE_RECEIPT"
+            completed_tasks.append("ACCEPTANCE_RECEIPT")
+            IPOS_SG_OPERATOR_DAG.assert_observed_order(completed_tasks)
             completed_at = now().astimezone(timezone.utc)
             report = IposOperatorReport(
                 version=IPOS_SG_OPERATOR_RUN_VERSION,
+                task_dag_version=IPOS_SG_OPERATOR_DAG_VERSION,
                 run_id=run_id,
                 started_at=started_at,
                 completed_at=completed_at,
                 status="PASS",
+                completed_tasks=tuple(completed_tasks),
                 state_before=audit_payload(before),
                 storage_preflight=storage_preflight_payload(storage),
                 live_source=_live_source_payload(live),
@@ -281,9 +296,11 @@ def run_ipos_operator(
         except Exception as exc:
             failure = {
                 "version": IPOS_SG_OPERATOR_RUN_VERSION,
+                "task_dag_version": IPOS_SG_OPERATOR_DAG_VERSION,
                 "run_id": run_id,
                 "status": "FAILED",
                 "phase": phase,
+                "completed_tasks": completed_tasks,
                 "failed_at": now().astimezone(timezone.utc).isoformat(),
                 "error_type": type(exc).__name__,
                 "error": _redact_secret(str(exc), secret),
