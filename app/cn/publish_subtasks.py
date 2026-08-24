@@ -59,6 +59,7 @@ class PublishSubtaskStore:
         self.package_id = str(package_uuid)
         self._work_store = DurableWorkUnitStore(
             owner_scope=WORK_OWNER_SCOPE,
+            job_id=self.package_id,
             checkpoint_version=CHECKPOINT_VERSION,
             read_task=self._read_task,
             upsert_running=self._upsert_running,
@@ -223,6 +224,8 @@ class PublishSubtaskStore:
         }
 
     def _upsert_running(self, spec: WorkUnitSpec) -> None:
+        if spec.job_id != self.package_id:
+            raise RuntimeError("CN publish work-unit job scope disagrees with package_id")
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
