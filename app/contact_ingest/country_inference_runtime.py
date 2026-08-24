@@ -9,6 +9,7 @@ import uuid
 
 from app.contact_ingest import country_inference as engine
 from app.contact_ingest import country_inference_work as work
+from app.contact_ingest import country_inference_work_guard as membership_guard
 from app.db import postgres_conn
 
 
@@ -231,9 +232,11 @@ def main() -> int:
         work_engine_owner_scope=work.WORK_OWNER_SCOPE,
         work_engine_checkpoint_version=work.CHECKPOINT_VERSION,
         work_engine_partition_kind=work.PARTITION_KIND,
+        membership_guard_version=membership_guard.MEMBERSHIP_GUARD_VERSION,
         resume_run_id=args.resume_run,
     )
     try:
+        membership_guard.ensure_country_inference_work_membership_guard()
         result = work.run_country_inference_resumable(
             apply=args.apply,
             min_confidence=args.min_confidence,
