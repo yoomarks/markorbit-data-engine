@@ -72,7 +72,8 @@ def test_changed_cycle_refuses_delta_when_retained_current_is_corrupt(tmp_path: 
 
     assert (tmp_path / "current.json").read_bytes() == pointer_before
     assert retained.read_bytes() == b"tampered prior evidence"
-    assert list((tmp_path / "events").glob("*.jsonl")) == [] if (tmp_path / "events").exists() else True
+    events = tmp_path / "events"
+    assert not events.exists() or not list(events.glob("*.jsonl"))
     assert not (tmp_path / "incoming" / IPOS_SG_TRADEMARK_APPLICATIONS.filename).exists()
 
 
