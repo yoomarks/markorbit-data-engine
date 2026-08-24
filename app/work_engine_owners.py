@@ -16,6 +16,17 @@ from app.contact_ingest.country_inference_work import (
 WORK_ENGINE_OWNER_REGISTRY_VERSION = "MARKORBIT_WORK_ENGINE_OWNER_REGISTRY_V1"
 
 
+def _second_owner_runtime_fixture_proven(runtime: dict[str, Any]) -> bool:
+    return bool(
+        runtime.get("database_backed")
+        and runtime.get("interruption_resume")
+        and runtime.get("committed_result_reconciliation")
+        and runtime.get("membership_drift_fail_closed")
+        and runtime.get("workflow")
+        and len(runtime.get("fixtures") or []) >= 2
+    )
+
+
 def work_engine_owner_registry() -> dict[str, Any]:
     """Describe concrete owners that execute through MARKORBIT_WORK_ENGINE_V1.
 
@@ -63,13 +74,7 @@ def work_engine_owner_registry() -> dict[str, Any]:
         owner for owner in owners if owner["owner_scope"] == CONTACT_WORK_OWNER_SCOPE
     )
     second_runtime = second_owner["runtime_proof"]
-    second_owner_runtime_fixture_proof = bool(
-        second_runtime.get("database_backed")
-        and second_runtime.get("interruption_resume")
-        and second_runtime.get("membership_drift_fail_closed")
-        and second_runtime.get("workflow")
-        and len(second_runtime.get("fixtures") or []) >= 2
-    )
+    second_owner_runtime_fixture_proof = _second_owner_runtime_fixture_proven(second_runtime)
     return {
         "version": WORK_ENGINE_OWNER_REGISTRY_VERSION,
         "work_engine_version": "MARKORBIT_WORK_ENGINE_V1",
