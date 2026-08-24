@@ -42,6 +42,6 @@ def test_show_run_emits_persisted_result_without_reprocessing(monkeypatch, capsy
     assert '"accepted": 20891' in output
 
 
-def test_runtime_version_marks_transaction_fix() -> None:
-    assert runtime.CONTACT_COUNTRY_RUNTIME_MODEL_VERSION == "CONTACT_COUNTRY_RUNTIME_MODEL_V3"
+def test_runtime_version_marks_transaction_and_durable_work_owner() -> None:
+    assert runtime.CONTACT_COUNTRY_RUNTIME_MODEL_VERSION == "CONTACT_COUNTRY_RUNTIME_MODEL_V4"
     assert runtime._CONTACT_CITY_COUNTS_SQL.count("entity.entity_mention") == 0
