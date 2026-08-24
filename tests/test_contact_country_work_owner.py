@@ -86,6 +86,9 @@ def test_contact_country_runtime_is_a_real_second_work_engine_owner() -> None:
     owner = (
         ROOT / "app" / "contact_ingest" / "country_inference_work.py"
     ).read_text(encoding="utf-8")
+    guard = (
+        ROOT / "app" / "contact_ingest" / "country_inference_work_guard.py"
+    ).read_text(encoding="utf-8")
     migration = (
         ROOT
         / "database"
@@ -106,11 +109,19 @@ def test_contact_country_runtime_is_a_real_second_work_engine_owner() -> None:
 
     assert "--resume-run" in runtime
     assert "run_country_inference_resumable" in runtime
+    assert "ensure_country_inference_work_membership_guard" in runtime
     assert "CONTACT_COUNTRY_RUNTIME_MODEL_V4" in runtime
     assert "INFERRED_CONTACT_GEO_OVERLAY_NOT_OFFICIAL_TRADEMARK_FACT" in owner
+
+    assert "country_inference_work_member_fingerprint" in guard
+    assert "membership drift" in guard
+    assert "NEW.attempts > OLD.attempts" in guard
+    assert "member_fingerprint SET NOT NULL" in guard
 
     assert "contact.country_inference_work_unit" in migration
     assert "PRIMARY KEY (run_id, checkpoint_version, task_key)" in migration
     assert "CHECK (status IN ('RUNNING', 'SUCCESS', 'FAILED'))" in migration
     assert "CHECK (partition_kind = 'ENTITY_RANGE')" in migration
+    assert "member_fingerprint char(32) NOT NULL" in migration
+    assert "trg_contact_country_work_membership" in migration
     assert "ix_contact_country_inference_last_run" in migration
