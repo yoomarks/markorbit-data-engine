@@ -22,7 +22,7 @@ from .ipos_sg_observation import (
 from .ipos_sg_pipeline import manifest_evidence_reference
 from .ipos_sg_schema_contract import validate_ipos_native_snapshot_schema
 from .loader import SnapshotCsvLoader
-from .manifest import build_snapshot_manifest
+from .manifest import build_snapshot_manifest, file_sha256
 from .models import DeltaEvent, SnapshotManifest
 from .runtime import detect_snapshot_deltas
 
@@ -62,6 +62,20 @@ def _manifest_from_payload(payload: dict[str, Any]) -> SnapshotManifest:
         content_hash=str(payload["content_hash"]),
         row_count=int(payload["row_count"]),
         storage_reference=str(payload["storage_reference"]),
+    )
+
+
+def _version_identity(manifest: SnapshotManifest) -> tuple[Any, ...]:
+    """Fields that must agree before an existing physical version can be trusted."""
+    return (
+        manifest.jurisdiction,
+        manifest.source_id,
+        manifest.dataset_id,
+        manifest.source_uri,
+        manifest.schema_hash,
+        manifest.content_hash,
+        manifest.row_count,
+        manifest.storage_reference,
     )
 
 
@@ -144,8 +158,10 @@ def _persist_version(
 
     if manifest_path.exists() and snapshot_path.exists():
         existing = _manifest_from_payload(_read_json(manifest_path))
-        if existing.content_hash != manifest.content_hash:
-            raise ValueError("existing snapshot version has inconsistent manifest")
+        if _version_identity(existing) != _version_identity(manifest):
+            raise ValueError("existing snapshot version disagrees with the fresh candidate manifest")
+        if file_sha256(snapshot_path) != manifest.content_hash:
+            raise ValueError("existing snapshot version content does not match its SHA-256 identity")
         acquired.path.unlink(missing_ok=True)
         return existing, snapshot_path, manifest_path
 
@@ -318,6 +334,26 @@ def run_ipos_snapshot_cycle(
         raise
 
     if current is not None and current[0].content_hash == candidate.content_hash:
+        if _version_identity(current[0]) != _version_identity(candidate):
+            acquired.path.unlink(missing_ok=True)
+            raise ValueError(
+                "current snapshot manifest disagrees with newly acquired identical content"
+            )
+        physical_hash = file_sha256(current[1])
+        if physical_hash != candidate.content_hash:
+            # The fresh candidate was already hashed to the expected identity. Repair
+            # only the physical retained file and preserve the accepted manifest/pointer.
+            os.replace(acquired.path, current[1])
+            cleanup_pending_paths = _cleanup_unreferenced_snapshots(
+                state,
+                current_content_hash=current[0].content_hash,
+            )
+            return SnapshotCycleResult(
+                status="REPAIRED",
+                manifest=current[0],
+                cleanup_pending_paths=cleanup_pending_paths,
+            )
+
         acquired.path.unlink(missing_ok=True)
         cleanup_pending_paths = _cleanup_unreferenced_snapshots(
             state,
@@ -329,11 +365,15 @@ def run_ipos_snapshot_cycle(
             cleanup_pending_paths=cleanup_pending_paths,
         )
 
-    candidate, candidate_snapshot, _ = _persist_version(
-        state,
-        acquired,
-        candidate,
-    )
+    try:
+        candidate, candidate_snapshot, _ = _persist_version(
+            state,
+            acquired,
+            candidate,
+        )
+    except Exception:
+        acquired.path.unlink(missing_ok=True)
+        raise
     protected_content_hash = current[0].content_hash if current is not None else None
 
     if current is None:
