@@ -9,7 +9,7 @@ from app.contact_ingest.country_inference_runtime import (
 
 
 def test_runtime_city_training_is_contact_scoped_and_avoids_global_mentions() -> None:
-    assert CONTACT_COUNTRY_RUNTIME_MODEL_VERSION == "CONTACT_COUNTRY_RUNTIME_MODEL_V3"
+    assert CONTACT_COUNTRY_RUNTIME_MODEL_VERSION == "CONTACT_COUNTRY_RUNTIME_MODEL_V4"
     assert "contact.raw_record" in _CONTACT_CITY_COUNTS_SQL
     assert "contact.entity_person_relation" in _CONTACT_CITY_COUNTS_SQL
     assert "contact.channel" in _CONTACT_CITY_COUNTS_SQL
