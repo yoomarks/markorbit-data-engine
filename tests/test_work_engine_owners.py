@@ -1,6 +1,7 @@
 from app.platform_contract import platform_contract
 from app.work_engine_owners import (
     WORK_ENGINE_OWNER_REGISTRY_VERSION,
+    _second_owner_runtime_fixture_proven,
     work_engine_owner_registry,
 )
 
@@ -44,6 +45,16 @@ def test_contact_country_owner_records_database_backed_resume_and_drift_proof() 
         "app.contact_ingest.validate_country_inference_work_fixture",
         "app.contact_ingest.validate_country_inference_membership_guard_fixture",
     ]
+
+
+def test_second_owner_runtime_proof_requires_committed_result_reconciliation() -> None:
+    registry = work_engine_owner_registry()
+    owners = {owner["owner_scope"]: owner for owner in registry["owners"]}
+    proof = dict(owners["CONTACT_COUNTRY_INFERENCE"]["runtime_proof"])
+
+    assert _second_owner_runtime_fixture_proven(proof) is True
+    proof["committed_result_reconciliation"] = False
+    assert _second_owner_runtime_fixture_proven(proof) is False
 
 
 def test_cn_owner_keeps_legacy_task_key_and_persistence_compatibility() -> None:
