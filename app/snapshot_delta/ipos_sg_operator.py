@@ -22,6 +22,11 @@ from .ipos_sg_full_acceptance import (
     run_ipos_full_corpus_acceptance,
     write_acceptance_report,
 )
+from .ipos_sg_resources import (
+    IposStoragePreflight,
+    build_ipos_storage_preflight,
+    storage_preflight_payload,
+)
 from .ipos_sg_state import (
     IposStateAudit,
     assert_ipos_state_ready,
@@ -40,7 +45,7 @@ class IposOperatorBusyError(RuntimeError):
 
 
 class IposOperatorStateError(RuntimeError):
-    """Raised when the pre-run state audit is not safe to continue."""
+    """Raised when an operator precondition is not safe to continue."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,7 @@ class IposOperatorReport:
     completed_at: datetime
     status: str
     state_before: dict[str, Any]
+    storage_preflight: dict[str, Any]
     live_source: dict[str, Any]
     full_corpus: dict[str, Any]
     state_after: dict[str, Any]
@@ -151,7 +157,6 @@ def ipos_operator_lease(
                 "Singapore operator lock was reacquired by another process during stale recovery"
             ) from retry_exc
 
-    owns_lock = True
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as target:
             json.dump(payload, target, ensure_ascii=False, sort_keys=True)
@@ -160,8 +165,7 @@ def ipos_operator_lease(
             os.fsync(target.fileno())
         yield payload
     finally:
-        if owns_lock:
-            lock_path.unlink(missing_ok=True)
+        lock_path.unlink(missing_ok=True)
 
 
 def _live_source_payload(result: IposSourceAcceptance) -> dict[str, Any]:
@@ -188,13 +192,14 @@ def run_ipos_operator(
     api_key: str,
     recover_stale_lock: bool = False,
     state_auditor: Callable[[str | Path], IposStateAudit] = audit_ipos_state,
+    storage_builder: Callable[[str | Path], IposStoragePreflight] = build_ipos_storage_preflight,
     live_probe: Callable[..., IposSourceAcceptance] = probe_ipos_live_source,
     downloader_factory: Callable[..., Any] = DataGovSgSnapshotDownloader,
     full_runner: Callable[..., FullCorpusAcceptanceReport] = run_ipos_full_corpus_acceptance,
     acceptance_writer: Callable[[str | Path, FullCorpusAcceptanceReport], Path] = write_acceptance_report,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> IposOperatorReport:
-    """Run preflight, authenticated source probe, full corpus, and strict postflight.
+    """Run state/resource preflight, source probe, full corpus, and strict postflight.
 
     The lightweight live probe deliberately does not resolve a whole-dataset download
     URL. The full-corpus downloader performs the single authenticated initiate/poll
@@ -224,6 +229,18 @@ def run_ipos_operator(
                     + json.dumps(audit_payload(before), ensure_ascii=False, sort_keys=True)
                 )
 
+            phase = "RESOURCE_PREFLIGHT"
+            storage = storage_builder(state)
+            if not storage.safe_to_run:
+                raise IposOperatorStateError(
+                    "Singapore IPOS storage headroom is blocked: "
+                    + json.dumps(
+                        storage_preflight_payload(storage),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+
             phase = "LIVE_SOURCE_AUTHENTICATION"
             live = live_probe(
                 api_key=secret,
@@ -251,6 +268,7 @@ def run_ipos_operator(
                 completed_at=completed_at,
                 status="PASS",
                 state_before=audit_payload(before),
+                storage_preflight=storage_preflight_payload(storage),
                 live_source=_live_source_payload(live),
                 full_corpus=full_corpus_report_payload(corpus),
                 state_after=audit_payload(after),
