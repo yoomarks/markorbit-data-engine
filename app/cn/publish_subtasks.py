@@ -69,6 +69,10 @@ class PublishSubtaskStore:
             task_key_factory=_legacy_task_key,
         )
 
+    def _assert_job_id(self, job_id: str) -> None:
+        if str(job_id) != self.package_id:
+            raise RuntimeError("CN publish work-unit job scope disagrees with package_id")
+
     def task_key(
         self,
         *,
@@ -89,7 +93,7 @@ class PublishSubtaskStore:
 
     def task_status(self, task_key: str, sql_hash: str) -> str | None:
         """Read exact persisted state without weakening Work Engine transitions."""
-        row = self._read_task(task_key)
+        row = self._read_task(self.package_id, task_key)
         if not row or row.get("operation_hash") != sql_hash:
             return None
         return str(row.get("status") or "") or None
@@ -202,7 +206,8 @@ class PublishSubtaskStore:
                 "CN final publish durable stage ledger incomplete: " + "; ".join(details)
             )
 
-    def _read_task(self, task_key: str) -> dict[str, Any] | None:
+    def _read_task(self, job_id: str, task_key: str) -> dict[str, Any] | None:
+        self._assert_job_id(job_id)
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -224,8 +229,7 @@ class PublishSubtaskStore:
         }
 
     def _upsert_running(self, spec: WorkUnitSpec) -> None:
-        if spec.job_id != self.package_id:
-            raise RuntimeError("CN publish work-unit job scope disagrees with package_id")
+        self._assert_job_id(spec.job_id)
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -270,7 +274,8 @@ class PublishSubtaskStore:
                     ),
                 )
 
-    def _set_success(self, task_key: str) -> None:
+    def _set_success(self, job_id: str, task_key: str) -> None:
+        self._assert_job_id(job_id)
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -287,7 +292,8 @@ class PublishSubtaskStore:
                     (self.package_id, CHECKPOINT_VERSION, task_key),
                 )
 
-    def _set_failed(self, task_key: str, error: str) -> None:
+    def _set_failed(self, job_id: str, task_key: str, error: str) -> None:
+        self._assert_job_id(job_id)
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -309,7 +315,8 @@ class PublishSubtaskStore:
                     ),
                 )
 
-    def _summarize(self) -> dict[str, int]:
+    def _summarize(self, job_id: str) -> dict[str, int]:
+        self._assert_job_id(job_id)
         with postgres_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
