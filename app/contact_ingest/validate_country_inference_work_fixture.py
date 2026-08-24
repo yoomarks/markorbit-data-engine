@@ -6,12 +6,16 @@ from app.contact_ingest.country_inference_work import (
     CHECKPOINT_VERSION,
     run_country_inference_resumable,
 )
+from app.contact_ingest.country_inference_work_guard import (
+    ensure_country_inference_work_membership_guard,
+)
 from app.contact_ingest.validate_country_inference_fixture import seed_fixture
 from app.db import postgres_conn
 
 
 def validate() -> dict[str, object]:
     seed_fixture()
+    ensure_country_inference_work_membership_guard()
 
     first = run_country_inference_resumable(
         apply=False,
@@ -33,7 +37,7 @@ def validate() -> dict[str, object]:
             cur.execute(
                 """
                 SELECT task_key, status, attempts, item_count,
-                       range_lower::text, range_upper::text
+                       range_lower::text, range_upper::text, member_fingerprint
                 FROM contact.country_inference_work_unit
                 WHERE run_id = %s::uuid AND checkpoint_version = %s
                 """,
@@ -43,6 +47,7 @@ def validate() -> dict[str, object]:
             assert before["status"] == "SUCCESS"
             assert int(before["attempts"]) == 1
             assert int(before["item_count"]) == 2
+            assert len(str(before["member_fingerprint"])) == 32
 
             cur.execute(
                 """
@@ -97,7 +102,7 @@ def validate() -> dict[str, object]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT status, attempts, last_error
+                SELECT status, attempts, last_error, member_fingerprint
                 FROM contact.country_inference_work_unit
                 WHERE run_id = %s::uuid AND checkpoint_version = %s
                 """,
@@ -108,6 +113,7 @@ def validate() -> dict[str, object]:
             # Reconciliation proves the result transaction rather than re-running it.
             assert int(after["attempts"]) == 1
             assert after["last_error"] == ""
+            assert after["member_fingerprint"] == before["member_fingerprint"]
 
             cur.execute(
                 """
@@ -128,6 +134,7 @@ def validate() -> dict[str, object]:
             "reconciled_committed_units"
         ],
         "attempts_after_reconcile": int(after["attempts"]),
+        "member_fingerprint": after["member_fingerprint"],
     }
 
 
