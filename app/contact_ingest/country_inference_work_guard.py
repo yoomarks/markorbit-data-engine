@@ -68,6 +68,18 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    IF NEW.task_group IS DISTINCT FROM OLD.task_group
+       OR NEW.task_index IS DISTINCT FROM OLD.task_index
+       OR NEW.task_total IS DISTINCT FROM OLD.task_total
+       OR NEW.partition_kind IS DISTINCT FROM OLD.partition_kind
+       OR NEW.range_lower IS DISTINCT FROM OLD.range_lower
+       OR NEW.range_upper IS DISTINCT FROM OLD.range_upper
+       OR NEW.operation_hash IS DISTINCT FROM OLD.operation_hash
+       OR NEW.item_count IS DISTINCT FROM OLD.item_count THEN
+        RAISE EXCEPTION
+            'contact country work-unit durable identity is immutable';
+    END IF;
+
     IF NEW.status = 'RUNNING' AND NEW.attempts > OLD.attempts THEN
         IF OLD.member_fingerprint IS NULL THEN
             RAISE EXCEPTION
@@ -117,7 +129,7 @@ ALTER COLUMN member_fingerprint SET NOT NULL;
 
 
 def ensure_country_inference_work_membership_guard() -> None:
-    """Install a fail-closed fingerprint gate around entity-range retry identity."""
+    """Install fail-closed identity and membership gates around entity-range retry."""
     work.ensure_country_inference_work_schema()
     with postgres_conn() as conn:
         with conn.cursor() as cur:
