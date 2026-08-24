@@ -50,7 +50,7 @@ def test_identical_cycle_repairs_corrupted_retained_snapshot(tmp_path: Path):
     assert second.status == "REPAIRED"
     assert second.manifest.content_hash == first.manifest.content_hash
     assert file_sha256(retained) == first.manifest.content_hash
-    assert retained.read_text(encoding="utf-8") == payload
+    assert retained.read_bytes() == payload.encode("utf-8")
     assert not (tmp_path / "incoming" / IPOS_SG_TRADEMARK_APPLICATIONS.filename).exists()
 
 
