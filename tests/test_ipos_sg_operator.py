@@ -13,6 +13,7 @@ from app.snapshot_delta.ipos_sg_operator import (
     operator_report_payload,
     run_ipos_operator,
 )
+from app.snapshot_delta.ipos_sg_resources import IposStoragePreflight
 from app.snapshot_delta.ipos_sg_state import IposStateAudit, IposStateIssue
 
 
@@ -37,6 +38,18 @@ def state_audit(status: str, *, safe: bool) -> IposStateAudit:
                 ),
             )
         ),
+    )
+
+
+def storage_preflight(*, safe: bool = True) -> IposStoragePreflight:
+    return IposStoragePreflight(
+        version="IPOS_SG_STORAGE_PREFLIGHT_V1",
+        status="PASS" if safe else "BLOCKED",
+        free_bytes=20 * 1024**3 if safe else 4 * 1024**3,
+        total_bytes=100 * 1024**3,
+        largest_retained_snapshot_bytes=4 * 1024**3,
+        required_free_bytes=8 * 1024**3,
+        safe_to_run=safe,
     )
 
 
@@ -116,6 +129,7 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
         tmp_path,
         api_key=secret,
         state_auditor=audit,
+        storage_builder=lambda _state: storage_preflight(),
         live_probe=live_probe,
         downloader_factory=downloader_factory,
         full_runner=full_runner,
@@ -130,6 +144,7 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
     assert calls["full_state"] == tmp_path
     assert calls["acceptance_path"] == tmp_path / "acceptance" / "latest.json"
     assert report.status == "PASS"
+    assert report.storage_preflight["status"] == "PASS"
     serialized = json.dumps(operator_report_payload(report), sort_keys=True)
     assert secret not in serialized
     assert not (tmp_path / ".operator.lock").exists()
@@ -157,6 +172,7 @@ def test_operator_failure_redacts_secret_and_releases_lease(tmp_path: Path):
             tmp_path,
             api_key=secret,
             state_auditor=lambda _state: state_audit("EMPTY", safe=True),
+            storage_builder=lambda _state: storage_preflight(),
             live_probe=live_probe,
         )
 
@@ -171,7 +187,11 @@ def test_operator_failure_redacts_secret_and_releases_lease(tmp_path: Path):
 
 
 def test_blocked_preflight_fails_before_any_network_or_corpus_work(tmp_path: Path):
-    called = {"live": False, "full": False}
+    called = {"storage": False, "live": False, "full": False}
+
+    def build_storage(_state):
+        called["storage"] = True
+        return storage_preflight()
 
     def live_probe(**_kwargs):
         called["live"] = True
@@ -186,9 +206,41 @@ def test_blocked_preflight_fails_before_any_network_or_corpus_work(tmp_path: Pat
             tmp_path,
             api_key="secret",
             state_auditor=lambda _state: state_audit("BLOCKED", safe=False),
+            storage_builder=build_storage,
             live_probe=live_probe,
             full_runner=full_runner,
         )
 
+    assert called == {"storage": False, "live": False, "full": False}
+    assert not (tmp_path / ".operator.lock").exists()
+
+
+def test_storage_block_fails_before_network_or_corpus_work(tmp_path: Path):
+    called = {"live": False, "full": False}
+
+    def live_probe(**_kwargs):
+        called["live"] = True
+        return live_acceptance()
+
+    def full_runner(*_args, **_kwargs):
+        called["full"] = True
+        return corpus_report()
+
+    with pytest.raises(IposOperatorStateError, match="storage headroom is blocked"):
+        run_ipos_operator(
+            tmp_path,
+            api_key="secret",
+            state_auditor=lambda _state: state_audit("EMPTY", safe=True),
+            storage_builder=lambda _state: storage_preflight(safe=False),
+            live_probe=live_probe,
+            full_runner=full_runner,
+        )
+
+    failure = json.loads(
+        (tmp_path / "acceptance" / "operator_failure_latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert failure["phase"] == "RESOURCE_PREFLIGHT"
     assert called == {"live": False, "full": False}
     assert not (tmp_path / ".operator.lock").exists()
