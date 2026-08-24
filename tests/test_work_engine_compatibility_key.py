@@ -2,19 +2,19 @@ from app.work_engine import DurableWorkUnitStore
 
 
 class _Memory:
-    def read(self, key):
+    def read(self, job_id, key):
         return None
 
     def running(self, spec):
         pass
 
-    def success(self, key):
+    def success(self, job_id, key):
         pass
 
-    def failed(self, key, error):
+    def failed(self, job_id, key, error):
         pass
 
-    def summary(self):
+    def summary(self, job_id):
         return {}
 
 
@@ -28,6 +28,7 @@ def test_compatibility_task_key_factory_can_preserve_existing_domain_identity() 
     memory = _Memory()
     store = DurableWorkUnitStore(
         owner_scope="CN_FINAL_PUBLISH",
+        job_id="package-001",
         checkpoint_version="CN_FINAL_PUBLISH_V1",
         read_task=memory.read,
         upsert_running=memory.running,
