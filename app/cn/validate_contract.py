@@ -4,9 +4,10 @@ import json
 import time
 import uuid
 
-from app.cn.ingest import STAGE_COLUMNS, _publish
+from app.cn import ingest as legacy
+from app.cn.resource_client import cn_resource_client
 from app.cn.text import application_number_parts
-from app.db import clickhouse_client
+from app.db import clickhouse_client, clickhouse_execution_settings
 
 
 PERMANENT_LINEAGE_TABLES = [
@@ -33,7 +34,7 @@ def _table_columns(client, table: str) -> set[str]:
 
 
 def _assert_lineage_contract(client) -> None:
-    for qualified in STAGE_COLUMNS:
+    for qualified in legacy.STAGE_COLUMNS:
         table = qualified.split(".", 1)[1]
         columns = _table_columns(client, table)
         missing = {"source_file", "source_start_line", "source_end_line", "row_hash"} - columns
@@ -73,15 +74,32 @@ def _assert_empty_publish_compiles() -> dict[str, int]:
     # A random package has no stage rows. _publish therefore compiles and executes every
     # production INSERT...SELECT path without importing a real ZIP or changing business data.
     # This catches ClickHouse identifier/alias/aggregation/column-count errors in seconds.
+    #
+    # The production CN ingest path always combines the CN per-query resource envelope with
+    # a scoped disk-spilling grace-hash JOIN profile. Run this compile gate through that same
+    # resource stack: otherwise an empty synthetic package can still force ClickHouse to build
+    # a multi-GB right-hand hash table from the accumulated current corpus and fail before the
+    # real failed-package retry is even attempted.
     package_uuid = uuid.uuid4()
-    metrics = _publish(
-        package_uuid,
-        {
-            "package_kind": "CONTRACT_PREFLIGHT",
-            "source_rank": 1,
-            "source_period_end": None,
-        },
-    )
+    original_client = legacy.clickhouse_client
+    legacy.clickhouse_client = lambda: cn_resource_client(original_client)
+    try:
+        with clickhouse_execution_settings(
+            join_algorithm="grace_hash",
+            grace_hash_join_initial_buckets=32,
+            send_receive_timeout=3600,
+        ):
+            metrics = legacy._publish(
+                package_uuid,
+                {
+                    "package_kind": "CONTRACT_PREFLIGHT",
+                    "source_rank": 1,
+                    "source_period_end": None,
+                },
+            )
+    finally:
+        legacy.clickhouse_client = original_client
+
     nonzero = {key: value for key, value in metrics.items() if int(value or 0) != 0}
     if nonzero:
         raise RuntimeError(f"empty publish preflight unexpectedly produced rows: {nonzero}")
