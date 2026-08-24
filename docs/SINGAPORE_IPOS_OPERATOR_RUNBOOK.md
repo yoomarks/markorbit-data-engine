@@ -19,22 +19,36 @@ The key must never be:
 
 The data.gov.sg API key is attached only to data.gov.sg API requests. Whole-dataset signed storage requests are deliberately unauthenticated with respect to that key.
 
+## Explicit task DAG
+
+The operator is registered as `IPOS_SG_OPERATOR_DAG_V1` in the M1.7 platform contract. Its native task order is:
+
+1. `STATE_PREFLIGHT`;
+2. `RESOURCE_PREFLIGHT`;
+3. `LIVE_SOURCE_AUTHENTICATION`;
+4. `FULL_CORPUS_LIFECYCLE`;
+5. `STATE_POSTFLIGHT`;
+6. `ACCEPTANCE_RECEIPT`.
+
+The operator records the DAG version and completed task sequence in success/failure evidence. Dependency order is checked with the generic M1.7 `WorkDagDefinition`; recurring scheduling remains explicitly disabled in the task contract.
+
 ## One operator run
 
 `./scripts/run-ipos-sg.ps1` launches one Docker Compose one-shot worker and keeps that same worker alive across the complete operator chain:
 
 1. acquire the state-directory operator lease;
 2. run a fast read-only lifecycle-state preflight;
-3. authenticate the live datastore source and validate the authoritative 39-field contract;
-4. perform exactly one authenticated whole-dataset initiate/poll sequence as part of the real full-corpus acquisition;
-5. stream the current CSV into the lifecycle without buffering the corpus in memory;
-6. validate critical and complete source schema before acceptance;
-7. commit snapshot manifest/current pointer and any required generic/native evidence;
-8. retry superseded full-snapshot cleanup;
-9. write the full-corpus acceptance report atomically;
-10. run a strict post-commit state audit;
-11. write a combined operator acceptance report;
-12. release the state-directory operator lease.
+3. verify filesystem headroom before any provider request;
+4. authenticate the live datastore source and validate the authoritative 39-field contract;
+5. perform exactly one authenticated whole-dataset initiate/poll sequence as part of the real full-corpus acquisition;
+6. stream the current CSV into the lifecycle without buffering the corpus in memory;
+7. validate critical and complete source schema before acceptance;
+8. commit snapshot manifest/current pointer and any required generic/native evidence;
+9. retry superseded full-snapshot cleanup;
+10. write the full-corpus acceptance report atomically;
+11. run a strict post-commit state audit;
+12. write a combined operator acceptance report;
+13. release the state-directory operator lease.
 
 Keeping all phases in one worker removes the gap that previously existed between a live-source probe and a second full-corpus container. Other guarded worker operations can observe that the worker service is occupied for the complete Singapore run.
 
@@ -52,6 +66,17 @@ Possible statuses:
 - `BLOCKED`: accepted-current integrity is invalid. Network acquisition must not start until the state is reviewed.
 
 The postflight gate is stricter than the preflight gate: a successful authenticated operator run must end in `READY`, not merely `RECOVERABLE`.
+
+## Storage headroom
+
+The full-corpus lifecycle keeps the previously accepted full snapshot while the next corpus is downloaded and compared. `IPOS_SG_STORAGE_PREFLIGHT_V1` therefore runs before network activity.
+
+The default minimum is the greater of:
+
+- 8 GiB free space; or
+- twice the size of the largest retained full snapshot.
+
+Insufficient headroom fails before the live provider probe or whole-dataset materialization request. The calculated free/required byte counts are included in the operator success report; a failure is recorded at the `RESOURCE_PREFLIGHT` task.
 
 ## Lease and interruption recovery
 
@@ -73,8 +98,8 @@ Important files include:
 - `events/*.jsonl` — generic create/update/delete evidence for changed snapshots;
 - `native_changes/*.jsonl` — neutral IPOS source-family evidence for updates;
 - `acceptance/latest.json` — strict full-corpus acceptance evidence;
-- `acceptance/operator_latest.json` — combined preflight/source/corpus/postflight success receipt;
-- `acceptance/operator_failure_latest.json` — last handled operator failure, with the configured API key redacted from the error string.
+- `acceptance/operator_latest.json` — combined task/state/resource/source/corpus/postflight success receipt;
+- `acceptance/operator_failure_latest.json` — last handled operator failure, including task progress and with the configured API key redacted from the error string.
 
 ## Production scheduling gate
 
@@ -83,10 +108,11 @@ Do not enable a recurring acquisition schedule merely because code/CI is green. 
 1. authenticated source probe passes on the target host;
 2. full-corpus lifecycle passes on the target host;
 3. postflight state is `READY`;
-4. the operator success receipt contains no credential material;
-5. a second controlled run proves `UNCHANGED` or `CHANGED` behavior against the retained current state;
-6. runtime duration, disk usage, evidence growth, and provider rate-limit behavior are reviewed;
-7. overlap policy with CN/US and other worker jobs is approved;
-8. failure/retry alerting and stale-lock recovery ownership are assigned.
+4. storage headroom evidence is acceptable for sustained operation;
+5. the operator success receipt contains no credential material;
+6. a second controlled run proves `UNCHANGED` or `CHANGED` behavior against the retained current state;
+7. runtime duration, disk usage, evidence growth, and provider rate-limit behavior are reviewed;
+8. overlap policy with CN/US and other worker jobs is approved;
+9. failure/retry alerting and stale-lock recovery ownership are assigned.
 
 Until those gates are complete, Singapore acquisition remains explicit operator-driven execution.
