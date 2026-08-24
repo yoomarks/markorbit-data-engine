@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "M1.6 CN contract preflight failed; real CN package retry was not started."
 }
 
-docker compose exec -T api python -m app.cn.validate_fixture
+docker compose exec -T api python -m app.cn.validate_fixture_m16
 if ($LASTEXITCODE -ne 0) {
     throw "M1.6 CN runtime fixture failed; real CN package retry was not started."
 }
