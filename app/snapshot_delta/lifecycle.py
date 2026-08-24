@@ -333,37 +333,49 @@ def run_ipos_snapshot_cycle(
         acquired.path.unlink(missing_ok=True)
         raise
 
-    if current is not None and current[0].content_hash == candidate.content_hash:
-        if _version_identity(current[0]) != _version_identity(candidate):
+    if current is not None:
+        same_content = current[0].content_hash == candidate.content_hash
+        if same_content and _version_identity(current[0]) != _version_identity(candidate):
             acquired.path.unlink(missing_ok=True)
             raise ValueError(
                 "current snapshot manifest disagrees with newly acquired identical content"
             )
+
         physical_hash = file_sha256(current[1])
-        if physical_hash != candidate.content_hash:
-            # The fresh candidate was already hashed to the expected identity. Repair
-            # only the physical retained file and preserve the accepted manifest/pointer.
-            os.replace(acquired.path, current[1])
+        if physical_hash != current[0].content_hash:
+            if same_content:
+                # The fresh candidate proves the expected bytes are available again.
+                # Repair only the physical retained file and preserve accepted metadata.
+                os.replace(acquired.path, current[1])
+                cleanup_pending_paths = _cleanup_unreferenced_snapshots(
+                    state,
+                    current_content_hash=current[0].content_hash,
+                )
+                return SnapshotCycleResult(
+                    status="REPAIRED",
+                    manifest=current[0],
+                    cleanup_pending_paths=cleanup_pending_paths,
+                )
+
+            # A changed source cannot reconstruct the prior accepted evidence. Never
+            # compute deltas from bytes that no longer match the accepted manifest.
+            acquired.path.unlink(missing_ok=True)
+            raise ValueError(
+                "accepted current snapshot content does not match its manifest; "
+                "refusing changed-source delta"
+            )
+
+        if same_content:
+            acquired.path.unlink(missing_ok=True)
             cleanup_pending_paths = _cleanup_unreferenced_snapshots(
                 state,
                 current_content_hash=current[0].content_hash,
             )
             return SnapshotCycleResult(
-                status="REPAIRED",
+                status="UNCHANGED",
                 manifest=current[0],
                 cleanup_pending_paths=cleanup_pending_paths,
             )
-
-        acquired.path.unlink(missing_ok=True)
-        cleanup_pending_paths = _cleanup_unreferenced_snapshots(
-            state,
-            current_content_hash=current[0].content_hash,
-        )
-        return SnapshotCycleResult(
-            status="UNCHANGED",
-            manifest=current[0],
-            cleanup_pending_paths=cleanup_pending_paths,
-        )
 
     try:
         candidate, candidate_snapshot, _ = _persist_version(
