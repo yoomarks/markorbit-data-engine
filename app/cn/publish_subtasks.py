@@ -131,6 +131,76 @@ class PublishSubtaskStore:
             raise RuntimeError(f"CN final publish subtask ledger incomplete: {summary}")
         return summary
 
+    def assert_stage_groups_complete(
+        self,
+        stage_tables: tuple[str, ...] = PUBLISH_STAGE_TABLES,
+    ) -> None:
+        """Verify persisted range groups form complete SUCCESS ledgers for every stage.
+
+        A retry can legitimately reach a newer legacy publisher shape after all bounded
+        final-publish ranges were already committed by an earlier attempt. In that case
+        the durable ledger, not re-observation of the legacy SQL placeholder, is the
+        recovery authority. This guard refuses partial groups or a missing stage table.
+        """
+        if not stage_tables:
+            raise ValueError("stage_tables must not be empty")
+
+        placeholders = ", ".join(["%s"] * len(stage_tables))
+        query = f"""
+            SELECT
+                stage_table,
+                task_group,
+                sql_hash,
+                min(task_index) AS first_index,
+                max(task_index) AS last_index,
+                max(task_total) AS task_total,
+                count(DISTINCT task_index) AS task_count,
+                bool_and(status = 'SUCCESS') AS all_success
+            FROM control.cn_publish_subtask
+            WHERE package_id = %s
+              AND checkpoint_version = %s
+              AND stage_table IN ({placeholders})
+            GROUP BY stage_table, task_group, sql_hash
+            ORDER BY stage_table, task_group, sql_hash
+        """
+        params = (self.package_id, CHECKPOINT_VERSION, *stage_tables)
+        with postgres_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                rows = cur.fetchall()
+
+        seen_tables: set[str] = set()
+        incomplete: list[str] = []
+        for row in rows:
+            stage_table = str(row["stage_table"])
+            seen_tables.add(stage_table)
+            task_total = int(row["task_total"] or 0)
+            first_index = int(row["first_index"] or 0)
+            last_index = int(row["last_index"] or 0)
+            task_count = int(row["task_count"] or 0)
+            all_success = bool(row["all_success"])
+            if not (
+                all_success
+                and task_total > 0
+                and first_index == 1
+                and last_index == task_total
+                and task_count == task_total
+            ):
+                incomplete.append(
+                    f"{stage_table}:{row['task_group']}:{str(row['sql_hash']).strip()}"
+                )
+
+        missing = [table for table in stage_tables if table not in seen_tables]
+        if missing or incomplete:
+            details: list[str] = []
+            if missing:
+                details.append("missing_stage_ledgers=" + ",".join(missing))
+            if incomplete:
+                details.append("incomplete_groups=" + ",".join(incomplete))
+            raise RuntimeError(
+                "CN final publish durable stage ledger incomplete: " + "; ".join(details)
+            )
+
     def _read_task(self, task_key: str) -> dict[str, Any] | None:
         with postgres_conn() as conn:
             with conn.cursor() as cur:
