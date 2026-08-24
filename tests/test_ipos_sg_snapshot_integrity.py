@@ -54,6 +54,28 @@ def test_identical_cycle_repairs_corrupted_retained_snapshot(tmp_path: Path):
     assert not (tmp_path / "incoming" / IPOS_SG_TRADEMARK_APPLICATIONS.filename).exists()
 
 
+def test_changed_cycle_refuses_delta_when_retained_current_is_corrupt(tmp_path: Path):
+    first_payload = snapshot_csv("Pending")
+    first = run_ipos_snapshot_cycle(
+        tmp_path,
+        downloader=FakeDownloader(first_payload, day=22),
+    )
+    pointer_before = (tmp_path / "current.json").read_bytes()
+    retained = tmp_path / first.manifest.storage_reference
+    retained.write_bytes(b"tampered prior evidence")
+
+    with pytest.raises(ValueError, match="refusing changed-source delta"):
+        run_ipos_snapshot_cycle(
+            tmp_path,
+            downloader=FakeDownloader(snapshot_csv("Registered"), day=23),
+        )
+
+    assert (tmp_path / "current.json").read_bytes() == pointer_before
+    assert retained.read_bytes() == b"tampered prior evidence"
+    assert list((tmp_path / "events").glob("*.jsonl")) == [] if (tmp_path / "events").exists() else True
+    assert not (tmp_path / "incoming" / IPOS_SG_TRADEMARK_APPLICATIONS.filename).exists()
+
+
 def test_orphan_reuse_rejects_manifest_identity_drift(tmp_path: Path):
     payload = snapshot_csv()
     first = run_ipos_snapshot_cycle(tmp_path, downloader=FakeDownloader(payload, day=22))
