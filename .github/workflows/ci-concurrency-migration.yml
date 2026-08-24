@@ -28,10 +28,13 @@ jobs:
 
           root = Path('.github/workflows')
           migration = root / 'ci-concurrency-migration.yml'
+          expression_open = '$' + '{{'
+          expression_close = '}}'
           block = (
               'concurrency:\n'
-              '  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n'
-              "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"
+              f'  group: {expression_open} github.workflow {expression_close}-'
+              f'{expression_open} github.event.pull_request.number || github.ref {expression_close}\n'
+              f"  cancel-in-progress: {expression_open} github.event_name == 'pull_request' {expression_close}\n"
           )
           changed = []
           skipped = []
