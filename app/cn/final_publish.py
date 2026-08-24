@@ -214,10 +214,14 @@ class ResumableFinalPublishClient(LegacySnapshotPersistClient):
             table for table, seen in self._stage_commands_seen.items() if seen == 0
         ]
         if missing:
-            raise RuntimeError(
-                "Legacy publisher shape changed; no final publish command observed for: "
-                + ", ".join(missing)
-            )
+            # On a retry, an earlier attempt may already have committed every bounded
+            # stage range while a newer legacy publisher no longer emits the old SQL
+            # placeholders. The durable ledger is authoritative only when every
+            # persisted group for all three publish stages is structurally complete
+            # and SUCCESS. Fresh/partial shape drift still fails closed here.
+            summary = self._subtask_store.assert_complete()
+            self._subtask_store.assert_stage_groups_complete(_PUBLISH_STAGE_TABLES)
+            return summary
         return self._subtask_store.assert_complete()
 
     def audit_current_coverage(self, *, source_rank: int) -> dict[str, int]:
