@@ -12,6 +12,7 @@ WORK_UNIT_STATUSES = ("RUNNING", "SUCCESS", "FAILED")
 @dataclass(frozen=True)
 class WorkUnitIdentity:
     owner_scope: str
+    job_id: str
     checkpoint_version: str
     operation_hash: str
     partition_kind: str
@@ -19,6 +20,12 @@ class WorkUnitIdentity:
     partition_upper: str | None = None
 
     def task_key(self) -> str:
+        """Return the stable V1 task key within one durable job scope.
+
+        ``job_id`` is deliberately the outer persistence scope and is not added to the
+        V1 hash. This preserves already-established task-key semantics while the full
+        work-unit identity is the pair ``(job_id, task_key)``.
+        """
         payload = "|".join(
             (
                 WORK_ENGINE_VERSION,
@@ -35,6 +42,7 @@ class WorkUnitIdentity:
 
 @dataclass(frozen=True)
 class WorkUnitSpec:
+    job_id: str
     task_key: str
     task_group: str
     task_index: int
@@ -55,6 +63,10 @@ class DurableWorkUnitStore:
     small persistence callbacks so an existing in-flight checkpoint format can be kept
     stable while the state-machine semantics are shared across jurisdictions.
 
+    ``job_id`` is the owner-neutral durable job scope. Domain adapters may map that
+    value onto an existing physical identifier (for example CN ``package_id``) without
+    changing their database schema.
+
     ``task_key_factory`` is intentionally injectable. New domains should use the
     generic owner-scoped identity. Existing domains may supply a compatibility factory
     while migrating so already persisted SUCCESS work is not orphaned by refactoring.
@@ -64,6 +76,7 @@ class DurableWorkUnitStore:
         self,
         *,
         owner_scope: str,
+        job_id: str,
         checkpoint_version: str,
         read_task: Callable[[str], dict[str, Any] | None],
         upsert_running: Callable[[WorkUnitSpec], None],
@@ -72,7 +85,11 @@ class DurableWorkUnitStore:
         summarize: Callable[[], dict[str, int]],
         task_key_factory: TaskKeyFactory | None = None,
     ) -> None:
+        normalized_job_id = str(job_id).strip()
+        if not normalized_job_id:
+            raise ValueError("job_id is required")
         self.owner_scope = owner_scope
+        self.job_id = normalized_job_id
         self.checkpoint_version = checkpoint_version
         self._read_task = read_task
         self._upsert_running = upsert_running
@@ -93,6 +110,7 @@ class DurableWorkUnitStore:
             return self._task_key_factory(operation_hash, partition_kind, lower, upper)
         return WorkUnitIdentity(
             owner_scope=self.owner_scope,
+            job_id=self.job_id,
             checkpoint_version=self.checkpoint_version,
             operation_hash=operation_hash,
             partition_kind=partition_kind,
@@ -127,6 +145,7 @@ class DurableWorkUnitStore:
             raise ValueError("partition_kind is required")
         self._upsert_running(
             WorkUnitSpec(
+                job_id=self.job_id,
                 task_key=task_key,
                 task_group=task_group,
                 task_index=int(task_index),
@@ -166,7 +185,14 @@ def work_engine_contract() -> dict[str, Any]:
         "version": WORK_ENGINE_VERSION,
         "role": "DURABLE_IDEMPOTENT_RESUMABLE_WORK_UNITS",
         "statuses": list(WORK_UNIT_STATUSES),
-        "task_identity": [
+        "work_unit_identity": [
+            "owner_scope",
+            "job_id",
+            "checkpoint_version",
+            "task_key",
+        ],
+        "persistence_identity": ["job_id", "task_key"],
+        "task_key_identity": [
             "owner_scope",
             "checkpoint_version",
             "operation_hash",
@@ -174,6 +200,7 @@ def work_engine_contract() -> dict[str, Any]:
             "partition_lower",
             "partition_upper",
         ],
+        "task_key_job_local": True,
         "resume_policy": {
             "skip_only_matching_success": True,
             "failed_is_rerunnable": True,
