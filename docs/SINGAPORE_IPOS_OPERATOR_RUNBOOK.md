@@ -45,12 +45,13 @@ The operator records the DAG version and completed task sequence in success/fail
 7. stream the current CSV into the lifecycle without buffering the corpus in memory;
 8. validate critical and complete source schema before acceptance;
 9. compare the candidate manifest row count with the authenticated live total before any candidate snapshot/pointer persistence;
-10. commit snapshot manifest/current pointer and any required generic/native evidence;
-11. retry superseded full-snapshot cleanup;
-12. write the full-corpus acceptance report atomically;
-13. run a strict post-commit state audit;
-14. write a combined operator acceptance report;
-15. release the state-directory operator lease.
+10. verify retained physical snapshot integrity before unchanged/changed delta handling;
+11. commit snapshot manifest/current pointer and any required generic/native evidence;
+12. retry superseded full-snapshot cleanup;
+13. write the full-corpus acceptance report atomically;
+14. run a strict post-commit state audit;
+15. write a combined operator acceptance report;
+16. release the state-directory operator lease.
 
 Keeping all phases in one worker removes the gap that previously existed between a live-source probe and a second full-corpus container. Other guarded worker operations can observe that the worker service is occupied for the complete Singapore run.
 
@@ -63,11 +64,24 @@ The live-source probe intentionally does **not** request a whole-dataset export 
 Possible statuses:
 
 - `EMPTY`: no accepted state exists; safe for first bootstrap.
-- `READY`: the current pointer, canonical manifest, and retained full snapshot are internally consistent and there is no cleanup/transient residue.
-- `RECOVERABLE`: no accepted-state corruption exists, but retryable residue such as a superseded full CSV, orphan pre-pointer snapshot, or `.part` file remains. A lifecycle run may recover it.
-- `BLOCKED`: accepted-current integrity is invalid. Network acquisition must not start until the state is reviewed.
+- `READY`: the current pointer, canonical manifest, and retained full snapshot metadata are internally consistent and there is no cleanup/transient residue.
+- `RECOVERABLE`: no accepted-state metadata corruption exists, but retryable residue such as a superseded full CSV, orphan pre-pointer snapshot, or `.part` file remains. A lifecycle run may recover it.
+- `BLOCKED`: accepted-current metadata integrity is invalid. Network acquisition must not start until the state is reviewed.
+
+`READY` is intentionally a fast metadata-state result, not a fresh checksum of the multi-gigabyte retained CSV. Physical content integrity is enforced by the lifecycle before it may rely on retained bytes for an unchanged or changed cycle.
 
 The postflight gate is stricter than the preflight gate: a successful authenticated operator run must end in `READY`, not merely `RECOVERABLE`.
+
+## Physical snapshot integrity
+
+Every accepted manifest identifies its full CSV by SHA-256. Before the lifecycle treats retained current bytes as authoritative evidence, it hashes that physical CSV and compares the result with the accepted manifest identity.
+
+- If the newly acquired corpus has the same content identity and the retained current CSV is intact, the cycle returns `UNCHANGED`.
+- If the newly acquired corpus has the same content identity but the retained current CSV is corrupted or truncated, the fresh authoritative bytes replace only the damaged retained file and the lifecycle returns `REPAIRED`. No synthetic create/update/delete or native-family evidence is emitted.
+- If the provider corpus has changed while the retained prior CSV no longer matches its accepted SHA-256, the lifecycle fails closed before delta generation. The fresh candidate cannot reconstruct the lost prior evidence, so `current.json` is not advanced and no delta/native evidence is written.
+- An orphan pre-pointer snapshot may be reused only when its persisted manifest identity agrees with the fresh candidate and its physical CSV hashes to that identity.
+
+`REPAIRED` is an integrity-recovery signal, not a normal production-scheduling success condition. Preserve the operator report, investigate the cause of the physical corruption, and perform a later clean controlled cycle before considering recurring scheduling.
 
 ## Storage headroom
 
@@ -126,7 +140,7 @@ Do not enable a recurring acquisition schedule merely because code/CI is green. 
 4. postflight state is `READY`;
 5. storage headroom evidence is acceptable for sustained operation;
 6. the operator success receipt contains no credential material;
-7. a second controlled run proves `UNCHANGED` or `CHANGED` behavior against the retained current state;
+7. a second controlled run proves normal retained-state behavior with `UNCHANGED` or a valid `CHANGED` cycle; `REPAIRED` requires integrity incident review and another clean controlled cycle;
 8. runtime duration, disk usage, evidence growth, and provider rate-limit behavior are reviewed;
 9. overlap policy with CN/US and other worker jobs is approved;
 10. failure/retry alerting and stale-lock recovery ownership are assigned.
