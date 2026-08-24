@@ -54,6 +54,11 @@ class WorkUnitSpec:
 
 
 TaskKeyFactory = Callable[[str, str, str | None, str | None], str]
+ReadTask = Callable[[str, str], dict[str, Any] | None]
+UpsertRunning = Callable[[WorkUnitSpec], None]
+SetSuccess = Callable[[str, str], None]
+SetFailed = Callable[[str, str, str], None]
+Summarize = Callable[[str], dict[str, int]]
 
 
 class DurableWorkUnitStore:
@@ -63,9 +68,10 @@ class DurableWorkUnitStore:
     small persistence callbacks so an existing in-flight checkpoint format can be kept
     stable while the state-machine semantics are shared across jurisdictions.
 
-    ``job_id`` is the owner-neutral durable job scope. Domain adapters may map that
-    value onto an existing physical identifier (for example CN ``package_id``) without
-    changing their database schema.
+    ``job_id`` is the owner-neutral durable job scope. It is passed explicitly through
+    every persistence callback, so adapters cannot accidentally collapse two jobs that
+    share the same V1 task key. A domain may map it onto an existing physical identifier
+    (for example CN ``package_id``) without changing its database schema.
 
     ``task_key_factory`` is intentionally injectable. New domains should use the
     generic owner-scoped identity. Existing domains may supply a compatibility factory
@@ -78,11 +84,11 @@ class DurableWorkUnitStore:
         owner_scope: str,
         job_id: str,
         checkpoint_version: str,
-        read_task: Callable[[str], dict[str, Any] | None],
-        upsert_running: Callable[[WorkUnitSpec], None],
-        set_success: Callable[[str], None],
-        set_failed: Callable[[str, str], None],
-        summarize: Callable[[], dict[str, int]],
+        read_task: ReadTask,
+        upsert_running: UpsertRunning,
+        set_success: SetSuccess,
+        set_failed: SetFailed,
+        summarize: Summarize,
         task_key_factory: TaskKeyFactory | None = None,
     ) -> None:
         normalized_job_id = str(job_id).strip()
@@ -119,7 +125,7 @@ class DurableWorkUnitStore:
         ).task_key()
 
     def is_success(self, task_key: str, operation_hash: str) -> bool:
-        row = self._read_task(task_key)
+        row = self._read_task(self.job_id, task_key)
         return bool(
             row
             and str(row.get("status") or "") == "SUCCESS"
@@ -158,13 +164,13 @@ class DurableWorkUnitStore:
         )
 
     def mark_success(self, task_key: str) -> None:
-        self._set_success(task_key)
+        self._set_success(self.job_id, task_key)
 
     def mark_failed(self, task_key: str, error: str) -> None:
-        self._set_failed(task_key, str(error))
+        self._set_failed(self.job_id, task_key, str(error))
 
     def summary(self) -> dict[str, int]:
-        raw = self._summarize()
+        raw = self._summarize(self.job_id)
         result = {status: 0 for status in WORK_UNIT_STATUSES}
         for status, value in raw.items():
             normalized = str(status).upper()
@@ -204,6 +210,7 @@ def work_engine_contract() -> dict[str, Any]:
         "task_identity": list(task_key_identity),
         "task_key_identity": list(task_key_identity),
         "task_key_job_local": True,
+        "persistence_callbacks_job_scoped": True,
         "resume_policy": {
             "skip_only_matching_success": True,
             "failed_is_rerunnable": True,
