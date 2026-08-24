@@ -207,7 +207,8 @@ def run_ipos_operator(
 
     The lightweight live probe deliberately does not resolve a whole-dataset download
     URL. The full-corpus downloader performs the single authenticated initiate/poll
-    sequence, avoiding duplicate multi-GB materialization requests.
+    sequence. The live datastore total is carried into the full-corpus pre-commit gate
+    so a materially truncated/wrong export cannot advance accepted-current state.
     """
     secret = api_key.strip()
     if not secret:
@@ -259,7 +260,11 @@ def run_ipos_operator(
 
             phase = "FULL_CORPUS_LIFECYCLE"
             downloader = downloader_factory(api_key=secret)
-            corpus = full_runner(state, downloader=downloader)
+            corpus = full_runner(
+                state,
+                downloader=downloader,
+                expected_live_rows=live.total_rows,
+            )
             if corpus.dataset_id != IPOS_SG_TRADEMARK_APPLICATIONS.dataset_id:
                 raise RuntimeError("Singapore full-corpus run returned the wrong dataset identity")
             acceptance_writer(acceptance_dir / "latest.json", corpus)

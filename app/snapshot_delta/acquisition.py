@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .ipos_sg import DataGovSgSnapshotSource, IPOS_SG_TRADEMARK_APPLICATIONS
@@ -44,11 +45,17 @@ class DataGovSgSnapshotDownloader:
         max_poll_attempts: int = 40,
         chunk_size: int = 1024 * 1024,
         api_key: str | None = None,
+        api_request_attempts: int = 3,
+        api_retry_base_seconds: float = 1.0,
     ) -> None:
         if max_poll_attempts < 1:
             raise ValueError("max_poll_attempts must be positive")
         if chunk_size < 1:
             raise ValueError("chunk_size must be positive")
+        if api_request_attempts < 1:
+            raise ValueError("api_request_attempts must be positive")
+        if api_retry_base_seconds < 0:
+            raise ValueError("api_retry_base_seconds must not be negative")
         self.source = source
         self._opener = opener
         self._sleeper = sleeper
@@ -57,6 +64,8 @@ class DataGovSgSnapshotDownloader:
         self.max_poll_attempts = max_poll_attempts
         self.chunk_size = chunk_size
         self.api_key = api_key
+        self.api_request_attempts = api_request_attempts
+        self.api_retry_base_seconds = api_retry_base_seconds
 
     def _request_json(self, url: str) -> dict[str, Any]:
         headers = {
@@ -65,12 +74,33 @@ class DataGovSgSnapshotDownloader:
         }
         if self.api_key:
             headers["x-api-key"] = self.api_key
-        request = Request(url, headers=headers)
-        with self._opener(request, timeout=self.timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise SnapshotDownloadError(f"unexpected JSON response from {url}")
-        return payload
+
+        last_error: Exception | None = None
+        for attempt in range(self.api_request_attempts):
+            request = Request(url, headers=headers)
+            try:
+                with self._opener(request, timeout=self.timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise SnapshotDownloadError(
+                        f"unexpected JSON response from data.gov.sg API: {url}"
+                    )
+                return payload
+            except HTTPError as exc:
+                last_error = exc
+                if exc.code != 429 and exc.code < 500:
+                    raise SnapshotDownloadError(
+                        f"data.gov.sg API request failed with HTTP {exc.code}: {url}"
+                    ) from exc
+            except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+                last_error = exc
+
+            if attempt + 1 < self.api_request_attempts:
+                self._sleeper(self.api_retry_base_seconds * float(2**attempt))
+
+        raise SnapshotDownloadError(
+            f"data.gov.sg API request exhausted {self.api_request_attempts} attempts: {url}"
+        ) from last_error
 
     @staticmethod
     def _download_url(payload: dict[str, Any]) -> str | None:
@@ -82,15 +112,31 @@ class DataGovSgSnapshotDownloader:
         url = data.get("url")
         return str(url) if url else None
 
+    @staticmethod
+    def _api_error_detail(payload: dict[str, Any]) -> str:
+        return str(
+            payload.get("errMsg")
+            or payload.get("message")
+            or payload.get("error")
+            or "unknown provider error"
+        )
+
     def resolve_download_url(self) -> str:
         """Resolve the current whole-dataset export with bounded polling.
 
         Authenticated operators explicitly initiate materialization before polling.
         Anonymous public acceptance uses the already-materialized poll endpoint,
         because data.gov.sg rejects anonymous initiate calls while permitting poll.
+        Transient control-plane failures use bounded exponential retry, while the
+        outer poll loop remains the bound for materialization readiness.
         """
         if self.api_key:
-            self._request_json(self.source.initiate_download_url)
+            initiated = self._request_json(self.source.initiate_download_url)
+            if initiated.get("code") != 0:
+                raise SnapshotDownloadError(
+                    "data.gov.sg initiate-download rejected the request: "
+                    + self._api_error_detail(initiated)
+                )
 
         last_payload: dict[str, Any] | None = None
         for attempt in range(self.max_poll_attempts):
@@ -104,7 +150,7 @@ class DataGovSgSnapshotDownloader:
 
         detail = ""
         if last_payload:
-            detail = str(last_payload.get("errMsg") or last_payload.get("message") or "")
+            detail = self._api_error_detail(last_payload)
         suffix = f": {detail}" if detail else ""
         raise SnapshotDownloadError(
             f"data.gov.sg download was not ready after {self.max_poll_attempts} polls{suffix}"

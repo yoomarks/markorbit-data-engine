@@ -56,6 +56,8 @@ def test_full_corpus_acceptance_bootstraps_and_reports_runtime_evidence(tmp_path
         tmp_path,
         downloader=FakeDownloader(payload, 22),
         clock=clock(10.0, 12.5),
+        expected_live_rows=2,
+        minimum_live_row_drift_rows=0,
     )
 
     assert report.status == "BOOTSTRAPPED"
@@ -69,8 +71,31 @@ def test_full_corpus_acceptance_bootstraps_and_reports_runtime_evidence(tmp_path
     assert report.events_path is None
     assert report.native_change_count == 0
     assert report.native_changes_path is None
+    assert report.live_total_rows == 2
+    assert report.live_row_count_delta == 0
+    assert report.allowed_live_row_drift == 1
     assert len(report.content_hash) == 64
     assert len(report.schema_hash) == 64
+
+
+def test_full_corpus_acceptance_rejects_material_row_count_mismatch_before_commit(
+    tmp_path: Path,
+):
+    payload = snapshot_csv([("SG1", "Pending")])
+
+    with pytest.raises(FullCorpusAcceptanceError, match="diverges from the authenticated live"):
+        run_ipos_full_corpus_acceptance(
+            tmp_path,
+            downloader=FakeDownloader(payload, 22),
+            clock=clock(10.0),
+            expected_live_rows=100,
+            max_live_row_drift_fraction=0.01,
+            minimum_live_row_drift_rows=0,
+        )
+
+    assert not (tmp_path / "current.json").exists()
+    assert not list((tmp_path / "snapshots").glob("*.csv"))
+    assert not (tmp_path / "incoming" / IPOS_SG_TRADEMARK_APPLICATIONS.filename).exists()
 
 
 def test_full_corpus_acceptance_changed_cycle_retains_durable_delta_and_native_evidence(

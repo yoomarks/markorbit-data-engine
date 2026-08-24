@@ -257,3 +257,27 @@ def test_lifecycle_rejects_custom_downloader_that_bypasses_full_schema_gate(tmp_
     assert accepted_snapshot.read_bytes() == accepted_bytes
     assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
     assert not list((tmp_path / "events").glob("*.jsonl"))
+
+
+def test_candidate_validator_fails_before_persistence_and_cleans_incoming(tmp_path: Path):
+    first = run_ipos_snapshot_cycle(
+        tmp_path,
+        downloader=downloader(snapshot_csv([("SG1", "Registered")]), 22),
+    )
+    pointer_before = read_pointer(tmp_path)
+
+    def reject_candidate(_manifest):
+        raise RuntimeError("candidate acceptance rejected")
+
+    with pytest.raises(RuntimeError, match="candidate acceptance rejected"):
+        run_ipos_snapshot_cycle(
+            tmp_path,
+            downloader=downloader(snapshot_csv([("SG2", "Pending")]), 23),
+            candidate_validator=reject_candidate,
+        )
+
+    assert read_pointer(tmp_path) == pointer_before
+    assert (tmp_path / first.manifest.storage_reference).exists()
+    assert len(list((tmp_path / "snapshots").glob("*.csv"))) == 1
+    assert not (tmp_path / "incoming" / IPOS_SG_TRADEMARK_APPLICATIONS.filename).exists()
+    assert not list((tmp_path / "events").glob("*.jsonl"))

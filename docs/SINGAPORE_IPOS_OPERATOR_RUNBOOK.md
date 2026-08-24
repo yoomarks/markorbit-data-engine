@@ -40,19 +40,21 @@ The operator records the DAG version and completed task sequence in success/fail
 2. run a fast read-only lifecycle-state preflight;
 3. verify filesystem headroom before any provider request;
 4. authenticate the live datastore source and validate the authoritative 39-field contract;
-5. perform exactly one authenticated whole-dataset initiate/poll sequence as part of the real full-corpus acquisition;
-6. stream the current CSV into the lifecycle without buffering the corpus in memory;
-7. validate critical and complete source schema before acceptance;
-8. commit snapshot manifest/current pointer and any required generic/native evidence;
-9. retry superseded full-snapshot cleanup;
-10. write the full-corpus acceptance report atomically;
-11. run a strict post-commit state audit;
-12. write a combined operator acceptance report;
-13. release the state-directory operator lease.
+5. record the live datastore total row count as a full-corpus consistency reference;
+6. perform one logical authenticated whole-dataset initiate/poll sequence as part of the real full-corpus acquisition;
+7. stream the current CSV into the lifecycle without buffering the corpus in memory;
+8. validate critical and complete source schema before acceptance;
+9. compare the candidate manifest row count with the authenticated live total before any candidate snapshot/pointer persistence;
+10. commit snapshot manifest/current pointer and any required generic/native evidence;
+11. retry superseded full-snapshot cleanup;
+12. write the full-corpus acceptance report atomically;
+13. run a strict post-commit state audit;
+14. write a combined operator acceptance report;
+15. release the state-directory operator lease.
 
 Keeping all phases in one worker removes the gap that previously existed between a live-source probe and a second full-corpus container. Other guarded worker operations can observe that the worker service is occupied for the complete Singapore run.
 
-The live-source probe intentionally does **not** request a whole-dataset export URL. The full-corpus downloader owns the single authenticated materialization request, avoiding duplicate 3+ GB export initiations.
+The live-source probe intentionally does **not** request a whole-dataset export URL. The full-corpus downloader owns the authenticated materialization request, avoiding duplicate 3+ GB export initiations. Transient data.gov.sg control-plane failures (network errors, HTTP 429, and HTTP 5xx) use bounded exponential retries. Non-transient HTTP failures fail immediately. Signed object-storage streaming remains a single transfer attempt rather than inventing unverified byte-range resume semantics.
 
 ## State audit
 
@@ -78,6 +80,19 @@ The default minimum is the greater of:
 
 Insufficient headroom fails before the live provider probe or whole-dataset materialization request. The calculated free/required byte counts are included in the operator success report; a failure is recorded at the `RESOURCE_PREFLIGHT` task.
 
+## Live/export corpus consistency
+
+A syntactically valid CSV is not enough evidence that a multi-gigabyte transfer is complete. The authenticated live datastore probe returns `total_rows`; the full-corpus lifecycle carries that value into a pre-commit candidate validator.
+
+The default drift tolerance is the greater of:
+
+- 1,000 rows; or
+- 0.5% of the authenticated live total.
+
+This tolerance permits normal source movement between the lightweight live query and asynchronous export materialization while rejecting materially truncated or wrong-corpus downloads. A mismatch fails before `_persist_version` and before `current.json` can advance. The unaccepted incoming file is removed, and an existing accepted snapshot remains unchanged.
+
+The full-corpus acceptance report records `live_total_rows`, `live_row_count_delta`, and `allowed_live_row_drift` so this gate is auditable rather than implicit.
+
 ## Lease and interruption recovery
 
 The state directory contains `.operator.lock` while an authenticated Singapore run is active. A second Singapore run fails closed rather than overlapping the first.
@@ -97,7 +112,7 @@ Important files include:
 - `snapshots/<sha256>.manifest.json` — durable source/provenance manifest;
 - `events/*.jsonl` — generic create/update/delete evidence for changed snapshots;
 - `native_changes/*.jsonl` — neutral IPOS source-family evidence for updates;
-- `acceptance/latest.json` — strict full-corpus acceptance evidence;
+- `acceptance/latest.json` — strict full-corpus acceptance evidence, including live/export row consistency;
 - `acceptance/operator_latest.json` — combined task/state/resource/source/corpus/postflight success receipt;
 - `acceptance/operator_failure_latest.json` — last handled operator failure, including task progress and with the configured API key redacted from the error string.
 
@@ -107,12 +122,13 @@ Do not enable a recurring acquisition schedule merely because code/CI is green. 
 
 1. authenticated source probe passes on the target host;
 2. full-corpus lifecycle passes on the target host;
-3. postflight state is `READY`;
-4. storage headroom evidence is acceptable for sustained operation;
-5. the operator success receipt contains no credential material;
-6. a second controlled run proves `UNCHANGED` or `CHANGED` behavior against the retained current state;
-7. runtime duration, disk usage, evidence growth, and provider rate-limit behavior are reviewed;
-8. overlap policy with CN/US and other worker jobs is approved;
-9. failure/retry alerting and stale-lock recovery ownership are assigned.
+3. live/export row consistency passes and is recorded;
+4. postflight state is `READY`;
+5. storage headroom evidence is acceptable for sustained operation;
+6. the operator success receipt contains no credential material;
+7. a second controlled run proves `UNCHANGED` or `CHANGED` behavior against the retained current state;
+8. runtime duration, disk usage, evidence growth, and provider rate-limit behavior are reviewed;
+9. overlap policy with CN/US and other worker jobs is approved;
+10. failure/retry alerting and stale-lock recovery ownership are assigned.
 
 Until those gates are complete, Singapore acquisition remains explicit operator-driven execution.

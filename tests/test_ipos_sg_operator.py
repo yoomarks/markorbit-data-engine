@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -82,6 +82,9 @@ def corpus_report() -> FullCorpusAcceptanceReport:
         storage_reference=f"snapshots/{'a' * 64}.csv",
         events_path=None,
         native_changes_path=None,
+        live_total_rows=875000,
+        live_row_count_delta=0,
+        allowed_live_row_drift=4375,
     )
 
 
@@ -109,9 +112,10 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
         calls["downloader_api_key"] = api_key
         return downloader
 
-    def full_runner(state, *, downloader):
+    def full_runner(state, *, downloader, expected_live_rows):
         calls["full_state"] = Path(state)
         calls["full_downloader"] = downloader
+        calls["expected_live_rows"] = expected_live_rows
         return corpus_report()
 
     def acceptance_writer(path, report):
@@ -142,9 +146,11 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
     assert calls["downloader_api_key"] == secret
     assert calls["full_downloader"] is downloader
     assert calls["full_state"] == tmp_path
+    assert calls["expected_live_rows"] == 875000
     assert calls["acceptance_path"] == tmp_path / "acceptance" / "latest.json"
     assert report.status == "PASS"
     assert report.storage_preflight["status"] == "PASS"
+    assert report.full_corpus["live_row_count_delta"] == 0
     serialized = json.dumps(operator_report_payload(report), sort_keys=True)
     assert secret not in serialized
     assert not (tmp_path / ".operator.lock").exists()
@@ -159,6 +165,49 @@ def test_operator_lease_rejects_overlap_and_releases_after_exit(tmp_path: Path):
         assert (tmp_path / ".operator.lock").exists()
 
     assert not (tmp_path / ".operator.lock").exists()
+
+
+def test_operator_lease_requires_explicit_old_stale_recovery(tmp_path: Path):
+    lock = tmp_path / ".operator.lock"
+    tmp_path.mkdir(exist_ok=True)
+    lock.write_text(
+        json.dumps(
+            {
+                "version": "IPOS_SG_OPERATOR_RUN_V1",
+                "run_id": "abrupt-run",
+                "started_at": "2026-08-23T15:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    now = datetime(2026, 8, 24, 5, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(IposOperatorBusyError, match="already leased"):
+        with ipos_operator_lease(tmp_path, now=lambda: now):
+            pass
+
+    with ipos_operator_lease(
+        tmp_path,
+        recover_stale_lock=True,
+        stale_after=timedelta(hours=12),
+        now=lambda: now,
+    ) as lease:
+        assert lease["run_id"] != "abrupt-run"
+        assert lock.exists()
+
+    assert not lock.exists()
+
+
+def test_operator_lease_never_auto_recovers_malformed_lock(tmp_path: Path):
+    tmp_path.mkdir(exist_ok=True)
+    lock = tmp_path / ".operator.lock"
+    lock.write_text("not-json", encoding="utf-8")
+
+    with pytest.raises(IposOperatorBusyError, match="cannot be validated"):
+        with ipos_operator_lease(tmp_path, recover_stale_lock=True):
+            pass
+
+    assert lock.exists()
 
 
 def test_operator_failure_redacts_secret_and_releases_lease(tmp_path: Path):

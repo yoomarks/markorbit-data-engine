@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -14,6 +15,11 @@ from typing import Any, Callable
 from .acquisition import AcquiredSnapshot, DataGovSgSnapshotDownloader
 from .ipos_sg import IPOS_SG_TRADEMARK_APPLICATIONS
 from .lifecycle import SnapshotCycleResult, SnapshotDownloader, run_ipos_snapshot_cycle
+from .models import SnapshotManifest
+
+
+IPOS_SG_LIVE_ROW_DRIFT_FRACTION = 0.005
+IPOS_SG_LIVE_ROW_DRIFT_MIN_ROWS = 1000
 
 
 class FullCorpusAcceptanceError(RuntimeError):
@@ -37,6 +43,9 @@ class FullCorpusAcceptanceReport:
     storage_reference: str
     events_path: str | None
     native_changes_path: str | None
+    live_total_rows: int | None = None
+    live_row_count_delta: int | None = None
+    allowed_live_row_drift: int | None = None
 
 
 class _CapturingDownloader:
@@ -48,6 +57,45 @@ class _CapturingDownloader:
         acquired = self.delegate.download(destination_directory)
         self.acquired = acquired
         return acquired
+
+
+def _allowed_live_row_drift(
+    expected_live_rows: int,
+    *,
+    fraction: float,
+    minimum_rows: int,
+) -> int:
+    if expected_live_rows < 1:
+        raise ValueError("expected_live_rows must be positive")
+    if not 0 <= fraction <= 0.05:
+        raise ValueError("live row drift fraction must be between 0 and 0.05")
+    if minimum_rows < 0:
+        raise ValueError("minimum live row drift must not be negative")
+    return max(int(minimum_rows), int(math.ceil(expected_live_rows * fraction)))
+
+
+def _live_row_candidate_validator(
+    expected_live_rows: int,
+    *,
+    fraction: float,
+    minimum_rows: int,
+) -> tuple[Callable[[SnapshotManifest], None], int]:
+    allowed = _allowed_live_row_drift(
+        expected_live_rows,
+        fraction=fraction,
+        minimum_rows=minimum_rows,
+    )
+
+    def validate(manifest: SnapshotManifest) -> None:
+        delta = int(manifest.row_count) - int(expected_live_rows)
+        if abs(delta) > allowed:
+            raise FullCorpusAcceptanceError(
+                "downloaded IPOS corpus row count diverges from the authenticated live "
+                f"source beyond tolerance: live={expected_live_rows}, "
+                f"downloaded={manifest.row_count}, delta={delta}, allowed={allowed}"
+            )
+
+    return validate, allowed
 
 
 def _validate_committed_state(
@@ -116,16 +164,38 @@ def run_ipos_full_corpus_acceptance(
     *,
     downloader: SnapshotDownloader | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    expected_live_rows: int | None = None,
+    max_live_row_drift_fraction: float = IPOS_SG_LIVE_ROW_DRIFT_FRACTION,
+    minimum_live_row_drift_rows: int = IPOS_SG_LIVE_ROW_DRIFT_MIN_ROWS,
 ) -> FullCorpusAcceptanceReport:
-    """Run one real-sized lifecycle and return machine-readable acceptance evidence."""
+    """Run one real-sized lifecycle and return machine-readable acceptance evidence.
+
+    When an authenticated live-source row count is supplied, the downloaded candidate
+    is checked before persistence/pointer publication. The tolerance allows normal
+    source movement between the lightweight probe and export materialization while
+    rejecting materially truncated or wrong-corpus downloads.
+    """
     state = Path(state_directory)
     delegate = downloader or DataGovSgSnapshotDownloader(
         api_key=os.getenv("DATA_GOV_SG_API_KEY") or None
     )
     capture = _CapturingDownloader(delegate)
 
+    candidate_validator = None
+    allowed_live_row_drift = None
+    if expected_live_rows is not None:
+        candidate_validator, allowed_live_row_drift = _live_row_candidate_validator(
+            int(expected_live_rows),
+            fraction=max_live_row_drift_fraction,
+            minimum_rows=minimum_live_row_drift_rows,
+        )
+
     started = clock()
-    result = run_ipos_snapshot_cycle(state, downloader=capture)
+    result = run_ipos_snapshot_cycle(
+        state,
+        downloader=capture,
+        candidate_validator=candidate_validator,
+    )
     elapsed = max(0.0, clock() - started)
 
     acquired = capture.acquired
@@ -136,6 +206,11 @@ def run_ipos_full_corpus_acceptance(
         state,
         result,
         acquired,
+    )
+    live_row_count_delta = (
+        int(result.manifest.row_count) - int(expected_live_rows)
+        if expected_live_rows is not None
+        else None
     )
 
     return FullCorpusAcceptanceReport(
@@ -156,6 +231,9 @@ def run_ipos_full_corpus_acceptance(
         native_changes_path=(
             str(result.native_changes_path) if result.native_changes_path else None
         ),
+        live_total_rows=(int(expected_live_rows) if expected_live_rows is not None else None),
+        live_row_count_delta=live_row_count_delta,
+        allowed_live_row_drift=allowed_live_row_drift,
     )
 
 
