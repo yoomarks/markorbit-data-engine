@@ -1,3 +1,4 @@
+# Branch-only one-shot migrator; deletes itself after applying the final contract.
 name: CI Concurrency Migration
 
 on:
