@@ -1,4 +1,7 @@
-from app.cn.audit_acceptance_m16 import CNAcceptanceResourceClient
+from app.cn.audit_acceptance_m16 import (
+    CNAcceptanceResourceClient,
+    CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS,
+)
 
 
 class _Result:
@@ -17,7 +20,7 @@ class _Delegate:
         if "cn_case_scope_current" in sql:
             return _Result(3)
         if "cn_case_party_current" in sql:
-            return _Result(4)
+            return _Result(1)
         raise AssertionError(sql)
 
 
@@ -38,8 +41,10 @@ def test_acceptance_uniqueness_rewrites_uniqexact_to_spillable_group_by():
         """
     )
 
-    assert result.result_rows == [(2, 3, 4)]
-    assert len(delegate.queries) == 3
+    assert result.result_rows == [(2, 3, CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS)]
+    assert len(delegate.queries) == 2 + CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS
+
+    party_queries = []
     for sql, kwargs in delegate.queries:
         assert "uniqExact" not in sql
         assert "GROUP BY" in sql
@@ -49,6 +54,15 @@ def test_acceptance_uniqueness_rewrites_uniqexact_to_spillable_group_by():
         assert settings["max_threads"] == 1
         assert settings["max_memory_usage"] == 8_589_934_592
         assert settings["max_bytes_before_external_group_by"] == 67_108_864
+        if "cn_case_party_current" in sql:
+            party_queries.append(sql)
+
+    assert len(party_queries) == CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS
+    for bucket, sql in enumerate(party_queries):
+        assert (
+            "cityHash64(application_number, role, relation_key) % "
+            f"{CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS} = {bucket}"
+        ) in sql
 
 
 def test_acceptance_client_leaves_non_uniqueness_queries_unchanged():
