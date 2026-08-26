@@ -2,7 +2,8 @@ param(
     [string]$CnAcceptanceReceiptPath = "",
     [string]$ExpectedCnFileName = "2023_5.zip",
     [string]$OutputPath = "",
-    [switch]$Compact
+    [switch]$Compact,
+    [switch]$UseDocker
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,36 +20,72 @@ try {
         $gateArgs += "--compact"
     }
 
-    $volumeArgs = @(
-        "--volume",
-        "${repoRoot}\app:/app/app:ro"
-    )
     $receiptDisplayPath = "<missing>"
+    $resolvedReceipt = $null
     if ($CnAcceptanceReceiptPath) {
         if (-not (Test-Path -LiteralPath $CnAcceptanceReceiptPath -PathType Leaf)) {
             throw "CN acceptance receipt not found: $CnAcceptanceReceiptPath"
         }
-        $receiptPath = (Resolve-Path -LiteralPath $CnAcceptanceReceiptPath).Path
-        $receiptDirectory = Split-Path -Parent $receiptPath
-        $receiptName = Split-Path -Leaf $receiptPath
-        $containerReceiptPath = "/evidence/$receiptName"
-        $volumeArgs += @(
-            "--volume",
-            "${receiptDirectory}:/evidence:ro"
-        )
-        $gateArgs += @(
-            "--cn-acceptance-receipt",
-            $containerReceiptPath
-        )
-        $receiptDisplayPath = $receiptPath
+        $resolvedReceipt = (Resolve-Path -LiteralPath $CnAcceptanceReceiptPath).Path
+        $receiptDisplayPath = $resolvedReceipt
     }
 
-    # Receipt-driven and read-only: the gate only reads static code plus the
-    # persisted CN post-import report. It never connects to PostgreSQL/ClickHouse,
-    # reruns CN replay/readiness, or executes the CN final checkpoint.
-    $jsonLines = & docker compose run --rm --no-deps -T `
-        @volumeArgs `
-        worker python @gateArgs
+    if ($UseDocker) {
+        $volumeArgs = @(
+            "--volume",
+            "${repoRoot}\app:/app/app:ro"
+        )
+        if ($resolvedReceipt) {
+            $receiptDirectory = Split-Path -Parent $resolvedReceipt
+            $receiptName = Split-Path -Leaf $resolvedReceipt
+            $containerReceiptPath = "/evidence/$receiptName"
+            $volumeArgs += @(
+                "--volume",
+                "${receiptDirectory}:/evidence:ro"
+            )
+            $gateArgs += @(
+                "--cn-acceptance-receipt",
+                $containerReceiptPath
+            )
+        }
+
+        # Docker execution is opt-in only. --no-deps prevents this gate from
+        # starting PostgreSQL or ClickHouse as dependencies.
+        $composeArgs = @("compose", "run", "--rm", "--no-deps", "-T") +
+            $volumeArgs + @("worker", "python") + $gateArgs
+        $jsonLines = & docker @composeArgs
+    }
+    else {
+        $pythonCommand = $null
+        $pythonPrefix = @()
+        $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+        if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
+            $pythonCommand = $venvPython
+        }
+        elseif (Get-Command python -ErrorAction SilentlyContinue) {
+            $pythonCommand = (Get-Command python).Source
+        }
+        elseif (Get-Command py -ErrorAction SilentlyContinue) {
+            $pythonCommand = (Get-Command py).Source
+            $pythonPrefix = @("-3")
+        }
+        else {
+            throw (
+                "Python 3 is required for the default local M1.7 gate. " +
+                "Docker is not started automatically; use -UseDocker only when explicitly desired."
+            )
+        }
+
+        if ($resolvedReceipt) {
+            $gateArgs += @(
+                "--cn-acceptance-receipt",
+                $resolvedReceipt
+            )
+        }
+        $invokeArgs = @($pythonPrefix) + $gateArgs
+        $jsonLines = & $pythonCommand @invokeArgs
+    }
+
     $exitCode = $LASTEXITCODE
     $json = $jsonLines -join "`n"
 
@@ -75,6 +112,7 @@ try {
 
     Write-Host "M1.7 platformization runtime gate: $($report.status)"
     Write-Host "Receipt-driven: $($report.receipt_driven)"
+    Write-Host "Execution mode: $(if ($UseDocker) { 'DOCKER_EXPLICIT' } else { 'LOCAL_PYTHON' })"
     Write-Host "CN acceptance receipt: $receiptDisplayPath"
     Write-Host "Expected CN package: $ExpectedCnFileName"
     Write-Host "Static code ready: $($report.static_code_ready)"
