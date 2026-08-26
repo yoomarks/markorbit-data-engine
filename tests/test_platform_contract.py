@@ -1,4 +1,5 @@
 from app.platform_contract import platform_contract
+from app.release_promotion import PROMOTION_CONTRACT_VERSION
 
 
 def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
@@ -22,14 +23,20 @@ def test_platformization_contract_keeps_cn_runtime_compatibility() -> None:
     assert contract["planned_contracts"] == []
     assert (
         contract["next_platformization_focus"]
-        == "RUN_REAL_CN_RUNTIME_ACCEPTANCE_SEPARATELY"
+        == "RUN_LIGHTWEIGHT_CN_SERVING_STATE_AND_EVALUATE_PROMOTION"
     )
 
     runtime = contract["runtime_acceptance_boundary"]
     assert runtime["required"] is True
     assert runtime["evaluated_by_platform_contract"] is False
-    assert runtime["authoritative_checkpoint"] == "CN_M16_FINAL_CHECKPOINT_V1"
+    assert runtime["authoritative_checkpoint"] == PROMOTION_CONTRACT_VERSION
+    assert (
+        runtime["evidence_mode"]
+        == "PRIOR_RUNTIME_OPERATOR_ACCEPTED_PLUS_CURRENT_SERVING_STATE"
+    )
     assert runtime["real_corpus_success_claimed"] is False
+    assert runtime["fresh_full_corpus_validation_claimed"] is False
+    assert runtime["package_replay_or_rescan_required"] is False
     assert runtime["release_promotion_allowed_without_runtime_acceptance"] is False
 
     cn_dag = contract["active_publish_dags"]["cn_final_publish"]
