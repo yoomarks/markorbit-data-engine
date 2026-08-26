@@ -1,0 +1,22 @@
+# Opt-in persistent database storage override.
+#
+# The default docker-compose.yml remains unchanged and continues to use Docker
+# managed volumes. Use this file only after the target directories have been
+# prepared and a migration/cutover has been explicitly approved.
+#
+# Example:
+#   docker compose -f docker-compose.yml -f docker-compose.external-storage.yml config
+#
+# Required environment variables:
+#   POSTGRES_DATA_PATH
+#   CLICKHOUSE_DATA_PATH
+#   CLICKHOUSE_LOG_PATH
+services:
+  postgres:
+    volumes:
+      - "${POSTGRES_DATA_PATH:?Set POSTGRES_DATA_PATH before enabling external storage}:/var/lib/postgresql/data"
+
+  clickhouse:
+    volumes:
+      - "${CLICKHOUSE_DATA_PATH:?Set CLICKHOUSE_DATA_PATH before enabling external storage}:/var/lib/clickhouse"
+      - "${CLICKHOUSE_LOG_PATH:?Set CLICKHOUSE_LOG_PATH before enabling external storage}:/var/log/clickhouse-server"
