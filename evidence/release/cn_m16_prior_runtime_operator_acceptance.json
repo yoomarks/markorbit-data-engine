@@ -1,0 +1,23 @@
+{
+  "schema_version": "CN_OPERATOR_RUNTIME_EVIDENCE_V1",
+  "evidence_id": "CN_2023_5_PRIOR_RUNTIME_OPERATOR_ACCEPTED_2026_08_26",
+  "jurisdiction": "CN",
+  "source_package_file_name": "2023_5.zip",
+  "evidence_type": "PRIOR_RUNTIME_VALIDATION_OPERATOR_ACCEPTED",
+  "operator_decision": "DO_NOT_RERUN_EXPENSIVE_PACKAGE_VALIDATION",
+  "accepted_scope": "PRIOR_TARGET_HOST_RUNTIME_VALIDATION_ACCEPTED_AS_BASE_EVIDENCE_FOR_M1_7_PROMOTION_EVALUATION",
+  "requires_current_serving_state": true,
+  "fresh_full_corpus_validation_claimed": false,
+  "package_replay_or_rescan_required": false,
+  "target_host_runtime_details_reconstructed": false,
+  "source_reference": {
+    "kind": "GITHUB_ISSUE_COMMENT",
+    "repository": "yoomarks/markorbit-data-engine",
+    "issue_number": 247,
+    "comment_id": 5421693252,
+    "comment_url": "https://github.com/yoomarks/markorbit-data-engine/issues/247#issuecomment-5421693252",
+    "comment_body_sha256": "499a8ea46e08aa2a95dacf80e2e516099ced59e9dde6be9fdabad4f8cf8a8877"
+  },
+  "source_operator_decision_text": "Operator decision: do not re-run the expensive `2023_5.zip` package validation. The package has already completed and was previously validated on the target host; repeating validation of this very large package would add cost without new evidence. Treat `2023_5.zip` completion as accepted operator evidence. Any remaining work should be separated into lightweight, resource-safe full-corpus checkpoint / runtime-gate engineering and must not require reprocessing or rescanning the package itself.",
+  "statement": "This record preserves the operator's explicit acceptance of prior target-host validation. It does not claim that a fresh full-corpus semantic checkpoint was executed. Current serving-state evidence is still required before M1.7 release promotion."
+}
