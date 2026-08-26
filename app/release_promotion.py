@@ -9,6 +9,8 @@ from typing import Any
 from app.cn.serving_state_checkpoint import (
     CHECKPOINT_VERSION as CN_SERVING_STATE_CHECKPOINT_VERSION,
 )
+from app.cn.serving_state_checkpoint import CRITICAL_TABLES as CN_CRITICAL_TABLES
+from app.cn.serving_state_checkpoint import DISK_WARN_FREE_RATIO
 
 
 PROMOTION_CONTRACT_VERSION = "MARKORBIT_M17_RELEASE_PROMOTION_V1"
@@ -17,6 +19,7 @@ EXPECTED_OPERATOR_EVIDENCE_TYPE = "PRIOR_RUNTIME_VALIDATION_OPERATOR_ACCEPTED"
 EXPECTED_OPERATOR_DECISION = "DO_NOT_RERUN_EXPENSIVE_PACKAGE_VALIDATION"
 EXPECTED_SOURCE_PACKAGE = "2023_5.zip"
 EXPECTED_JURISDICTION = "CN"
+EXPECTED_QUERY_SCOPE = "control_and_system_metadata_only"
 OPERATOR_EVIDENCE_PATH = (
     Path(__file__).resolve().parents[1]
     / "evidence"
@@ -141,6 +144,13 @@ def _validate_serving_state(
                 "Current serving-state evidence must be produced by the read-only gate.",
             )
         )
+    if serving_state.get("query_scope") != EXPECTED_QUERY_SCOPE:
+        reasons.append(
+            _reason(
+                "SERVING_STATE_QUERY_SCOPE_MISMATCH",
+                "Promotion requires the control/system-metadata-only checkpoint scope.",
+            )
+        )
     if serving_state.get("expected_file_name") != EXPECTED_SOURCE_PACKAGE:
         reasons.append(
             _reason(
@@ -150,6 +160,13 @@ def _validate_serving_state(
         )
 
     expected_package = serving_state.get("expected_package") or {}
+    if expected_package.get("file_name") != EXPECTED_SOURCE_PACKAGE:
+        reasons.append(
+            _reason(
+                "SERVING_STATE_PACKAGE_RECORD_MISMATCH",
+                "The successful package record must match the expected CN package.",
+            )
+        )
     if expected_package.get("status") != "SUCCESS":
         reasons.append(
             _reason(
@@ -173,14 +190,8 @@ def _validate_serving_state(
         )
 
     critical_tables = serving_state.get("critical_tables") or {}
-    if not critical_tables:
-        reasons.append(
-            _reason(
-                "SERVING_STATE_CRITICAL_TABLES_MISSING",
-                "Current serving state must include critical table metadata.",
-            )
-        )
-    for table, state in critical_tables.items():
+    for table in CN_CRITICAL_TABLES:
+        state = critical_tables.get(table) or {}
         if state.get("exists") is not True or int(state.get("active_parts") or 0) <= 0:
             reasons.append(
                 _reason(
@@ -197,6 +208,25 @@ def _validate_serving_state(
                 "Current serving state must include ClickHouse disk metadata.",
             )
         )
+    for disk in disks:
+        free_ratio = disk.get("free_ratio")
+        if free_ratio is None:
+            reasons.append(
+                _reason(
+                    "SERVING_STATE_DISK_CAPACITY_UNKNOWN",
+                    f"ClickHouse disk {disk.get('name')!r} has no usable free ratio.",
+                )
+            )
+            continue
+        if float(free_ratio) < DISK_WARN_FREE_RATIO:
+            reasons.append(
+                _reason(
+                    "SERVING_STATE_DISK_HEADROOM_BELOW_PROMOTION_THRESHOLD",
+                    f"ClickHouse disk {disk.get('name')!r} has only "
+                    f"{float(free_ratio):.1%} free space; promotion requires "
+                    f"at least {DISK_WARN_FREE_RATIO:.0%}.",
+                )
+            )
 
     return reasons
 
