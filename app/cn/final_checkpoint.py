@@ -4,7 +4,7 @@ import argparse
 import json
 from typing import Any, Callable
 
-from app.cn.audit_acceptance import build_acceptance_audit
+from app.cn.audit_acceptance_m16 import build_acceptance_audit_m16
 from app.cn.replay_readiness import build_readiness
 from app.db import clickhouse_execution_settings
 
@@ -116,7 +116,7 @@ def build_final_checkpoint(
     *,
     persistent_worker_running: bool = False,
     readiness_builder: Callable[..., dict[str, Any]] = build_readiness,
-    acceptance_builder: Callable[[], dict[str, Any]] = build_acceptance_audit,
+    acceptance_builder: Callable[[], dict[str, Any]] = build_acceptance_audit_m16,
 ) -> dict[str, Any]:
     """Build the final CN gate without mutating PostgreSQL or ClickHouse.
 
