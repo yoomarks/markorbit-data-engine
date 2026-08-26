@@ -8,6 +8,7 @@ from app.data_trust import data_trust_contract
 from app.domain_adapter import domain_adapter_contract
 from app.fact_event_envelope import fact_event_envelope_contract
 from app.operations_v2 import operations_contract
+from app.release_promotion import PROMOTION_CONTRACT_VERSION
 from app.snapshot_delta.ipos_sg_tasks import ipos_sg_operator_task_contract
 from app.work_dag import work_dag_contract
 from app.work_engine import work_engine_contract
@@ -41,11 +42,16 @@ def platform_contract() -> dict[str, Any]:
         "runtime_acceptance_boundary": {
             "required": True,
             "evaluated_by_platform_contract": False,
-            "authoritative_checkpoint": "CN_M16_FINAL_CHECKPOINT_V1",
+            "authoritative_checkpoint": PROMOTION_CONTRACT_VERSION,
+            "evidence_mode": "PRIOR_RUNTIME_OPERATOR_ACCEPTED_PLUS_CURRENT_SERVING_STATE",
             "real_corpus_success_claimed": False,
+            "fresh_full_corpus_validation_claimed": False,
+            "package_replay_or_rescan_required": False,
             "release_promotion_allowed_without_runtime_acceptance": False,
         },
-        "next_platformization_focus": "RUN_REAL_CN_RUNTIME_ACCEPTANCE_SEPARATELY",
+        "next_platformization_focus": (
+            "RUN_LIGHTWEIGHT_CN_SERVING_STATE_AND_EVALUATE_PROMOTION"
+        ),
         "compatibility": {
             "cn_inflight_checkpoint_schema_preserved": True,
             "cn_source_rank_semantics_unchanged": True,
