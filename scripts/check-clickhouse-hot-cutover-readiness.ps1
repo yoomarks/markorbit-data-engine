@@ -119,14 +119,21 @@ $runningServices = @(Invoke-DockerText -Arguments @("compose", "ps", "--services
     ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -ne "" })
 
 $hotEntries = @(Get-ChildItem -LiteralPath $resolvedHot -Force -ErrorAction Stop)
+$coldEntries = @(Get-ChildItem -LiteralPath $resolvedCold -Force -ErrorAction Stop)
 $hotEmpty = $hotEntries.Count -eq 0
+$coldEmpty = $coldEntries.Count -eq 0
 
-# The source is mounted read-only into a disposable container. du reads filesystem
-# metadata only; it does not query or validate the trademark corpus.
+# The source is mounted read-only into a disposable container. Only filesystem
+# metadata for regular files is read; no trademark rows are queried or validated.
+# Summing file sizes avoids false mismatches from different directory inode sizes
+# on the Docker ext4 volume and the Windows bind filesystem.
+$sizeCommand = @'
+find /source -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
+'@
 $sizeLines = Invoke-DockerText -Arguments @(
     "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
     "--mount", "type=volume,source=$sourceVolume,target=/source,readonly",
-    $image, "-lc", "du -sb /source | cut -f1"
+    $image, "-lc", $sizeCommand
 )
 $sourceBytes = Get-ScalarInt64 -Lines $sizeLines
 
@@ -142,6 +149,7 @@ $safe = (
     $runningJobs -eq 0 -and
     $processingCn -eq 0 -and
     $hotEmpty -and
+    $coldEmpty -and
     $headroomOk -and
     $preflight.compose_validated
 )
@@ -151,11 +159,12 @@ $safe = (
     safe_to_cutover = $safe
     source_volume = $sourceVolume
     clickhouse_image = $image
-    source_volume_bytes = $sourceBytes
+    source_regular_file_bytes = $sourceBytes
     hot_path = $resolvedHot
     cold_path = $resolvedCold
     log_path = $resolvedLog
     hot_path_empty = $hotEmpty
+    cold_path_empty = $coldEmpty
     hot_free_bytes = [int64]$hotDrive.Free
     reserve_bytes = $reserveBytes
     required_free_bytes = $requiredFreeBytes
