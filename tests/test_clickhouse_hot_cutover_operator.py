@@ -16,7 +16,9 @@ def test_readiness_is_control_plane_and_metadata_only():
     assert "status = ''PROCESSING''" in text
     assert "system.parts" in text
     assert "source=$sourceVolume,target=/source,readonly" in text
-    assert "du -sb /source" in text
+    assert "find /source -type f" in text
+    assert "source_regular_file_bytes" in text
+    assert "cold_path_empty" in text
     assert "revalidates_source_packages = $false" in text
 
     forbidden = (
@@ -40,6 +42,8 @@ def test_migration_is_explicit_source_preserving_and_rollback_capable():
     assert '"compose", "stop", "clickhouse"' in text
     assert "source=$sourceVolume,target=/source,readonly" in text
     assert "cp -a /source/. /target/" in text
+    assert "find /target -type f" in text
+    assert "source_regular_file_bytes" in text
     assert "source_volume_retained = $true" in text
     assert "Start-OriginalClickHouse" in text
     assert "Assert-BaselineEqual" in text
