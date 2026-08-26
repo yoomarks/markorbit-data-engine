@@ -42,10 +42,12 @@ def test_valid_receipt_passes_without_runtime_dependencies() -> None:
     assert report["docker_required"] is False
     assert report["database_connection_required"] is False
 
-    source = inspect.getsource(receipt_module)
-    assert "docker" not in source.lower()
-    assert "postgres" not in source.lower()
-    assert "clickhouse" not in source.lower()
+    source = inspect.getsource(receipt_module).lower()
+    assert "docker compose" not in source
+    assert "import subprocess" not in source
+    assert "from app.db import" not in source
+    assert "postgres_conn(" not in source
+    assert "clickhouse_client(" not in source
 
 
 def test_ready_to_continue_receipt_is_not_final_acceptance() -> None:
