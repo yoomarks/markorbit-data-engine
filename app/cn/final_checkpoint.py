@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from app.cn.audit_acceptance import build_acceptance_audit
 from app.cn.replay_readiness import build_readiness
+from app.db import clickhouse_execution_settings
 
 
 CHECKPOINT_VERSION = "CN_M16_FINAL_CHECKPOINT_V1"
@@ -130,7 +131,18 @@ def build_final_checkpoint(
     if readiness.get("status") != "COMPLETE":
         return evaluate_final_checkpoint(readiness=readiness, acceptance=None)
 
-    acceptance = acceptance_builder()
+    # The acceptance audit contains full-corpus orphan checks. On the retained CN
+    # corpus the default hash JOIN can materialize a >12 GiB right side and exceed
+    # the target host's ~14 GiB ClickHouse ceiling. Reuse the same disk-spilling
+    # execution profile already proven by CN ingestion. These settings affect only
+    # execution resources; query semantics and the read-only acceptance contract
+    # remain unchanged.
+    with clickhouse_execution_settings(
+        join_algorithm="grace_hash",
+        grace_hash_join_initial_buckets=32,
+        send_receive_timeout=3600,
+    ):
+        acceptance = acceptance_builder()
     return evaluate_final_checkpoint(readiness=readiness, acceptance=acceptance)
 
 
