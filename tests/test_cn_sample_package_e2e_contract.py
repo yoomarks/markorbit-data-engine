@@ -26,3 +26,13 @@ def test_local_receipt_operator_never_starts_docker() -> None:
     assert "postgres" not in lowered
     assert "clickhouse" not in lowered
     assert "app.cn.acceptance_receipt" in script
+
+
+def test_platformization_operator_is_local_first_with_explicit_docker_opt_in() -> None:
+    script = Path("scripts/check-platformization-m17.ps1").read_text(encoding="utf-8")
+    assert "[switch]$UseDocker" in script
+    assert "if ($UseDocker)" in script
+    assert ".venv\\Scripts\\python.exe" in script
+    assert "$jsonLines = & $pythonCommand @invokeArgs" in script
+    assert "$jsonLines = & docker @composeArgs" in script
+    assert "Docker is not started automatically" in script
