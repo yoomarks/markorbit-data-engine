@@ -154,6 +154,19 @@ jobs:
         run: |
           docker run --rm --entrypoint python markorbit-data-engine:ci -c "from app.main import ENGINE_VERSION; assert ENGINE_VERSION == 'M1.6', ENGINE_VERSION; print(ENGINE_VERSION)"
 
+      - name: Verify ClickHouse cutover helper commands
+        run: |
+          docker run --rm --entrypoint sh clickhouse/clickhouse-server:24.8 -lc '
+            set -eu
+            command -v find
+            command -v awk
+            command -v cp
+            command -v grep
+            printf test > /tmp/cutover-helper
+            find /tmp -maxdepth 1 -type f -name cutover-helper -printf "%s\n" | awk "{s += \$1} END {exit !(s == 4)}"
+            grep -qx test /tmp/cutover-helper
+          '
+
   us-runtime-fixture:
     runs-on: ubuntu-latest
     steps:
