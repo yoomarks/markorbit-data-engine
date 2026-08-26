@@ -52,7 +52,7 @@ CLICKHOUSE_TABLES_SQL = f"""
 def _parts_clause(table: str) -> str:
     return f"""
     SELECT
-        '{table}' AS table,
+        '{table}' AS table_name,
         count() AS active_parts,
         coalesce(sum(bytes_on_disk), 0) AS bytes_on_disk,
         coalesce(sum(rows), 0) AS rows_from_parts
@@ -202,7 +202,9 @@ def evaluate_serving_state(
 
     goods_schema_exact = goods_schema_error is None
     if not goods_schema_exact:
-        reasons.append(_reason("GOODS_SCHEMA_MISMATCH", goods_schema_error or "", "BLOCKED"))
+        reasons.append(
+            _reason("GOODS_SCHEMA_MISMATCH", goods_schema_error or "", "BLOCKED")
+        )
 
     usable_disks = [disk for disk in disks if disk.get("free_ratio") is not None]
     if not usable_disks:
@@ -361,7 +363,14 @@ def main() -> int:
         report = _execution_error_report(args.expected_file_name, exc)
 
     if args.compact:
-        print(json.dumps(report, ensure_ascii=False, separators=(",", ":"), default=str))
+        print(
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+        )
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0 if report["status"] in {"PASS", "WARN"} else 2
