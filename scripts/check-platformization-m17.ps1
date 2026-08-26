@@ -1,5 +1,6 @@
 param(
     [string]$CnAcceptanceReceiptPath = "",
+    [string]$CnServingCheckpointPath = "",
     [string]$ExpectedCnFileName = "2023_5.zip",
     [string]$OutputPath = "",
     [switch]$Compact,
@@ -10,6 +11,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
+    if ($CnAcceptanceReceiptPath -and $CnServingCheckpointPath) {
+        throw "Specify exactly one CN runtime evidence path: -CnAcceptanceReceiptPath or -CnServingCheckpointPath."
+    }
+
     $gateArgs = @(
         "-m",
         "app.platformization_runtime_gate",
@@ -21,13 +26,23 @@ try {
     }
 
     $receiptDisplayPath = "<missing>"
+    $servingDisplayPath = "<missing>"
     $resolvedReceipt = $null
+    $resolvedServing = $null
+
     if ($CnAcceptanceReceiptPath) {
         if (-not (Test-Path -LiteralPath $CnAcceptanceReceiptPath -PathType Leaf)) {
             throw "CN acceptance receipt not found: $CnAcceptanceReceiptPath"
         }
         $resolvedReceipt = (Resolve-Path -LiteralPath $CnAcceptanceReceiptPath).Path
         $receiptDisplayPath = $resolvedReceipt
+    }
+    if ($CnServingCheckpointPath) {
+        if (-not (Test-Path -LiteralPath $CnServingCheckpointPath -PathType Leaf)) {
+            throw "CN serving-state checkpoint not found: $CnServingCheckpointPath"
+        }
+        $resolvedServing = (Resolve-Path -LiteralPath $CnServingCheckpointPath).Path
+        $servingDisplayPath = $resolvedServing
     }
 
     if ($UseDocker) {
@@ -36,21 +51,34 @@ try {
             "${repoRoot}\app:/app/app:ro"
         )
         if ($resolvedReceipt) {
-            $receiptDirectory = Split-Path -Parent $resolvedReceipt
-            $receiptName = Split-Path -Leaf $resolvedReceipt
-            $containerReceiptPath = "/evidence/$receiptName"
+            $evidenceDirectory = Split-Path -Parent $resolvedReceipt
+            $evidenceName = Split-Path -Leaf $resolvedReceipt
+            $containerEvidencePath = "/evidence/$evidenceName"
             $volumeArgs += @(
                 "--volume",
-                "${receiptDirectory}:/evidence:ro"
+                "${evidenceDirectory}:/evidence:ro"
             )
             $gateArgs += @(
                 "--cn-acceptance-receipt",
-                $containerReceiptPath
+                $containerEvidencePath
+            )
+        }
+        elseif ($resolvedServing) {
+            $evidenceDirectory = Split-Path -Parent $resolvedServing
+            $evidenceName = Split-Path -Leaf $resolvedServing
+            $containerEvidencePath = "/evidence/$evidenceName"
+            $volumeArgs += @(
+                "--volume",
+                "${evidenceDirectory}:/evidence:ro"
+            )
+            $gateArgs += @(
+                "--cn-serving-checkpoint",
+                $containerEvidencePath
             )
         }
 
-        # Docker execution is opt-in only. --no-deps prevents this gate from
-        # starting PostgreSQL or ClickHouse as dependencies.
+        # Docker execution is explicit opt-in only. --no-deps prevents this gate
+        # from starting PostgreSQL or ClickHouse as dependencies.
         $composeArgs = @("compose", "run", "--rm", "--no-deps", "-T") +
             $volumeArgs + @("worker", "python") + $gateArgs
         $jsonLines = & docker @composeArgs
@@ -82,6 +110,12 @@ try {
                 $resolvedReceipt
             )
         }
+        elseif ($resolvedServing) {
+            $gateArgs += @(
+                "--cn-serving-checkpoint",
+                $resolvedServing
+            )
+        }
         $invokeArgs = @($pythonPrefix) + $gateArgs
         $jsonLines = & $pythonCommand @invokeArgs
     }
@@ -111,13 +145,15 @@ try {
     $json | Set-Content -Encoding UTF8 $OutputPath
 
     Write-Host "M1.7 platformization runtime gate: $($report.status)"
-    Write-Host "Receipt-driven: $($report.receipt_driven)"
     Write-Host "Execution mode: $(if ($UseDocker) { 'DOCKER_EXPLICIT' } else { 'LOCAL_PYTHON' })"
+    Write-Host "Runtime evidence mode: $($report.runtime_evidence_mode)"
     Write-Host "CN acceptance receipt: $receiptDisplayPath"
+    Write-Host "CN serving-state checkpoint: $servingDisplayPath"
     Write-Host "Expected CN package: $ExpectedCnFileName"
     Write-Host "Static code ready: $($report.static_code_ready)"
-    Write-Host "CN runtime acceptance evaluated: $($report.runtime_acceptance_evaluated)"
-    Write-Host "CN runtime acceptance passed: $($report.runtime_acceptance_passed)"
+    Write-Host "CN runtime evidence evaluated: $($report.runtime_acceptance_evaluated)"
+    Write-Host "CN runtime evidence passed: $($report.runtime_acceptance_passed)"
+    Write-Host "Promotion basis: $($report.promotion_basis)"
     Write-Host "Release promotion eligible: $($report.release_promotion_eligible)"
     Write-Host "Release promoted by this gate: $($report.release_promoted)"
     Write-Host "Report: $OutputPath"
@@ -131,7 +167,7 @@ try {
         throw "M1.7 platformization runtime gate exited successfully without release promotion eligibility."
     }
 
-    Write-Host "M1.7 code + persisted real CN runtime acceptance passed. VERSION remains unchanged by this gate."
+    Write-Host "M1.7 code + persisted CN runtime evidence passed. VERSION remains unchanged by this gate."
 }
 finally {
     Pop-Location
