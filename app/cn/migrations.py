@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.cn.goods_serving_contract import assert_goods_serving_schema
 from app.db import clickhouse_client, postgres_conn
 
 
@@ -16,12 +17,13 @@ REQUIRED_CLICKHOUSE_COLUMNS = {
 
 
 def ensure_m15_schema() -> None:
-    """Fail early when an M1.0-M1.4 volume is used with M1.5 code.
+    """Fail early when an M1.0-M1.4 volume is used with M1.5/M1.6 code.
 
     M1.5 changes replacement keys and permanent field semantics. An in-place
     migration would risk presenting old rows under the new meaning, so M1.5
     intentionally requires a clean development-volume reset while preserving
-    raw ZIP files.
+    raw ZIP files. M1.6 additionally freezes the deployed goods-serving schema
+    because the current CN case API exposes every goods-current column.
     """
     client = clickhouse_client()
     rows = client.query(
@@ -39,6 +41,11 @@ def ensure_m15_schema() -> None:
             "M1.5 ClickHouse schema is not initialized. Missing: "
             f"{formatted}. Run scripts/reset-m15.ps1; raw_data is not removed."
         )
+
+    # Metadata-only M1.6 serving-contract guard. This deliberately rejects
+    # missing, extra, reordered, or retyped cn_goods_item_current columns before
+    # the API can expose a silently drifted SELECT-* response surface.
+    assert_goods_serving_schema(client)
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
