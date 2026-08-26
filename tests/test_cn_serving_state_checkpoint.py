@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.cn.migrations import EXPECTED_CN_GOODS_ITEM_CURRENT_COLUMNS
 from app.cn.serving_state_checkpoint import (
@@ -14,6 +16,7 @@ from app.cn.serving_state_checkpoint import (
     READ_ONLY_QUERIES,
     _aggregate_parts,
     _disk_report,
+    build_serving_state_checkpoint,
     evaluate_serving_state,
 )
 
@@ -60,6 +63,69 @@ def _evaluate(**overrides):
     }
     values.update(overrides)
     return evaluate_serving_state(**values)
+
+
+class _FakeCursor:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, object]] = []
+        self._next_row: dict[str, object] | None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def execute(self, sql: str, params=None) -> None:
+        self.executed.append((sql, params))
+        if sql == POSTGRES_EXPECTED_PACKAGE_SQL:
+            self._next_row = {
+                "file_name": "2023_5.zip",
+                "status": "SUCCESS",
+                "processed_at": None,
+                "error_message": None,
+                "package_sequence": 99,
+            }
+        elif sql == POSTGRES_PROCESSING_COUNT_SQL:
+            self._next_row = {"processing_count": 0}
+        else:  # pragma: no cover - protects the query budget contract
+            raise AssertionError(f"unexpected PostgreSQL query: {sql}")
+
+    def fetchone(self):
+        return self._next_row
+
+
+class _FakePostgresConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = _FakeCursor()
+
+    def cursor(self) -> _FakeCursor:
+        return self.cursor_instance
+
+
+class _FakeClickHouseClient:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def query(self, sql: str):
+        self.queries.append(sql)
+        if sql == CLICKHOUSE_TABLES_SQL:
+            rows = [(table,) for table in CRITICAL_TABLES]
+        elif sql == CLICKHOUSE_ACTIVE_PARTS_SQL:
+            rows = [(table, 1024, 10) for table in CRITICAL_TABLES]
+        elif sql == CLICKHOUSE_GOODS_COLUMNS_SQL:
+            rows = [
+                ("cn_goods_item_current", name, position)
+                for position, name in enumerate(
+                    EXPECTED_CN_GOODS_ITEM_CURRENT_COLUMNS,
+                    start=1,
+                )
+            ]
+        elif sql == CLICKHOUSE_DISKS_SQL:
+            rows = [("default", "/var/lib/clickhouse/", 300, 1000, 0)]
+        else:  # pragma: no cover - protects the query budget contract
+            raise AssertionError(f"unexpected ClickHouse query: {sql}")
+        return SimpleNamespace(result_rows=rows)
 
 
 def test_healthy_state_passes_without_corpus_acceptance() -> None:
@@ -183,6 +249,32 @@ def test_disk_report_computes_free_ratio_without_table_scan() -> None:
     assert report[0]["free_ratio"] == 0.25
     assert report[0]["free_space"] == 250
     assert report[0]["total_space"] == 1000
+
+
+def test_build_checkpoint_uses_only_control_and_system_metadata_queries() -> None:
+    fake_postgres = _FakePostgresConnection()
+    fake_clickhouse = _FakeClickHouseClient()
+
+    @contextmanager
+    def postgres_factory():
+        yield fake_postgres
+
+    report = build_serving_state_checkpoint(
+        postgres_connection_factory=postgres_factory,
+        clickhouse_client_factory=lambda: fake_clickhouse,
+    )
+
+    assert report["status"] == "PASS"
+    assert fake_postgres.cursor_instance.executed == [
+        (POSTGRES_EXPECTED_PACKAGE_SQL, ("2023_5.zip",)),
+        (POSTGRES_PROCESSING_COUNT_SQL, None),
+    ]
+    assert fake_clickhouse.queries == [
+        CLICKHOUSE_TABLES_SQL,
+        CLICKHOUSE_ACTIVE_PARTS_SQL,
+        CLICKHOUSE_GOODS_COLUMNS_SQL,
+        CLICKHOUSE_DISKS_SQL,
+    ]
 
 
 def test_query_contract_is_metadata_control_only() -> None:
