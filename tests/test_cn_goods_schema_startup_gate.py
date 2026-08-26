@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.cn.migrations import (
@@ -70,3 +72,16 @@ def test_missing_goods_table_fails_with_migration_message() -> None:
     assert "cn_goods_item_current" in message
     assert "found 0" in message
     assert "schema migration required before replay/import" in message
+
+
+def test_ingest_checks_schema_before_package_or_job_work() -> None:
+    source = Path("app/cn/ingest.py").read_text(encoding="utf-8")
+    start = source.index("def ingest_cn_package(")
+    ingest_source = source[start:]
+
+    assert ingest_source.index("ensure_m15_schema()") < ingest_source.index(
+        "get_package(str(package_uuid))"
+    )
+    assert ingest_source.index("ensure_m15_schema()") < ingest_source.index(
+        "create_job_run("
+    )
