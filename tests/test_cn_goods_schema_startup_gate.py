@@ -6,7 +6,7 @@ import pytest
 
 from app.cn.migrations import (
     EXPECTED_CN_GOODS_ITEM_CURRENT_COLUMNS,
-    _assert_exact_goods_current_schema,
+    assert_exact_goods_current_schema,
 )
 
 
@@ -26,7 +26,7 @@ def test_exact_goods_current_schema_passes() -> None:
         ]
     )
 
-    _assert_exact_goods_current_schema(rows)
+    assert_exact_goods_current_schema(rows)
 
 
 def test_legacy_34_column_goods_schema_fails_before_replay() -> None:
@@ -38,7 +38,7 @@ def test_legacy_34_column_goods_schema_fails_before_replay() -> None:
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        _assert_exact_goods_current_schema(_goods_rows(legacy_columns))
+        assert_exact_goods_current_schema(_goods_rows(legacy_columns))
 
     message = str(exc_info.value)
     assert "cn_goods_item_current" in message
@@ -53,7 +53,7 @@ def test_misordered_goods_schema_fails_before_replay() -> None:
     columns[1], columns[2] = columns[2], columns[1]
 
     with pytest.raises(RuntimeError) as exc_info:
-        _assert_exact_goods_current_schema(_goods_rows(tuple(columns)))
+        assert_exact_goods_current_schema(_goods_rows(tuple(columns)))
 
     message = str(exc_info.value)
     assert "exactly 30 columns" in message
@@ -64,7 +64,7 @@ def test_misordered_goods_schema_fails_before_replay() -> None:
 
 def test_missing_goods_table_fails_with_migration_message() -> None:
     with pytest.raises(RuntimeError) as exc_info:
-        _assert_exact_goods_current_schema(
+        assert_exact_goods_current_schema(
             [("cn_case_current", "source_rank", 1)]
         )
 
