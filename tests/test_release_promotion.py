@@ -9,6 +9,7 @@ from app.cn.serving_state_checkpoint import (
 from app.release_promotion import (
     EXPECTED_OPERATOR_DECISION,
     EXPECTED_OPERATOR_EVIDENCE_TYPE,
+    EXPECTED_QUERY_SCOPE,
     EXPECTED_SOURCE_PACKAGE,
     OPERATOR_EVIDENCE_SCHEMA_VERSION,
     build_m17_release_promotion_contract,
@@ -46,6 +47,7 @@ def _serving_state() -> dict:
         "checkpoint_version": CN_SERVING_STATE_CHECKPOINT_VERSION,
         "status": "PASS",
         "read_only": True,
+        "query_scope": EXPECTED_QUERY_SCOPE,
         "expected_file_name": EXPECTED_SOURCE_PACKAGE,
         "expected_package": {
             "file_name": EXPECTED_SOURCE_PACKAGE,
@@ -150,6 +152,21 @@ def test_schema_or_processing_drift_blocks_release() -> None:
     assert "SERVING_STATE_PACKAGE_PROCESSING" in codes
 
 
+def test_missing_expected_critical_table_blocks_even_if_report_claims_pass() -> None:
+    serving_state = _serving_state()
+    del serving_state["critical_tables"]["cn_case_party_current"]
+
+    report = evaluate_m17_release_promotion(
+        operator_evidence=_operator_evidence(),
+        serving_state=serving_state,
+    )
+
+    assert report["release_promotion_allowed"] is False
+    assert "SERVING_STATE_CRITICAL_TABLE_BLOCKED" in {
+        reason["code"] for reason in report["reasons"]
+    }
+
+
 def test_missing_active_part_blocks_release() -> None:
     serving_state = _serving_state()
     serving_state["critical_tables"]["cn_case_party_current"]["active_parts"] = 0
@@ -161,6 +178,36 @@ def test_missing_active_part_blocks_release() -> None:
 
     assert report["release_promotion_allowed"] is False
     assert "SERVING_STATE_CRITICAL_TABLE_BLOCKED" in {
+        reason["code"] for reason in report["reasons"]
+    }
+
+
+def test_disk_headroom_is_independently_checked() -> None:
+    serving_state = _serving_state()
+    serving_state["disks"][0]["free_ratio"] = 0.19
+
+    report = evaluate_m17_release_promotion(
+        operator_evidence=_operator_evidence(),
+        serving_state=serving_state,
+    )
+
+    assert report["release_promotion_allowed"] is False
+    assert "SERVING_STATE_DISK_HEADROOM_BELOW_PROMOTION_THRESHOLD" in {
+        reason["code"] for reason in report["reasons"]
+    }
+
+
+def test_query_scope_is_independently_checked() -> None:
+    serving_state = _serving_state()
+    serving_state["query_scope"] = "full_corpus"
+
+    report = evaluate_m17_release_promotion(
+        operator_evidence=_operator_evidence(),
+        serving_state=serving_state,
+    )
+
+    assert report["release_promotion_allowed"] is False
+    assert "SERVING_STATE_QUERY_SCOPE_MISMATCH" in {
         reason["code"] for reason in report["reasons"]
     }
 
