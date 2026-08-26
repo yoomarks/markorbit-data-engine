@@ -26,14 +26,6 @@ function Invoke-Readiness {
     return (($text -join [Environment]::NewLine) | ConvertFrom-Json)
 }
 
-function Invoke-HotColdComposeText {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
-
-    return Invoke-DockerText -Arguments @(
-        "compose", "-f", "docker-compose.yml", "-f", "docker-compose.hot-cold-storage.yml"
-    ) + $Arguments
-}
-
 function Invoke-HotColdCompose {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
 
@@ -127,15 +119,17 @@ try {
         [int64]$afterWriterStop.processing_cn_package_count -ne 0) {
         throw "A task became active before writer shutdown completed; refusing storage cutover."
     }
-    if (-not $afterWriterStop.hot_path_empty -or -not $afterWriterStop.headroom_ok) {
-        throw "Hot destination changed or headroom gate failed after writer shutdown."
+    if (-not $afterWriterStop.hot_path_empty -or
+        -not $afterWriterStop.cold_path_empty -or
+        -not $afterWriterStop.headroom_ok) {
+        throw "Hot/Cold destination changed or headroom gate failed after writer shutdown."
     }
     if ($afterWriterStop.source_volume -ne $initial.source_volume) {
         throw "Authoritative ClickHouse source volume changed during cutover preparation."
     }
 
     $sourceVolume = [string]$initial.source_volume
-    $sourceBytes = [int64]$initial.source_volume_bytes
+    $sourceBytes = [int64]$initial.source_regular_file_bytes
     $image = [string]$initial.clickhouse_image
 
     # Prove Docker can write the three Windows bind destinations before stopping
@@ -150,6 +144,11 @@ try {
         "--mount", "type=bind,source=$($initial.log_path),target=/logs",
         $image, "-lc", $probeCommand
     ) | Out-Null
+
+    if (@(Get-ChildItem -LiteralPath $initial.hot_path -Force).Count -ne 0 -or
+        @(Get-ChildItem -LiteralPath $initial.cold_path -Force).Count -ne 0) {
+        throw "Hot or Cold destination is not empty after bind-path probe cleanup."
+    }
 
     Invoke-DockerText -Arguments @("compose", "stop", "clickhouse") | Out-Null
     $clickhouseStopped = $true
@@ -172,19 +171,22 @@ try {
         $image, "-lc", "set -eu; cp -a /source/. /target/"
     ) | Out-Null
 
+    $targetSizeCommand = @'
+find /target -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
+'@
     $targetSizeLines = Invoke-DockerText -Arguments @(
         "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
         "--mount", "type=bind,source=$($initial.hot_path),target=/target,readonly",
-        $image, "-lc", "du -sb /target | cut -f1"
+        $image, "-lc", $targetSizeCommand
     )
     $targetSizeText = ($targetSizeLines | ForEach-Object { $_.ToString().Trim() } |
         Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
     if ($null -eq $targetSizeText) {
-        throw "Unable to measure copied Hot destination."
+        throw "Unable to measure copied Hot destination regular files."
     }
     $targetBytes = [int64]$targetSizeText
     if ($targetBytes -ne $sourceBytes) {
-        throw "Copied data size mismatch: source=$sourceBytes target=$targetBytes"
+        throw "Copied regular-file byte mismatch: source=$sourceBytes target=$targetBytes"
     }
 
     Invoke-HotColdCompose -Arguments @("up", "-d", "--wait", "--no-deps", "clickhouse") | Out-Null
@@ -229,8 +231,8 @@ try {
         hot_cold_activated = $true
         source_volume = $sourceVolume
         source_volume_retained = $true
-        source_volume_bytes = $sourceBytes
-        hot_copy_bytes = $targetBytes
+        source_regular_file_bytes = $sourceBytes
+        hot_copy_regular_file_bytes = $targetBytes
         hot_path = $initial.hot_path
         cold_path = $initial.cold_path
         log_path = $initial.log_path
