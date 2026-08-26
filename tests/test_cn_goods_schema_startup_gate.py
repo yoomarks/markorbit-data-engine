@@ -74,6 +74,24 @@ def test_missing_goods_table_fails_with_migration_message() -> None:
     assert "schema migration required before replay/import" in message
 
 
+def test_goods_schema_gate_matches_clickhouse_ddl_order() -> None:
+    ddl = Path("database/clickhouse/init/003_m16_goods_lifecycle.sql").read_text(
+        encoding="utf-8"
+    )
+    marker = "CREATE TABLE IF NOT EXISTS markorbit_facts.cn_goods_item_current"
+    start = ddl.index(marker)
+    body_start = ddl.index("(\n", start) + 2
+    body_end = ddl.index(")\nENGINE", body_start)
+    definition_lines = [
+        line.strip()
+        for line in ddl[body_start:body_end].splitlines()
+        if line.strip()
+    ]
+    ddl_columns = tuple(line.split()[0] for line in definition_lines)
+
+    assert ddl_columns == EXPECTED_CN_GOODS_ITEM_CURRENT_COLUMNS
+
+
 def test_ingest_checks_schema_before_package_or_job_work() -> None:
     source = Path("app/cn/ingest.py").read_text(encoding="utf-8")
     start = source.index("def ingest_cn_package(")
