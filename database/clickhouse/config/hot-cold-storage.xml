@@ -1,0 +1,23 @@
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <cold>
+                <path>/var/lib/clickhouse-cold/</path>
+                <keep_free_space_bytes>68719476736</keep_free_space_bytes>
+            </cold>
+        </disks>
+        <policies>
+            <hot_cold>
+                <volumes>
+                    <hot>
+                        <disk>default</disk>
+                    </hot>
+                    <cold>
+                        <disk>cold</disk>
+                    </cold>
+                </volumes>
+                <move_factor>0.10</move_factor>
+            </hot_cold>
+        </policies>
+    </storage_configuration>
+</clickhouse>
