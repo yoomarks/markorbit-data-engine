@@ -50,7 +50,7 @@ EXPECTED_CN_GOODS_ITEM_CURRENT_COLUMNS = (
 )
 
 
-def _assert_exact_goods_current_schema(
+def assert_exact_goods_current_schema(
     rows: Iterable[tuple[object, object, object]],
 ) -> None:
     """Reject legacy or reordered goods-current schemas before CN work starts."""
@@ -100,7 +100,7 @@ def ensure_m15_schema() -> None:
             f"{formatted}. Run scripts/reset-m15.ps1; raw_data is not removed."
         )
 
-    _assert_exact_goods_current_schema(rows)
+    assert_exact_goods_current_schema(rows)
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
