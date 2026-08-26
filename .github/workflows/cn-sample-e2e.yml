@@ -1,0 +1,38 @@
+name: CN Bounded Sample E2E
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: cn-bounded-sample-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  sample-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare isolated Compose environment
+        run: |
+          cp .env.example .env
+          sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
+          mkdir -p raw_data
+
+      - name: Start isolated PostgreSQL and ClickHouse
+        run: docker compose up -d --wait postgres clickhouse
+
+      - name: Run bounded real-ZIP CN package E2E
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_sample_package_e2e
+
+      - name: Tear down isolated fixture databases
+        if: always()
+        run: docker compose down -v --remove-orphans
