@@ -74,3 +74,11 @@ This means current target-host serving/control state is accepted as release evid
 The gate does not edit `VERSION`. Release promotion remains a separate explicit repository change after the evidence gate passes.
 
 A future intentionally scheduled deep audit remains a separate concern and must not be silently substituted into this lightweight operator path.
+
+## CI and merge contract
+
+Changes to the checkpoint, its evidence schema, the Windows operators, or the M1.7 runtime gate must pass the repository's complete pull-request workflow set on the **exact current PR head SHA** before merge. Results from an earlier head are not reusable after any code, test, or documentation commit that changes the PR head.
+
+At minimum, the generic Python/Ruff/Pytest job, Windows PowerShell parsing/contracts, runtime image checks, the M1.7 static checkpoint, the bounded CN real-package E2E, and all repository domain workflows must complete successfully. A lightweight target-host report is runtime evidence and cannot be used to bypass repository CI.
+
+Likewise, CI evidence cannot replace the target-host report: repository CI proves the implementation contract, while `CN_M16_LIGHTWEIGHT_SERVING_CHECKPOINT_V1` proves the current configured target's serving/control state. Both layers remain distinct.
