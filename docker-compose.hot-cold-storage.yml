@@ -1,0 +1,19 @@
+# Opt-in Windows ClickHouse Hot/Cold storage override.
+#
+# This file is intentionally separate from docker-compose.yml so the default
+# Docker-managed ClickHouse volume remains unchanged until an explicit cutover.
+#
+# Example validation only (does not start containers):
+#   docker compose -f docker-compose.yml -f docker-compose.hot-cold-storage.yml config
+#
+# Required environment variables:
+#   CLICKHOUSE_HOT_DATA_PATH   e.g. E:/MarkOrbitData/hot/clickhouse
+#   CLICKHOUSE_COLD_DATA_PATH  e.g. F:/MarkOrbitData/cold/clickhouse
+#   CLICKHOUSE_LOG_PATH        e.g. E:/MarkOrbitData/hot/clickhouse-logs
+services:
+  clickhouse:
+    volumes:
+      - "${CLICKHOUSE_HOT_DATA_PATH:?Set CLICKHOUSE_HOT_DATA_PATH before enabling Hot/Cold storage}:/var/lib/clickhouse"
+      - "${CLICKHOUSE_COLD_DATA_PATH:?Set CLICKHOUSE_COLD_DATA_PATH before enabling Hot/Cold storage}:/var/lib/clickhouse-cold"
+      - "${CLICKHOUSE_LOG_PATH:?Set CLICKHOUSE_LOG_PATH before enabling Hot/Cold storage}:/var/log/clickhouse-server"
+      - ./database/clickhouse/config/hot-cold-storage.xml:/etc/clickhouse-server/config.d/hot-cold-storage.xml:ro
