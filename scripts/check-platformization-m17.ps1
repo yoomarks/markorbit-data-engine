@@ -1,4 +1,6 @@
 param(
+    [string]$CnAcceptanceReceiptPath = "",
+    [string]$ExpectedCnFileName = "2023_5.zip",
     [string]$OutputPath = "",
     [switch]$Compact
 )
@@ -7,30 +9,45 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 try {
-    foreach ($service in @("postgres", "clickhouse")) {
-        $running = docker compose ps --status running -q $service
-        if ($LASTEXITCODE -ne 0 -or -not $running) {
-            throw "$service must be running before the M1.7 platformization runtime gate."
-        }
-    }
-
-    $persistentWorkerId = docker compose ps --status running -q worker
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect Docker Compose worker state."
-    }
-    if ($persistentWorkerId) {
-        throw "Persistent worker is running. Stop it before the M1.7 platformization runtime gate."
-    }
-
-    $gateArgs = @("-m", "app.platformization_runtime_gate")
+    $gateArgs = @(
+        "-m",
+        "app.platformization_runtime_gate",
+        "--expected-cn-file-name",
+        $ExpectedCnFileName
+    )
     if ($Compact) {
         $gateArgs += "--compact"
     }
 
-    # The gate is read-only. Mount the checked-out app code so both the M1.7
-    # static contract and the existing CN final checkpoint use this exact branch.
+    $volumeArgs = @(
+        "--volume",
+        "${repoRoot}\app:/app/app:ro"
+    )
+    $receiptDisplayPath = "<missing>"
+    if ($CnAcceptanceReceiptPath) {
+        if (-not (Test-Path -LiteralPath $CnAcceptanceReceiptPath -PathType Leaf)) {
+            throw "CN acceptance receipt not found: $CnAcceptanceReceiptPath"
+        }
+        $receiptPath = (Resolve-Path -LiteralPath $CnAcceptanceReceiptPath).Path
+        $receiptDirectory = Split-Path -Parent $receiptPath
+        $receiptName = Split-Path -Leaf $receiptPath
+        $containerReceiptPath = "/evidence/$receiptName"
+        $volumeArgs += @(
+            "--volume",
+            "${receiptDirectory}:/evidence:ro"
+        )
+        $gateArgs += @(
+            "--cn-acceptance-receipt",
+            $containerReceiptPath
+        )
+        $receiptDisplayPath = $receiptPath
+    }
+
+    # Receipt-driven and read-only: the gate only reads static code plus the
+    # persisted CN post-import report. It never connects to PostgreSQL/ClickHouse,
+    # reruns CN replay/readiness, or executes the CN final checkpoint.
     $jsonLines = & docker compose run --rm --no-deps -T `
-        --volume "${repoRoot}\app:/app/app:ro" `
+        @volumeArgs `
         worker python @gateArgs
     $exitCode = $LASTEXITCODE
     $json = $jsonLines -join "`n"
@@ -57,6 +74,9 @@ try {
     $json | Set-Content -Encoding UTF8 $OutputPath
 
     Write-Host "M1.7 platformization runtime gate: $($report.status)"
+    Write-Host "Receipt-driven: $($report.receipt_driven)"
+    Write-Host "CN acceptance receipt: $receiptDisplayPath"
+    Write-Host "Expected CN package: $ExpectedCnFileName"
     Write-Host "Static code ready: $($report.static_code_ready)"
     Write-Host "CN runtime acceptance evaluated: $($report.runtime_acceptance_evaluated)"
     Write-Host "CN runtime acceptance passed: $($report.runtime_acceptance_passed)"
@@ -73,7 +93,7 @@ try {
         throw "M1.7 platformization runtime gate exited successfully without release promotion eligibility."
     }
 
-    Write-Host "M1.7 code + real CN runtime acceptance passed. VERSION remains unchanged by this gate."
+    Write-Host "M1.7 code + persisted real CN runtime acceptance passed. VERSION remains unchanged by this gate."
 }
 finally {
     Pop-Location
