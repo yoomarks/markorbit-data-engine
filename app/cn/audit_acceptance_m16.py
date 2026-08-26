@@ -11,6 +11,7 @@ from app.db import clickhouse_execution_settings
 CN_ACCEPTANCE_JOIN_ALGORITHM = "grace_hash"
 CN_ACCEPTANCE_GRACE_HASH_JOIN_INITIAL_BUCKETS = 32
 CN_ACCEPTANCE_SEND_RECEIVE_TIMEOUT = 3600
+CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS = 64
 
 
 class CNAcceptanceResourceClient(CNResourceClient):
@@ -23,6 +24,12 @@ class CNAcceptanceResourceClient(CNResourceClient):
     ``grace_hash``. The acceptance path preserves the exact duplicate-excess
     semantics while expressing the check as GROUP BY + ``sum(count() - 1)`` so
     ClickHouse can spill aggregation state to disk.
+
+    The party-current key space is substantially larger than case/scope. Its exact
+    GROUP BY is therefore partitioned deterministically by a hash of the complete
+    uniqueness key and summed across buckets. Every equal key hashes to the same
+    bucket, so duplicate-excess semantics remain exact while peak aggregation state
+    is bounded to one bucket at a time.
     """
 
     _UNIQUENESS_MARKER = "uniqExact(application_number)"
@@ -32,18 +39,43 @@ class CNAcceptanceResourceClient(CNResourceClient):
         table: str,
         keys: str,
         where: str,
+        bucket_predicate: str | None = None,
     ) -> str:
+        predicates = [f"({where})"]
+        if bucket_predicate:
+            predicates.append(f"({bucket_predicate})")
         return f"""
         SELECT coalesce(sum(group_count - 1), 0)
         FROM
         (
             SELECT count() AS group_count
             FROM {table} FINAL
-            WHERE {where}
+            WHERE {' AND '.join(predicates)}
             GROUP BY {keys}
             HAVING group_count > 1
         )
         """
+
+    @staticmethod
+    def _party_bucket_predicate(bucket: int) -> str:
+        return (
+            "cityHash64(application_number, role, relation_key) % "
+            f"{CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS} = {bucket}"
+        )
+
+    def _party_duplicate_excess(self) -> int:
+        duplicate_excess = 0
+        for bucket in range(CN_ACCEPTANCE_PARTY_UNIQUENESS_BUCKETS):
+            value = super().query(
+                self._duplicate_excess_query(
+                    "markorbit_facts.cn_case_party_current",
+                    "application_number, role, relation_key",
+                    "is_deleted = 0 AND is_current = 1",
+                    self._party_bucket_predicate(bucket),
+                )
+            ).result_rows[0][0]
+            duplicate_excess += int(value or 0)
+        return duplicate_excess
 
     def query(self, sql: str, *args: Any, **kwargs: Any) -> Any:
         if self._UNIQUENESS_MARKER not in sql:
@@ -63,13 +95,7 @@ class CNAcceptanceResourceClient(CNResourceClient):
                 "is_deleted = 0",
             )
         ).result_rows[0][0]
-        party_duplicates = super().query(
-            self._duplicate_excess_query(
-                "markorbit_facts.cn_case_party_current",
-                "application_number, role, relation_key",
-                "is_deleted = 0 AND is_current = 1",
-            )
-        ).result_rows[0][0]
+        party_duplicates = self._party_duplicate_excess()
 
         class _Result:
             result_rows = [
