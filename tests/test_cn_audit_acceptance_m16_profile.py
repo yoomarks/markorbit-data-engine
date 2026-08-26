@@ -60,8 +60,12 @@ def test_final_acceptance_uses_cn_resource_and_spill_profile(monkeypatch):
         "grace_hash_join_initial_buckets": 32,
         "send_receive_timeout": 3600,
     }
-    assert calls["resource_factories"] == [audit_factory, followup_factory]
-    assert calls["audit_client"] == "RESOURCE:AUDIT_RAW"
+    assert calls["resource_factories"] == [followup_factory]
+    assert isinstance(
+        calls["audit_client"],
+        audit_acceptance_m16.CNAcceptanceResourceClient,
+    )
+    assert calls["audit_client"]._delegate == "AUDIT_RAW"
     assert calls["followup_client"] == "RESOURCE:FOLLOWUP_RAW"
     assert audit_acceptance_m16.audit_data.clickhouse_client is audit_factory
     assert audit_acceptance_m16.audit_followup.clickhouse_client is followup_factory
