@@ -136,7 +136,7 @@ try {
     # the authoritative ClickHouse. The probe files are tiny and removed in the
     # same disposable container; they never touch the source named volume.
     $probeName = ".markorbit-cutover-probe-$([guid]::NewGuid().ToString('N'))"
-    $probeCommand = "set -eu; trap 'rm -f /hot/$probeName /cold/$probeName /logs/$probeName' EXIT; printf hot > /hot/$probeName; printf cold > /cold/$probeName; printf logs > /logs/$probeName; test \"`$(cat /hot/$probeName)\" = hot; test \"`$(cat /cold/$probeName)\" = cold; test \"`$(cat /logs/$probeName)\" = logs"
+    $probeCommand = "set -eu; trap 'rm -f /hot/$probeName /cold/$probeName /logs/$probeName' EXIT; printf hot > /hot/$probeName; printf cold > /cold/$probeName; printf logs > /logs/$probeName; grep -qx hot /hot/$probeName; grep -qx cold /cold/$probeName; grep -qx logs /logs/$probeName"
     Invoke-DockerText -Arguments @(
         "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
         "--mount", "type=bind,source=$($initial.hot_path),target=/hot",
