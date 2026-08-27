@@ -95,19 +95,31 @@ if ([string]::IsNullOrWhiteSpace($clickhouseId)) {
     throw "The current Compose ClickHouse container is required to resolve the authoritative source volume."
 }
 
-# Filter the authoritative mount inside Docker's Go template and deserialize a
-# single object. This avoids Windows PowerShell 5.1 array/pipeline enumeration
-# differences when ConvertFrom-Json receives the full .Mounts array. This is a
-# PowerShell single-quoted string, so the Go-template double quotes must not be
-# backslash-escaped; otherwise Docker receives the backslashes literally.
-$sourceMountFormat = '{{range .Mounts}}{{if eq .Destination "/var/lib/clickhouse"}}{{json .}}{{end}}{{end}}'
-$sourceMountJson = ((Invoke-DockerText -Arguments @(
-    "inspect", $clickhouseId, "--format", $sourceMountFormat
+# Ask Docker only for the Mounts JSON. The template has no embedded string
+# literal, so Windows PowerShell native-argument quoting cannot strip a Go
+# template comparison operand. Enumerate the parsed array with foreach instead
+# of piping it through Where-Object: Windows PowerShell 5.1 can preserve a JSON
+# array as one pipeline object, while foreach always walks the collection.
+$mountsJson = ((Invoke-DockerText -Arguments @(
+    "inspect", $clickhouseId, "--format", "{{json .Mounts}}"
 )) -join "").Trim()
-if ([string]::IsNullOrWhiteSpace($sourceMountJson)) {
+if ([string]::IsNullOrWhiteSpace($mountsJson)) {
+    throw "Unable to resolve Docker mounts from the current ClickHouse container."
+}
+$mounts = ($mountsJson | ConvertFrom-Json)
+$sourceMount = $null
+foreach ($mount in $mounts) {
+    if ([string]$mount.Destination -ne "/var/lib/clickhouse") {
+        continue
+    }
+    if ($null -ne $sourceMount) {
+        throw "Multiple /var/lib/clickhouse mounts found on the current ClickHouse container; refusing ambiguous cutover."
+    }
+    $sourceMount = $mount
+}
+if ($null -eq $sourceMount) {
     throw "Unable to resolve /var/lib/clickhouse from the current ClickHouse container."
 }
-$sourceMount = ($sourceMountJson | ConvertFrom-Json)
 $sourceMountType = [string]$sourceMount.Type
 $sourceMountName = [string]$sourceMount.Name
 if ($sourceMountType -ne "volume" -or [string]::IsNullOrWhiteSpace($sourceMountName)) {
