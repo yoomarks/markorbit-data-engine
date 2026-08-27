@@ -13,11 +13,28 @@ $ErrorActionPreference = "Stop"
 function Invoke-DockerText {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
 
-    $output = @(& docker @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker $($Arguments -join ' ') failed: $($output -join [Environment]::NewLine)"
+    # Windows PowerShell 5.1 can promote ordinary native-process stderr records
+    # to terminating NativeCommandError exceptions when the caller uses
+    # $ErrorActionPreference = "Stop". Docker Compose writes normal progress
+    # messages to stderr even when it exits 0. Capture both streams with native
+    # error promotion temporarily relaxed, then use the process exit code as the
+    # authoritative success/failure signal. This also keeps rollback commands
+    # from being aborted by benign Compose progress output.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& docker @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
     }
-    return $output
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $rendered = @($output | ForEach-Object { $_.ToString() })
+    if ($exitCode -ne 0) {
+        throw "docker $($Arguments -join ' ') failed with exit code $exitCode`: $($rendered -join [Environment]::NewLine)"
+    }
+    return $rendered
 }
 
 function ConvertTo-Base64Utf8 {
