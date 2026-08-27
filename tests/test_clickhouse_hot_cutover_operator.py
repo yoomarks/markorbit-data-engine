@@ -53,18 +53,25 @@ def test_readiness_is_control_plane_and_metadata_only():
         assert marker not in text
 
 
-def test_readiness_filters_source_mount_inside_docker_inspect():
+def test_readiness_resolves_source_mount_without_native_template_string_literal():
     text = READINESS.read_text(encoding="utf-8")
 
-    assert "$sourceMountFormat" in text
-    assert '{{range .Mounts}}{{if eq .Destination \"/var/lib/clickhouse\"}}{{json .}}{{end}}{{end}}' in text
-    assert '"inspect", $clickhouseId, "--format", $sourceMountFormat' in text
-    assert "$sourceMountJson | ConvertFrom-Json" in text
+    assert '"inspect", $clickhouseId, "--format", "{{json .Mounts}}"' in text
+    assert "$mountsJson | ConvertFrom-Json" in text
+    assert "foreach ($mount in $mounts)" in text
+    assert '[string]$mount.Destination -ne "/var/lib/clickhouse"' in text
+    assert "$sourceMount = $mount" in text
+    assert "Multiple /var/lib/clickhouse mounts found" in text
     assert "$sourceMountType = [string]$sourceMount.Type" in text
     assert "$sourceMountName = [string]$sourceMount.Name" in text
     assert "Observed Type='$sourceMountType' Name='$sourceMountName'" in text
-    assert "{{json .Mounts}}" not in text
-    assert "Where-Object { $_.Destination -eq \"/var/lib/clickhouse\" }" not in text
+
+    # Windows PowerShell 5.1 can strip embedded quote characters while building
+    # a native-process command line. Keep the Docker template quote-free and do
+    # the exact Destination match after JSON parsing instead.
+    assert "$sourceMountFormat" not in text
+    assert "{{if eq .Destination" not in text
+    assert 'Where-Object { $_.Destination -eq "/var/lib/clickhouse" }' not in text
 
 
 def test_migration_is_explicit_source_preserving_and_rollback_capable():
