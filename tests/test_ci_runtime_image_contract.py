@@ -9,4 +9,6 @@ def test_ci_builds_and_imports_runtime_image() -> None:
     assert "docker compose config --quiet" in workflow
     assert "docker build --file docker/api.Dockerfile" in workflow
     assert "from app.main import ENGINE_VERSION" in workflow
-    assert "ENGINE_VERSION == 'M1.6'" in workflow
+    assert "expected=\"$(tr -d '\\r\\n' < VERSION)\"" in workflow
+    assert "ENGINE_VERSION == expected" in workflow
+    assert "ENGINE_VERSION == 'M1.6'" not in workflow
