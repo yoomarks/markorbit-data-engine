@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OPERATOR = ROOT / "scripts" / "check-m17-target-promotion-evidence.ps1"
+SERVING_OPERATOR = ROOT / "scripts" / "check-cn-serving-state.ps1"
 
 
 def test_target_promotion_operator_composes_only_lightweight_evidence_gates() -> None:
@@ -51,3 +52,31 @@ def test_target_promotion_operator_does_not_modify_release_version() -> None:
     assert "update_file" not in lowered
     assert "release version is changed" in lowered
     assert "no release version is changed" in lowered
+
+
+def test_serving_state_operator_preflights_python_runtime_before_checkpoint() -> None:
+    text = SERVING_OPERATOR.read_text(encoding="utf-8")
+    lowered = text.lower()
+
+    assert '.venv\\Scripts\\python.exe' in text
+    assert "sys.version_info >= (3, 12)" in text
+    assert "importlib.util.find_spec" in text
+    assert '"clickhouse_connect"' in text
+    assert '"psycopg"' in text
+    assert '"pydantic_settings"' in text
+    assert "missing_modules" in text
+    assert ".\\.venv\\Scripts\\python.exe -m pip install -e ." in text
+    assert text.index("importlib.util.find_spec") < text.index("app.cn.serving_state_checkpoint")
+
+    forbidden = (
+        "docker compose up",
+        "docker compose run",
+        "docker compose restart",
+        "docker compose stop",
+        "docker compose down",
+        "replay-cn",
+        "scan-cn",
+        "final_checkpoint",
+    )
+    for marker in forbidden:
+        assert marker not in lowered

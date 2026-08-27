@@ -25,6 +25,62 @@ try {
         throw "Python 3 is required for the CN serving-state checkpoint."
     }
 
+    # The checkpoint imports the repository database/config runtime. Do not
+    # silently fall through to an arbitrary host Python that cannot import the
+    # declared project dependencies; fail before the checkpoint with a stable,
+    # actionable operator error instead of a ModuleNotFoundError traceback.
+    $probeCode = @'
+import importlib.util, json, sys
+required = ("clickhouse_connect", "psycopg", "pydantic_settings")
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+print(json.dumps({
+    "python_version": list(sys.version_info[:3]),
+    "version_ok": sys.version_info >= (3, 12),
+    "missing": missing,
+}))
+'@
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $probeLines = @(& $pythonCommand @pythonPrefix -c $probeCode 2>$null)
+        $probeExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $probeJson = ($probeLines -join "`n").Trim()
+    if ($probeExitCode -ne 0 -or -not $probeJson) {
+        throw (
+            "Unable to validate the CN serving-state Python runtime. " +
+            "Use Python >=3.12 to create .venv, then run " +
+            ".\.venv\Scripts\python.exe -m pip install -e ."
+        )
+    }
+    try {
+        $pythonRuntime = $probeJson | ConvertFrom-Json
+    }
+    catch {
+        throw "CN serving-state Python runtime preflight produced invalid output."
+    }
+
+    $missingModules = @($pythonRuntime.missing)
+    if ($pythonRuntime.version_ok -ne $true -or $missingModules.Count -gt 0) {
+        $versionText = @($pythonRuntime.python_version) -join "."
+        $missingText = if ($missingModules.Count -gt 0) {
+            $missingModules -join ", "
+        }
+        else {
+            "none"
+        }
+        throw (
+            "CN serving-state Python runtime is incomplete: " +
+            "python=$versionText; missing_modules=$missingText. " +
+            "Use Python >=3.12 to create repository .venv, then run " +
+            ".\.venv\Scripts\python.exe -m pip install -e ."
+        )
+    }
+
     $checkpointArgs = @(
         "-m",
         "app.cn.serving_state_checkpoint",
