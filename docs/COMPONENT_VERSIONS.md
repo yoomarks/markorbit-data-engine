@@ -8,7 +8,7 @@ The authoritative machine-readable matrix is `app.component_versions.component_v
 
 | Component | Version | Meaning |
 |---|---|---|
-| Data Engine release | `M1.6` | Root release/runtime marker from `VERSION`. |
+| Data Engine release | `M1.7` | Root release/runtime marker from `VERSION`. |
 | CN fact model | `CN_M1.6` | China trademark durable fact model. |
 | CN final checkpoint | `CN_M16_FINAL_CHECKPOINT_V1` | Read-only CN replay + Storage V2 + acceptance completion gate. |
 | US Application schema | `US_M1.4` | USPTO application/current facts + durable change history. |
