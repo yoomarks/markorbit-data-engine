@@ -14,6 +14,10 @@ on:
       - "tests/test_clickhouse_hot_cutover_operator.py"
       - ".github/workflows/clickhouse-cutover-contract.yml"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
