@@ -36,3 +36,26 @@ jobs:
       - name: Tear down isolated fixture databases
         if: always()
         run: docker compose down -v --remove-orphans
+
+  research-dataset-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare isolated Compose environment
+        run: |
+          cp .env.example .env
+          sed -i 's|^RAW_DATA_PATH=.*|RAW_DATA_PATH=./raw_data|' .env
+          mkdir -p raw_data
+
+      - name: Start isolated PostgreSQL and ClickHouse
+        run: docker compose up -d --wait postgres clickhouse
+
+      - name: Run bounded real-ZIP research dataset replay
+        run: docker compose run --rm --no-deps worker python -m app.cn.validate_research_dataset_replay
+
+      - name: Tear down isolated fixture databases
+        if: always()
+        run: docker compose down -v --remove-orphans
