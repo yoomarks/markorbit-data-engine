@@ -141,4 +141,8 @@ jobs:
           }
           finally {
               $env:PATH = $originalPath
+              # The failure path above is intentionally caught and asserted. The
+              # GitHub PowerShell runner appends an implicit native-exit check, so
+              # clear the expected test exit code after all assertions pass.
+              $global:LASTEXITCODE = 0
           }
