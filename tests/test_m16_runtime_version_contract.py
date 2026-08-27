@@ -3,9 +3,9 @@ from pathlib import Path
 from app.version import engine_version
 
 
-def test_engine_release_marker_is_m16_and_runtime_reads_it() -> None:
+def test_engine_release_marker_is_m17_and_runtime_reads_it() -> None:
     version = Path("VERSION").read_text(encoding="utf-8").strip()
-    assert version == "M1.6"
+    assert version == "M1.7"
     assert engine_version() == version
 
 
@@ -29,12 +29,12 @@ def test_api_metadata_and_surfaces_use_current_engine_version() -> None:
     assert "sys.modules[__name__] = _core" in wrapper
 
 
-def test_current_docs_identify_m16() -> None:
+def test_current_release_docs_and_m16_domain_docs_are_aligned() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
     architecture = Path("docs/ARCHITECTURE.md").read_text(encoding="utf-8")
     build_validation = Path("docs/BUILD_VALIDATION.md").read_text(encoding="utf-8")
     changelog = Path("docs/CHANGELOG.md").read_text(encoding="utf-8")
-    assert readme.startswith("# MarkOrbit Data Engine — M1.6")
+    assert readme.startswith("# MarkOrbit Data Engine — M1.7")
     assert architecture.startswith("# MarkOrbit Data Engine M1.6 Architecture")
     assert build_validation.startswith("# M1.6 Build Validation")
     assert "## M1.6 / 0.4.0" in changelog
