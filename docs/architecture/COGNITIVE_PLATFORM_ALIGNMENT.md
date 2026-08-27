@@ -2,160 +2,170 @@
 
 Status: Proposed alignment baseline
 
-This document aligns Data Engine with the MarkOrbit cognitive-platform architecture used by Core/Brain/Capability and Knowledge.
+This document aligns Data Engine with the shared cognitive-platform architecture used by Brain, Capability, Knowledge, and product runtimes.
 
 ## 1. Data Engine responsibility
 
 Data Engine owns objective structured facts and historical factual state.
 
-The governing boundary is:
+The governing model is:
 
-> Knowledge owns documents. Data Engine owns facts. Brain owns methods. Capability owns execution. Products own business state.
+> Knowledge owns documents. Data Engine owns facts. Brain Research consumes both. Brain publishes reusable methods. Capability executes ACTIVE methods. Products own business state.
 
-Data Engine is the large factual substrate. It should stay stable, queryable, reproducible, and intentionally conservative about interpretation.
+Data Engine is the large factual substrate. It serves both research and production execution while remaining conservative about interpretation.
 
 ## 2. Facts Data Engine should own
 
 Examples include:
 
-- trademark application and registration records;
+- trademark application/registration records;
 - applicant/owner/entity records;
 - prosecution/case/proceeding records;
-- assignment and ownership events;
-- trademark status and lifecycle events;
-- dates and event timelines;
+- assignment/ownership events;
+- trademark status/lifecycle events;
+- dates/event timelines;
 - factual entity identifiers;
-- recorded addresses and contact attributes where legitimately sourced;
+- recorded addresses/contact attributes where legitimately sourced;
 - historical snapshots/change feeds;
 - source-backed factual relationships.
 
-## 3. What Data Engine should not own
+## 3. Dual consumer model
 
-Data Engine must not persist AI/analytical conclusions as source truth merely because higher layers compute them.
+Data Engine has two first-class consumers.
 
-Examples that belong outside Data Engine source truth:
+### 3.1 Brain Research
 
-- customer opportunity classification;
-- renewal propensity;
-- expansion propensity;
+Brain Research uses Data Engine to form and validate methods through:
+
+- bounded sampling;
+- population statistics;
+- hypothesis testing;
+- feature discovery;
+- segment discovery;
+- clustering where justified;
+- training/calibration;
+- historical backtesting;
+- status-transition analysis;
+- duration/time-series analysis;
+- entity/relationship research.
+
+Every research run should retain reproducible lineage to the exact Data Engine query, snapshot, partition, or dataset definition used.
+
+### 3.2 Capability Runtime
+
+Capability Runtime uses Data Engine for current factual execution of ACTIVE methods, including:
+
+- risk scoring;
+- entity resolution;
+- relationship inference;
+- opportunity discovery;
+- ranking;
+- current portfolio/status analysis;
+- live or bounded statistical queries.
+
+Data Engine should support efficient current execution without absorbing Brain method policy.
+
+## 4. What Data Engine should not own
+
+Data Engine must not persist inferred intelligence as source truth merely because Brain or Capability computes it.
+
+Examples outside Data Engine factual truth:
+
+- opportunity classification;
+- renewal/expansion propensity;
 - dead-mark commercial attractiveness;
 - application risk score;
 - inferred same-group probability;
 - inferred holding-company classification;
 - recommendation/ranking decisions;
-- product campaign state.
+- product campaign/workflow state.
 
-If a relationship later becomes an independently sourced fact, it may enter Data Engine through the normal factual-ingestion contract. Inferred relationships remain method outputs or product state until then.
+If an inferred relation later becomes independently sourced fact, it may enter through normal factual-ingestion contracts.
 
-## 4. Data Engine as analytical substrate
+## 5. Required research/query substrate
 
-Although intelligence conclusions belong in Brain methods and Capability execution, Data Engine must expose efficient primitives so those methods do not need to copy large populations elsewhere.
+To support Brain Research without copying large source populations, Data Engine should evolve toward:
 
-Required long-term primitives include:
-
-- scoped filtering and projection;
+- scoped filtering/projection;
 - deterministic pagination/streaming;
 - joins across trademarks, entities, cases, assignments, and events;
-- grouped aggregation;
-- count/distinct count;
-- time-window queries;
-- time-series bucketing;
-- duration calculations over factual event timelines;
+- grouped aggregation and distinct counts;
+- time-window/time-series queries;
+- factual duration calculations over event timelines;
 - status-transition extraction;
-- historical snapshot access;
+- historical snapshot/change-feed access;
+- bounded/reproducible sampling;
+- deterministic train/validation/backtest partitioning or equivalent reproducible split definitions;
 - reproducible query/dataset identity;
-- bounded sampling for research/backtesting;
-- feature-source extraction without embedding business interpretation in Data Engine.
+- factual relationship traversal;
+- feature-source extraction without embedding business interpretation;
+- objective pre-aggregations/materialized factual views where scale requires them.
 
-Where performance requires precomputation, prefer factual/materialized query infrastructure whose semantics remain objective. Do not encode business scoring policy into those tables.
+## 6. Reproducible dataset contract
 
-## 5. Brain research interaction
+A Brain Research dataset definition should be reproducible from explicit inputs such as:
 
-Brain may use Data Engine populations to discover and validate reusable methods.
+- resource/fact families;
+- jurisdiction/scope filters;
+- temporal window;
+- historical snapshot/as-of identity;
+- selected fields;
+- joins/traversals;
+- sampling/partition rule;
+- ordering/pagination semantics;
+- query/dataset fingerprint.
 
-Examples:
+The dataset contract exists to make methods and evaluations repeatable, not to move the dataset into Brain ownership.
 
-- Entity Resolution Method;
-- Relationship Inference Method;
-- Examination-Time Analysis Method;
-- Application Risk Method;
-- Renewal Opportunity Method;
-- Jurisdiction Expansion Opportunity Method;
-- Dead Trademark Opportunity Method;
-- Status Transition Method.
+## 7. Production execution efficiency
 
-Brain may sample, aggregate, cluster, train, and backtest against Data Engine data, but raw source populations must not be copied into Brain as long-term ownership.
+Capability should execute compiled Brain methods directly against current Data Engine facts where appropriate.
 
-A Brain method must retain reproducible lineage to the Data Engine query/snapshot or dataset definition used for research and evaluation.
+Example:
 
-## 6. Capability execution interaction
+```text
+ACTIVE RenewalOpportunityMethod + Data Engine current facts -> Discovery Capability -> transient candidates -> MarkReg pool
+```
 
-Capabilities may execute ACTIVE Brain methods against Data Engine facts.
+The candidate population does not become a Data Engine intelligence table or Capability cache.
 
-Examples:
-
-- `assess_application_risk`;
-- `resolve_entity`;
-- `detect_same_group`;
-- `find_renewal_opportunities`;
-- `find_expansion_opportunities`;
-- `trademark_volume_statistics`;
-- `status_transition_statistics`;
-- `estimate_examination_time`.
-
-Data Engine returns facts or objective aggregates. Capability owns method execution. Product consumers own durable business lifecycle state.
-
-## 7. Candidate and cache rule
-
-Business-candidate result sets must not become Data Engine intelligence tables merely to simplify downstream workflows.
-
-For example, a list of 100,000 renewal opportunities belongs to the consuming MarkReg opportunity pool after import, not to Data Engine or Brain.
-
-Data Engine may support the factual query used to generate those candidates and may retain ordinary source/history data required to recompute them.
+For repeated expensive objective calculations, Data Engine may maintain factual/materialized primitives if their semantics remain neutral and reusable.
 
 ## 8. Long-term development obligations
 
 ### DE-CG-A — analytical primitive inventory
 
-Audit current query APIs and identify gaps for:
+Audit current APIs for time-series, duration, status transition, joins/traversal, aggregation, historical access, sampling, streaming, and reproducible query identity.
 
-- time-series statistics;
-- duration statistics;
-- status-transition analysis;
-- entity/trademark relationship joins;
-- bounded research sampling;
-- reproducible dataset/query snapshots.
+### DE-CG-B — Brain Research dataset contract
 
-### DE-CG-B — reproducible dataset contract
+Define a read-only reproducible research contract supporting large-scale method research/backtesting without population copy.
 
-Define a contract allowing Brain research and Capability execution to identify the exact factual scope used for a method result or backtest.
+### DE-CG-C — Capability execution contract
 
-The contract should support method lineage without copying the population into Brain.
+Define efficient bounded query/streaming primitives for ACTIVE method execution against current facts.
 
-### DE-CG-C — high-cost factual aggregation support
+### DE-CG-D — objective aggregation support
 
-Add only objective, reusable aggregation primitives that materially reduce repeated scanning of large populations.
+Add only objective reusable primitives that materially reduce repeated large scans, such as event durations, grouped counts, transition matrices, portfolio lookup, and recorded ownership traversal.
 
-Examples:
+Do not encode opportunity/risk/recommendation policy into these primitives.
 
-- event-duration primitives;
-- grouped counts by jurisdiction/class/status/time bucket;
-- status-transition matrices;
-- portfolio membership lookup;
-- ownership/assignment traversal based on recorded facts.
+### DE-CG-E — historical/backtest readiness
 
-Do not add opportunity, risk, or recommendation policy to these primitives.
+Ensure research can reproduce historical conditions rather than evaluating only against present-state records.
 
-### DE-CG-D — source-truth boundary tests
+### DE-CG-F — source-truth boundary tests
 
-Add documentation or architecture tests ensuring inferred intelligence does not silently become factual source truth.
+Add architecture documentation/tests ensuring inferred intelligence does not silently become factual source truth.
 
 ## 9. Exit criteria for Data Engine cognitive readiness
 
-Data Engine is cognitive-platform-ready when:
+Data Engine is ready when:
 
-- Brain can perform real research/backtests without bulk-copying source populations;
-- Capability can execute scoped analytical methods efficiently;
-- large statistical workloads have objective reusable query support;
-- every research/evaluation dataset can be reproduced from a query/snapshot identity;
+- Brain Research can perform real statistical research, training, and backtests without bulk-copying source populations;
+- every research/evaluation dataset can be reproduced from query/snapshot/partition identity;
+- Capability can execute scoped ACTIVE methods efficiently against current facts;
+- high-cost factual workloads have reusable objective query support;
+- historical evaluation is possible where required;
 - inferred intelligence remains outside factual source truth.
