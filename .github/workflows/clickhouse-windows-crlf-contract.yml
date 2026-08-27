@@ -1,0 +1,61 @@
+name: ClickHouse Windows CRLF Contract
+
+on:
+  pull_request:
+    paths:
+      - "scripts/check-clickhouse-hot-cutover-readiness.ps1"
+      - "scripts/migrate-clickhouse-volume-to-hot.ps1"
+      - ".github/workflows/clickhouse-windows-crlf-contract.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/check-clickhouse-hot-cutover-readiness.ps1"
+      - "scripts/migrate-clickhouse-volume-to-hot.ps1"
+      - ".github/workflows/clickhouse-windows-crlf-contract.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-crlf-shell-transport:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify readiness Base64 encoder normalizes CRLF
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = Get-Content -LiteralPath "scripts/check-clickhouse-hot-cutover-readiness.ps1" -Raw
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+              throw "PowerShell parse errors: $($errors -join '; ')"
+          }
+
+          $functionAst = $ast.Find({
+              param($node)
+              $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                  $node.Name -eq "ConvertTo-Base64Utf8"
+          }, $true)
+          if ($null -eq $functionAst) {
+              throw "ConvertTo-Base64Utf8 not found in readiness script."
+          }
+
+          Invoke-Expression $functionAst.Extent.Text
+          $inputText = "set -eu`r`necho transport-ok`r"
+          $payload = ConvertTo-Base64Utf8 -Text $inputText
+          $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload))
+
+          if ($decoded.Contains("`r")) {
+              throw "Decoded shell script still contains carriage returns."
+          }
+          if ($decoded -ne "set -eu`necho transport-ok`n") {
+              throw "Unexpected normalized shell script: $decoded"
+          }
