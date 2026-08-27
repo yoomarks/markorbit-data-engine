@@ -72,7 +72,10 @@ print(json.dumps({
         }
 
         if (Test-Path -LiteralPath $probeErrorPath -PathType Leaf) {
-            $probeStdErr = (Get-Content -LiteralPath $probeErrorPath -Raw).Trim()
+            $probeStdErrRaw = Get-Content -LiteralPath $probeErrorPath -Raw
+            if ($null -ne $probeStdErrRaw) {
+                $probeStdErr = $probeStdErrRaw.Trim()
+            }
         }
     }
     finally {
