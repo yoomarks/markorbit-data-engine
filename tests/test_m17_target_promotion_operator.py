@@ -85,6 +85,26 @@ def test_serving_state_operator_preflights_python_runtime_before_checkpoint() ->
         assert marker not in lowered
 
 
+def test_serving_state_python_probe_avoids_multiline_native_c_transport() -> None:
+    text = SERVING_OPERATOR.read_text(encoding="utf-8")
+
+    assert "python -c $probeCode" in text  # documented as the path being avoided
+    assert "@pythonPrefix -c $probeCode" not in text
+    assert "[System.IO.File]::WriteAllText" in text
+    assert "markorbit-cn-serving-state-probe-" in text
+    assert "$probeErrorPath" in text
+    assert "2> $probeErrorPath" in text
+    assert "Remove-Item -LiteralPath $probePath" in text
+    assert "Remove-Item -LiteralPath $probeErrorPath" in text
+    assert "exit_code=$probeExitCode" in text
+    assert "stderr=$normalizedProbeStdErr" in text
+
+    write_index = text.index("[System.IO.File]::WriteAllText")
+    invoke_index = text.index("@pythonPrefix $probePath")
+    cleanup_index = text.index("Remove-Item -LiteralPath $probePath")
+    assert write_index < invoke_index < cleanup_index
+
+
 def test_packaging_and_target_operator_share_python_support_window() -> None:
     metadata = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     text = SERVING_OPERATOR.read_text(encoding="utf-8")
