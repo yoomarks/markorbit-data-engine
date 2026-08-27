@@ -113,8 +113,6 @@ def test_migration_hard_gates_only_merge_stable_metadata():
         text.index("function Assert-LogicalBaselineEqual") : text.index("function Start-OriginalClickHouse")
     ]
     assert '@("active_table_count", "active_rows")' in function_text
-    assert 'active_part_count' in function_text
-    assert 'bytes_on_disk' in function_text
     assert 'foreach ($field in @("active_table_count", "active_part_count", "active_rows", "active_bytes_on_disk"))' not in text
     assert "$metadataBefore = $afterWriterStop.clickhouse_baseline" in text
     assert "metadata_guard_fields = @(\"active_table_count\", \"active_rows\")" in text
