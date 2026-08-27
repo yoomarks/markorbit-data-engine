@@ -105,6 +105,20 @@ def test_serving_state_python_probe_avoids_multiline_native_c_transport() -> Non
     assert write_index < invoke_index < cleanup_index
 
 
+def test_serving_state_python_probe_handles_empty_stderr_null_safely() -> None:
+    text = SERVING_OPERATOR.read_text(encoding="utf-8")
+
+    assert "$probeStdErrRaw = Get-Content -LiteralPath $probeErrorPath -Raw" in text
+    assert "if ($null -ne $probeStdErrRaw)" in text
+    assert "$probeStdErr = $probeStdErrRaw.Trim()" in text
+    assert "(Get-Content -LiteralPath $probeErrorPath -Raw).Trim()" not in text
+
+    read_index = text.index("$probeStdErrRaw = Get-Content")
+    guard_index = text.index("if ($null -ne $probeStdErrRaw)")
+    trim_index = text.index("$probeStdErr = $probeStdErrRaw.Trim()")
+    assert read_index < guard_index < trim_index
+
+
 def test_packaging_and_target_operator_share_python_support_window() -> None:
     metadata = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     text = SERVING_OPERATOR.read_text(encoding="utf-8")
