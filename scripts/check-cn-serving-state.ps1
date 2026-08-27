@@ -43,20 +43,55 @@ print(json.dumps({
     "missing": missing,
 }))
 '@
-    $previousErrorActionPreference = $ErrorActionPreference
+
+    # Windows PowerShell 5.1 reconstructs native command lines using legacy
+    # quoting rules. Passing a multiline script with embedded quotes through
+    # `python -c $probeCode` is not reliable. Write the small probe as UTF-8
+    # source and execute the file instead; this keeps the transport independent
+    # of native argument quoting while preserving a read-only checkpoint.
+    $probePath = Join-Path (
+        [System.IO.Path]::GetTempPath()
+    ) ("markorbit-cn-serving-state-probe-{0}.py" -f [Guid]::NewGuid().ToString("N"))
+    $probeErrorPath = "$probePath.stderr"
+    $probeLines = @()
+    $probeExitCode = $null
+    $probeStdErr = ""
+    $utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+
     try {
-        $ErrorActionPreference = "Continue"
-        $probeLines = @(& $pythonCommand @pythonPrefix -c $probeCode 2>$null)
-        $probeExitCode = $LASTEXITCODE
+        [System.IO.File]::WriteAllText($probePath, $probeCode, $utf8NoBom)
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $probeLines = @(& $pythonCommand @pythonPrefix $probePath 2> $probeErrorPath)
+            $probeExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if (Test-Path -LiteralPath $probeErrorPath -PathType Leaf) {
+            $probeStdErr = (Get-Content -LiteralPath $probeErrorPath -Raw).Trim()
+        }
     }
     finally {
-        $ErrorActionPreference = $previousErrorActionPreference
+        Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $probeErrorPath -Force -ErrorAction SilentlyContinue
     }
 
     $probeJson = ($probeLines -join "`n").Trim()
     if ($probeExitCode -ne 0 -or -not $probeJson) {
+        $probeDetails = "exit_code=$probeExitCode"
+        if ($probeStdErr) {
+            $normalizedProbeStdErr = ($probeStdErr -replace "`r?`n", " | ")
+            if ($normalizedProbeStdErr.Length -gt 1000) {
+                $normalizedProbeStdErr = $normalizedProbeStdErr.Substring(0, 1000) + "..."
+            }
+            $probeDetails += "; stderr=$normalizedProbeStdErr"
+        }
         throw (
-            "Unable to validate the CN serving-state Python runtime. " +
+            "Unable to validate the CN serving-state Python runtime ($probeDetails). " +
             "Use Python 3.12 or 3.13 to create .venv, then run " +
             ".\.venv\Scripts\python.exe -m pip install -e ."
         )
