@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OPERATOR = ROOT / "scripts" / "check-m17-target-promotion-evidence.ps1"
 SERVING_OPERATOR = ROOT / "scripts" / "check-cn-serving-state.ps1"
+PYPROJECT = ROOT / "pyproject.toml"
 
 
 def test_target_promotion_operator_composes_only_lightweight_evidence_gates() -> None:
@@ -59,7 +61,8 @@ def test_serving_state_operator_preflights_python_runtime_before_checkpoint() ->
     lowered = text.lower()
 
     assert '.venv\\Scripts\\python.exe' in text
-    assert "sys.version_info >= (3, 12)" in text
+    assert "(3, 12) <= sys.version_info < (3, 14)" in text
+    assert "Python 3.12 or 3.13" in text
     assert "importlib.util.find_spec" in text
     assert '"clickhouse_connect"' in text
     assert '"psycopg"' in text
@@ -80,3 +83,11 @@ def test_serving_state_operator_preflights_python_runtime_before_checkpoint() ->
     )
     for marker in forbidden:
         assert marker not in lowered
+
+
+def test_packaging_and_target_operator_share_python_support_window() -> None:
+    metadata = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    text = SERVING_OPERATOR.read_text(encoding="utf-8")
+
+    assert metadata["project"]["requires-python"] == ">=3.12,<3.14"
+    assert "(3, 12) <= sys.version_info < (3, 14)" in text
