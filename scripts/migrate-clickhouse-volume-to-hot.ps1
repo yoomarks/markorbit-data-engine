@@ -20,6 +20,34 @@ function Invoke-DockerText {
     return $output
 }
 
+function ConvertTo-Base64Utf8 {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text))
+}
+
+function New-QuoteSafeShellRunner {
+    param([Parameter(Mandatory = $true)][string]$Script)
+
+    # Keep the native docker.exe command line free of the shell program's own
+    # quote characters. Base64 is a single non-whitespace shell word, so Windows
+    # PowerShell 5.1 cannot rewrite SQL, awk, test, or path quoting inside it.
+    $payload = ConvertTo-Base64Utf8 -Text $Script
+    return "printf %s $payload | base64 -d | sh"
+}
+
+function Invoke-DockerRunScript {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$RunArguments,
+        [Parameter(Mandatory = $true)][string]$Image,
+        [Parameter(Mandatory = $true)][string]$Script
+    )
+
+    $runner = New-QuoteSafeShellRunner -Script $Script
+    $arguments = @("run") + $RunArguments + @("--entrypoint", "sh", $Image, "-c", $runner)
+    return Invoke-DockerText -Arguments $arguments
+}
+
 function Invoke-Readiness {
     $text = @(& "$PSScriptRoot\check-clickhouse-hot-cutover-readiness.ps1" `
         -HotPath $HotPath -ColdPath $ColdPath -LogPath $LogPath -ReserveGiB $ReserveGiB)
@@ -33,11 +61,41 @@ function Invoke-HotColdCompose {
     return Invoke-DockerText -Arguments $all
 }
 
+function Invoke-HotColdComposeScript {
+    param(
+        [Parameter(Mandatory = $true)][string]$Service,
+        [Parameter(Mandatory = $true)][string]$Script
+    )
+
+    $runner = New-QuoteSafeShellRunner -Script $Script
+    return Invoke-HotColdCompose -Arguments @("exec", "-T", $Service, "sh", "-c", $runner)
+}
+
+function Get-SingleMountByDestination {
+    param(
+        [Parameter(Mandatory = $true)][object]$Mounts,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $result = $null
+    foreach ($mount in $Mounts) {
+        if ([string]$mount.Destination -ne $Destination) {
+            continue
+        }
+        if ($null -ne $result) {
+            throw "Multiple $Destination mounts found; refusing ambiguous cutover state."
+        }
+        $result = $mount
+    }
+    return $result
+}
+
 function Get-HotBaseline {
-    $command = @'
+    $script = @'
+set -eu
 clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --format TSVRaw --query "SELECT countDistinct(table), count(), coalesce(sum(rows), 0), coalesce(sum(bytes_on_disk), 0) FROM system.parts WHERE active AND database = currentDatabase()"
 '@
-    $lines = Invoke-HotColdCompose -Arguments @("exec", "-T", "clickhouse", "sh", "-lc", $command)
+    $lines = Invoke-HotColdComposeScript -Service "clickhouse" -Script $script
     $line = ($lines | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -ne "" } |
         Select-Object -Last 1)
     $parts = $line -split "`t"
@@ -61,7 +119,7 @@ function Get-StructuralManifest {
 
     # Metadata-only: no file contents are read. The digest covers relative path,
     # regular-file size/link-count, directory path, and symlink target.
-    $manifestCommand = @'
+    $manifestScript = @'
 set -eu
 stats="$(find /root -type f -printf '%s\n' | awk '{bytes += $1; count += 1} END {printf "%.0f\t%.0f\n", bytes, count}')"
 symlink_count="$(find /root -type l -printf '.\n' | wc -l | tr -d ' ')"
@@ -69,11 +127,10 @@ directory_count="$(find /root -mindepth 1 -type d -printf '.\n' | wc -l | tr -d 
 digest="$(find /root -mindepth 1 \( -type d -printf 'D\t%P\n' -o -type f -printf 'F\t%P\t%s\t%n\n' -o -type l -printf 'L\t%P\t%l\n' \) | LC_ALL=C sort | sha256sum | awk '{print $1}')"
 printf '%s\t%s\t%s\t%s\n' "$stats" "$symlink_count" "$directory_count" "$digest"
 '@
-    $lines = Invoke-DockerText -Arguments @(
-        "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
-        "--mount", $MountSpec,
-        $Image, "-lc", $manifestCommand
-    )
+    $lines = Invoke-DockerRunScript `
+        -RunArguments @("--rm", "--user", "0:0", "--mount", $MountSpec) `
+        -Image $Image `
+        -Script $manifestScript
     $line = ($lines | ForEach-Object { $_.ToString().Trim() } |
         Where-Object { $_ -ne "" } | Select-Object -Last 1)
     $parts = $line -split "`t"
@@ -196,7 +253,7 @@ try {
     # for mkdir/rename/hardlink/symlink/ownership/mode; Cold/logs verify ownership,
     # mode and ordinary file IO. All probe artifacts are removed in-container.
     $probeName = ".markorbit-cutover-probe-$([guid]::NewGuid().ToString('N'))"
-    $probeCommandTemplate = @'
+    $probeScriptTemplate = @'
 set -eu
 probe="__PROBE__"
 hot_root="/hot/$probe"
@@ -235,14 +292,16 @@ test "$(stat -c %a "$log_file")" = "640"
 grep -qx cold "$cold_file"
 grep -qx logs "$log_file"
 '@
-    $probeCommand = $probeCommandTemplate.Replace("__PROBE__", $probeName)
-    Invoke-DockerText -Arguments @(
-        "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
-        "--mount", "type=bind,source=$($initial.hot_path),target=/hot",
-        "--mount", "type=bind,source=$($initial.cold_path),target=/cold",
-        "--mount", "type=bind,source=$($initial.log_path),target=/logs",
-        $image, "-lc", $probeCommand
-    ) | Out-Null
+    $probeScript = $probeScriptTemplate.Replace("__PROBE__", $probeName)
+    Invoke-DockerRunScript `
+        -RunArguments @(
+            "--rm", "--user", "0:0",
+            "--mount", "type=bind,source=$($initial.hot_path),target=/hot",
+            "--mount", "type=bind,source=$($initial.cold_path),target=/cold",
+            "--mount", "type=bind,source=$($initial.log_path),target=/logs"
+        ) `
+        -Image $image `
+        -Script $probeScript | Out-Null
 
     $logProbePath = Join-Path -Path $initial.log_path -ChildPath $probeName
     if (@(Get-ChildItem -LiteralPath $initial.hot_path -Force).Count -ne 0 -or
@@ -273,12 +332,18 @@ grep -qx logs "$log_file"
 
     # Copy exact stopped ClickHouse files. The source volume is mounted read-only
     # and is deliberately retained after success for rollback.
-    Invoke-DockerText -Arguments @(
-        "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
-        "--mount", "type=volume,source=$sourceVolume,target=/source,readonly",
-        "--mount", "type=bind,source=$($initial.hot_path),target=/target",
-        $image, "-lc", "set -eu; cp -a /source/. /target/"
-    ) | Out-Null
+    $copyScript = @'
+set -eu
+cp -a /source/. /target/
+'@
+    Invoke-DockerRunScript `
+        -RunArguments @(
+            "--rm", "--user", "0:0",
+            "--mount", "type=volume,source=$sourceVolume,target=/source,readonly",
+            "--mount", "type=bind,source=$($initial.hot_path),target=/target"
+        ) `
+        -Image $image `
+        -Script $copyScript | Out-Null
 
     $targetManifest = Get-StructuralManifest `
         -MountSpec "type=bind,source=$($initial.hot_path),target=/root,readonly" `
@@ -297,24 +362,30 @@ grep -qx logs "$log_file"
     if ([string]::IsNullOrWhiteSpace($hotContainer)) {
         throw "Hot/Cold ClickHouse container did not start."
     }
-    $mountsJson = (Invoke-DockerText -Arguments @("inspect", $hotContainer, "--format", "{{json .Mounts}}")) -join ""
-    $mounts = @($mountsJson | ConvertFrom-Json)
-    $hotMount = @($mounts | Where-Object { $_.Destination -eq "/var/lib/clickhouse" }) | Select-Object -First 1
-    $coldMount = @($mounts | Where-Object { $_.Destination -eq "/var/lib/clickhouse-cold" }) | Select-Object -First 1
-    if ($null -eq $hotMount -or $hotMount.Type -ne "bind") {
+    $mountsJson = ((Invoke-DockerText -Arguments @(
+        "inspect", $hotContainer, "--format", "{{json .Mounts}}"
+    )) -join "").Trim()
+    if ([string]::IsNullOrWhiteSpace($mountsJson)) {
+        throw "Unable to inspect activated ClickHouse mounts."
+    }
+    $mounts = ($mountsJson | ConvertFrom-Json)
+    $hotMount = Get-SingleMountByDestination -Mounts $mounts -Destination "/var/lib/clickhouse"
+    $coldMount = Get-SingleMountByDestination -Mounts $mounts -Destination "/var/lib/clickhouse-cold"
+    if ($null -eq $hotMount -or [string]$hotMount.Type -ne "bind") {
         throw "Activated ClickHouse Hot data root is not a bind mount."
     }
-    if ($null -eq $coldMount -or $coldMount.Type -ne "bind") {
+    if ($null -eq $coldMount -or [string]$coldMount.Type -ne "bind") {
         throw "Activated ClickHouse Cold data root is not a bind mount."
     }
 
     $after = Get-HotBaseline
     Assert-LogicalBaselineEqual -Before $metadataBefore -After $after
 
-    $coldDiskLines = Invoke-HotColdCompose -Arguments @(
-        "exec", "-T", "clickhouse", "sh", "-lc",
-        'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --format TSVRaw --query "SELECT count() FROM system.disks WHERE name = ''cold''"'
-    )
+    $coldDiskScript = @'
+set -eu
+clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --format TSVRaw --query "SELECT count() FROM system.disks WHERE name = 'cold'"
+'@
+    $coldDiskLines = Invoke-HotColdComposeScript -Service "clickhouse" -Script $coldDiskScript
     $coldDiskCount = [int64](($coldDiskLines | ForEach-Object { $_.ToString().Trim() } |
         Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1))
     if ($coldDiskCount -ne 1) {

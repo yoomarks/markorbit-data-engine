@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 READINESS = ROOT / "scripts" / "check-clickhouse-hot-cutover-readiness.ps1"
 MIGRATE = ROOT / "scripts" / "migrate-clickhouse-volume-to-hot.ps1"
 COMPOSE = ROOT / "docker-compose.yml"
+CUTOVER_WORKFLOW = ROOT / ".github" / "workflows" / "clickhouse-cutover-contract.yml"
 
 
 def _compose_service_names(text: str) -> set[str]:
@@ -31,9 +32,9 @@ def test_readiness_is_control_plane_and_metadata_only():
 
     assert "safe_to_cutover" in text
     assert "control.job_run" in text
-    assert "status = ''RUNNING''" in text
+    assert "status = 'RUNNING'" in text
     assert "control.source_package" in text
-    assert "status = ''PROCESSING''" in text
+    assert "status = 'PROCESSING'" in text
     assert "system.parts" in text
     assert "source=$sourceVolume,target=/source,readonly" in text
     assert "find /source -type f" in text
@@ -92,6 +93,22 @@ def test_readiness_labels_scalar_evidence_failures():
     assert "Get-ScalarInt64 -Lines (Invoke-ComposeShell" not in text
 
 
+def test_readiness_uses_quote_safe_base64_shell_transport():
+    text = READINESS.read_text(encoding="utf-8")
+
+    assert "function ConvertTo-Base64Utf8" in text
+    assert "function New-QuoteSafeShellRunner" in text
+    assert '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text))' in text
+    assert 'return "printf %s $payload | base64 -d | sh"' in text
+    assert "function Invoke-ComposeScript" in text
+    assert "function Invoke-DockerRunScript" in text
+    assert '$runningJobScript = @\'' in text
+    assert '$processingCnScript = @\'' in text
+    assert '$sizeScript = @\'' in text
+    assert "Invoke-ComposeShell" not in text
+    assert '"sh", "-lc"' not in text
+
+
 def test_migration_is_explicit_source_preserving_and_rollback_capable():
     text = MIGRATE.read_text(encoding="utf-8")
 
@@ -120,6 +137,22 @@ def test_migration_is_explicit_source_preserving_and_rollback_capable():
         assert marker not in text
 
 
+def test_migration_uses_quote_safe_base64_shell_transport():
+    text = MIGRATE.read_text(encoding="utf-8")
+
+    assert "function ConvertTo-Base64Utf8" in text
+    assert "function New-QuoteSafeShellRunner" in text
+    assert "function Invoke-DockerRunScript" in text
+    assert "function Invoke-HotColdComposeScript" in text
+    assert 'return "printf %s $payload | base64 -d | sh"' in text
+    assert "$manifestScript = @'" in text
+    assert "$probeScriptTemplate = @'" in text
+    assert "$copyScript = @'" in text
+    assert "$coldDiskScript = @'" in text
+    assert '"sh", "-lc"' not in text
+    assert '"-lc", $' not in text
+
+
 def test_migration_closes_writer_shutdown_race_before_clickhouse_stop():
     text = MIGRATE.read_text(encoding="utf-8")
 
@@ -134,7 +167,7 @@ def test_migration_closes_writer_shutdown_race_before_clickhouse_stop():
 def test_migration_probes_windows_bind_semantics_before_clickhouse_stop():
     text = MIGRATE.read_text(encoding="utf-8")
 
-    probe = text.index("$probeCommandTemplate = @'")
+    probe = text.index("$probeScriptTemplate = @'")
     clickhouse_stop = text.index('Invoke-DockerText -Arguments @("compose", "stop", "clickhouse")')
 
     assert probe < clickhouse_stop
@@ -186,6 +219,17 @@ def test_migration_structural_manifest_is_metadata_only_and_compared_before_acti
     assert "hot_copy_structure_manifest_sha256" in text
 
 
+def test_migration_activated_mount_verification_is_windows_safe():
+    text = MIGRATE.read_text(encoding="utf-8")
+
+    assert "function Get-SingleMountByDestination" in text
+    assert 'Get-SingleMountByDestination -Mounts $mounts -Destination "/var/lib/clickhouse"' in text
+    assert 'Get-SingleMountByDestination -Mounts $mounts -Destination "/var/lib/clickhouse-cold"' in text
+    assert 'Where-Object { $_.Destination -eq "/var/lib/clickhouse" }' not in text
+    assert 'Where-Object { $_.Destination -eq "/var/lib/clickhouse-cold" }' not in text
+    assert "Multiple $Destination mounts found" in text
+
+
 def test_migration_hard_gates_only_merge_stable_metadata():
     text = MIGRATE.read_text(encoding="utf-8")
 
@@ -216,3 +260,13 @@ def test_migration_pause_set_tracks_every_compose_application_service():
     application_services = compose_services - {"postgres", "clickhouse"}
 
     assert paused_services == application_services
+
+
+def test_cutover_workflow_verifies_base64_transport_dependencies():
+    text = CUTOVER_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'scripts/check-clickhouse-hot-cutover-readiness.ps1' in text
+    assert "for cmd in base64 find awk cp" in text
+    assert "postgres:16-alpine" in text
+    assert "base64 -d | sh" in text
+    assert "transport-ok" in text

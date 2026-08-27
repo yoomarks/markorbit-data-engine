@@ -19,13 +19,42 @@ function Invoke-DockerText {
     return $output
 }
 
-function Invoke-ComposeShell {
+function ConvertTo-Base64Utf8 {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text))
+}
+
+function New-QuoteSafeShellRunner {
+    param([Parameter(Mandatory = $true)][string]$Script)
+
+    # The native docker.exe argument contains no embedded quote characters from
+    # the actual script. Base64 uses only shell-safe non-whitespace characters,
+    # so Windows PowerShell 5.1 cannot strip or reinterpret the script's quotes.
+    $payload = ConvertTo-Base64Utf8 -Text $Script
+    return "printf %s $payload | base64 -d | sh"
+}
+
+function Invoke-ComposeScript {
     param(
         [Parameter(Mandatory = $true)][string]$Service,
-        [Parameter(Mandatory = $true)][string]$Command
+        [Parameter(Mandatory = $true)][string]$Script
     )
 
-    return Invoke-DockerText -Arguments @("compose", "exec", "-T", $Service, "sh", "-lc", $Command)
+    $runner = New-QuoteSafeShellRunner -Script $Script
+    return Invoke-DockerText -Arguments @("compose", "exec", "-T", $Service, "sh", "-c", $runner)
+}
+
+function Invoke-DockerRunScript {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$RunArguments,
+        [Parameter(Mandatory = $true)][string]$Image,
+        [Parameter(Mandatory = $true)][string]$Script
+    )
+
+    $runner = New-QuoteSafeShellRunner -Script $Script
+    $arguments = @("run") + $RunArguments + @("--entrypoint", "sh", $Image, "-c", $runner)
+    return Invoke-DockerText -Arguments $arguments
 }
 
 function Get-ScalarInt64 {
@@ -63,10 +92,11 @@ function Resolve-Directory {
 }
 
 function Get-ClickHouseBaseline {
-    $command = @'
+    $script = @'
+set -eu
 clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --format TSVRaw --query "SELECT countDistinct(table), count(), coalesce(sum(rows), 0), coalesce(sum(bytes_on_disk), 0) FROM system.parts WHERE active AND database = currentDatabase()"
 '@
-    $line = (Invoke-ComposeShell -Service "clickhouse" -Command $command |
+    $line = (Invoke-ComposeScript -Service "clickhouse" -Script $script |
         Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString().Trim() } |
         Where-Object { $_ -ne "" } | Select-Object -Last 1)
     $parts = $line -split "`t"
@@ -136,12 +166,18 @@ if ([string]::IsNullOrWhiteSpace($image)) {
     throw "Unable to resolve the current ClickHouse image."
 }
 
-$runningJobLines = @(Invoke-ComposeShell -Service "postgres" -Command `
-    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM control.job_run WHERE status = ''RUNNING''"')
+$runningJobScript = @'
+set -eu
+psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM control.job_run WHERE status = 'RUNNING'"
+'@
+$runningJobLines = @(Invoke-ComposeScript -Service "postgres" -Script $runningJobScript)
 $runningJobs = Get-ScalarInt64 -Name "running_job_count" -Lines $runningJobLines
 
-$processingCnLines = @(Invoke-ComposeShell -Service "postgres" -Command `
-    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM control.source_package WHERE jurisdiction = ''CN'' AND status = ''PROCESSING''"')
+$processingCnScript = @'
+set -eu
+psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM control.source_package WHERE jurisdiction = 'CN' AND status = 'PROCESSING'"
+'@
+$processingCnLines = @(Invoke-ComposeScript -Service "postgres" -Script $processingCnScript)
 $processingCn = Get-ScalarInt64 -Name "processing_cn_package_count" -Lines $processingCnLines
 
 $runningServices = @(Invoke-DockerText -Arguments @("compose", "ps", "--services", "--status", "running") |
@@ -156,14 +192,17 @@ $coldEmpty = $coldEntries.Count -eq 0
 # metadata for regular files is read; no trademark rows are queried or validated.
 # Summing file sizes avoids false mismatches from different directory inode sizes
 # on the Docker ext4 volume and the Windows bind filesystem.
-$sizeCommand = @'
+$sizeScript = @'
+set -eu
 find /source -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
 '@
-$sizeLines = @(Invoke-DockerText -Arguments @(
-    "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
-    "--mount", "type=volume,source=$sourceVolume,target=/source,readonly",
-    $image, "-lc", $sizeCommand
-))
+$sizeLines = @(Invoke-DockerRunScript `
+    -RunArguments @(
+        "--rm", "--user", "0:0",
+        "--mount", "type=volume,source=$sourceVolume,target=/source,readonly"
+    ) `
+    -Image $image `
+    -Script $sizeScript)
 $sourceBytes = Get-ScalarInt64 -Name "source_regular_file_bytes" -Lines $sizeLines
 
 $hotRoot = [System.IO.Path]::GetPathRoot($resolvedHot)
