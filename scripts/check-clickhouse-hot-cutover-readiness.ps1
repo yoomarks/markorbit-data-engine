@@ -97,7 +97,9 @@ if ([string]::IsNullOrWhiteSpace($clickhouseId)) {
 
 # Filter the authoritative mount inside Docker's Go template and deserialize a
 # single object. This avoids Windows PowerShell 5.1 array/pipeline enumeration
-# differences when ConvertFrom-Json receives the full .Mounts array.
+# differences when ConvertFrom-Json receives the full .Mounts array. This is a
+# PowerShell single-quoted string, so the Go-template double quotes must not be
+# backslash-escaped; otherwise Docker receives the backslashes literally.
 $sourceMountFormat = '{{range .Mounts}}{{if eq .Destination "/var/lib/clickhouse"}}{{json .}}{{end}}{{end}}'
 $sourceMountJson = ((Invoke-DockerText -Arguments @(
     "inspect", $clickhouseId, "--format", $sourceMountFormat
