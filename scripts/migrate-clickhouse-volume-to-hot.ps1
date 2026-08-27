@@ -52,15 +52,40 @@ clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --
     }
 }
 
-function Assert-BaselineEqual {
+function Get-StoppedSourceRegularFileBytes {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceVolume,
+        [Parameter(Mandatory = $true)][string]$Image
+    )
+
+    $sizeCommand = @'
+find /source -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
+'@
+    $sizeLines = Invoke-DockerText -Arguments @(
+        "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
+        "--mount", "type=volume,source=$SourceVolume,target=/source,readonly",
+        $Image, "-lc", $sizeCommand
+    )
+    $sizeText = ($sizeLines | ForEach-Object { $_.ToString().Trim() } |
+        Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
+    if ($null -eq $sizeText) {
+        throw "Unable to measure stopped source regular files."
+    }
+    return [int64]$sizeText
+}
+
+function Assert-LogicalBaselineEqual {
     param(
         [Parameter(Mandatory = $true)]$Before,
         [Parameter(Mandatory = $true)]$After
     )
 
-    foreach ($field in @("active_table_count", "active_part_count", "active_rows", "active_bytes_on_disk")) {
+    # MergeTree background merges are allowed to change active part count and
+    # bytes_on_disk without changing logical data. Only merge-stable invariants
+    # are hard cutover gates; part/byte values remain in the receipt as evidence.
+    foreach ($field in @("active_table_count", "active_rows")) {
         if ([int64]$Before.$field -ne [int64]$After[$field]) {
-            throw "ClickHouse metadata baseline mismatch for $field`: before=$($Before.$field) after=$($After[$field])"
+            throw "ClickHouse logical baseline mismatch for $field`: before=$($Before.$field) after=$($After[$field])"
         }
     }
 }
@@ -129,8 +154,11 @@ try {
     }
 
     $sourceVolume = [string]$initial.source_volume
-    $sourceBytes = [int64]$initial.source_regular_file_bytes
     $image = [string]$initial.clickhouse_image
+    # Use the post-writer-stop logical baseline for final comparison. Part count
+    # and bytes are retained as observations only because background merges may
+    # continue until ClickHouse itself is stopped.
+    $metadataBefore = $afterWriterStop.clickhouse_baseline
 
     # Prove Docker can write the three Windows bind destinations before stopping
     # the authoritative ClickHouse. The probe files are tiny and removed in the
@@ -161,6 +189,11 @@ try {
     if (@(Get-ChildItem -LiteralPath $initial.hot_path -Force).Count -ne 0) {
         throw "Hot destination is no longer empty immediately before copy."
     }
+
+    # Freeze the authoritative physical byte baseline only after ClickHouse has
+    # stopped. Readiness measurements happen while ClickHouse is live and can
+    # legitimately drift because MergeTree background merges rewrite part files.
+    $sourceBytes = Get-StoppedSourceRegularFileBytes -SourceVolume $sourceVolume -Image $image
 
     # Copy exact stopped ClickHouse files. The source volume is mounted read-only
     # and is deliberately retained after success for rollback.
@@ -211,7 +244,7 @@ find /target -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
     }
 
     $after = Get-HotBaseline
-    Assert-BaselineEqual -Before $initial.clickhouse_baseline -After $after
+    Assert-LogicalBaselineEqual -Before $metadataBefore -After $after
 
     $coldDiskLines = Invoke-HotColdCompose -Arguments @(
         "exec", "-T", "clickhouse", "sh", "-lc",
@@ -232,12 +265,16 @@ find /target -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
         source_volume = $sourceVolume
         source_volume_retained = $true
         source_regular_file_bytes = $sourceBytes
+        source_bytes_measured_after_clickhouse_stop = $true
         hot_copy_regular_file_bytes = $targetBytes
         hot_path = $initial.hot_path
         cold_path = $initial.cold_path
         log_path = $initial.log_path
-        metadata_before = $initial.clickhouse_baseline
+        metadata_initial = $initial.clickhouse_baseline
+        metadata_before = $metadataBefore
         metadata_after = $after
+        metadata_guard_fields = @("active_table_count", "active_rows")
+        metadata_observation_fields = @("active_part_count", "active_bytes_on_disk")
         cold_disk_registered = $true
         source_packages_revalidated = $false
         rollback_available = $true
