@@ -1,0 +1,80 @@
+﻿{
+  "checkpoint_version": "CN_M16_LIGHTWEIGHT_SERVING_CHECKPOINT_V1",
+  "status": "PASS",
+  "read_only": true,
+  "evidence_mode": "LIGHTWEIGHT_SERVING_CHECKPOINT",
+  "expected_file_name": "2023_5.zip",
+  "expected_package": {
+    "file_name": "2023_5.zip",
+    "status": "SUCCESS",
+    "processed_at": "2026-08-24 02:35:31.822265+00:00",
+    "error_message": null,
+    "package_sequence": 50
+  },
+  "expected_package_success": true,
+  "processing_package_count": 0,
+  "quiescent": true,
+  "critical_tables": {
+    "cn_case_current": {
+      "exists": true,
+      "active_parts": 11,
+      "bytes_on_disk": 28226495405,
+      "rows_from_parts": 132205465
+    },
+    "cn_case_scope_current": {
+      "exists": true,
+      "active_parts": 8,
+      "bytes_on_disk": 61120726438,
+      "rows_from_parts": 119357862
+    },
+    "cn_case_party_current": {
+      "exists": true,
+      "active_parts": 17,
+      "bytes_on_disk": 76914302654,
+      "rows_from_parts": 264649807
+    },
+    "cn_goods_item_current": {
+      "exists": true,
+      "active_parts": 15,
+      "bytes_on_disk": 371274466312,
+      "rows_from_parts": 1639720127
+    },
+    "cn_goods_scope_lifecycle_current": {
+      "exists": true,
+      "active_parts": 14,
+      "bytes_on_disk": 4695899436,
+      "rows_from_parts": 158375737
+    },
+    "cn_observed_event": {
+      "exists": true,
+      "active_parts": 17,
+      "bytes_on_disk": 127836678068,
+      "rows_from_parts": 413031435
+    }
+  },
+  "core_tables_ready": true,
+  "goods_schema_exact": true,
+  "disks": [
+    {
+      "name": "cold",
+      "path": "/var/lib/clickhouse-cold/",
+      "free_space": 3931818967040,
+      "total_space": 3932049895424,
+      "keep_free_space": 68719476736,
+      "free_ratio": 0.999941
+    },
+    {
+      "name": "default",
+      "path": "/var/lib/clickhouse/",
+      "free_space": 556326711296,
+      "total_space": 2048391114752,
+      "keep_free_space": 0,
+      "free_ratio": 0.271592
+    }
+  ],
+  "reasons": [],
+  "query_scope": "control_and_system_metadata_only",
+  "full_corpus_scan": false,
+  "package_reprocessed": false,
+  "full_corpus_semantic_acceptance_claimed": false
+}
