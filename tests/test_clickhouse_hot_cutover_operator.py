@@ -53,6 +53,20 @@ def test_readiness_is_control_plane_and_metadata_only():
         assert marker not in text
 
 
+def test_readiness_filters_source_mount_inside_docker_inspect():
+    text = READINESS.read_text(encoding="utf-8")
+
+    assert "$sourceMountFormat" in text
+    assert '{{range .Mounts}}{{if eq .Destination \"/var/lib/clickhouse\"}}{{json .}}{{end}}{{end}}' in text
+    assert '"inspect", $clickhouseId, "--format", $sourceMountFormat' in text
+    assert "$sourceMountJson | ConvertFrom-Json" in text
+    assert "$sourceMountType = [string]$sourceMount.Type" in text
+    assert "$sourceMountName = [string]$sourceMount.Name" in text
+    assert "Observed Type='$sourceMountType' Name='$sourceMountName'" in text
+    assert "{{json .Mounts}}" not in text
+    assert "Where-Object { $_.Destination -eq \"/var/lib/clickhouse\" }" not in text
+
+
 def test_migration_is_explicit_source_preserving_and_rollback_capable():
     text = MIGRATE.read_text(encoding="utf-8")
 
