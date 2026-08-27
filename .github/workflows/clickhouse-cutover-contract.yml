@@ -3,6 +3,7 @@ name: ClickHouse Cutover Contract
 on:
   pull_request:
     paths:
+      - "scripts/check-clickhouse-hot-cutover-readiness.ps1"
       - "scripts/migrate-clickhouse-volume-to-hot.ps1"
       - "tests/test_clickhouse_hot_cutover_operator.py"
       - ".github/workflows/clickhouse-cutover-contract.yml"
@@ -10,6 +11,7 @@ on:
     branches:
       - main
     paths:
+      - "scripts/check-clickhouse-hot-cutover-readiness.ps1"
       - "scripts/migrate-clickhouse-volume-to-hot.ps1"
       - "tests/test_clickhouse_hot_cutover_operator.py"
       - ".github/workflows/clickhouse-cutover-contract.yml"
@@ -29,7 +31,7 @@ jobs:
         run: |
           docker run --rm --entrypoint sh clickhouse/clickhouse-server:24.8 -lc '
             set -eu
-            for cmd in find awk cp grep mkdir mv ln id chown chmod stat sort sha256sum wc tr rm; do
+            for cmd in base64 find awk cp grep mkdir mv ln id chown chmod stat sort sha256sum wc tr rm; do
               command -v "$cmd"
             done
 
@@ -51,3 +53,13 @@ jobs:
             printf "%s\n" "$digest" | grep -Eq "^[0-9a-f]{64}$"
             rm -rf "$root"
           '
+
+      - name: Verify base64 script transport in ClickHouse and PostgreSQL images
+        run: |
+          set -eu
+          payload="$(printf 'printf transport-ok\\n' | base64 | tr -d '\n')"
+          runner="printf %s $payload | base64 -d | sh"
+
+          docker run --rm --entrypoint sh clickhouse/clickhouse-server:24.8 -c "$runner" | grep -qx transport-ok
+          docker run --rm --entrypoint sh postgres:16-alpine -c 'command -v base64 >/dev/null'
+          docker run --rm --entrypoint sh postgres:16-alpine -c "$runner" | grep -qx transport-ok
