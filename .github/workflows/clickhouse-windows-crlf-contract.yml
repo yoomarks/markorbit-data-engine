@@ -67,3 +67,82 @@ jobs:
                   throw "Unexpected normalized shell script from $scriptPath`: $decoded"
               }
           }
+
+      - name: Verify Docker wrapper uses exit code instead of benign stderr
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $scripts = @(
+              "scripts/check-clickhouse-hot-cutover-readiness.ps1",
+              "scripts/migrate-clickhouse-volume-to-hot.ps1"
+          )
+          $fakeBin = Join-Path $env:RUNNER_TEMP "markorbit-fake-docker"
+          New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
+          $fakeDocker = Join-Path $fakeBin "docker.cmd"
+          @'
+          @echo off
+          if "%1"=="success" (
+            echo progress-ok 1>&2
+            echo stdout-ok
+            exit /b 0
+          )
+          echo progress-fail 1>&2
+          echo stdout-fail
+          exit /b 23
+          '@ | Set-Content -LiteralPath $fakeDocker -Encoding ASCII
+          $originalPath = $env:PATH
+          $env:PATH = "$fakeBin;$originalPath"
+
+          try {
+              foreach ($scriptPath in $scripts) {
+                  $source = Get-Content -LiteralPath $scriptPath -Raw
+                  $tokens = $null
+                  $errors = $null
+                  $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
+                  if ($errors.Count -ne 0) {
+                      throw "PowerShell parse errors in $scriptPath`: $($errors -join '; ')"
+                  }
+
+                  $functionAst = $ast.Find({
+                      param($node)
+                      $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                          $node.Name -eq "Invoke-DockerText"
+                  }, $true)
+                  if ($null -eq $functionAst) {
+                      throw "Invoke-DockerText not found in $scriptPath."
+                  }
+
+                  Remove-Item -Path Function:\Invoke-DockerText -ErrorAction SilentlyContinue
+                  Invoke-Expression $functionAst.Extent.Text
+
+                  $successOutput = @(Invoke-DockerText -Arguments @("success"))
+                  $successText = $successOutput -join "`n"
+                  if ($successText -notmatch "stdout-ok" -or $successText -notmatch "progress-ok") {
+                      throw "Exit-0 native stderr/stdout was not captured for $scriptPath`: $successText"
+                  }
+
+                  $failed = $false
+                  try {
+                      Invoke-DockerText -Arguments @("fail") | Out-Null
+                  }
+                  catch {
+                      $failed = $true
+                      $message = $_.Exception.Message
+                      if ($message -notmatch "exit code 23" -or
+                          $message -notmatch "progress-fail" -or
+                          $message -notmatch "stdout-fail") {
+                          throw "Nonzero native diagnostics were incomplete for $scriptPath`: $message"
+                      }
+                  }
+                  if (-not $failed) {
+                      throw "Invoke-DockerText did not fail on exit code 23 for $scriptPath."
+                  }
+              }
+          }
+          finally {
+              $env:PATH = $originalPath
+              # The failure path above is intentionally caught and asserted. The
+              # GitHub PowerShell runner appends an implicit native-exit check, so
+              # clear the expected test exit code after all assertions pass.
+              $global:LASTEXITCODE = 0
+          }
