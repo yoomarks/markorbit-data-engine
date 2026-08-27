@@ -22,7 +22,11 @@ function Invoke-DockerText {
 function ConvertTo-Base64Utf8 {
     param([Parameter(Mandatory = $true)][string]$Text)
 
-    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text))
+    # PowerShell here-strings loaded from a Windows checkout carry CRLF. Container
+    # /bin/sh expects Unix line endings; otherwise `set -eu\r` is parsed as an
+    # invalid option token. Normalize CRLF and lone CR before Base64 encoding.
+    $normalized = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($normalized))
 }
 
 function New-QuoteSafeShellRunner {
