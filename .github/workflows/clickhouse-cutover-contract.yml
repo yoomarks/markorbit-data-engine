@@ -57,7 +57,7 @@ jobs:
       - name: Verify base64 script transport in ClickHouse and PostgreSQL images
         run: |
           set -eu
-          payload="$(printf 'printf transport-ok\\n' | base64 | tr -d '\n')"
+          payload="$(printf %s 'echo transport-ok' | base64 | tr -d '\n')"
           runner="printf %s $payload | base64 -d | sh"
 
           docker run --rm --entrypoint sh clickhouse/clickhouse-server:24.8 -c "$runner" | grep -qx transport-ok
