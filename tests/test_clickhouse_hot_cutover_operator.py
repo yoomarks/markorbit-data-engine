@@ -74,6 +74,24 @@ def test_readiness_resolves_source_mount_without_native_template_string_literal(
     assert 'Where-Object { $_.Destination -eq "/var/lib/clickhouse" }' not in text
 
 
+def test_readiness_labels_scalar_evidence_failures():
+    text = READINESS.read_text(encoding="utf-8")
+
+    assert '[AllowNull()][object]$Lines' in text
+    assert 'throw "Expected integer output for $Name, got: $rendered"' in text
+    assert '$rendered = if ($items.Count -eq 0) { "<empty>" }' in text
+
+    for variable, field in (
+        ("$runningJobLines", "running_job_count"),
+        ("$processingCnLines", "processing_cn_package_count"),
+        ("$sizeLines", "source_regular_file_bytes"),
+    ):
+        assert f"{variable} = @(" in text
+        assert f'Get-ScalarInt64 -Name "{field}" -Lines {variable}' in text
+
+    assert "Get-ScalarInt64 -Lines (Invoke-ComposeShell" not in text
+
+
 def test_migration_is_explicit_source_preserving_and_rollback_capable():
     text = MIGRATE.read_text(encoding="utf-8")
 
