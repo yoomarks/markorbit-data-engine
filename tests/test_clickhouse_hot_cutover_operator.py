@@ -168,9 +168,10 @@ def test_migration_probes_windows_bind_semantics_before_clickhouse_stop():
     text = MIGRATE.read_text(encoding="utf-8")
 
     probe = text.index("$probeScriptTemplate = @'")
+    case_probe = text.index('printf case-upper > "$hot_root/CaseSensitiveProbe"')
     clickhouse_stop = text.index('Invoke-DockerText -Arguments @("compose", "stop", "clickhouse")')
 
-    assert probe < clickhouse_stop
+    assert probe < case_probe < clickhouse_stop
     for marker in (
         'mkdir "$hot_root/dir"',
         'mv "$hot_root/dir" "$hot_root/dir-renamed"',
@@ -179,7 +180,12 @@ def test_migration_probes_windows_bind_semantics_before_clickhouse_stop():
         'chown "$uid:$gid"',
         'chmod 640',
         'stat -c %h',
+        'printf case-upper > "$hot_root/CaseSensitiveProbe"',
+        'printf case-lower > "$hot_root/casesensitiveprobe"',
+        'grep -qx case-upper "$hot_root/CaseSensitiveProbe"',
+        'grep -qx case-lower "$hot_root/casesensitiveprobe"',
         'bind_filesystem_capabilities_verified = $true',
+        'bind_case_sensitive_semantics_verified = $true',
     ):
         assert marker in text
 
