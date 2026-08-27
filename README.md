@@ -1,14 +1,14 @@
-# MarkOrbit Data Engine — M1.6
+# MarkOrbit Data Engine — M1.7
 
 MarkOrbit Data Engine 是 MarkOrbit 的 **authoritative source-fact service**：PostgreSQL 管理 source package / job / control-plane state，ClickHouse 保存 CN、US Application、US Assignment、US TTAB 等 durable official facts。事实层保留来源、时间与可重放证据，不把原始官方状态、Assignment 或 TTAB 程序事实直接提升为法律结论。
 
-根目录 `VERSION` 是 Data Engine **发布标记**，当前为 `M1.6`。各数据域拥有独立组件版本，不再用一个总版本推断所有组件。
+根目录 `VERSION` 是 Data Engine **发布标记**，当前为 `M1.7`。各数据域拥有独立组件版本，不再用一个总版本推断所有组件。
 
 ## 当前组件版本
 
 | 组件 | 当前版本 |
 |---|---|
-| Data Engine release | `M1.6` |
+| Data Engine release | `M1.7` |
 | CN fact model | `CN_M1.6` |
 | US Application | `US_M1.4` |
 | US Assignment | `US_ASSIGNMENT_M1.0` |
