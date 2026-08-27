@@ -259,10 +259,14 @@ def test_blocked_serving_checkpoint_cannot_promote() -> None:
     assert "SERVING_STATE_NOT_PASS" in _codes(report["reasons"])
 
 
-def test_repository_contract_stays_pending_without_committed_target_report() -> None:
+def test_repository_contract_accepts_committed_target_report() -> None:
     report = build_m17_release_promotion_contract()
 
-    assert report["status"] == "PENDING_CURRENT_SERVING_STATE"
+    assert report["status"] == "READY_FOR_M1_7"
     assert report["operator_evidence_valid"] is True
-    assert report["current_serving_state_present"] is False
-    assert report["release_promotion_allowed"] is False
+    assert report["current_serving_state_present"] is True
+    assert report["current_serving_state_valid"] is True
+    assert report["release_promotion_allowed"] is True
+    assert report["fresh_full_corpus_validation_claimed"] is False
+    assert report["package_replay_or_rescan_required"] is False
+    assert report["reasons"] == []

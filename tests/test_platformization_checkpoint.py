@@ -241,14 +241,18 @@ def test_unsupported_engine_release_blocks() -> None:
     }
 
 
-def test_repository_state_passes_static_checkpoint_without_target_report() -> None:
+def test_repository_state_accepts_committed_m17_target_report() -> None:
     checkpoint = assert_platformization_code_ready()
 
+    assert checkpoint["status"] == "M1_7_RELEASE_PROMOTION_ACCEPTED"
     assert checkpoint["code_ready"] is True
-    assert checkpoint["engine_release"] == "M1.6"
+    assert checkpoint["engine_release"] == "M1.7"
     assert checkpoint["promotion_operator_evidence_valid"] is True
-    assert checkpoint["promotion_current_serving_state_present"] is False
-    assert checkpoint["release_promotion_allowed"] is False
+    assert checkpoint["promotion_current_serving_state_present"] is True
+    assert checkpoint["promotion_current_serving_state_valid"] is True
+    assert checkpoint["runtime_acceptance_passed"] is True
+    assert checkpoint["release_promotion_allowed"] is True
+    assert checkpoint["reasons"] == []
 
 
 def test_assertion_raises_on_blocked_checkpoint(monkeypatch) -> None:

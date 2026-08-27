@@ -150,9 +150,10 @@ jobs:
       - name: Build API/worker runtime image
         run: docker build --file docker/api.Dockerfile --tag markorbit-data-engine:ci .
 
-      - name: Verify M1.6 runtime marker and API import
+      - name: Verify current runtime marker and API import
         run: |
-          docker run --rm --entrypoint python markorbit-data-engine:ci -c "from app.main import ENGINE_VERSION; assert ENGINE_VERSION == 'M1.6', ENGINE_VERSION; print(ENGINE_VERSION)"
+          expected="$(tr -d '\r\n' < VERSION)"
+          docker run --rm --entrypoint python markorbit-data-engine:ci -c "from app.main import ENGINE_VERSION; expected='${expected}'; assert ENGINE_VERSION == expected, (ENGINE_VERSION, expected); print(ENGINE_VERSION)"
 
       - name: Verify ClickHouse cutover helper commands
         run: |
