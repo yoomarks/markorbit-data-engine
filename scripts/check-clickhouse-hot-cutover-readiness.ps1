@@ -95,16 +95,23 @@ if ([string]::IsNullOrWhiteSpace($clickhouseId)) {
     throw "The current Compose ClickHouse container is required to resolve the authoritative source volume."
 }
 
-$mountsJson = (Invoke-DockerText -Arguments @("inspect", $clickhouseId, "--format", "{{json .Mounts}}")) -join ""
-$mounts = @($mountsJson | ConvertFrom-Json)
-$sourceMount = @($mounts | Where-Object { $_.Destination -eq "/var/lib/clickhouse" }) | Select-Object -First 1
-if ($null -eq $sourceMount) {
+# Filter the authoritative mount inside Docker's Go template and deserialize a
+# single object. This avoids Windows PowerShell 5.1 array/pipeline enumeration
+# differences when ConvertFrom-Json receives the full .Mounts array.
+$sourceMountFormat = '{{range .Mounts}}{{if eq .Destination "/var/lib/clickhouse"}}{{json .}}{{end}}{{end}}'
+$sourceMountJson = ((Invoke-DockerText -Arguments @(
+    "inspect", $clickhouseId, "--format", $sourceMountFormat
+)) -join "").Trim()
+if ([string]::IsNullOrWhiteSpace($sourceMountJson)) {
     throw "Unable to resolve /var/lib/clickhouse from the current ClickHouse container."
 }
-if ($sourceMount.Type -ne "volume" -or [string]::IsNullOrWhiteSpace($sourceMount.Name)) {
-    throw "Current /var/lib/clickhouse is not a Docker named volume; refusing named-volume cutover."
+$sourceMount = ($sourceMountJson | ConvertFrom-Json)
+$sourceMountType = [string]$sourceMount.Type
+$sourceMountName = [string]$sourceMount.Name
+if ($sourceMountType -ne "volume" -or [string]::IsNullOrWhiteSpace($sourceMountName)) {
+    throw "Current /var/lib/clickhouse is not a Docker named volume; refusing named-volume cutover. Observed Type='$sourceMountType' Name='$sourceMountName'."
 }
-$sourceVolume = [string]$sourceMount.Name
+$sourceVolume = $sourceMountName
 $image = ((Invoke-DockerText -Arguments @("inspect", $clickhouseId, "--format", "{{.Config.Image}}")) -join "").Trim()
 if ([string]::IsNullOrWhiteSpace($image)) {
     throw "Unable to resolve the current ClickHouse image."
