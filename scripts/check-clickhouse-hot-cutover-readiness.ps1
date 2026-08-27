@@ -29,12 +29,17 @@ function Invoke-ComposeShell {
 }
 
 function Get-ScalarInt64 {
-    param([Parameter(Mandatory = $true)][object[]]$Lines)
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $false)][AllowNull()][object]$Lines
+    )
 
-    $text = ($Lines | Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString().Trim() } |
+    $items = @($Lines | Where-Object { $_ -ne $null })
+    $text = ($items | ForEach-Object { $_.ToString().Trim() } |
         Where-Object { $_ -ne "" } | Select-Object -Last 1)
     if ($null -eq $text -or $text -notmatch '^\d+$') {
-        throw "Expected integer output, got: $($Lines -join ' | ')"
+        $rendered = if ($items.Count -eq 0) { "<empty>" } else { $items -join " | " }
+        throw "Expected integer output for $Name, got: $rendered"
     }
     return [int64]$text
 }
@@ -131,10 +136,13 @@ if ([string]::IsNullOrWhiteSpace($image)) {
     throw "Unable to resolve the current ClickHouse image."
 }
 
-$runningJobs = Get-ScalarInt64 -Lines (Invoke-ComposeShell -Service "postgres" -Command `
+$runningJobLines = @(Invoke-ComposeShell -Service "postgres" -Command `
     'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM control.job_run WHERE status = ''RUNNING''"')
-$processingCn = Get-ScalarInt64 -Lines (Invoke-ComposeShell -Service "postgres" -Command `
+$runningJobs = Get-ScalarInt64 -Name "running_job_count" -Lines $runningJobLines
+
+$processingCnLines = @(Invoke-ComposeShell -Service "postgres" -Command `
     'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT count(*) FROM control.source_package WHERE jurisdiction = ''CN'' AND status = ''PROCESSING''"')
+$processingCn = Get-ScalarInt64 -Name "processing_cn_package_count" -Lines $processingCnLines
 
 $runningServices = @(Invoke-DockerText -Arguments @("compose", "ps", "--services", "--status", "running") |
     ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -ne "" })
@@ -151,12 +159,12 @@ $coldEmpty = $coldEntries.Count -eq 0
 $sizeCommand = @'
 find /source -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
 '@
-$sizeLines = Invoke-DockerText -Arguments @(
+$sizeLines = @(Invoke-DockerText -Arguments @(
     "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
     "--mount", "type=volume,source=$sourceVolume,target=/source,readonly",
     $image, "-lc", $sizeCommand
-)
-$sourceBytes = Get-ScalarInt64 -Lines $sizeLines
+))
+$sourceBytes = Get-ScalarInt64 -Name "source_regular_file_bytes" -Lines $sizeLines
 
 $hotRoot = [System.IO.Path]::GetPathRoot($resolvedHot)
 $hotDriveName = $hotRoot.Substring(0, 1)
