@@ -22,20 +22,24 @@ try {
         $pythonPrefix = @("-3")
     }
     else {
-        throw "Python 3 is required for the CN serving-state checkpoint."
+        throw "Python 3.12 or 3.13 is required for the CN serving-state checkpoint."
     }
 
     # The checkpoint imports the repository database/config runtime. Do not
     # silently fall through to an arbitrary host Python that cannot import the
     # declared project dependencies; fail before the checkpoint with a stable,
     # actionable operator error instead of a ModuleNotFoundError traceback.
+    # Keep this support window aligned with pyproject.toml. The pinned
+    # psycopg[binary]==3.2.9 runtime does not provide a CPython 3.14 Windows
+    # binary wheel, so Python 3.14 must fail before dependency installation or
+    # checkpoint execution.
     $probeCode = @'
 import importlib.util, json, sys
 required = ("clickhouse_connect", "psycopg", "pydantic_settings")
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 print(json.dumps({
     "python_version": list(sys.version_info[:3]),
-    "version_ok": sys.version_info >= (3, 12),
+    "version_ok": (3, 12) <= sys.version_info < (3, 14),
     "missing": missing,
 }))
 '@
@@ -53,7 +57,7 @@ print(json.dumps({
     if ($probeExitCode -ne 0 -or -not $probeJson) {
         throw (
             "Unable to validate the CN serving-state Python runtime. " +
-            "Use Python >=3.12 to create .venv, then run " +
+            "Use Python 3.12 or 3.13 to create .venv, then run " +
             ".\.venv\Scripts\python.exe -m pip install -e ."
         )
     }
@@ -74,9 +78,9 @@ print(json.dumps({
             "none"
         }
         throw (
-            "CN serving-state Python runtime is incomplete: " +
+            "CN serving-state Python runtime is incomplete or unsupported: " +
             "python=$versionText; missing_modules=$missingText. " +
-            "Use Python >=3.12 to create repository .venv, then run " +
+            "Use Python 3.12 or 3.13 to create repository .venv, then run " +
             ".\.venv\Scripts\python.exe -m pip install -e ."
         )
     }
