@@ -52,26 +52,57 @@ clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --
     }
 }
 
-function Get-StoppedSourceRegularFileBytes {
+function Get-StructuralManifest {
     param(
-        [Parameter(Mandatory = $true)][string]$SourceVolume,
-        [Parameter(Mandatory = $true)][string]$Image
+        [Parameter(Mandatory = $true)][string]$MountSpec,
+        [Parameter(Mandatory = $true)][string]$Image,
+        [Parameter(Mandatory = $true)][string]$Label
     )
 
-    $sizeCommand = @'
-find /source -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
+    # Metadata-only: no file contents are read. The digest covers relative path,
+    # regular-file size/link-count, directory path, and symlink target.
+    $manifestCommand = @'
+set -eu
+stats="$(find /root -type f -printf '%s\n' | awk '{bytes += $1; count += 1} END {printf "%.0f\t%.0f\n", bytes, count}')"
+symlink_count="$(find /root -type l -printf '.\n' | wc -l | tr -d ' ')"
+directory_count="$(find /root -mindepth 1 -type d -printf '.\n' | wc -l | tr -d ' ')"
+digest="$(find /root -mindepth 1 \( -type d -printf 'D\t%P\n' -o -type f -printf 'F\t%P\t%s\t%n\n' -o -type l -printf 'L\t%P\t%l\n' \) | LC_ALL=C sort | sha256sum | awk '{print $1}')"
+printf '%s\t%s\t%s\t%s\n' "$stats" "$symlink_count" "$directory_count" "$digest"
 '@
-    $sizeLines = Invoke-DockerText -Arguments @(
+    $lines = Invoke-DockerText -Arguments @(
         "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
-        "--mount", "type=volume,source=$SourceVolume,target=/source,readonly",
-        $Image, "-lc", $sizeCommand
+        "--mount", $MountSpec,
+        $Image, "-lc", $manifestCommand
     )
-    $sizeText = ($sizeLines | ForEach-Object { $_.ToString().Trim() } |
-        Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
-    if ($null -eq $sizeText) {
-        throw "Unable to measure stopped source regular files."
+    $line = ($lines | ForEach-Object { $_.ToString().Trim() } |
+        Where-Object { $_ -ne "" } | Select-Object -Last 1)
+    $parts = $line -split "`t"
+    if ($parts.Count -ne 5 -or $parts[4] -notmatch '^[0-9a-f]{64}$') {
+        throw "Unexpected $Label structural manifest output: $line"
     }
-    return [int64]$sizeText
+    return [ordered]@{
+        regular_file_bytes = [int64]$parts[0]
+        regular_file_count = [int64]$parts[1]
+        symlink_count = [int64]$parts[2]
+        directory_count = [int64]$parts[3]
+        manifest_sha256 = [string]$parts[4]
+    }
+}
+
+function Assert-StructuralManifestEqual {
+    param(
+        [Parameter(Mandatory = $true)]$Before,
+        [Parameter(Mandatory = $true)]$After
+    )
+
+    foreach ($field in @("regular_file_bytes", "regular_file_count", "symlink_count", "directory_count")) {
+        if ([int64]$Before[$field] -ne [int64]$After[$field]) {
+            throw "ClickHouse structural copy mismatch for $field`: source=$($Before[$field]) target=$($After[$field])"
+        }
+    }
+    if ([string]$Before.manifest_sha256 -ne [string]$After.manifest_sha256) {
+        throw "ClickHouse structural manifest mismatch after Hot copy."
+    }
 }
 
 function Assert-LogicalBaselineEqual {
@@ -160,11 +191,51 @@ try {
     # continue until ClickHouse itself is stopped.
     $metadataBefore = $afterWriterStop.clickhouse_baseline
 
-    # Prove Docker can write the three Windows bind destinations before stopping
-    # the authoritative ClickHouse. The probe files are tiny and removed in the
-    # same disposable container; they never touch the source named volume.
+    # Prove the Windows bind paths support the filesystem semantics required by
+    # ClickHouse/cp -a before stopping the authoritative database. Hot is tested
+    # for mkdir/rename/hardlink/symlink/ownership/mode; Cold/logs verify ownership,
+    # mode and ordinary file IO. All probe artifacts are removed in-container.
     $probeName = ".markorbit-cutover-probe-$([guid]::NewGuid().ToString('N'))"
-    $probeCommand = "set -eu; trap 'rm -f /hot/$probeName /cold/$probeName /logs/$probeName' EXIT; printf hot > /hot/$probeName; printf cold > /cold/$probeName; printf logs > /logs/$probeName; grep -qx hot /hot/$probeName; grep -qx cold /cold/$probeName; grep -qx logs /logs/$probeName"
+    $probeCommandTemplate = @'
+set -eu
+probe="__PROBE__"
+hot_root="/hot/$probe"
+cold_file="/cold/$probe"
+log_file="/logs/$probe"
+cleanup() {
+  rm -rf "$hot_root"
+  rm -f "$cold_file" "$log_file"
+}
+trap cleanup EXIT
+uid="$(id -u clickhouse)"
+gid="$(id -g clickhouse)"
+mkdir "$hot_root"
+mkdir "$hot_root/dir"
+printf hot > "$hot_root/dir/source"
+mv "$hot_root/dir/source" "$hot_root/dir/renamed"
+mv "$hot_root/dir" "$hot_root/dir-renamed"
+ln "$hot_root/dir-renamed/renamed" "$hot_root/hardlink"
+ln -s "dir-renamed/renamed" "$hot_root/symlink"
+chown "$uid:$gid" "$hot_root/dir-renamed/renamed" "$hot_root/hardlink"
+chmod 640 "$hot_root/dir-renamed/renamed" "$hot_root/hardlink"
+test "$(stat -c %u "$hot_root/dir-renamed/renamed")" = "$uid"
+test "$(stat -c %g "$hot_root/dir-renamed/renamed")" = "$gid"
+test "$(stat -c %a "$hot_root/dir-renamed/renamed")" = "640"
+test "$(stat -c %h "$hot_root/dir-renamed/renamed")" -ge 2
+grep -qx hot "$hot_root/hardlink"
+grep -qx hot "$hot_root/symlink"
+printf cold > "$cold_file"
+printf logs > "$log_file"
+chown "$uid:$gid" "$cold_file" "$log_file"
+chmod 640 "$cold_file" "$log_file"
+test "$(stat -c %u "$cold_file")" = "$uid"
+test "$(stat -c %u "$log_file")" = "$uid"
+test "$(stat -c %a "$cold_file")" = "640"
+test "$(stat -c %a "$log_file")" = "640"
+grep -qx cold "$cold_file"
+grep -qx logs "$log_file"
+'@
+    $probeCommand = $probeCommandTemplate.Replace("__PROBE__", $probeName)
     Invoke-DockerText -Arguments @(
         "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
         "--mount", "type=bind,source=$($initial.hot_path),target=/hot",
@@ -173,9 +244,11 @@ try {
         $image, "-lc", $probeCommand
     ) | Out-Null
 
+    $logProbePath = Join-Path -Path $initial.log_path -ChildPath $probeName
     if (@(Get-ChildItem -LiteralPath $initial.hot_path -Force).Count -ne 0 -or
-        @(Get-ChildItem -LiteralPath $initial.cold_path -Force).Count -ne 0) {
-        throw "Hot or Cold destination is not empty after bind-path probe cleanup."
+        @(Get-ChildItem -LiteralPath $initial.cold_path -Force).Count -ne 0 -or
+        (Test-Path -LiteralPath $logProbePath)) {
+        throw "Hot/Cold/log bind capability probe did not clean up completely."
     }
 
     Invoke-DockerText -Arguments @("compose", "stop", "clickhouse") | Out-Null
@@ -190,10 +263,13 @@ try {
         throw "Hot destination is no longer empty immediately before copy."
     }
 
-    # Freeze the authoritative physical byte baseline only after ClickHouse has
-    # stopped. Readiness measurements happen while ClickHouse is live and can
-    # legitimately drift because MergeTree background merges rewrite part files.
-    $sourceBytes = Get-StoppedSourceRegularFileBytes -SourceVolume $sourceVolume -Image $image
+    # Freeze the authoritative physical structure only after ClickHouse has
+    # stopped. This walks filesystem metadata only; it does not hash file contents.
+    $sourceManifest = Get-StructuralManifest `
+        -MountSpec "type=volume,source=$sourceVolume,target=/root,readonly" `
+        -Image $image `
+        -Label "source"
+    $sourceBytes = [int64]$sourceManifest.regular_file_bytes
 
     # Copy exact stopped ClickHouse files. The source volume is mounted read-only
     # and is deliberately retained after success for rollback.
@@ -204,23 +280,12 @@ try {
         $image, "-lc", "set -eu; cp -a /source/. /target/"
     ) | Out-Null
 
-    $targetSizeCommand = @'
-find /target -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
-'@
-    $targetSizeLines = Invoke-DockerText -Arguments @(
-        "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
-        "--mount", "type=bind,source=$($initial.hot_path),target=/target,readonly",
-        $image, "-lc", $targetSizeCommand
-    )
-    $targetSizeText = ($targetSizeLines | ForEach-Object { $_.ToString().Trim() } |
-        Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1)
-    if ($null -eq $targetSizeText) {
-        throw "Unable to measure copied Hot destination regular files."
-    }
-    $targetBytes = [int64]$targetSizeText
-    if ($targetBytes -ne $sourceBytes) {
-        throw "Copied regular-file byte mismatch: source=$sourceBytes target=$targetBytes"
-    }
+    $targetManifest = Get-StructuralManifest `
+        -MountSpec "type=bind,source=$($initial.hot_path),target=/root,readonly" `
+        -Image $image `
+        -Label "Hot copy"
+    Assert-StructuralManifestEqual -Before $sourceManifest -After $targetManifest
+    $targetBytes = [int64]$targetManifest.regular_file_bytes
 
     Invoke-HotColdCompose -Arguments @("up", "-d", "--wait", "--no-deps", "clickhouse") | Out-Null
     $hotActivated = $true
@@ -262,11 +327,21 @@ find /target -type f -printf '%s\n' | awk '{s += $1} END {printf "%.0f\n", s}'
     [ordered]@{
         migration_completed = $true
         hot_cold_activated = $true
+        bind_filesystem_capabilities_verified = $true
         source_volume = $sourceVolume
         source_volume_retained = $true
         source_regular_file_bytes = $sourceBytes
+        source_regular_file_count = [int64]$sourceManifest.regular_file_count
+        source_symlink_count = [int64]$sourceManifest.symlink_count
+        source_directory_count = [int64]$sourceManifest.directory_count
+        source_structure_manifest_sha256 = [string]$sourceManifest.manifest_sha256
         source_bytes_measured_after_clickhouse_stop = $true
         hot_copy_regular_file_bytes = $targetBytes
+        hot_copy_regular_file_count = [int64]$targetManifest.regular_file_count
+        hot_copy_symlink_count = [int64]$targetManifest.symlink_count
+        hot_copy_directory_count = [int64]$targetManifest.directory_count
+        hot_copy_structure_manifest_sha256 = [string]$targetManifest.manifest_sha256
+        structural_manifest_verified = $true
         hot_path = $initial.hot_path
         cold_path = $initial.cold_path
         log_path = $initial.log_path
