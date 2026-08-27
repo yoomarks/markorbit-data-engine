@@ -271,8 +271,11 @@ try {
 
     # Prove the Windows bind paths support the filesystem semantics required by
     # ClickHouse/cp -a before stopping the authoritative database. Hot is tested
-    # for mkdir/rename/hardlink/symlink/ownership/mode; Cold/logs verify ownership,
-    # mode and ordinary file IO. All probe artifacts are removed in-container.
+    # for mkdir/rename/hardlink/symlink/ownership/mode AND case-distinct files;
+    # Cold/logs verify ownership, mode and ordinary file IO. The case-distinct
+    # check is required because a Linux ClickHouse data root can legitimately
+    # contain paths that differ only by case, which collide on a case-insensitive
+    # Windows bind. All probe artifacts are removed in-container.
     $probeName = ".markorbit-cutover-probe-$([guid]::NewGuid().ToString('N'))"
     $probeScriptTemplate = @'
 set -eu
@@ -302,6 +305,12 @@ test "$(stat -c %a "$hot_root/dir-renamed/renamed")" = "640"
 test "$(stat -c %h "$hot_root/dir-renamed/renamed")" -ge 2
 grep -qx hot "$hot_root/hardlink"
 grep -qx hot "$hot_root/symlink"
+printf case-upper > "$hot_root/CaseSensitiveProbe"
+printf case-lower > "$hot_root/casesensitiveprobe"
+grep -qx case-upper "$hot_root/CaseSensitiveProbe"
+grep -qx case-lower "$hot_root/casesensitiveprobe"
+case_count="$(find "$hot_root" -maxdepth 1 -type f \( -name 'CaseSensitiveProbe' -o -name 'casesensitiveprobe' \) -printf '.\n' | wc -l | tr -d ' ')"
+test "$case_count" = "2"
 printf cold > "$cold_file"
 printf logs > "$log_file"
 chown "$uid:$gid" "$cold_file" "$log_file"
@@ -420,6 +429,7 @@ clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --
         migration_completed = $true
         hot_cold_activated = $true
         bind_filesystem_capabilities_verified = $true
+        bind_case_sensitive_semantics_verified = $true
         source_volume = $sourceVolume
         source_volume_retained = $true
         source_regular_file_bytes = $sourceBytes
