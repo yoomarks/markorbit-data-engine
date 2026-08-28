@@ -16,6 +16,9 @@ def test_postgres_pre_reset_backup_operator_is_fail_closed() -> None:
     assert "pg_dumpall" in text
     assert "LOGICAL_BACKUP_OK" in text
     assert "docker stop --timeout 60 $PostgresContainer" in text
+    assert "$postgresStoppedByOperator = $false" in text
+    assert "$postgresStoppedByOperator = $true" in text
+    assert "if ($postgresStoppedByOperator)" in text
     assert "type=volume,source=$PostgresVolume,target=/source,readonly" in text
     assert "tar -czf" in text
     assert "gzip -t" in text
