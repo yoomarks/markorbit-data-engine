@@ -14,10 +14,39 @@ function Assert-LastExitCode([string]$Message) {
     if ($LASTEXITCODE -ne 0) { throw $Message }
 }
 
-function Assert-FileHash([string]$Path, [string]$Expected) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Required recovery file missing: $Path" }
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
-    if ($actual -ne $Expected.ToLowerInvariant()) { throw "SHA256 mismatch: $Path" }
+function Assert-FileReceipt(
+    [string]$Path,
+    [int64]$ExpectedBytes,
+    [string]$ExpectedHash,
+    [string]$ReceiptHash
+) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Required recovery file missing: $Path"
+    }
+    $item = Get-Item -LiteralPath $Path
+    if ([int64]$item.Length -ne $ExpectedBytes) {
+        throw "Recovery file byte length changed after preparation: $Path"
+    }
+    if ($ExpectedHash -notmatch '^[0-9a-fA-F]{64}$' -or $ReceiptHash -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "Recovery SHA256 receipt is malformed: $Path"
+    }
+    if ($ExpectedHash.ToLowerInvariant() -ne $ReceiptHash.ToLowerInvariant()) {
+        throw "Recovery SHA256 receipt chain mismatch: $Path"
+    }
+}
+
+function Assert-AncillaryReceipt($Entry) {
+    $path = [string]$Entry.archive
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Ancillary recovery file missing: $path"
+    }
+    $item = Get-Item -LiteralPath $path
+    if ([int64]$item.Length -ne [int64]$Entry.bytes) {
+        throw "Ancillary recovery file byte length changed after preparation: $path"
+    }
+    if ([string]$Entry.sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "Ancillary SHA256 receipt is malformed: $path"
+    }
 }
 
 function Normalize-HostPath([string]$Path) {
@@ -54,6 +83,7 @@ try {
 
     docker info | Out-Null
     Assert-LastExitCode "Docker Engine is unavailable after reset."
+    Write-Host "DOCKER_ENGINE_OK"
 
     $prepDir = Get-ChildItem -LiteralPath $RecoveryRoot -Directory |
         Sort-Object LastWriteTime -Descending |
@@ -66,13 +96,24 @@ try {
     if ($prep.schema_version -ne "DOCKER_DATA_RESET_PREPARATION_V1" -or [bool]$prep.destructive_action_performed) {
         throw "Unexpected or unsafe Docker reset preparation manifest."
     }
+    Write-Host "PREPARATION_MANIFEST_OK"
 
     $pgManifest = Get-Content -Raw -LiteralPath $prep.postgres_backup_manifest | ConvertFrom-Json
-    if ($pgManifest.schema_version -ne "POSTGRES_BEFORE_DOCKER_DATA_RESET_V1") { throw "Unexpected PostgreSQL backup manifest schema." }
-    Assert-FileHash $pgManifest.logical_backup.path $pgManifest.logical_backup.sha256
-    Assert-FileHash $pgManifest.cold_pgdata_backup.path $pgManifest.cold_pgdata_backup.sha256
-    foreach ($entry in @($prep.ancillary_volumes)) { Assert-FileHash ([string]$entry.archive) ([string]$entry.sha256) }
-    Write-Host "RECOVERY_ARTIFACTS_REVERIFIED"
+    if ($pgManifest.schema_version -ne "POSTGRES_BEFORE_DOCKER_DATA_RESET_V1") {
+        throw "Unexpected PostgreSQL backup manifest schema."
+    }
+
+    Assert-FileReceipt ([string]$pgManifest.logical_backup.path) ([int64]$pgManifest.logical_backup.bytes) ([string]$pgManifest.logical_backup.sha256) ([string]$prep.postgres_logical_sha256)
+    Write-Host "LOGICAL_BACKUP_RECEIPT_OK"
+
+    Assert-FileReceipt ([string]$pgManifest.cold_pgdata_backup.path) ([int64]$pgManifest.cold_pgdata_backup.bytes) ([string]$pgManifest.cold_pgdata_backup.sha256) ([string]$prep.postgres_pgdata_sha256)
+    Write-Host "COLD_PGDATA_RECEIPT_OK"
+
+    foreach ($entry in @($prep.ancillary_volumes)) {
+        Assert-AncillaryReceipt $entry
+        Write-Host "Ancillary receipt OK: $([string]$entry.volume)"
+    }
+    Write-Host "RECOVERY_RECEIPT_CHAIN_OK"
 
     foreach ($p in @($HotPath, $ColdPath, $LogPath)) {
         if (-not (Test-Path -LiteralPath $p -PathType Container)) { throw "Persistent bind path missing after reset: $p" }

@@ -76,7 +76,11 @@ def test_restore_operator_requires_fresh_d_drive_and_preserves_external_clickhou
     lowered = text.lower()
 
     for marker in (
-        "RECOVERY_ARTIFACTS_REVERIFIED",
+        "DOCKER_ENGINE_OK",
+        "PREPARATION_MANIFEST_OK",
+        "LOGICAL_BACKUP_RECEIPT_OK",
+        "COLD_PGDATA_RECEIPT_OK",
+        "RECOVERY_RECEIPT_CHAIN_OK",
         "HOT_CASE_SENSITIVE_QUERY_OK",
         "FRESH_DOCKER_DATA_DISK_OK",
         "CLEAN_DOCKER_STATE_OK",
@@ -99,9 +103,13 @@ def test_restore_operator_requires_fresh_d_drive_and_preserves_external_clickhou
     assert "docker compose @compose pull postgres clickhouse" in text
     assert "markorbit-data-engine_postgres_data" in text
     assert "docker volume create $volumeName" in text
+    assert "tar -xzf" in text
+    assert "postgres_logical_sha256" in text
+    assert "postgres_pgdata_sha256" in text
     assert "2%" in text
 
     for forbidden in (
+        "get-filehash",
         "--no-deps",
         "docker volume rm",
         "docker system prune",
@@ -114,6 +122,18 @@ def test_restore_operator_requires_fresh_d_drive_and_preserves_external_clickhou
         "docker desktop restart",
     ):
         assert forbidden not in lowered
+
+
+def test_restore_receipt_gate_is_fail_closed_without_duplicate_full_file_hashing() -> None:
+    text = RESTORE.read_text(encoding="utf-8")
+
+    assert "function Assert-FileReceipt" in text
+    assert "Recovery file byte length changed after preparation" in text
+    assert "Recovery SHA256 receipt chain mismatch" in text
+    assert "function Assert-AncillaryReceipt" in text
+    assert "Ancillary recovery file byte length changed after preparation" in text
+    assert "^[0-9a-fA-F]{64}$" in text
+    assert "Get-FileHash" not in text
 
 
 def test_reset_operators_use_character_path_normalization_and_native_shell_quotes() -> None:
