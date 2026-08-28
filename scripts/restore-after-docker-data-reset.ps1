@@ -103,18 +103,10 @@ try {
         throw "Unexpected PostgreSQL backup manifest schema."
     }
 
-    Assert-FileReceipt \
-        ([string]$pgManifest.logical_backup.path) \
-        ([int64]$pgManifest.logical_backup.bytes) \
-        ([string]$pgManifest.logical_backup.sha256) \
-        ([string]$prep.postgres_logical_sha256)
+    Assert-FileReceipt ([string]$pgManifest.logical_backup.path) ([int64]$pgManifest.logical_backup.bytes) ([string]$pgManifest.logical_backup.sha256) ([string]$prep.postgres_logical_sha256)
     Write-Host "LOGICAL_BACKUP_RECEIPT_OK"
 
-    Assert-FileReceipt \
-        ([string]$pgManifest.cold_pgdata_backup.path) \
-        ([int64]$pgManifest.cold_pgdata_backup.bytes) \
-        ([string]$pgManifest.cold_pgdata_backup.sha256) \
-        ([string]$prep.postgres_pgdata_sha256)
+    Assert-FileReceipt ([string]$pgManifest.cold_pgdata_backup.path) ([int64]$pgManifest.cold_pgdata_backup.bytes) ([string]$pgManifest.cold_pgdata_backup.sha256) ([string]$prep.postgres_pgdata_sha256)
     Write-Host "COLD_PGDATA_RECEIPT_OK"
 
     foreach ($entry in @($prep.ancillary_volumes)) {
