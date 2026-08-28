@@ -1,4 +1,5 @@
-from app.us.capacity_pilot import build_pilot_receipt
+from app.us.capacity_pilot import APPLICATION_OUTPUT_TABLES, build_pilot_receipt
+from app.us.ingest import OUTPUT_PACKAGE_COLUMNS
 
 
 def _profile(**tables: tuple[int, int]) -> dict[str, object]:
@@ -55,6 +56,12 @@ def _replay() -> dict[str, object]:
     }
 
 
+def test_capacity_pilot_output_tables_match_ingest_cleanup_contract() -> None:
+    assert APPLICATION_OUTPUT_TABLES == {
+        qualified.split(".", 1)[1] for qualified in OUTPUT_PACKAGE_COLUMNS
+    }
+
+
 def test_one_package_receipt_measures_hot_table_family_deltas() -> None:
     before = _profile(us_case_current=(100, 10), us_owner_current=(50, 10))
     after = _profile(
@@ -92,7 +99,10 @@ def test_receipt_blocks_if_any_unrelated_us_table_changes() -> None:
         after_profile=_profile(us_case_current=(150, 20), us_assignment_current=(21, 3)),
     )
     assert result["status"] == "BLOCKED"
-    assert any(issue["type"] == "CONCURRENT_OR_UNEXPECTED_US_TABLE_CHANGE" for issue in result["issues"])
+    assert any(
+        issue["type"] == "CONCURRENT_OR_UNEXPECTED_US_TABLE_CHANGE"
+        for issue in result["issues"]
+    )
 
 
 def test_receipt_blocks_unstable_negative_active_part_delta() -> None:
@@ -104,7 +114,10 @@ def test_receipt_blocks_unstable_negative_active_part_delta() -> None:
         after_profile=_profile(us_case_current=(90, 20)),
     )
     assert result["status"] == "BLOCKED"
-    assert any(issue["type"] == "ACTIVE_PART_DELTA_NOT_STABLE_FOR_MEASUREMENT" for issue in result["issues"])
+    assert any(
+        issue["type"] == "ACTIVE_PART_DELTA_NOT_STABLE_FOR_MEASUREMENT"
+        for issue in result["issues"]
+    )
 
 
 def test_receipt_requires_exactly_one_applied_package() -> None:
