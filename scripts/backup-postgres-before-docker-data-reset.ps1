@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$postgresStoppedByOperator = $false
 Push-Location $repoRoot
 
 function Assert-LastExitCode([string]$Message) {
@@ -112,6 +113,7 @@ try {
 
     docker stop --timeout 60 $PostgresContainer | Out-Host
     Assert-LastExitCode "Failed to stop PostgreSQL cleanly."
+    $postgresStoppedByOperator = $true
 
     $stopped = Get-ContainerState $PostgresContainer
     if ($stopped.State.Status -ne "exited") {
@@ -144,6 +146,7 @@ try {
 
     docker start $PostgresContainer | Out-Host
     Assert-LastExitCode "Failed to restart PostgreSQL after backup."
+    $postgresStoppedByOperator = $false
     Wait-PostgresHealthy $PostgresContainer
     Write-Host "POSTGRES_RESTORED_HEALTHY"
 
@@ -177,17 +180,13 @@ try {
     Write-Host "POSTGRES_DUAL_BACKUP_OK"
 }
 finally {
-    try {
-        $raw = docker inspect $PostgresContainer 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $obj = (($raw | Out-String) | ConvertFrom-Json)[0]
-            if ($obj.State.Status -ne "running") {
-                docker start $PostgresContainer | Out-Null
-            }
+    if ($postgresStoppedByOperator) {
+        try {
+            docker start $PostgresContainer | Out-Null
         }
-    }
-    catch {
-        Write-Warning "PostgreSQL automatic restart attempt failed: $($_.Exception.Message)"
+        catch {
+            Write-Warning "PostgreSQL automatic restart attempt failed: $($_.Exception.Message)"
+        }
     }
     Pop-Location
 }
