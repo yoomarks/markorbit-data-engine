@@ -180,9 +180,9 @@ try {
     docker rm $cid | Out-Host
     Assert-LastExitCode "Failed removing stopped ClickHouse container shell. Data directory was not touched."
 
-    $env:CLICKHOUSE_HOT_DATA_PATH = ($NewHotPath -replace '\\', '/')
-    $env:CLICKHOUSE_COLD_DATA_PATH = ($ColdPath -replace '\\', '/')
-    $env:CLICKHOUSE_LOG_PATH = ($LogPath -replace '\\', '/')
+    $env:CLICKHOUSE_HOT_DATA_PATH = ($NewHotPath -replace '\', '/')
+    $env:CLICKHOUSE_COLD_DATA_PATH = ($ColdPath -replace '\', '/')
+    $env:CLICKHOUSE_LOG_PATH = ($LogPath -replace '\', '/')
 
     $rawConfig = docker compose @compose config --format json
     Assert-LastExitCode "Unable to resolve Hot/Cold compose model for new path."
