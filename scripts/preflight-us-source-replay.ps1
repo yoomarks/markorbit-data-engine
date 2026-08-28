@@ -16,8 +16,9 @@ try {
         throw "Persistent worker is running. Stop it before US source replay preflight."
     }
 
-    # Build separately from the report-producing container run. Docker Desktop can emit
-    # progress/status text on host output streams; never use those streams as JSON evidence.
+    # Build separately from the report-producing container run. Do not use `docker compose run --build`:
+    # Docker Desktop can emit build/progress text on host output streams, which must never become
+    # part of the JSON evidence channel.
     Write-Host "Building US preflight worker image..."
     & docker compose build worker | Out-Host
     if ($LASTEXITCODE -ne 0) {
@@ -41,10 +42,12 @@ try {
     if (-not $outputFileName) {
         throw "US source preflight output path must have a file name."
     }
+    if ($outputFileName -notmatch "^[A-Za-z0-9_.-]+$") {
+        throw "US source preflight output file name contains unsupported characters."
+    }
 
     # Redirect Python stdout *inside* the disposable container to a bind-mounted file.
-    # This keeps Docker/Compose host progress, warnings, and container lifecycle output
-    # completely outside the JSON evidence channel.
+    # Every command argument below is operator-owned and contains no shell metacharacters.
     $pythonArgs = @("python", "-m", "app.us.source_preflight")
     if ($ExpectedHistoryParts -gt 0) {
         $pythonArgs += @("--expected-history-parts", "$ExpectedHistoryParts")
@@ -52,9 +55,7 @@ try {
     if ($DeepSourceTest) {
         $pythonArgs += "--deep-source-test"
     }
-    $shellCommand = (($pythonArgs | ForEach-Object {
-        if ($_ -match "^[A-Za-z0-9_./:-]+$") { $_ } else { "'" + ($_ -replace "'", "'\"'\"'") + "'" }
-    }) -join " ") + " > /preflight-output/$outputFileName"
+    $shellCommand = ($pythonArgs -join " ") + " > /preflight-output/$outputFileName"
 
     if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
         Remove-Item -LiteralPath $OutputPath -Force
