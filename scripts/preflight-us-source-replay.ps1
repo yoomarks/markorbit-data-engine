@@ -14,8 +14,18 @@ if ($worker) {
     throw "Persistent worker is running. Stop it before US source replay preflight."
 }
 
+# Build separately from the JSON-producing container run. `docker compose run --build`
+# can emit build/progress text onto the captured PowerShell output stream on some
+# Docker Desktop/PowerShell combinations, corrupting the JSON payload passed to
+# ConvertFrom-Json even when the Python process itself emitted valid JSON.
+Write-Host "Building US preflight worker image..."
+& docker compose build worker | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to build worker image for US source replay preflight."
+}
+
 $args = @(
-    "run", "--build", "--rm", "--no-deps", "worker",
+    "run", "--rm", "--no-deps", "-T", "worker",
     "python", "-m", "app.us.source_preflight"
 )
 if ($ExpectedHistoryParts -gt 0) {
@@ -26,11 +36,21 @@ if ($DeepSourceTest) {
 }
 
 $jsonLines = & docker compose @args
-if ($LASTEXITCODE -ne 0) {
-    throw "US source replay preflight process failed."
+$runExitCode = $LASTEXITCODE
+if ($runExitCode -ne 0) {
+    throw "US source replay preflight process failed with exit code $runExitCode."
 }
 $json = $jsonLines -join "`n"
-$report = $json | ConvertFrom-Json
+if (-not $json.Trim()) {
+    throw "US source replay preflight produced no JSON output."
+}
+try {
+    $report = $json | ConvertFrom-Json
+}
+catch {
+    $preview = if ($json.Length -gt 500) { $json.Substring(0, 500) } else { $json }
+    throw "US source replay preflight produced invalid JSON. Output preview: $preview"
+}
 
 if (-not $OutputPath) {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
