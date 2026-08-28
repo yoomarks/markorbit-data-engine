@@ -12,7 +12,8 @@ Push-Location $repoRoot
 
 function Normalize-HostPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return "" }
-    return (($Path -replace '/', '\\').TrimEnd('\')).ToLowerInvariant()
+    $normalized = $Path.Replace([char]47, [char]92)
+    return $normalized.TrimEnd([char[]]@([char]92)).ToLowerInvariant()
 }
 
 function Test-IsAdministrator {
@@ -94,9 +95,9 @@ try {
 
     Write-Host "`n===== RESOLVE NEW HOT/COLD COMPOSE MODEL ====="
 
-    $env:CLICKHOUSE_HOT_DATA_PATH = $NewHotPath.Replace('\', '/')
-    $env:CLICKHOUSE_COLD_DATA_PATH = $ColdPath.Replace('\', '/')
-    $env:CLICKHOUSE_LOG_PATH = $LogPath.Replace('\', '/')
+    $env:CLICKHOUSE_HOT_DATA_PATH = $NewHotPath.Replace([char]92, [char]47)
+    $env:CLICKHOUSE_COLD_DATA_PATH = $ColdPath.Replace([char]92, [char]47)
+    $env:CLICKHOUSE_LOG_PATH = $LogPath.Replace([char]92, [char]47)
 
     $compose = @(
         "-f", "docker-compose.yml",

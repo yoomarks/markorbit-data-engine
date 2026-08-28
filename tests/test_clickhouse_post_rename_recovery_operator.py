@@ -14,7 +14,10 @@ def test_post_rename_recovery_is_fail_closed_and_path_safe() -> None:
     assert "Old Hot path still exists" in text
     assert "Renamed Hot directory missing" in text
     assert "queryCaseSensitiveInfo" in text
-    assert ".Replace('\\', '/')" in text
+    assert "$Path.Replace([char]47, [char]92)" in text
+    assert "$NewHotPath.Replace([char]92, [char]47)" in text
+    assert "$ColdPath.Replace([char]92, [char]47)" in text
+    assert "$LogPath.Replace([char]92, [char]47)" in text
     assert "docker compose @compose create clickhouse" in lowered
     assert "docker compose @compose create --no-deps clickhouse" not in lowered
     assert "ClickHouse unexpectedly has compose dependencies" in text
@@ -51,3 +54,12 @@ def test_post_rename_recovery_never_starts_api_or_worker() -> None:
     assert "docker start $cid" in lowered
     assert "docker start markorbit-data-engine-worker-1" not in lowered
     assert "docker start markorbit-data-engine-api-1" not in lowered
+
+
+def test_post_rename_recovery_avoids_regex_for_host_path_conversion() -> None:
+    text = OPERATOR.read_text(encoding="utf-8")
+
+    assert "-replace '/'," not in text
+    assert "-replace '\\', '/'" not in text
+    assert "Replace([char]47, [char]92)" in text
+    assert "Replace([char]92, [char]47)" in text
