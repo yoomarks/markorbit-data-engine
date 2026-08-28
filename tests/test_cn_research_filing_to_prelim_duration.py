@@ -102,6 +102,9 @@ def test_materialization_is_replay_stable_and_generated_at_is_not_identity() -> 
     assert first.dataset_ref.query["missing_temporal_policy"] == "EXCLUDE_DECLARED"
     assert first.dataset_ref.query["replay_scope"] == "QUIESCENT_CURRENT_SERVING_EPOCH"
     assert first.dataset_ref.query["historic_as_of_reconstruction"] is False
+    assert first.dataset_ref.query["source_column_aliases"] == {
+        "source_package_id": "last_source_package_id"
+    }
 
 
 def test_content_or_lineage_drift_fails_replay_under_same_query_identity() -> None:
@@ -177,7 +180,8 @@ def test_keyset_sql_is_bounded_and_carries_source_lineage() -> None:
     assert "LIMIT 250" in sql
     assert "filing_date IS NOT NULL" in sql
     assert "prelim_pub_date IS NOT NULL" in sql
-    assert "source_package_id" in sql
+    assert "toString(last_source_package_id) AS source_package_id" in sql
+    assert "toString(source_package_id) AS source_package_id" not in sql
     assert "source_row_hash" in sql
     assert "record_hash" in sql
     assert "source_rank" in sql
