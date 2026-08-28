@@ -215,6 +215,9 @@ def _query_identity(*, max_rows: int | None) -> dict[str, Any]:
             "record_hash",
             "source_rank",
         ],
+        "source_column_aliases": {
+            "source_package_id": "last_source_package_id",
+        },
         "source_predicate": {
             "is_deleted": 0,
             "filing_date": "NOT_NULL",
@@ -333,7 +336,7 @@ def _duration_batch_sql(*, after_application_number: str, batch_size: int) -> st
             application_number,
             filing_date,
             prelim_pub_date,
-            toString(source_package_id) AS source_package_id,
+            toString(last_source_package_id) AS source_package_id,
             source_effective_date,
             source_row_hash,
             record_hash,
