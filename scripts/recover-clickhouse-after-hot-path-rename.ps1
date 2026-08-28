@@ -12,7 +12,7 @@ Push-Location $repoRoot
 
 function Normalize-HostPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return "" }
-    return (($Path -replace '/', '\').TrimEnd('\')).ToLowerInvariant()
+    return (($Path -replace '/', '\\').TrimEnd('\')).ToLowerInvariant()
 }
 
 function Test-IsAdministrator {
@@ -125,12 +125,19 @@ try {
     if ((Normalize-HostPath $resolvedLogs.source) -ne (Normalize-HostPath $LogPath)) {
         throw "Resolved Logs source is unexpected."
     }
+    if ($null -ne $cfg.services.clickhouse.depends_on) {
+        throw "ClickHouse unexpectedly has compose dependencies. Single-service shell creation is blocked."
+    }
 
     Write-Host "COMPOSE_MODEL_OK"
+    Write-Host "CLICKHOUSE_HAS_NO_DEPENDENCIES_OK"
 
     Write-Host "`n===== CREATE CLICKHOUSE CONTAINER SHELL ====="
 
-    docker compose @compose create --no-deps clickhouse
+    # `docker compose create` does not support --no-deps on the accepted
+    # target-host Compose version. The resolved ClickHouse service has no
+    # depends_on entries, so naming only `clickhouse` remains single-service.
+    docker compose @compose create clickhouse
     Assert-LastExitCode "Failed to create ClickHouse container shell."
 
     $cid = docker compose @compose ps -a -q clickhouse

@@ -15,7 +15,10 @@ def test_post_rename_recovery_is_fail_closed_and_path_safe() -> None:
     assert "Renamed Hot directory missing" in text
     assert "queryCaseSensitiveInfo" in text
     assert ".Replace('\\', '/')" in text
-    assert "docker compose @compose create --no-deps clickhouse" in lowered
+    assert "docker compose @compose create clickhouse" in lowered
+    assert "docker compose @compose create --no-deps clickhouse" not in lowered
+    assert "ClickHouse unexpectedly has compose dependencies" in text
+    assert "CLICKHOUSE_HAS_NO_DEPENDENCIES_OK" in text
     assert "CREATED_MOUNTS_OK" in text
     assert "check-cn-serving-state.ps1" in text
     assert "profile-cn-hot-warm-capacity.ps1" in text
