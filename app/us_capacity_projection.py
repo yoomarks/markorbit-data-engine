@@ -31,6 +31,22 @@ def _percent(value: Any, field: str) -> float:
     return result
 
 
+def _byte_map(value: Any, field: str) -> dict[str, int]:
+    if not isinstance(value, dict) or not value:
+        raise ValueError(f"{field} must be a non-empty object")
+    result: dict[str, int] = {}
+    for raw_name, raw_bytes in value.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValueError(f"{field} keys must be non-empty strings")
+        name = raw_name.strip()
+        if name in result:
+            raise ValueError(f"{field} contains duplicate normalized key {name!r}")
+        result[name] = _non_negative_int(raw_bytes, f"{field}.{name}")
+    if not any(result.values()):
+        raise ValueError(f"{field} must contain at least one positive byte value")
+    return dict(sorted(result.items()))
+
+
 def _ceil_ratio(total: int, numerator: int, denominator: int) -> int:
     return (total * numerator + denominator - 1) // denominator
 
@@ -109,11 +125,17 @@ def evaluate_projection(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         pilot_raw_bytes = _positive_int(pilot.get("raw_bytes"), "pilot.raw_bytes")
+        pilot_warm_bytes = _non_negative_int(pilot.get("warm_bytes"), "pilot.warm_bytes")
         pilot_hot_bytes = _positive_int(pilot.get("hot_bytes"), "pilot.hot_bytes")
+        hot_bytes_by_table_family = _byte_map(
+            pilot.get("hot_bytes_by_table_family"), "pilot.hot_bytes_by_table_family"
+        )
         pilot_rows = _positive_int(pilot.get("rows"), "pilot.rows")
         pilot_identity = pilot.get("receipt_identity")
         if not isinstance(pilot_identity, str) or not pilot_identity.strip():
             raise ValueError("pilot.receipt_identity is required")
+        if sum(hot_bytes_by_table_family.values()) != pilot_hot_bytes:
+            raise ValueError("pilot.hot_bytes_by_table_family must sum exactly to pilot.hot_bytes")
     except ValueError as exc:
         return {**base, **_blocked([{"type": "PILOT_INVALID", "error": str(exc)}])}
 
@@ -124,9 +146,15 @@ def evaluate_projection(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     projected_hot_bytes = _ceil_ratio(corpus_raw_bytes, pilot_hot_bytes, pilot_raw_bytes)
+    projected_warm_bytes = _ceil_ratio(corpus_raw_bytes, pilot_warm_bytes, pilot_raw_bytes)
     projected_rows = _ceil_ratio(corpus_raw_bytes, pilot_rows, pilot_raw_bytes)
+    projected_hot_by_table_family = {
+        name: _ceil_ratio(corpus_raw_bytes, size, pilot_raw_bytes)
+        for name, size in hot_bytes_by_table_family.items()
+    }
+    required_cold_and_warm_bytes = corpus_raw_bytes + projected_warm_bytes
     hot_safe = projected_hot_bytes <= hot_budget_bytes
-    cold_safe = corpus_raw_bytes <= cold_budget_bytes
+    cold_safe = required_cold_and_warm_bytes <= cold_budget_bytes
     gate_issues: list[dict[str, Any]] = []
     if not hot_safe:
         gate_issues.append(
@@ -139,8 +167,8 @@ def evaluate_projection(payload: dict[str, Any]) -> dict[str, Any]:
     if not cold_safe:
         gate_issues.append(
             {
-                "type": "RAW_CORPUS_EXCEEDS_COLD_BUDGET",
-                "corpus_raw_bytes": corpus_raw_bytes,
+                "type": "PROJECTED_COLD_AND_WARM_EXCEED_BUDGET",
+                "required_cold_and_warm_bytes": required_cold_and_warm_bytes,
                 "cold_budget_bytes": cold_budget_bytes,
             }
         )
@@ -155,14 +183,19 @@ def evaluate_projection(payload: dict[str, Any]) -> dict[str, Any]:
         "pilot": {
             "receipt_identity": pilot_identity.strip(),
             "raw_bytes": pilot_raw_bytes,
+            "warm_bytes": pilot_warm_bytes,
             "hot_bytes": pilot_hot_bytes,
+            "hot_bytes_by_table_family": hot_bytes_by_table_family,
             "rows": pilot_rows,
         },
         "projection": {
-            "method": "MEASURED_BOUNDED_PILOT_RAW_TO_HOT_RATIO",
+            "method": "MEASURED_BOUNDED_PILOT_RAW_TO_STORAGE_RATIOS",
             "projected_hot_bytes": projected_hot_bytes,
+            "projected_hot_bytes_by_table_family": projected_hot_by_table_family,
+            "projected_warm_bytes": projected_warm_bytes,
             "projected_rows": projected_rows,
             "required_cold_raw_bytes": corpus_raw_bytes,
+            "required_cold_and_warm_bytes": required_cold_and_warm_bytes,
             "hot_safe": hot_safe,
             "cold_safe": cold_safe,
             "physical_batch_or_package_shape_assumed_equal": False,
@@ -185,7 +218,7 @@ def _blocked(issues: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Evaluate the measured US full-corpus Hot/Cold capacity gate"
+        description="Evaluate the measured US full-corpus Hot/Warm/Cold capacity gate"
     )
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path)
