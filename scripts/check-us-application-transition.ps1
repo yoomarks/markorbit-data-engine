@@ -28,7 +28,7 @@ try {
     }
 
     $gateArgs = @(
-        "-m", "app.us.application_transition_gate",
+        "-m", "app.us.application_transition_host_protocol",
         "--expected-history-parts", "$ExpectedHistoryParts"
     )
     if ($DeepSourceTest) {
@@ -37,27 +37,56 @@ try {
     if ($VerifySourceFiles) {
         $gateArgs += "--verify-source-files"
     }
-    if ($Compact) {
-        $gateArgs += "--compact"
-    }
 
-    # Entire transition gate is read-only. It first runs the metadata-only CN
-    # serving-state checkpoint; it never repeats the already-accepted CN full-
-    # corpus semantic audit. US source/readiness is evaluated only after CN passes.
-    $jsonLines = & docker compose run --rm --no-deps -T `
+    # The Python host protocol executes the transition exactly once. It emits a
+    # small flat decision summary for Windows PowerShell control flow plus the
+    # complete nested evidence as an opaque JSON line. PowerShell must never
+    # deserialize the full nested evidence object.
+    $protocolLines = @(& docker compose run --rm --no-deps -T `
         --volume "${repoRoot}\app:/app/app:ro" `
-        worker python @gateArgs
+        worker python @gateArgs)
     $exitCode = $LASTEXITCODE
-    $json = $jsonLines -join "`n"
 
-    if (-not $json.Trim()) {
-        throw "US Application transition gate produced no JSON report."
+    $summaryPrefix = "MARKORBIT_US_APPLICATION_TRANSITION_SUMMARY`t"
+    $evidencePrefix = "MARKORBIT_US_APPLICATION_TRANSITION_EVIDENCE`t"
+    $summaryLines = @($protocolLines | Where-Object {
+        $_ -is [string] -and $_.StartsWith($summaryPrefix)
+    })
+    $evidenceLines = @($protocolLines | Where-Object {
+        $_ -is [string] -and $_.StartsWith($evidencePrefix)
+    })
+
+    if ($summaryLines.Count -ne 1) {
+        throw "US Application transition host protocol produced $($summaryLines.Count) summary lines; expected exactly 1."
     }
+    if ($evidenceLines.Count -ne 1) {
+        throw "US Application transition host protocol produced $($evidenceLines.Count) evidence lines; expected exactly 1."
+    }
+
+    $summaryJson = $summaryLines[0].Substring($summaryPrefix.Length)
+    $evidenceJson = $evidenceLines[0].Substring($evidencePrefix.Length)
+    if (-not $summaryJson.Trim()) {
+        throw "US Application transition host protocol produced an empty summary."
+    }
+    if (-not $evidenceJson.Trim()) {
+        throw "US Application transition host protocol produced empty full evidence."
+    }
+
     try {
-        $report = $json | ConvertFrom-Json
+        $report = $summaryJson | ConvertFrom-Json
     }
     catch {
-        throw "US Application transition gate produced invalid JSON: $($_.Exception.Message)"
+        throw "US Application transition host summary produced invalid JSON: $($_.Exception.Message)"
+    }
+
+    if ($report.host_protocol_version -ne "US_APPLICATION_TRANSITION_HOST_V1") {
+        throw "Unexpected US Application transition host protocol version: $($report.host_protocol_version)"
+    }
+    if ($report.transition_version -ne "CN_TO_US_APPLICATION_TRANSITION_V2") {
+        throw "Unexpected US Application transition version: $($report.transition_version)"
+    }
+    if ([int]$report.expected_history_parts -ne $ExpectedHistoryParts) {
+        throw "US Application transition summary history-part pin drifted."
     }
 
     if (-not $OutputPath) {
@@ -68,7 +97,7 @@ try {
     if ($outputDirectory) {
         New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
     }
-    $json | Set-Content -Encoding UTF8 $OutputPath
+    $evidenceJson | Set-Content -Encoding UTF8 $OutputPath
 
     Write-Host "Transition status: $($report.status)"
     Write-Host "CN gate passed: $($report.cn_gate_passed)"
@@ -81,8 +110,8 @@ try {
     if ($report.reason_codes -and $report.reason_codes.Count -gt 0) {
         Write-Host "Reasons: $($report.reason_codes -join ', ')"
     }
-    if ($report.next_action -and $report.next_action.code) {
-        Write-Host "Next action: $($report.next_action.code)"
+    if ($report.next_action_code) {
+        Write-Host "Next action: $($report.next_action_code)"
     }
 
     if ($exitCode -ne 0) {
