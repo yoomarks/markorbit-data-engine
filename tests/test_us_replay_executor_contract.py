@@ -42,11 +42,15 @@ def test_replay_wrapper_is_dry_run_by_default_worker_guarded_and_acceptance_awar
     assert 'foreach ($service in @("postgres", "clickhouse"))' in source
     assert '[switch]$Apply' in source
     assert '[switch]$All' in source
-    assert '$args += "--apply"' in source
-    assert '$args += "--all"' in source
+    assert 'assert-domain-apply-gate.ps1' in source
+    assert '-TargetDomain "US_APPLICATION"' in source
     assert "--max-packages" in source
     assert "Dry run only" in source
     assert "audit-us-real-data.ps1" in source
+    assert "one_package_apply_pass" in source
+    assert "US_REPLAY_SUMMARY_V1" in Path("app/us/replay_summary.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_us_repository_exposes_replay_registry_without_changing_registration_contract() -> None:
