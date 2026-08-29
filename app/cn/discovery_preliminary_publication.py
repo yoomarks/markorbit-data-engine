@@ -45,7 +45,7 @@ PROJECTION_FIELDS: tuple[str, ...] = (
 ORDERING: tuple[str, ...] = (
     "prelim_pub_date ASC",
     "application_number ASC",
-    "case_id ASC",
+    "toString(case_id) ASC",
 )
 
 
@@ -152,6 +152,9 @@ def _normalize_classes(value: Any) -> list[int]:
 
 
 def normalize_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
+    source_rank = row.get("source_rank")
+    if type(source_rank) is not int or source_rank < 0:
+        raise DiscoveryContractError("source_rank must be a non-negative integer")
     return {
         "candidate_type": CANDIDATE_TYPE,
         "case_id": _required_text(row.get("case_id"), "case_id"),
@@ -171,7 +174,7 @@ def normalize_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "source_row_hash": _required_text(row.get("source_row_hash"), "source_row_hash"),
         "record_hash": _required_text(row.get("record_hash"), "record_hash"),
-        "source_rank": int(row.get("source_rank")),
+        "source_rank": source_rank,
     }
 
 
@@ -230,7 +233,7 @@ def build_page_sql(
           AND prelim_pub_date IS NOT NULL
           AND prelim_pub_date >= {_sql_text(request.start_date.isoformat())}
           AND prelim_pub_date < {_sql_text(request.end_date.isoformat())}{keyset}
-        ORDER BY prelim_pub_date ASC, application_number ASC, case_id ASC
+        ORDER BY prelim_pub_date ASC, application_number ASC, toString(case_id) ASC
         LIMIT {limit}
     """
 
