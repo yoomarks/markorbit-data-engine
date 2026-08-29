@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from datetime import date
-
 import pytest
 
 import app.cn.discovery_preliminary_publication_acceptance as acceptance
+
+
+READ_BUDGET = {
+    "max_rows_to_read": 250000,
+    "max_bytes_to_read": 268435456,
+    "read_overflow_mode": "throw",
+}
 
 
 def page(
@@ -34,6 +39,7 @@ def page(
         ],
         "next_cursor": next_cursor,
         "bounded_truncation": False,
+        "read_budget": READ_BUDGET,
         "provenance": {
             "page_number": page_number,
             "result_count": 1,
@@ -60,8 +66,8 @@ def test_live_acceptance_proves_two_page_replay_without_raw_results(monkeypatch)
     monkeypatch.setattr(acceptance, "execute_page", lambda request, client: next(pages))
 
     receipt = acceptance.build_live_acceptance(
-        start_date=date(2026, 7, 1),
-        end_date=date(2026, 7, 2),
+        application_number_start="A000",
+        application_number_end="A999",
         page_size=1,
         client=object(),
     )
@@ -69,10 +75,13 @@ def test_live_acceptance_proves_two_page_replay_without_raw_results(monkeypatch)
     assert receipt["status"] == "PASS"
     assert receipt["read_only"] is True
     assert receipt["no_write_path"] is True
+    assert receipt["application_number_start"] == "A000"
+    assert receipt["application_number_end"] == "A999"
     assert receipt["page1_replay_match"] is True
     assert receipt["page2_replay_match"] is True
     assert receipt["page1"]["result_count"] == 1
     assert receipt["page2"]["result_count"] == 1
+    assert receipt["page1"]["read_budget"] == READ_BUDGET
     assert "results" not in receipt["page1"]
     assert "results" not in receipt["page2"]
 
@@ -95,8 +104,8 @@ def test_live_acceptance_rejects_cross_page_duplicate(monkeypatch):
 
     with pytest.raises(RuntimeError, match="duplicated"):
         acceptance.build_live_acceptance(
-            start_date=date(2026, 7, 1),
-            end_date=date(2026, 7, 2),
+            application_number_start="A000",
+            application_number_end="A999",
             page_size=1,
             client=object(),
         )
@@ -121,8 +130,8 @@ def test_live_acceptance_rejects_snapshot_change(monkeypatch):
 
     with pytest.raises(RuntimeError, match="crossed serving snapshots"):
         acceptance.build_live_acceptance(
-            start_date=date(2026, 7, 1),
-            end_date=date(2026, 7, 2),
+            application_number_start="A000",
+            application_number_end="A999",
             page_size=1,
             client=object(),
         )
