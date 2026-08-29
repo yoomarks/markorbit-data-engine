@@ -43,22 +43,54 @@ $mode = if ($Apply) { "apply" } else { "dryrun" }
 if (-not $OutputPath) {
     $OutputPath = Join-Path "reports" "us_deterministic_replay_${mode}_$timestamp.json"
 }
+$repoRoot = Split-Path -Parent $PSScriptRoot
+if (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
+    $OutputPath = Join-Path $repoRoot $OutputPath
+}
+$OutputPath = [System.IO.Path]::GetFullPath($OutputPath)
+$outputDirectory = Split-Path -Parent $OutputPath
+if (-not $outputDirectory) {
+    throw "US deterministic replay output path must have a parent directory."
+}
+New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+$outputFileName = [System.IO.Path]::GetFileName($OutputPath)
+if (-not $outputFileName -or $outputFileName -notmatch "^[A-Za-z0-9_.-]+$") {
+    throw "US deterministic replay output file name is invalid."
+}
+$summaryFileName = "$outputFileName.summary.json"
+$summaryPath = Join-Path $outputDirectory $summaryFileName
 
-$args = @(
-    "run", "--build", "--rm", "--no-deps", "worker",
+# Build separately. Do not use docker compose run --build for report-producing commands:
+# Docker Desktop may emit progress/lifecycle text on host output streams.
+Write-Host "Building US replay worker image..."
+& docker compose build worker | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to build worker image for deterministic US replay."
+}
+
+$pythonArgs = @(
     "python", "-m", "app.us.replay_executor",
     "--expected-history-parts", "$ExpectedHistoryParts"
 )
 if ($DeepSourceTest) {
-    $args += "--deep-source-test"
+    $pythonArgs += "--deep-source-test"
 }
 if ($All) {
-    $args += "--all"
+    $pythonArgs += "--all"
 } else {
-    $args += @("--max-packages", "$MaxPackages")
+    $pythonArgs += @("--max-packages", "$MaxPackages")
 }
 if ($Apply) {
-    $args += "--apply"
+    $pythonArgs += "--apply"
+}
+$replayCommand = ($pythonArgs -join " ") + " > /replay-output/$outputFileName"
+$summaryCommand = "python -m app.us.replay_summary /replay-output/$outputFileName /replay-output/$summaryFileName"
+$shellCommand = "$replayCommand && $summaryCommand"
+
+foreach ($path in @($OutputPath, $summaryPath)) {
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        Remove-Item -LiteralPath $path -Force
+    }
 }
 
 $telemetry = $null
@@ -78,32 +110,46 @@ if ($Apply) {
 }
 
 try {
-    $jsonLines = & docker compose @args
+    $outputDirectoryDocker = $outputDirectory.Replace('\', '/')
+    $runArgs = @(
+        "run", "--rm", "--no-deps", "-T",
+        "--volume", "${outputDirectoryDocker}:/replay-output",
+        "worker", "sh", "-lc", $shellCommand
+    )
+    & docker compose @runArgs | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Deterministic US replay process failed before a report was returned."
     }
-    $json = $jsonLines -join "`n"
-    $report = $json | ConvertFrom-Json
-
-    $outputDirectory = Split-Path -Parent $OutputPath
-    if ($outputDirectory) {
-        New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw "Deterministic US replay produced no full report: $OutputPath"
     }
-    $json | Set-Content -Encoding UTF8 $OutputPath
+    if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+        throw "Deterministic US replay produced no compact summary: $summaryPath"
+    }
+
+    # Never pass the full replay evidence object through Windows PowerShell 5.1 ConvertFrom-Json.
+    # Python validates the full JSON and emits this fixed-schema compact summary instead.
+    $summaryJson = Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8
+    if (-not $summaryJson.Trim()) {
+        throw "Deterministic US replay compact summary is empty."
+    }
+    try {
+        $report = $summaryJson | ConvertFrom-Json
+    }
+    catch {
+        throw "Deterministic US replay compact summary contains invalid JSON."
+    }
 
     Write-Host "US deterministic replay mode: $($report.mode)"
     Write-Host "Status: $($report.status)"
     Write-Host "Report: $OutputPath"
-    if ($report.processed_count -ne $null) {
-        Write-Host "Processed this run: $($report.processed_count)"
+    Write-Host "Summary: $summaryPath"
+    Write-Host "Processed this run: $($report.processed_count)"
+    Write-Host "Full source preflights this run: $($report.source_preflight_runs)"
+    if ($report.remaining_count -ne $null) {
+        Write-Host "Remaining: $($report.remaining_count)"
     }
-    if ($report.source_preflight_runs -ne $null) {
-        Write-Host "Full source preflights this run: $($report.source_preflight_runs)"
-    }
-    if ($report.final_plan -and $report.final_plan.remaining_count -ne $null) {
-        Write-Host "Remaining: $($report.final_plan.remaining_count)"
-    }
-    if (-not $Apply -and $report.status -eq "READY") {
+    if (-not $Apply -and $report.dry_run_ready) {
         Write-Host "Dry run only. Re-run with -Apply to process the next package, or -Apply -All for the full remaining plan."
     }
     if ($report.status -eq "COMPLETE") {
@@ -113,6 +159,12 @@ try {
     if ($report.status -in @("BLOCKED", "FAILED", "BUSY")) {
         $reason = if ($report.error) { $report.error } elseif ($report.blockers) { $report.blockers -join ", " } else { $report.status }
         throw "Deterministic US replay stopped: $reason"
+    }
+    if (-not $Apply -and -not $report.dry_run_ready -and $report.status -ne "COMPLETE") {
+        throw "Deterministic US replay dry run did not satisfy the READY gate."
+    }
+    if ($Apply -and $MaxPackages -eq 1 -and -not $All -and -not $report.apply_one_package_ok) {
+        throw "Deterministic US replay did not satisfy the exactly-one-package apply gate."
     }
     if ($telemetry) {
         $telemetryStatus = [string]$report.status
