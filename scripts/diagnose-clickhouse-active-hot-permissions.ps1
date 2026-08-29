@@ -86,7 +86,7 @@ try {
     $serverIdentity = "${serverUid}:${serverGid}"
 
     function Get-ContainerStat([string]$Path) {
-        if ($Path -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]*/?$') {
+        if ($Path -notmatch '^/var/lib/clickhouse(?:/[A-Za-z0-9_./-]*)?/?$') {
             throw "Refusing to stat an unexpected ClickHouse path: $Path"
         }
         $lines = @(& docker compose exec -T clickhouse sh -lc "stat -c '%u|%g|%a|%A|%n' '$Path'")
@@ -107,8 +107,20 @@ try {
         }
     }
 
-    $schemaParent = Split-Path -Parent $schemaPath.TrimEnd('/')
-    $schemaPrefixParent = Split-Path -Parent $schemaParent
+    # Parse Linux container paths as opaque strings. Do not use Split-Path here:
+    # Windows PowerShell can interpret leading-slash container paths via providers.
+    $schemaTrimmed = $schemaPath.TrimEnd('/')
+    $schemaLastSlash = $schemaTrimmed.LastIndexOf('/')
+    if ($schemaLastSlash -le 0) {
+        throw "Unable to derive schema_version parent path."
+    }
+    $schemaParent = $schemaTrimmed.Substring(0, $schemaLastSlash)
+    $prefixLastSlash = $schemaParent.LastIndexOf('/')
+    if ($prefixLastSlash -le 0) {
+        throw "Unable to derive schema_version store-prefix path."
+    }
+    $schemaPrefixParent = $schemaParent.Substring(0, $prefixLastSlash)
+
     $pathStats = @(
         Get-ContainerStat "/var/lib/clickhouse"
         Get-ContainerStat "/var/lib/clickhouse/store"
@@ -133,6 +145,7 @@ try {
         $tmpStats += Get-ContainerStat $tmpPath
     }
 
+    # Disposable probe is isolated at the Hot root, never under an active table UUID path.
     $stamp = Get-Date -Format "yyyyMMddHHmmssfff"
     $probePath = "/var/lib/clickhouse/.markorbit-permission-probe-$stamp"
     $probeRenamedPath = "$probePath-renamed"
