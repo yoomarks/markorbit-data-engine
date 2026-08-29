@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.cn.serving_state_checkpoint import CHECKPOINT_VERSION as CN_SERVING_CHECKPOINT_VERSION
 from app.us.application_transition_gate import (
     build_transition_gate,
     evaluate_transition,
@@ -12,6 +13,24 @@ def _cn(status: str, ready: bool):
         "ready_for_next_domain": ready,
         "reasons": [],
     }
+
+
+def _cn_serving(status: str = "PASS", **overrides):
+    report = {
+        "checkpoint_version": CN_SERVING_CHECKPOINT_VERSION,
+        "status": status,
+        "read_only": True,
+        "evidence_mode": "LIGHTWEIGHT_SERVING_CHECKPOINT",
+        "expected_package_success": True,
+        "quiescent": True,
+        "core_tables_ready": True,
+        "goods_schema_exact": True,
+        "full_corpus_scan": False,
+        "package_reprocessed": False,
+        "reasons": [],
+    }
+    report.update(overrides)
+    return report
 
 
 def _us(state: str, *, ready: bool = False, reasons=None):
@@ -58,7 +77,7 @@ def test_cn_failure_short_circuits_us_pipeline():
     assert report["ready_for_us_application"] is False
 
 
-def test_cn_pass_with_warnings_is_accepted_for_transition():
+def test_legacy_cn_pass_with_warnings_remains_accepted_for_transition():
     calls = []
 
     def cn_builder(**_kwargs):
@@ -83,6 +102,96 @@ def test_cn_pass_with_warnings_is_accepted_for_transition():
     assert calls[0][0] == Path("/raw")
     assert calls[0][1]["expected_history_parts"] == 91
     assert calls[0][1]["deep_source_test"] is True
+
+
+def test_lightweight_cn_pass_preserves_us_91_part_readiness_evaluation():
+    calls = []
+
+    def cn_builder():
+        return _cn_serving("PASS")
+
+    def us_builder(raw_root, **kwargs):
+        calls.append((raw_root, kwargs))
+        return _us("REPLAY_READY")
+
+    report = build_transition_gate(
+        Path("/raw"),
+        expected_history_parts=91,
+        verify_source_files=True,
+        cn_checkpoint_builder=cn_builder,
+        us_readiness_builder=us_builder,
+    )
+
+    assert report["status"] == "READY_FOR_US_APPLICATION_REPLAY"
+    assert report["cn_gate_passed"] is True
+    assert report["safe_to_start_us_replay"] is True
+    assert calls == [
+        (
+            Path("/raw"),
+            {
+                "expected_history_parts": 91,
+                "deep_source_test": False,
+                "verify_source_files": True,
+            },
+        )
+    ]
+
+
+def test_lightweight_cn_warn_is_accepted_without_full_corpus_reaudit():
+    report = evaluate_transition(
+        cn_checkpoint=_cn_serving("WARN"),
+        us_pipeline=_us("REPLAY_READY"),
+        expected_history_parts=91,
+    )
+
+    assert report["status"] == "READY_FOR_US_APPLICATION_REPLAY"
+    assert report["cn_gate_passed"] is True
+
+
+def test_lightweight_cn_missing_required_serving_invariant_fails_closed():
+    calls = []
+
+    def us_builder(*_args, **_kwargs):
+        calls.append("us")
+        return _us("REPLAY_READY")
+
+    report = build_transition_gate(
+        Path("/raw"),
+        expected_history_parts=91,
+        cn_checkpoint_builder=lambda: _cn_serving(
+            "PASS", expected_package_success=False
+        ),
+        us_readiness_builder=us_builder,
+    )
+
+    assert report["status"] == "BLOCKED_BY_CN"
+    assert report["cn_gate_passed"] is False
+    assert report["reason_codes"] == ["cn_serving_checkpoint_not_accepted"]
+    assert calls == []
+
+
+def test_persistent_worker_blocks_before_cn_or_us_builders():
+    calls = []
+
+    def cn_builder():
+        calls.append("cn")
+        return _cn_serving("PASS")
+
+    def us_builder(*_args, **_kwargs):
+        calls.append("us")
+        return _us("REPLAY_READY")
+
+    report = build_transition_gate(
+        Path("/raw"),
+        expected_history_parts=91,
+        persistent_worker_running=True,
+        cn_checkpoint_builder=cn_builder,
+        us_readiness_builder=us_builder,
+    )
+
+    assert report["status"] == "BLOCKED_BY_CN"
+    assert report["safe_to_start_us_replay"] is False
+    assert calls == []
 
 
 def test_cn_pass_but_us_source_blocked_is_not_ready():
@@ -129,7 +238,7 @@ def test_invalid_expected_history_parts_rejected_before_builders():
         build_transition_gate(
             Path("/raw"),
             expected_history_parts=0,
-            cn_checkpoint_builder=lambda **_kwargs: _cn("PASS", True),
+            cn_checkpoint_builder=lambda: _cn("PASS", True),
         )
     except ValueError as exc:
         assert str(exc) == "expected_history_parts must be at least 1"
