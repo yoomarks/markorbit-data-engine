@@ -29,6 +29,25 @@ def g0_contract_descriptor() -> dict[str, Any]:
                 {"path": "/api/v1/contract", "query": {}, "pagination": "none"},
                 {"path": "/api/v1/health", "query": {}, "pagination": "none"},
                 {"path": "/api/v1/cn/cases/{application_number}", "query": {}, "pagination": "none"},
+                {
+                    "path": "/api/v1/cn/discovery/preliminary-publications",
+                    "query": {
+                        "application_number_start": {"type": "string", "required": True, "semantics": "inclusive"},
+                        "application_number_end": {"type": "string", "required": True, "semantics": "exclusive"},
+                        "page_size": {"type": "integer", "default": 50, "min": 1, "max": 100},
+                        "cursor": {"type": "opaque_string", "required": False, "max_length": 8192},
+                    },
+                    "pagination": "bounded_keyset_cursor",
+                    "snapshot": "CN_QUIESCENT_SERVING_EPOCH",
+                    "hard_bounds": {"max_pages": 10, "max_results": 1000},
+                    "read_budget": {
+                        "max_rows_to_read": 250000,
+                        "max_bytes_to_read": 268435456,
+                        "overflow_mode": "throw",
+                    },
+                    "candidate_semantics": "objective_preliminary_publication_fact_only",
+                    "business_state_owned_outside_data_engine": True,
+                },
                 {"path": "/api/v1/us/cases/{serial_number}", "query": {}, "pagination": "none"},
                 {
                     "path": "/api/v1/us/cases/{serial_number}/360",
