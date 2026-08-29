@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.integration_discovery_api as discovery_api
+import app.integration_api as integration_api
 from app.config import get_settings
 from app.discovery_contract import DiscoveryCursorError
 from app.integration_g0_contract import g0_contract_descriptor
@@ -19,7 +19,7 @@ def _client(monkeypatch) -> TestClient:
     monkeypatch.setenv("INTEGRATION_RATE_LIMIT_ENABLED", "false")
     get_settings.cache_clear()
     app = FastAPI()
-    app.include_router(discovery_api.router)
+    app.include_router(integration_api.router)
     return TestClient(app)
 
 
@@ -41,7 +41,7 @@ def test_discovery_route_requires_integration_bearer(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_discovery_route_delegates_bounded_request(monkeypatch):
+def test_discovery_route_delegates_bounded_request_and_wraps_fact_envelope(monkeypatch):
     captured = {}
     page = {
         "contract_version": "DATA_ENGINE_DISCOVERY_CONTRACT_V1",
@@ -55,8 +55,9 @@ def test_discovery_route_delegates_bounded_request(monkeypatch):
         return page
 
     monkeypatch.setattr(
-        discovery_api, "execute_preliminary_publication_discovery", fake_execute
+        integration_api, "execute_preliminary_publication_discovery", fake_execute
     )
+    monkeypatch.setattr(integration_api, "engine_version", lambda: "M1.7-test")
     client = _client(monkeypatch)
     response = client.get(
         PATH,
@@ -65,7 +66,13 @@ def test_discovery_route_delegates_bounded_request(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == page
+    body = response.json()
+    assert body["jurisdiction"] == "CN"
+    assert body["resource_kind"] == "PRELIMINARY_PUBLICATION_FACT_DISCOVERY"
+    assert body["authority"] == "DATA_ENGINE_FACT_READ_MODEL"
+    assert body["legal_conclusion"] is False
+    assert body["fact_state"] == "observed"
+    assert body["payload"] == page
     request = captured["request"]
     assert request.application_number_start == "10000000"
     assert request.application_number_end == "10001000"
@@ -93,7 +100,9 @@ def test_discovery_route_maps_cursor_context_mismatch_to_conflict(monkeypatch):
     def fail(_request):
         raise DiscoveryCursorError("cursor/query mismatch")
 
-    monkeypatch.setattr(discovery_api, "execute_preliminary_publication_discovery", fail)
+    monkeypatch.setattr(
+        integration_api, "execute_preliminary_publication_discovery", fail
+    )
     client = _client(monkeypatch)
     response = client.get(
         PATH,
