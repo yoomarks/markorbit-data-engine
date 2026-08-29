@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APPLY_GATE = ROOT / "scripts" / "assert-domain-apply-gate.ps1"
 US_APPLICATION_TRANSITION = ROOT / "scripts" / "check-us-application-transition.ps1"
 PYTHON_TRANSITION = ROOT / "app" / "us" / "application_transition_gate.py"
+PYTHON_HOST_PROTOCOL = ROOT / "app" / "us" / "application_transition_host_protocol.py"
 
 
 def test_us_application_apply_gate_preserves_dedicated_transition_readiness_gate() -> None:
@@ -22,13 +23,30 @@ def test_us_application_apply_gate_preserves_dedicated_transition_readiness_gate
 def test_us_application_transition_uses_lightweight_cn_checkpoint_not_full_acceptance() -> None:
     powershell = US_APPLICATION_TRANSITION.read_text(encoding="utf-8")
     python = PYTHON_TRANSITION.read_text(encoding="utf-8")
+    host = PYTHON_HOST_PROTOCOL.read_text(encoding="utf-8")
 
-    assert 'app.us.application_transition_gate' in powershell
-    assert 'metadata-only CN' in powershell
+    assert 'app.us.application_transition_host_protocol' in powershell
+    assert 'from app.us.application_transition_gate import' in host
+    assert 'build_transition_gate' in host
+    assert 'metadata-only serving-state checkpoint' in python
     assert 'app.cn.serving_state_checkpoint' in python
     assert 'build_serving_state_checkpoint' in python
     assert 'app.cn.final_checkpoint' not in python
     assert 'build_final_checkpoint' not in python
+
+
+def test_us_application_transition_powershell_parses_only_flat_host_summary() -> None:
+    powershell = US_APPLICATION_TRANSITION.read_text(encoding="utf-8")
+
+    assert 'MARKORBIT_US_APPLICATION_TRANSITION_SUMMARY`t' in powershell
+    assert 'MARKORBIT_US_APPLICATION_TRANSITION_EVIDENCE`t' in powershell
+    assert '$report = $summaryJson | ConvertFrom-Json' in powershell
+    assert '$evidenceJson | Set-Content -Encoding UTF8 $OutputPath' in powershell
+    assert '$evidenceJson | ConvertFrom-Json' not in powershell
+    assert '$json | ConvertFrom-Json' not in powershell
+    assert 'expected exactly 1' in powershell
+    assert 'US_APPLICATION_TRANSITION_HOST_V1' in powershell
+    assert 'CN_TO_US_APPLICATION_TRANSITION_V2' in powershell
 
 
 def test_us_application_apply_gate_does_not_manage_service_or_replay_lifecycle() -> None:
