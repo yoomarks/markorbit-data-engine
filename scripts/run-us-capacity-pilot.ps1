@@ -42,6 +42,7 @@ try {
     $evidenceDir = (Resolve-Path -LiteralPath $evidenceDir).Path
 
     $dryRunPath = Join-Path $evidenceDir "dry_run.json"
+    $dryRunSummaryPath = "$dryRunPath.summary.json"
     $beforeProfilePath = Join-Path $evidenceDir "storage_before.json"
     $replayPath = Join-Path $evidenceDir "replay_one_package.json"
     $afterProfilePath = Join-Path $evidenceDir "storage_after.json"
@@ -56,8 +57,11 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "US deterministic dry run failed. No pilot mutation was started."
     }
-    $dryRun = Get-Content -LiteralPath $dryRunPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($dryRun.status -ne "READY" -or -not $dryRun.safe_to_execute -or -not $dryRun.next_step) {
+    if (-not (Test-Path -LiteralPath $dryRunSummaryPath -PathType Leaf)) {
+        throw "US deterministic dry run produced no compact summary. No pilot mutation was started."
+    }
+    $dryRun = Get-Content -LiteralPath $dryRunSummaryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $dryRun.dry_run_ready -or -not $dryRun.next_step) {
         throw "US dry run is not READY for exactly one bounded pilot package."
     }
     Write-Host "Next package: $($dryRun.next_step.file_name)"
