@@ -21,13 +21,14 @@ try {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     switch ($TargetDomain) {
         "US_APPLICATION" {
-            # CN full-corpus acceptance was already completed and explicitly does
-            # not need to be replayed/rescanned before a bounded US mutation.
-            # Gate only on the current read-only serving/runtime checkpoint.
-            $gateScript = Join-Path $PSScriptRoot "check-cn-serving-state.ps1"
-            $gateReport = Join-Path "reports" "apply_gate_cn_serving_to_us_application_$timestamp.json"
+            if ($ExpectedApplicationHistoryParts -lt 1) {
+                throw "ExpectedApplicationHistoryParts is required for the US Application apply gate."
+            }
+            $gateScript = Join-Path $PSScriptRoot "check-us-application-transition.ps1"
+            $gateReport = Join-Path "reports" "apply_gate_cn_to_us_application_$timestamp.json"
             $gateArgs = @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gateScript,
+                "-ExpectedHistoryParts", "$ExpectedApplicationHistoryParts",
                 "-OutputPath", $gateReport,
                 "-Compact"
             )
