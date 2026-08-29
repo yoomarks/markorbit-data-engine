@@ -208,11 +208,22 @@ def build_page_sql(
     keyset = ""
     if position is not None:
         cursor_date, application_number, case_id = _validate_cursor_position(position)
-        keyset = (
-            "\n          AND (prelim_pub_date, application_number, toString(case_id)) > "
-            f"({_sql_text(cursor_date.isoformat())}, {_sql_text(application_number)}, "
-            f"{_sql_text(case_id)})"
-        )
+        cursor_date_sql = f"toDate32({_sql_text(cursor_date.isoformat())})"
+        application_sql = _sql_text(application_number)
+        case_id_sql = _sql_text(case_id)
+        keyset = f"""
+          AND (
+                prelim_pub_date > {cursor_date_sql}
+             OR (
+                    prelim_pub_date = {cursor_date_sql}
+                AND application_number > {application_sql}
+             )
+             OR (
+                    prelim_pub_date = {cursor_date_sql}
+                AND application_number = {application_sql}
+                AND toString(case_id) > {case_id_sql}
+             )
+          )"""
 
     return f"""
         SELECT
@@ -231,8 +242,8 @@ def build_page_sql(
         FROM {SOURCE_TABLE} FINAL
         WHERE is_deleted = 0
           AND prelim_pub_date IS NOT NULL
-          AND prelim_pub_date >= {_sql_text(request.start_date.isoformat())}
-          AND prelim_pub_date < {_sql_text(request.end_date.isoformat())}{keyset}
+          AND prelim_pub_date >= toDate32({_sql_text(request.start_date.isoformat())})
+          AND prelim_pub_date < toDate32({_sql_text(request.end_date.isoformat())}){keyset}
         ORDER BY prelim_pub_date ASC, application_number ASC, toString(case_id) ASC
         LIMIT {limit}
     """
