@@ -1,6 +1,7 @@
 param(
     [int]$ExpectedHistoryParts = 0,
     [switch]$DeepSourceTest,
+    [switch]$AllowUnpinnedDiscovery,
     [string]$OutputPath = ""
 )
 
@@ -46,8 +47,12 @@ try {
         throw "US source preflight output file name contains unsupported characters."
     }
 
-    # Redirect Python stdout *inside* the disposable container to a bind-mounted file.
-    # Every command argument below is operator-owned and contains no shell metacharacters.
+    $summaryFileName = "$outputFileName.summary.json"
+    $summaryPath = Join-Path $outputDirectory $summaryFileName
+
+    # Redirect the full Python report inside the disposable container to a bind-mounted file,
+    # then parse that full JSON in Python and emit a compact fixed-schema summary. Windows
+    # PowerShell 5.1 never converts the large evidence object itself.
     $pythonArgs = @("python", "-m", "app.us.source_preflight")
     if ($ExpectedHistoryParts -gt 0) {
         $pythonArgs += @("--expected-history-parts", "$ExpectedHistoryParts")
@@ -55,10 +60,14 @@ try {
     if ($DeepSourceTest) {
         $pythonArgs += "--deep-source-test"
     }
-    $shellCommand = ($pythonArgs -join " ") + " > /preflight-output/$outputFileName"
+    $preflightCommand = ($pythonArgs -join " ") + " > /preflight-output/$outputFileName"
+    $summaryCommand = "python -m app.us.preflight_summary /preflight-output/$outputFileName /preflight-output/$summaryFileName"
+    $shellCommand = "$preflightCommand && $summaryCommand"
 
-    if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
-        Remove-Item -LiteralPath $OutputPath -Force
+    foreach ($path in @($OutputPath, $summaryPath)) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force
+        }
     }
 
     $runArgs = @(
@@ -74,26 +83,50 @@ try {
     if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
         throw "US source replay preflight produced no report file: $OutputPath"
     }
+    if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
+        throw "US source replay preflight produced no compact summary file: $summaryPath"
+    }
 
-    $json = Get-Content -LiteralPath $OutputPath -Raw -Encoding UTF8
-    if (-not $json.Trim()) {
-        throw "US source replay preflight produced an empty report file."
+    # The full evidence JSON is intentionally not passed to ConvertFrom-Json. Windows
+    # PowerShell 5.1 can reject large/complex valid JSON objects while Python json.loads succeeds.
+    $summaryJson = Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8
+    if (-not $summaryJson.Trim()) {
+        throw "US source replay preflight produced an empty compact summary file."
     }
     try {
-        $report = $json | ConvertFrom-Json
+        $report = $summaryJson | ConvertFrom-Json
     }
     catch {
-        $preview = if ($json.Length -gt 500) { $json.Substring(0, 500) } else { $json }
-        throw "US source replay preflight report file contains invalid JSON. Preview: $preview"
+        throw "US source replay preflight compact summary contains invalid JSON."
     }
 
     Write-Host "US source preflight status: $($report.status)"
     Write-Host "Safe to replay: $($report.safe_to_replay)"
     Write-Host "Report: $OutputPath"
-    Write-Host "Historical sources: $($report.source_inventory.history_source_count)"
-    Write-Host "Daily sources: $($report.source_inventory.daily_source_count)"
+    Write-Host "Summary: $summaryPath"
+    Write-Host "Physical sources: $($report.physical_source_count)"
+    Write-Host "Semantic sources: $($report.semantic_source_count)"
+    Write-Host "Historical sources: $($report.history_source_count)"
+    Write-Host "Daily sources: $($report.daily_source_count)"
     Write-Host "Historical baseline end: $($report.historical_baseline_end)"
     Write-Host "Archive sources needing staging: $($report.archive_staging_required_count)"
+    Write-Host "Hard issues: $($report.hard_issue_types -join ', ')"
+    Write-Host "Not-ready reasons: $($report.not_ready_reasons -join ', ')"
+    Write-Host "Warnings: $($report.warning_reasons -join ', ')"
+
+    if ($AllowUnpinnedDiscovery) {
+        if ($ExpectedHistoryParts -gt 0) {
+            throw "-AllowUnpinnedDiscovery cannot be combined with -ExpectedHistoryParts."
+        }
+        if ($report.discovery_only_not_ready -ne $true) {
+            throw "US source discovery did not produce the single accepted unpinned NOT_READY state."
+        }
+        if ([int]$report.history_source_count -lt 1) {
+            throw "US source discovery found no historical packages."
+        }
+        Write-Host "US_SOURCE_DISCOVERY_PASS"
+        return
+    }
 
     if ($report.status -eq "FAIL") {
         throw "US source replay preflight failed: $($report.hard_issue_types -join ', ')"
@@ -101,6 +134,10 @@ try {
     if ($report.status -eq "NOT_READY") {
         throw "US source replay preflight is not ready: $($report.not_ready_reasons -join ', ')"
     }
+    if ($report.pinned_pass -ne $true) {
+        throw "US source replay preflight did not satisfy the pinned PASS gate."
+    }
+    Write-Host "US_SOURCE_PINNED_PASS"
 }
 finally {
     Pop-Location
