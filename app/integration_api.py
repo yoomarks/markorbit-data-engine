@@ -9,9 +9,10 @@ from app.cn.discovery_preliminary_publication import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     PreliminaryPublicationDiscoveryRequest,
-    execute_preliminary_publication_discovery,
+    execute_page,
 )
 from app.component_versions import component_versions
+from app.db import clickhouse_client
 from app.discovery_contract import DiscoveryContractError, DiscoveryCursorError
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
 from app.integration_g0_contract import g0_contract_descriptor
@@ -34,10 +35,7 @@ router = APIRouter(
 
 
 def _envelope(
-    *,
-    jurisdiction: str,
-    resource_kind: str,
-    payload: Any,
+    *, jurisdiction: str, resource_kind: str, payload: Any
 ) -> dict[str, Any]:
     return {
         "contract_version": CONTRACT_VERSION,
@@ -60,9 +58,7 @@ def _discovery_http_error(exc: DiscoveryContractError) -> HTTPException:
         or "unsupported Discovery cursor version" in message
     )
     return HTTPException(
-        status_code=(
-            status.HTTP_409_CONFLICT if conflict else status.HTTP_400_BAD_REQUEST
-        ),
+        status_code=status.HTTP_409_CONFLICT if conflict else status.HTTP_400_BAD_REQUEST,
         detail={
             "code": (
                 "DATA_ENGINE_DISCOVERY_CURSOR_CONFLICT"
@@ -139,9 +135,7 @@ def integration_contract() -> dict[str, Any]:
 @router.get("/cn/cases/{application_number}")
 def integration_cn_case(application_number: str) -> dict[str, Any]:
     return _envelope(
-        jurisdiction="CN",
-        resource_kind="TRADEMARK_CASE",
-        payload=cn_case(application_number),
+        jurisdiction="CN", resource_kind="TRADEMARK_CASE", payload=cn_case(application_number)
     )
 
 
@@ -159,7 +153,7 @@ def integration_cn_preliminary_publication_discovery(
             page_size=page_size,
             cursor=cursor,
         )
-        page = execute_preliminary_publication_discovery(request)
+        page = execute_page(request, client=clickhouse_client())
     except DiscoveryContractError as exc:
         raise _discovery_http_error(exc) from exc
     return _envelope(
@@ -172,9 +166,7 @@ def integration_cn_preliminary_publication_discovery(
 @router.get("/us/cases/{serial_number}")
 def integration_us_case(serial_number: str) -> dict[str, Any]:
     return _envelope(
-        jurisdiction="US",
-        resource_kind="TRADEMARK_CASE",
-        payload=us_case(serial_number),
+        jurisdiction="US", resource_kind="TRADEMARK_CASE", payload=us_case(serial_number)
     )
 
 
