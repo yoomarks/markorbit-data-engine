@@ -10,6 +10,7 @@ from app.admin_system_api import router as admin_system_router
 from app.admin_task_api import router as admin_task_router
 from app.contact_ingest.admin_api import router as contact_admin_router
 from app.integration_api import router as integration_router
+from app.integration_discovery_api import router as integration_discovery_router
 from app.integration_runtime import install_integration_runtime
 from app.integration_transport import install_integration_transport
 from app.us.alert_api import router as us_alert_router
@@ -35,6 +36,7 @@ _core.app.include_router(admin_system_router)
 _core.app.include_router(admin_task_router)
 _core.app.include_router(contact_admin_router)
 _core.app.include_router(integration_router)
+_core.app.include_router(integration_discovery_router)
 _core.app.include_router(us_alert_router)
 _core.app.include_router(us_case_360_router)
 _core.app.include_router(us_deadline_docket_router)
