@@ -135,9 +135,11 @@ def test_sql_is_keyset_only_and_bounded():
     )
 
     assert "markorbit_facts.cn_case_current FINAL" in sql
-    assert "prelim_pub_date >= '2026-07-01'" in sql
-    assert "prelim_pub_date < '2026-08-01'" in sql
-    assert "(prelim_pub_date, application_number, toString(case_id)) >" in sql
+    assert "prelim_pub_date >= toDate32('2026-07-01')" in sql
+    assert "prelim_pub_date < toDate32('2026-08-01')" in sql
+    assert "prelim_pub_date > toDate32('2026-07-10')" in sql
+    assert "application_number > 'A002'" in sql
+    assert "toString(case_id) > '00000000-0000-0000-0000-000000000002'" in sql
     assert "ORDER BY prelim_pub_date ASC, application_number ASC, toString(case_id) ASC" in sql
     assert "LIMIT 3" in sql
     assert "OFFSET" not in sql.upper()
