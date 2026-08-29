@@ -5,13 +5,41 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from app.cn.final_checkpoint import build_final_checkpoint
+from app.cn.serving_state_checkpoint import (
+    CHECKPOINT_VERSION as CN_SERVING_CHECKPOINT_VERSION,
+    build_serving_state_checkpoint,
+)
 from app.config import get_settings
 from app.us.pipeline_readiness import build_readiness as build_us_readiness
 
 
-TRANSITION_VERSION = "CN_TO_US_APPLICATION_TRANSITION_V1"
-_CN_ACCEPTED_STATUSES = {"PASS", "PASS_WITH_WARNINGS"}
+TRANSITION_VERSION = "CN_TO_US_APPLICATION_TRANSITION_V2"
+_LEGACY_CN_ACCEPTED_STATUSES = {"PASS", "PASS_WITH_WARNINGS"}
+_LIGHTWEIGHT_CN_ACCEPTED_STATUSES = {"PASS", "WARN"}
+
+
+def _cn_checkpoint_accepted(cn_checkpoint: dict[str, Any]) -> bool:
+    """Accept the lightweight CN serving checkpoint without claiming a new full audit.
+
+    Legacy final-checkpoint-shaped reports remain supported for injected callers/tests,
+    but the production default is the metadata-only serving checkpoint.
+    """
+    status = str(cn_checkpoint.get("status") or "UNKNOWN")
+    if cn_checkpoint.get("checkpoint_version") == CN_SERVING_CHECKPOINT_VERSION:
+        return bool(
+            status in _LIGHTWEIGHT_CN_ACCEPTED_STATUSES
+            and cn_checkpoint.get("expected_package_success")
+            and cn_checkpoint.get("quiescent")
+            and cn_checkpoint.get("core_tables_ready")
+            and cn_checkpoint.get("goods_schema_exact")
+            and cn_checkpoint.get("full_corpus_scan") is False
+            and cn_checkpoint.get("package_reprocessed") is False
+        )
+
+    return bool(
+        status in _LEGACY_CN_ACCEPTED_STATUSES
+        and cn_checkpoint.get("ready_for_next_domain")
+    )
 
 
 def evaluate_transition(
@@ -24,10 +52,7 @@ def evaluate_transition(
         raise ValueError("expected_history_parts must be at least 1")
 
     cn_status = str(cn_checkpoint.get("status") or "UNKNOWN")
-    cn_accepted = (
-        cn_status in _CN_ACCEPTED_STATUSES
-        and bool(cn_checkpoint.get("ready_for_next_domain"))
-    )
+    cn_accepted = _cn_checkpoint_accepted(cn_checkpoint)
     common = {
         "transition_version": TRANSITION_VERSION,
         "read_only": True,
@@ -43,14 +68,15 @@ def evaluate_transition(
             "status": "BLOCKED_BY_CN",
             "ready_for_us_application": False,
             "safe_to_start_us_replay": False,
-            "reason_codes": ["cn_final_checkpoint_not_accepted"],
+            "reason_codes": ["cn_serving_checkpoint_not_accepted"],
             "us_pipeline_evaluated": False,
             "us_pipeline": None,
             "next_action": {
-                "code": "COMPLETE_CN_AND_PASS_FINAL_CHECKPOINT",
+                "code": "PASS_CN_LIGHTWEIGHT_SERVING_CHECKPOINT",
                 "description": (
-                    "Finish CN replay and pass the CN M1.6 final checkpoint before "
-                    "evaluating or starting US Application replay."
+                    "Restore a healthy, quiescent CN serving state before evaluating "
+                    "or starting US Application replay. Do not rerun the accepted CN "
+                    "full-corpus audit solely for this transition."
                 ),
             },
         }
@@ -108,25 +134,46 @@ def build_transition_gate(
     deep_source_test: bool = False,
     verify_source_files: bool = False,
     persistent_worker_running: bool = False,
-    cn_checkpoint_builder: Callable[..., dict[str, Any]] = build_final_checkpoint,
+    cn_checkpoint_builder: Callable[..., dict[str, Any]] = build_serving_state_checkpoint,
     us_readiness_builder: Callable[..., dict[str, Any]] = build_us_readiness,
 ) -> dict[str, Any]:
     """Return the read-only CN -> US Application transition decision.
 
-    US source/schema/replay readiness is deliberately not evaluated until the
-    CN final checkpoint is accepted. This encodes corpus ordering without
-    staging, registering, resetting, replaying, or changing database state.
+    The production CN prerequisite is the metadata-only serving-state checkpoint;
+    the already-accepted CN full-corpus semantic audit is not repeated here. US
+    source/schema/replay readiness is still fail-closed and is not evaluated until
+    the CN serving checkpoint passes. No source package is staged, registered,
+    reset, replayed, or otherwise mutated by this gate.
     """
     if expected_history_parts < 1:
         raise ValueError("expected_history_parts must be at least 1")
 
-    cn_checkpoint = cn_checkpoint_builder(
-        persistent_worker_running=persistent_worker_running
-    )
-    if not (
-        cn_checkpoint.get("status") in _CN_ACCEPTED_STATUSES
-        and cn_checkpoint.get("ready_for_next_domain")
-    ):
+    if persistent_worker_running:
+        return evaluate_transition(
+            cn_checkpoint={
+                "checkpoint_version": CN_SERVING_CHECKPOINT_VERSION,
+                "status": "BLOCKED",
+                "read_only": True,
+                "evidence_mode": "LIGHTWEIGHT_SERVING_CHECKPOINT",
+                "reasons": [
+                    {
+                        "code": "PERSISTENT_WORKER_RUNNING",
+                        "message": (
+                            "Persistent worker must be stopped before the US "
+                            "Application transition gate."
+                        ),
+                        "severity": "BLOCKED",
+                    }
+                ],
+                "full_corpus_scan": False,
+                "package_reprocessed": False,
+            },
+            us_pipeline=None,
+            expected_history_parts=expected_history_parts,
+        )
+
+    cn_checkpoint = cn_checkpoint_builder()
+    if not _cn_checkpoint_accepted(cn_checkpoint):
         return evaluate_transition(
             cn_checkpoint=cn_checkpoint,
             us_pipeline=None,
