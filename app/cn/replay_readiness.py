@@ -11,6 +11,7 @@ from app.version import engine_version
 
 
 READINESS_VERSION = "CN_M16_REPLAY_READINESS_V1"
+SUPPORTED_ENGINE_VERSIONS = frozenset({"M1.6", "M1.7"})
 
 _PACKAGE_STATUS_SQL = """
 SELECT status, count(*)
@@ -258,11 +259,12 @@ def evaluate_readiness(
     hard_issues: list[dict[str, Any]] = []
     retry_issues: list[dict[str, Any]] = []
 
-    if current_engine_version != "M1.6":
+    if current_engine_version not in SUPPORTED_ENGINE_VERSIONS:
         hard_issues.append(
             {
                 "code": "UNEXPECTED_ENGINE_VERSION",
                 "engine_version": current_engine_version,
+                "supported_engine_versions": sorted(SUPPORTED_ENGINE_VERSIONS),
             }
         )
     if persistent_worker_running:
