@@ -28,7 +28,7 @@ def test_us_application_transition_uses_lightweight_cn_checkpoint_not_full_accep
     assert 'app.us.application_transition_host_protocol' in powershell
     assert 'from app.us.application_transition_gate import' in host
     assert 'build_transition_gate' in host
-    assert 'metadata-only CN' in python
+    assert 'metadata-only serving-state checkpoint' in python
     assert 'app.cn.serving_state_checkpoint' in python
     assert 'build_serving_state_checkpoint' in python
     assert 'app.cn.final_checkpoint' not in python
