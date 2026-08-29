@@ -36,8 +36,13 @@ foreach ($schemaPath in $postgresSchemaPaths) {
     }
 }
 
-Write-Host "Running US schema runtime guard..."
-docker compose run --rm --no-deps worker python -c "from app.us.migrations import ensure_us_m1_schema; ensure_us_m1_schema(); print('US schema runtime guard PASS')"
+Write-Host "Running US schema runtime guard against current repository code..."
+# The target host may retain an older worker image. Bind-mount the exact checked-out
+# app tree so the runtime guard and schema-version marker always come from the
+# current repository revision without rebuilding or restarting persistent services.
+docker compose run --rm --no-deps -T `
+    --volume "${repoRoot}\app:/app/app:ro" `
+    worker python -c "from app.us.migrations import ensure_us_m1_schema; ensure_us_m1_schema(); print('US schema runtime guard PASS')"
 if ($LASTEXITCODE -ne 0) {
     throw "US schema runtime guard failed."
 }
