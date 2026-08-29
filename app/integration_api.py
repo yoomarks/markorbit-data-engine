@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.cn.discovery_preliminary_publication import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    PreliminaryPublicationDiscoveryRequest,
+    execute_page,
+)
 from app.component_versions import component_versions
+from app.db import clickhouse_client
+from app.discovery_contract import DiscoveryContractError, DiscoveryCursorError
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
 from app.integration_g0_contract import g0_contract_descriptor
 from app.integration_runtime import enforce_integration_rate_limit
@@ -27,10 +35,7 @@ router = APIRouter(
 
 
 def _envelope(
-    *,
-    jurisdiction: str,
-    resource_kind: str,
-    payload: Any,
+    *, jurisdiction: str, resource_kind: str, payload: Any
 ) -> dict[str, Any]:
     return {
         "contract_version": CONTRACT_VERSION,
@@ -43,6 +48,27 @@ def _envelope(
         "fact_state": "observed",
         "payload": payload,
     }
+
+
+def _discovery_http_error(exc: DiscoveryContractError) -> HTTPException:
+    message = str(exc)
+    conflict = isinstance(exc, DiscoveryCursorError) and (
+        "cursor/query mismatch" in message
+        or "cursor/snapshot mismatch" in message
+        or "unsupported Discovery cursor version" in message
+    )
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT if conflict else status.HTTP_400_BAD_REQUEST,
+        detail={
+            "code": (
+                "DATA_ENGINE_DISCOVERY_CURSOR_CONFLICT"
+                if conflict
+                else "DATA_ENGINE_DISCOVERY_QUERY_INVALID"
+            ),
+            "message": message,
+            "retryable": False,
+        },
+    )
 
 
 @router.get("/health")
@@ -109,18 +135,38 @@ def integration_contract() -> dict[str, Any]:
 @router.get("/cn/cases/{application_number}")
 def integration_cn_case(application_number: str) -> dict[str, Any]:
     return _envelope(
+        jurisdiction="CN", resource_kind="TRADEMARK_CASE", payload=cn_case(application_number)
+    )
+
+
+@router.get("/cn/discovery/preliminary-publications")
+def integration_cn_preliminary_publication_discovery(
+    application_number_start: Annotated[str, Query(min_length=1, max_length=128)],
+    application_number_end: Annotated[str, Query(min_length=1, max_length=128)],
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=8192)] = None,
+) -> dict[str, Any]:
+    try:
+        request = PreliminaryPublicationDiscoveryRequest(
+            application_number_start=application_number_start,
+            application_number_end=application_number_end,
+            page_size=page_size,
+            cursor=cursor,
+        )
+        page = execute_page(request, client=clickhouse_client())
+    except DiscoveryContractError as exc:
+        raise _discovery_http_error(exc) from exc
+    return _envelope(
         jurisdiction="CN",
-        resource_kind="TRADEMARK_CASE",
-        payload=cn_case(application_number),
+        resource_kind="PRELIMINARY_PUBLICATION_FACT_DISCOVERY",
+        payload=page,
     )
 
 
 @router.get("/us/cases/{serial_number}")
 def integration_us_case(serial_number: str) -> dict[str, Any]:
     return _envelope(
-        jurisdiction="US",
-        resource_kind="TRADEMARK_CASE",
-        payload=us_case(serial_number),
+        jurisdiction="US", resource_kind="TRADEMARK_CASE", payload=us_case(serial_number)
     )
 
 
