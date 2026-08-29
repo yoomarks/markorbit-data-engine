@@ -21,10 +21,14 @@ try {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
     switch ($TargetDomain) {
         "US_APPLICATION" {
-            $gateScript = Join-Path $PSScriptRoot "check-cn-final-checkpoint.ps1"
+            if ($ExpectedApplicationHistoryParts -lt 1) {
+                throw "ExpectedApplicationHistoryParts is required for the US Application apply gate."
+            }
+            $gateScript = Join-Path $PSScriptRoot "check-us-application-transition.ps1"
             $gateReport = Join-Path "reports" "apply_gate_cn_to_us_application_$timestamp.json"
             $gateArgs = @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gateScript,
+                "-ExpectedHistoryParts", "$ExpectedApplicationHistoryParts",
                 "-OutputPath", $gateReport,
                 "-Compact"
             )

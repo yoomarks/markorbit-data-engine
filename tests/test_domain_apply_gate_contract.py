@@ -12,7 +12,8 @@ def _text(name: str) -> str:
 def test_shared_apply_gate_dispatches_only_to_read_only_transition_checks() -> None:
     text = _text("assert-domain-apply-gate.ps1")
     assert 'ValidateSet("US_APPLICATION", "US_ASSIGNMENT", "US_TTAB")' in text
-    assert "check-cn-final-checkpoint.ps1" in text
+    assert "check-us-application-transition.ps1" in text
+    assert "check-cn-final-checkpoint.ps1" not in text
     assert "check-us-assignment-transition.ps1" in text
     assert "check-us-ttab-transition.ps1" in text
     assert "-Compact" in text

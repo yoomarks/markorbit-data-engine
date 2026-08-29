@@ -41,8 +41,9 @@ try {
         $gateArgs += "--compact"
     }
 
-    # Entire transition gate is read-only. It first runs the CN final checkpoint
-    # and does not evaluate the US pipeline at all unless CN is accepted.
+    # Entire transition gate is read-only. It first runs the metadata-only CN
+    # serving-state checkpoint; it never repeats the already-accepted CN full-
+    # corpus semantic audit. US source/readiness is evaluated only after CN passes.
     $jsonLines = & docker compose run --rm --no-deps -T `
         --volume "${repoRoot}\app:/app/app:ro" `
         worker python @gateArgs
