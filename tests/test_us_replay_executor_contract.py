@@ -37,16 +37,20 @@ def test_replay_executor_does_not_auto_stage_or_reset_sources_or_database() -> N
 
 def test_replay_wrapper_is_dry_run_by_default_worker_guarded_and_acceptance_aware() -> None:
     source = Path("scripts/replay-us-deterministic.ps1").read_text(encoding="utf-8")
+    summary_source = Path("app/us/replay_summary.py").read_text(encoding="utf-8")
     assert "docker compose ps --status running -q worker" in source
     assert "Persistent worker is running" in source
     assert 'foreach ($service in @("postgres", "clickhouse"))' in source
     assert '[switch]$Apply' in source
     assert '[switch]$All' in source
-    assert '$args += "--apply"' in source
-    assert '$args += "--all"' in source
+    assert 'assert-domain-apply-gate.ps1' in source
+    assert '-TargetDomain "US_APPLICATION"' in source
     assert "--max-packages" in source
     assert "Dry run only" in source
     assert "audit-us-real-data.ps1" in source
+    assert "app.us.replay_summary" in source
+    assert 'SUMMARY_VERSION = "US_REPLAY_SUMMARY_V1"' in summary_source
+    assert 'summary["apply_one_package_ok"]' in summary_source
 
 
 def test_us_repository_exposes_replay_registry_without_changing_registration_contract() -> None:
