@@ -16,8 +16,8 @@ from app.discovery_contract import (
     encode_cursor,
 )
 
-STREAM_ID = "CN_PRELIMINARY_PUBLICATION_FACT_DISCOVERY_V1"
-SOURCE_SCHEMA_ID = "CN_CASE_CURRENT_PRELIMINARY_PUBLICATION_DISCOVERY_V1"
+STREAM_ID = "CN_PRELIMINARY_PUBLICATION_FACT_DISCOVERY_V2"
+SOURCE_SCHEMA_ID = "CN_CASE_CURRENT_PRELIMINARY_PUBLICATION_DISCOVERY_V2"
 CANDIDATE_TYPE = "CN_TRADEMARK_PRELIMINARY_PUBLICATION"
 SOURCE_TABLE = "markorbit_facts.cn_case_current"
 SNAPSHOT_KIND = "CN_QUIESCENT_SERVING_EPOCH"
@@ -26,7 +26,8 @@ DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
 MAX_PAGES = 10
 MAX_RESULTS = 1_000
-MAX_INTERVAL_DAYS = 31
+MAX_ROWS_TO_READ = 250_000
+MAX_BYTES_TO_READ = 256 * 1024 * 1024
 
 PROJECTION_FIELDS: tuple[str, ...] = (
     "case_id",
@@ -43,30 +44,31 @@ PROJECTION_FIELDS: tuple[str, ...] = (
     "source_rank",
 )
 ORDERING: tuple[str, ...] = (
-    "prelim_pub_date ASC",
     "application_number ASC",
     "toString(case_id) ASC",
 )
+READ_SETTINGS: dict[str, Any] = {
+    "max_rows_to_read": MAX_ROWS_TO_READ,
+    "max_bytes_to_read": MAX_BYTES_TO_READ,
+    "read_overflow_mode": "throw",
+}
 
 
 @dataclass(frozen=True, slots=True)
 class PreliminaryPublicationDiscoveryRequest:
-    start_date: date
-    end_date: date
+    application_number_start: str
+    application_number_end: str
     page_size: int = DEFAULT_PAGE_SIZE
     cursor: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.start_date, date) or isinstance(self.start_date, datetime):
-            raise DiscoveryContractError("start_date must be a date")
-        if not isinstance(self.end_date, date) or isinstance(self.end_date, datetime):
-            raise DiscoveryContractError("end_date must be a date")
-        interval_days = (self.end_date - self.start_date).days
-        if interval_days <= 0:
-            raise DiscoveryContractError("discovery date interval must be positive")
-        if interval_days > MAX_INTERVAL_DAYS:
+        start = str(self.application_number_start or "").strip()
+        end = str(self.application_number_end or "").strip()
+        if not start or not end:
+            raise DiscoveryContractError("application-number bounds must be non-empty")
+        if start >= end:
             raise DiscoveryContractError(
-                f"discovery date interval exceeds {MAX_INTERVAL_DAYS} calendar days"
+                "application_number_start must be lexically less than application_number_end"
             )
         if type(self.page_size) is not int or self.page_size <= 0:
             raise DiscoveryContractError("page_size must be a positive integer")
@@ -74,6 +76,8 @@ class PreliminaryPublicationDiscoveryRequest:
             raise DiscoveryContractError(f"page_size exceeds pilot ceiling {MAX_PAGE_SIZE}")
         if self.cursor is not None and (not isinstance(self.cursor, str) or not self.cursor):
             raise DiscoveryCursorError("cursor must be a non-empty string when provided")
+        object.__setattr__(self, "application_number_start", start)
+        object.__setattr__(self, "application_number_end", end)
 
     @property
     def limits(self) -> DiscoveryLimits:
@@ -87,15 +91,20 @@ class PreliminaryPublicationDiscoveryRequest:
     def scope(self) -> dict[str, Any]:
         return {
             "jurisdiction": "CN",
-            "prelim_pub_date": {
-                "start_inclusive": self.start_date.isoformat(),
-                "end_exclusive": self.end_date.isoformat(),
+            "application_number": {
+                "start_inclusive": self.application_number_start,
+                "end_exclusive": self.application_number_end,
             },
             "is_deleted": 0,
             "prelim_pub_date_not_null": True,
             "ordering": list(ORDERING),
             "ranking": "NONE",
             "joins": "NONE",
+            "read_budget": {
+                "max_rows_to_read": MAX_ROWS_TO_READ,
+                "max_bytes_to_read": MAX_BYTES_TO_READ,
+                "overflow_mode": "throw",
+            },
         }
 
     @property
@@ -180,19 +189,17 @@ def normalize_candidate(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def _cursor_position(candidate: Mapping[str, Any]) -> list[str]:
     return [
-        _required_text(candidate.get("prelim_pub_date"), "prelim_pub_date"),
         _required_text(candidate.get("application_number"), "application_number"),
         _required_text(candidate.get("case_id"), "case_id"),
     ]
 
 
-def _validate_cursor_position(position: Sequence[Any]) -> tuple[date, str, str]:
-    if len(position) != 3:
-        raise DiscoveryCursorError("CN preliminary-publication cursor must have 3 keyset values")
-    cursor_date = _as_date(position[0], "cursor.prelim_pub_date")
-    application_number = _required_text(position[1], "cursor.application_number")
-    case_id = _required_text(position[2], "cursor.case_id")
-    return cursor_date, application_number, case_id
+def _validate_cursor_position(position: Sequence[Any]) -> tuple[str, str]:
+    if len(position) != 2:
+        raise DiscoveryCursorError("CN preliminary-publication cursor must have 2 keyset values")
+    application_number = _required_text(position[0], "cursor.application_number")
+    case_id = _required_text(position[1], "cursor.case_id")
+    return application_number, case_id
 
 
 def build_page_sql(
@@ -207,20 +214,14 @@ def build_page_sql(
 
     keyset = ""
     if position is not None:
-        cursor_date, application_number, case_id = _validate_cursor_position(position)
-        cursor_date_sql = f"toDate32({_sql_text(cursor_date.isoformat())})"
+        application_number, case_id = _validate_cursor_position(position)
         application_sql = _sql_text(application_number)
         case_id_sql = _sql_text(case_id)
         keyset = f"""
           AND (
-                prelim_pub_date > {cursor_date_sql}
+                application_number > {application_sql}
              OR (
-                    prelim_pub_date = {cursor_date_sql}
-                AND application_number > {application_sql}
-             )
-             OR (
-                    prelim_pub_date = {cursor_date_sql}
-                AND application_number = {application_sql}
+                    application_number = {application_sql}
                 AND toString(case_id) > {case_id_sql}
              )
           )"""
@@ -240,11 +241,11 @@ def build_page_sql(
             record_hash,
             source_rank
         FROM {SOURCE_TABLE} FINAL
-        WHERE is_deleted = 0
-          AND prelim_pub_date IS NOT NULL
-          AND prelim_pub_date >= toDate32({_sql_text(request.start_date.isoformat())})
-          AND prelim_pub_date < toDate32({_sql_text(request.end_date.isoformat())}){keyset}
-        ORDER BY prelim_pub_date ASC, application_number ASC, toString(case_id) ASC
+        WHERE application_number >= {_sql_text(request.application_number_start)}
+          AND application_number < {_sql_text(request.application_number_end)}
+          AND is_deleted = 0
+          AND prelim_pub_date IS NOT NULL{keyset}
+        ORDER BY application_number ASC, toString(case_id) ASC
         LIMIT {limit}
     """
 
@@ -302,7 +303,8 @@ def execute_page(
             request,
             position=position,
             fetch_limit=min(page_capacity + 1, request.page_size + 1),
-        )
+        ),
+        settings=READ_SETTINGS,
     )
     raw_rows = _dict_rows(result)
 
@@ -353,4 +355,5 @@ def execute_page(
         "next_cursor": next_cursor,
         "provenance": provenance,
         "bounded_truncation": bool(has_extra and not continuation_allowed),
+        "read_budget": dict(READ_SETTINGS),
     }
