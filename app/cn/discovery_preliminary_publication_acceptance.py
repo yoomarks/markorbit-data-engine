@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,7 @@ from app.cn.discovery_preliminary_publication import (
 )
 from app.db import clickhouse_client
 
-ACCEPTANCE_VERSION = "CN_PRELIMINARY_PUBLICATION_DISCOVERY_ACCEPTANCE_V1"
+ACCEPTANCE_VERSION = "CN_PRELIMINARY_PUBLICATION_DISCOVERY_ACCEPTANCE_V2"
 
 
 def _canonical_hash(value: Any) -> str:
@@ -42,21 +41,22 @@ def _page_evidence(page: dict[str, Any]) -> dict[str, Any]:
         ),
         "result_hash": _canonical_hash(page["results"]),
         "bounded_truncation": page["bounded_truncation"],
+        "read_budget": page["read_budget"],
     }
 
 
 def build_live_acceptance(
     *,
-    start_date: date,
-    end_date: date,
+    application_number_start: str,
+    application_number_end: str,
     page_size: int = 2,
     require_second_page: bool = True,
     client: Any | None = None,
 ) -> dict[str, Any]:
     db = client or clickhouse_client()
     first_request = PreliminaryPublicationDiscoveryRequest(
-        start_date=start_date,
-        end_date=end_date,
+        application_number_start=application_number_start,
+        application_number_end=application_number_end,
         page_size=page_size,
     )
 
@@ -74,12 +74,13 @@ def build_live_acceptance(
     if cursor is None:
         if require_second_page:
             raise RuntimeError(
-                "Discovery acceptance requires a second page; choose a populated interval or smaller page"
+                "Discovery acceptance requires a second page; choose a populated key range "
+                "or smaller page"
             )
     else:
         second_request = PreliminaryPublicationDiscoveryRequest(
-            start_date=start_date,
-            end_date=end_date,
+            application_number_start=application_number_start,
+            application_number_end=application_number_end,
             page_size=page_size,
             cursor=cursor,
         )
@@ -89,12 +90,10 @@ def build_live_acceptance(
         if not second_replay_match:
             raise RuntimeError("Discovery page 2 replay mismatch")
         first_keys = {
-            (item["prelim_pub_date"], item["application_number"], item["case_id"])
-            for item in first_a["results"]
+            (item["application_number"], item["case_id"]) for item in first_a["results"]
         }
         second_keys = {
-            (item["prelim_pub_date"], item["application_number"], item["case_id"])
-            for item in second_a["results"]
+            (item["application_number"], item["case_id"]) for item in second_a["results"]
         }
         if first_keys & second_keys:
             raise RuntimeError("Discovery continuation duplicated candidate keys across pages")
@@ -108,8 +107,8 @@ def build_live_acceptance(
         "acceptance_version": ACCEPTANCE_VERSION,
         "status": "PASS",
         "read_only": True,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
+        "application_number_start": application_number_start,
+        "application_number_end": application_number_end,
         "page_size": page_size,
         "page1_replay_match": first_replay_match,
         "page2_replay_match": second_replay_match,
@@ -124,22 +123,22 @@ def build_live_acceptance(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run a small read-only live acceptance for CN preliminary-publication Discovery."
+        description="Run a bounded read-only live acceptance for CN preliminary-publication Discovery."
     )
-    parser.add_argument("--start-date", required=True, type=date.fromisoformat)
-    parser.add_argument("--end-date", required=True, type=date.fromisoformat)
+    parser.add_argument("--application-number-start", required=True)
+    parser.add_argument("--application-number-end", required=True)
     parser.add_argument("--page-size", type=int, default=2)
     parser.add_argument(
         "--allow-single-page",
         action="store_true",
-        help="Permit acceptance when the bounded interval has no continuation page.",
+        help="Permit acceptance when the bounded key range has no continuation page.",
     )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     receipt = build_live_acceptance(
-        start_date=args.start_date,
-        end_date=args.end_date,
+        application_number_start=args.application_number_start,
+        application_number_end=args.application_number_end,
         page_size=args.page_size,
         require_second_page=not args.allow_single_page,
     )
