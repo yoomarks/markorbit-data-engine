@@ -134,7 +134,7 @@ try {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmssfff"
     $probeDatabase = "markorbit_native_rename_probe_$timestamp"
     $probeTable = "merge_tree_probe"
-    if ($probeDatabase -notmatch '^markorbit_native_rename_probe_[0-9]{17}$') {
+    if ($probeDatabase -notmatch '^markorbit_native_rename_probe_[0-9]{8}_[0-9]{9}$') {
         throw "Generated probe database name is invalid."
     }
 
@@ -160,11 +160,11 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Unable to create disposable probe database."
         }
+        $probeCreated = $true
         & docker compose exec -T clickhouse clickhouse-client --query "CREATE TABLE $probeDatabase.$probeTable (probe_id UInt64, payload String) ENGINE = MergeTree ORDER BY probe_id"
         if ($LASTEXITCODE -ne 0) {
             throw "Unable to create disposable MergeTree probe table."
         }
-        $probeCreated = $true
 
         $identityRows = @(& docker compose exec -T clickhouse clickhouse-client --query "SELECT toString(uuid), arrayStringConcat(data_paths, ';') FROM system.tables WHERE database = '$probeDatabase' AND name = '$probeTable' FORMAT TSVRaw")
         if ($LASTEXITCODE -ne 0) {
