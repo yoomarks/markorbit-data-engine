@@ -84,7 +84,7 @@ try {
     $permissionReport = Join-Path $evidenceDir "active_hot_permission.json"
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-        (Join-Path $PSScriptRoot "diagnose-clickhouse-active-hot-permissions.ps1") `
+        (Join-Path $PSScriptRoot "diagnose-clickhouse-active-hot-permissions-v2.ps1") `
         -OutputPath $permissionReport
     if ($LASTEXITCODE -ne 0) {
         throw "Active Hot permission diagnostic failed. No permission repair or US mutation was attempted."
