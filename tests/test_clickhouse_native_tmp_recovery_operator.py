@@ -36,15 +36,33 @@ def test_native_tmp_recovery_requires_global_idle_and_zero_workers() -> None:
     assert "ClickHouse is not idle enough for a controlled native tmp recovery restart" in text
 
 
-def test_native_tmp_recovery_waits_for_docker_health_not_native_query_probe() -> None:
+def test_native_tmp_recovery_waits_for_docker_health_before_any_table_query() -> None:
     text = _text()
 
     assert "function Wait-ClickHouseHealthy" in text
     assert "docker inspect --format" in text
     assert ".State.Health.Status" in text
     assert "clickhouse_docker_health=healthy" in text
+    assert "CLICKHOUSE_PREFLIGHT_HEALTHY_OK" in text
     assert "CLICKHOUSE_CONTROLLED_RESTART_READY_OK" in text
     assert 'clickhouse-client --query "SELECT 1"' not in text
+
+    preflight_call = text.index('$null = Wait-ClickHouseHealthy -Phase "preflight"')
+    pre_restart_query = text.index('$clickhouseVersion = Invoke-ClickHouseScalar "SELECT version()"')
+    assert preflight_call < pre_restart_query
+
+
+def test_native_tmp_recovery_surfaces_startup_diagnostics_on_health_timeout() -> None:
+    text = _text()
+
+    assert "ClickHouseHealthTimeoutSeconds = 600" in text
+    assert "function Show-ClickHouseStartupDiagnostics" in text
+    assert "clickhouse_container_state=" in text
+    assert "clickhouse_health_log=" in text
+    assert "docker compose logs --tail 120 --no-color clickhouse" in text
+    assert "clickhouse_startup_log=" in text
+    assert "CLICKHOUSE_STARTUP_DIAGNOSTICS_COMPLETE" in text
+    assert "Show-ClickHouseStartupDiagnostics -Phase $Phase -ContainerId $lastContainerId" in text
 
 
 def test_native_tmp_recovery_is_idempotent_after_interrupted_restart() -> None:
