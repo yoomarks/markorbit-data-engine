@@ -1,14 +1,20 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
 IDLE_WORKER = ROOT / "scripts" / "stop-idle-worker.ps1"
 HOT_DIAGNOSTIC = ROOT / "scripts" / "diagnose-clickhouse-active-hot-permissions.ps1"
+ADMIN_JOB_DIAGNOSTIC = ROOT / "scripts" / "diagnose-admin-job-runtime.ps1"
 PREPARE = ROOT / "scripts" / "prepare-us-capacity-pilot-target-host.ps1"
 
 
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _assert_no_all_switch(text: str) -> None:
+    assert re.search(r"(?i)(?<![A-Za-z0-9_-])-All(?![A-Za-z0-9_-])", text) is None
 
 
 def test_idle_worker_stop_is_global_idle_and_explicit() -> None:
@@ -72,6 +78,46 @@ def test_hot_permission_diagnostic_is_evidence_only() -> None:
     assert 'rm -rf "/var/lib/clickhouse/store' not in lowered
 
 
+def test_admin_job_runtime_diagnostic_is_read_only_and_exact_run_scoped() -> None:
+    text = _text(ADMIN_JOB_DIAGNOSTIC)
+
+    assert "[string]$RunId" in text
+    assert "[string]$ExpectedMainSha" in text
+    assert 'ExpectedJobType = "CN_ADMIN_CONTINUE"' in text
+    assert "WHERE run_id = '$canonicalRunId'::uuid" in text
+    assert "payload::text" in text
+    assert "metrics::text" in text
+    assert "error_message" in text
+    assert "worker_started_after_job_claim" in text
+    assert "worker_runtime_matches_exact_checkout" in text
+    assert "app/admin_domain_tasks.py" in text
+    assert "app/cn/final_checkpoint.py" in text
+    assert "system.processes" in text
+    assert "system.query_log" in text
+    assert "pg_stat_activity" in text
+    assert "reconciliation_performed=False" in text
+    assert "worker_stop_performed=False" in text
+    assert "schema_apply_performed=False" in text
+    assert "corpus_replay_performed=False" in text
+    assert "permission_repair_performed=False" in text
+    assert "ADMIN_JOB_RUNTIME_DIAGNOSTIC_COMPLETE" in text
+
+    lowered = text.lower()
+    assert "update control.job_run" not in lowered
+    assert "delete from control.job_run" not in lowered
+    assert "insert into control.job_run" not in lowered
+    assert "docker compose stop" not in lowered
+    assert "docker compose restart" not in lowered
+    assert "docker compose down" not in lowered
+    assert "apply-us-m1-schema.ps1" not in lowered
+    assert "replay-us-deterministic.ps1" not in lowered
+    assert "run-us-capacity-pilot.ps1" not in lowered
+    assert "2023_5.zip" not in lowered
+    _assert_no_all_switch(text)
+    assert "chmod " not in lowered
+    assert "chown " not in lowered
+
+
 def test_prepare_operator_is_single_process_stop_point_not_mutation() -> None:
     text = _text(PREPARE)
 
@@ -91,4 +137,4 @@ def test_prepare_operator_is_single_process_stop_point_not_mutation() -> None:
     assert "replay-us-deterministic.ps1" not in lowered
     assert "run-us-capacity-pilot.ps1" not in lowered
     assert "2023_5.zip" not in lowered
-    assert "-all" not in lowered
+    _assert_no_all_switch(text)
