@@ -44,12 +44,43 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not $clickhouse) {
         throw "ClickHouse must be running."
     }
-    $workerLines = @(& docker compose ps --status running -q worker)
-    if ($LASTEXITCODE -ne 0 -or $workerLines.Count -ne 1) {
-        throw "Exactly one persistent worker must be running for ownership diagnosis."
+    Write-Host "POSTGRES_CLICKHOUSE_RUNNING_OK"
+
+    $rawRunningWorkers = @(& docker compose ps --status running -q worker)
+    $runningWorkerPsExit = $LASTEXITCODE
+    if ($runningWorkerPsExit -ne 0) {
+        throw "Unable to enumerate running worker containers."
     }
-    $workerId = $workerLines[0].Trim()
-    Write-Host "POSTGRES_CLICKHOUSE_WORKER_RUNNING_OK"
+    $runningWorkerIds = @(
+        $rawRunningWorkers |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    $rawAllWorkers = @(& docker compose ps -a -q worker)
+    $allWorkerPsExit = $LASTEXITCODE
+    if ($allWorkerPsExit -ne 0) {
+        throw "Unable to enumerate worker containers across all states."
+    }
+    $allWorkerIds = @(
+        $rawAllWorkers |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    if ($runningWorkerIds.Count -eq 0) {
+        $workerOwnershipState = "NO_RUNNING_WORKER"
+    }
+    elseif ($runningWorkerIds.Count -eq 1) {
+        $workerOwnershipState = "SINGLE_RUNNING_WORKER"
+    }
+    else {
+        $workerOwnershipState = "MULTIPLE_RUNNING_WORKERS"
+    }
+
+    Write-Host "worker_running_count=$($runningWorkerIds.Count)"
+    Write-Host "worker_container_count_all_states=$($allWorkerIds.Count)"
+    Write-Host "worker_ownership_state=$workerOwnershipState"
 
     function Get-ContainerEnvValue {
         param(
@@ -94,6 +125,17 @@ try {
         return $lines
     }
 
+    function Convert-ToPortableSecondUtc {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Timestamp
+        )
+        if ($Timestamp.Length -lt 19) {
+            throw "Timestamp is too short for portable second-precision comparison: $Timestamp"
+        }
+        return [datetimeoffset]::Parse($Timestamp.Substring(0, 19) + "Z")
+    }
+
     $script:postgresUser = Get-ContainerEnvValue -Service "postgres" -Name "POSTGRES_USER"
     $script:postgresDb = Get-ContainerEnvValue -Service "postgres" -Name "POSTGRES_DB"
 
@@ -119,6 +161,7 @@ WHERE run_id = '$canonicalRunId'::uuid;
     $ageSeconds = [int64]$parts[3]
     $startedAtUtc = $parts[4]
     $stopRequested = $parts[5]
+    $jobStarted = Convert-ToPortableSecondUtc -Timestamp $startedAtUtc
 
     Write-Host "run_id=$canonicalRunId"
     Write-Host "job_type=$jobType"
@@ -141,39 +184,58 @@ WHERE run_id = '$canonicalRunId'::uuid;
     $payloadSql = "SELECT payload::text FROM control.job_run WHERE run_id = '$canonicalRunId'::uuid;"
     $metricsSql = "SELECT metrics::text FROM control.job_run WHERE run_id = '$canonicalRunId'::uuid;"
     $errorSql = "SELECT coalesce(error_message, '') FROM control.job_run WHERE run_id = '$canonicalRunId'::uuid;"
+    $processingSql = "SELECT count(*) FROM control.source_package WHERE status = 'PROCESSING';"
     Write-Host "payload=$((Invoke-PostgresSql -Sql $payloadSql) -join '')"
     Write-Host "metrics=$((Invoke-PostgresSql -Sql $metricsSql) -join '')"
     Write-Host "error_message=$((Invoke-PostgresSql -Sql $errorSql) -join '')"
+    Write-Host "global_processing_packages=$((Invoke-PostgresSql -Sql $processingSql) -join '')"
 
     Write-Host "`n===== WORKER CONTAINER OWNERSHIP ====="
-    $inspectLines = @(& docker inspect --format '{{.State.StartedAt}}|{{.RestartCount}}|{{.State.Pid}}|{{.State.Status}}|{{.Image}}' $workerId)
-    if ($LASTEXITCODE -ne 0 -or $inspectLines.Count -ne 1) {
-        throw "Unable to inspect the persistent worker container."
+    if ($allWorkerIds.Count -eq 0) {
+        Write-Host "worker_container_history=NONE"
     }
-    $inspect = $inspectLines[0].Split('|')
-    if ($inspect.Count -ne 5) {
-        throw "Persistent worker inspect result had an unexpected shape."
-    }
-    $workerStartedAt = $inspect[0]
-    $workerRestartCount = $inspect[1]
-    $workerPid = $inspect[2]
-    $workerState = $inspect[3]
-    $workerImageId = $inspect[4]
-    Write-Host "worker_container_id=$workerId"
-    Write-Host "worker_started_at=$workerStartedAt"
-    Write-Host "worker_restart_count=$workerRestartCount"
-    Write-Host "worker_pid=$workerPid"
-    Write-Host "worker_state=$workerState"
-    Write-Host "worker_image_id=$workerImageId"
+    else {
+        $workerOrdinal = 0
+        foreach ($workerId in $allWorkerIds) {
+            $workerOrdinal += 1
+            $inspectLines = @(& docker inspect --format '{{.State.StartedAt}}|{{.State.FinishedAt}}|{{.RestartCount}}|{{.State.Pid}}|{{.State.Status}}|{{.Image}}' $workerId)
+            if ($LASTEXITCODE -ne 0 -or $inspectLines.Count -ne 1) {
+                Write-Host "worker[$workerOrdinal]_container_id=$workerId"
+                Write-Host "worker[$workerOrdinal]_inspect_status=UNAVAILABLE"
+                continue
+            }
+            $inspect = $inspectLines[0].Split('|')
+            if ($inspect.Count -ne 6) {
+                Write-Host "worker[$workerOrdinal]_container_id=$workerId"
+                Write-Host "worker[$workerOrdinal]_inspect_status=UNEXPECTED_SHAPE"
+                continue
+            }
 
-    if ($startedAtUtc.Length -lt 19 -or $workerStartedAt.Length -lt 19) {
-        throw "Unable to compare job/worker timestamps at portable second precision."
+            $workerStartedAt = $inspect[0]
+            $workerFinishedAt = $inspect[1]
+            $workerRestartCount = $inspect[2]
+            $workerPid = $inspect[3]
+            $workerState = $inspect[4]
+            $workerImageId = $inspect[5]
+            $workerStarted = Convert-ToPortableSecondUtc -Timestamp $workerStartedAt
+            $workerStartedAfterJob = $workerStarted -gt $jobStarted
+
+            Write-Host "worker[$workerOrdinal]_container_id=$workerId"
+            Write-Host "worker[$workerOrdinal]_started_at=$workerStartedAt"
+            Write-Host "worker[$workerOrdinal]_finished_at=$workerFinishedAt"
+            Write-Host "worker[$workerOrdinal]_restart_count=$workerRestartCount"
+            Write-Host "worker[$workerOrdinal]_pid=$workerPid"
+            Write-Host "worker[$workerOrdinal]_state=$workerState"
+            Write-Host "worker[$workerOrdinal]_image_id=$workerImageId"
+            Write-Host "worker[$workerOrdinal]_started_after_job_claim=$workerStartedAfterJob"
+            Write-Host "worker[$workerOrdinal]_job_time_comparison_precision=SECONDS"
+
+            if ($workerFinishedAt -and $workerFinishedAt -notmatch '^0001-01-01') {
+                $workerFinished = Convert-ToPortableSecondUtc -Timestamp $workerFinishedAt
+                Write-Host "worker[$workerOrdinal]_finished_after_job_claim=$($workerFinished -gt $jobStarted)"
+            }
+        }
     }
-    $jobStarted = [datetimeoffset]::Parse($startedAtUtc.Substring(0, 19) + "Z")
-    $workerStarted = [datetimeoffset]::Parse($workerStartedAt.Substring(0, 19) + "Z")
-    $workerStartedAfterJob = $workerStarted -gt $jobStarted
-    Write-Host "worker_started_after_job_claim=$workerStartedAfterJob"
-    Write-Host "worker_job_time_comparison_precision=SECONDS"
 
     Write-Host "`n===== RUNNING WORKER CODE VS EXACT CHECKOUT ====="
     $keyFiles = @(
@@ -184,26 +246,43 @@ WHERE run_id = '$canonicalRunId'::uuid;
         "app/cn/audit_acceptance_m16.py"
     )
     $hashCode = 'import hashlib,sys; p=sys.argv[1]; print(hashlib.sha256(open(p,"rb").read()).hexdigest())'
-    $runtimeExact = $true
-    foreach ($relative in $keyFiles) {
-        $localPath = Join-Path $repoRoot ($relative -replace '/', '\')
-        if (-not (Test-Path -LiteralPath $localPath)) {
-            throw "Missing exact-checkout file: $relative"
-        }
-        $checkoutHash = (Get-FileHash -LiteralPath $localPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        $containerPath = "/app/$relative"
-        $runtimeLines = @(& docker compose exec -T worker python -c $hashCode $containerPath)
-        if ($LASTEXITCODE -ne 0 -or $runtimeLines.Count -ne 1) {
-            throw "Unable to hash runtime file inside persistent worker: $containerPath"
-        }
-        $runtimeHash = $runtimeLines[0].Trim().ToLowerInvariant()
-        $matchesCheckout = $runtimeHash -eq $checkoutHash
-        if (-not $matchesCheckout) {
-            $runtimeExact = $false
-        }
-        Write-Host "$relative|checkout=$checkoutHash|runtime=$runtimeHash|match=$matchesCheckout"
+
+    if ($runningWorkerIds.Count -eq 0) {
+        Write-Host "worker_runtime_matches_exact_checkout=NOT_APPLICABLE_NO_RUNNING_WORKER"
     }
-    Write-Host "worker_runtime_matches_exact_checkout=$runtimeExact"
+    else {
+        $allRunningWorkersExact = $true
+        $runningOrdinal = 0
+        foreach ($workerId in $runningWorkerIds) {
+            $runningOrdinal += 1
+            $workerRuntimeExact = $true
+            Write-Host "running_worker[$runningOrdinal]_container_id=$workerId"
+            foreach ($relative in $keyFiles) {
+                $localPath = Join-Path $repoRoot ($relative -replace '/', '\')
+                if (-not (Test-Path -LiteralPath $localPath)) {
+                    throw "Missing exact-checkout file: $relative"
+                }
+                $checkoutHash = (Get-FileHash -LiteralPath $localPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                $containerPath = "/app/$relative"
+                $runtimeLines = @(& docker exec $workerId python -c $hashCode $containerPath)
+                if ($LASTEXITCODE -ne 0 -or $runtimeLines.Count -ne 1) {
+                    $workerRuntimeExact = $false
+                    $allRunningWorkersExact = $false
+                    Write-Host "running_worker[$runningOrdinal]|$relative|checkout=$checkoutHash|runtime=UNAVAILABLE|match=False"
+                    continue
+                }
+                $runtimeHash = $runtimeLines[0].Trim().ToLowerInvariant()
+                $matchesCheckout = $runtimeHash -eq $checkoutHash
+                if (-not $matchesCheckout) {
+                    $workerRuntimeExact = $false
+                    $allRunningWorkersExact = $false
+                }
+                Write-Host "running_worker[$runningOrdinal]|$relative|checkout=$checkoutHash|runtime=$runtimeHash|match=$matchesCheckout"
+            }
+            Write-Host "running_worker[$runningOrdinal]_runtime_matches_exact_checkout=$workerRuntimeExact"
+        }
+        Write-Host "worker_runtime_matches_exact_checkout=$allRunningWorkersExact"
+    }
 
     Write-Host "`n===== WORKER LOG OWNERSHIP EVIDENCE ====="
     $logs = @(& docker compose logs --no-color --since $startedAtUtc --tail 20000 worker 2>&1)
@@ -326,6 +405,8 @@ FORMAT TabSeparatedRaw
     }
 
     Write-Host "`n===== READ-ONLY DIAGNOSTIC STOP POINT ====="
+    Write-Host "worker_ownership_state=$workerOwnershipState"
+    Write-Host "ownership_requires_review=True"
     Write-Host "reconciliation_performed=False"
     Write-Host "worker_stop_performed=False"
     Write-Host "schema_apply_performed=False"
