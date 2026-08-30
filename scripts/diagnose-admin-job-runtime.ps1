@@ -166,10 +166,14 @@ WHERE run_id = '$canonicalRunId'::uuid;
     Write-Host "worker_state=$workerState"
     Write-Host "worker_image_id=$workerImageId"
 
-    $jobStarted = [datetimeoffset]::Parse($startedAtUtc)
-    $workerStarted = [datetimeoffset]::Parse($workerStartedAt)
+    if ($startedAtUtc.Length -lt 19 -or $workerStartedAt.Length -lt 19) {
+        throw "Unable to compare job/worker timestamps at portable second precision."
+    }
+    $jobStarted = [datetimeoffset]::Parse($startedAtUtc.Substring(0, 19) + "Z")
+    $workerStarted = [datetimeoffset]::Parse($workerStartedAt.Substring(0, 19) + "Z")
     $workerStartedAfterJob = $workerStarted -gt $jobStarted
     Write-Host "worker_started_after_job_claim=$workerStartedAfterJob"
+    Write-Host "worker_job_time_comparison_precision=SECONDS"
 
     Write-Host "`n===== RUNNING WORKER CODE VS EXACT CHECKOUT ====="
     $keyFiles = @(
