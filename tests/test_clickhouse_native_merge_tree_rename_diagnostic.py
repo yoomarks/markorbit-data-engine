@@ -31,6 +31,21 @@ def test_native_merge_tree_probe_is_exact_main_idle_and_zero_worker() -> None:
     assert "system.mutations" in text
 
 
+def test_native_merge_tree_probe_is_bounded_and_owns_exact_query_id() -> None:
+    text = _text()
+
+    assert "[int]$ProbeReceiveTimeoutSeconds = 15" in text
+    assert "[int]$QueryKillTimeoutSeconds = 20" in text
+    assert '"--query_id=$QueryId"' in text
+    assert '"--receive_timeout=$ProbeReceiveTimeoutSeconds"' in text
+    assert '"--send_timeout=$ProbeReceiveTimeoutSeconds"' in text
+    assert "probe_query_id=" in text
+    assert "probe_server_query_count_after_client_return=" in text
+    assert "KILL QUERY WHERE query_id = '$QueryId' ASYNC" in text
+    assert "probe_server_query_count_after_kill=" in text
+    assert "NATIVE_MERGETREE_RENAME_HANG_ACTIVE_HOT_BIND_CONFIRMED" in text
+
+
 def test_native_merge_tree_probe_exercises_real_clickhouse_part_commit_only_in_disposable_database() -> None:
     text = _text()
 
@@ -47,6 +62,7 @@ def test_native_merge_tree_probe_exercises_real_clickhouse_part_commit_only_in_d
     assert "probe_row_count=" in text
     assert "DROP DATABASE IF EXISTS $probeDatabase SYNC" in text
     assert "probe_cleanup_succeeded=" in text
+    assert "probe_database_exists_after_cleanup=" in text
 
 
 def test_native_merge_tree_probe_preserves_business_schema_state_and_classifies_scope() -> None:
@@ -59,7 +75,7 @@ def test_native_merge_tree_probe_preserves_business_schema_state_and_classifies_
     assert "schema_version_tmp_insert_count_after=" in text
     assert "NATIVE_MERGETREE_RENAME_PASS_SCHEMA_VERSION_SPECIFIC_SUSPECT" in text
     assert "NATIVE_MERGETREE_RENAME_FAIL_ACTIVE_HOT_BIND_SUSPECT" in text
-    assert "CLICKHOUSE_NATIVE_MERGETREE_RENAME_DIAGNOSTIC_COMPLETE" in text
+    assert "CLICKHOUSE_NATIVE_MERGETREE_RENAME_DIAGNOSTIC_V2_COMPLETE" in text
 
 
 def test_native_merge_tree_probe_has_no_business_repair_or_rollout_escape_hatches() -> None:
