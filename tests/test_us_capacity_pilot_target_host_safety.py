@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,10 @@ PREPARE = ROOT / "scripts" / "prepare-us-capacity-pilot-target-host.ps1"
 
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _assert_no_all_switch(text: str) -> None:
+    assert re.search(r"(?i)(?<![A-Za-z0-9_-])-All(?![A-Za-z0-9_-])", text) is None
 
 
 def test_idle_worker_stop_is_global_idle_and_explicit() -> None:
@@ -108,7 +113,7 @@ def test_admin_job_runtime_diagnostic_is_read_only_and_exact_run_scoped() -> Non
     assert "replay-us-deterministic.ps1" not in lowered
     assert "run-us-capacity-pilot.ps1" not in lowered
     assert "2023_5.zip" not in lowered
-    assert "-all" not in lowered
+    _assert_no_all_switch(text)
     assert "chmod " not in lowered
     assert "chown " not in lowered
 
@@ -132,4 +137,4 @@ def test_prepare_operator_is_single_process_stop_point_not_mutation() -> None:
     assert "replay-us-deterministic.ps1" not in lowered
     assert "run-us-capacity-pilot.ps1" not in lowered
     assert "2023_5.zip" not in lowered
-    assert "-all" not in lowered
+    _assert_no_all_switch(text)
