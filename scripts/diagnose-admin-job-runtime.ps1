@@ -103,7 +103,7 @@ SELECT job_type,
        trigger_type,
        status,
        extract(epoch FROM now() - started_at)::bigint AS age_seconds,
-       to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD""T""HH24:MI:SS.US""Z""') AS started_at_utc,
+       to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS started_at_utc,
        coalesce(payload->>'stop_requested', 'false') AS stop_requested
 FROM control.job_run
 WHERE run_id = '$canonicalRunId'::uuid;
