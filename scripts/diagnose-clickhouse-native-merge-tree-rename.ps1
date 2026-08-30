@@ -2,6 +2,10 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$ExpectedMainSha,
+    [ValidateRange(5, 120)]
+    [int]$ProbeReceiveTimeoutSeconds = 15,
+    [ValidateRange(5, 120)]
+    [int]$QueryKillTimeoutSeconds = 20,
     [string]$EvidenceRoot = "reports"
 )
 
@@ -11,7 +15,112 @@ Push-Location $repoRoot
 try {
     $expectedSha = $ExpectedMainSha.Trim().ToLowerInvariant()
 
-    Write-Host "===== EXACT-MAIN NATIVE MERGETREE RENAME DIAGNOSTIC ====="
+    function Invoke-ClickHouseScalar([string]$Query) {
+        $lines = @(& docker compose exec -T clickhouse clickhouse-client --query $Query)
+        if ($LASTEXITCODE -ne 0) {
+            throw "ClickHouse scalar query failed."
+        }
+        $values = @($lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($values.Count -ne 1) {
+            throw "ClickHouse scalar query returned an unexpected shape."
+        }
+        return $values[0].Trim()
+    }
+
+    function Invoke-BoundedClickHouseCommand([string]$QueryId, [string]$Query) {
+        if ($QueryId -notmatch '^[A-Za-z0-9_-]+$') {
+            throw "Unsafe ClickHouse query_id."
+        }
+        $savedErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $output = @(& docker compose exec -T clickhouse clickhouse-client `
+                "--query_id=$QueryId" `
+                "--connect_timeout=5" `
+                "--send_timeout=$ProbeReceiveTimeoutSeconds" `
+                "--receive_timeout=$ProbeReceiveTimeoutSeconds" `
+                --query $Query 2>&1)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $savedErrorActionPreference
+        }
+        return [pscustomobject]@{
+            exit_code = $exitCode
+            output = @($output | ForEach-Object { [string]$_ })
+        }
+    }
+
+    function Get-QueryCountById([string]$QueryId) {
+        if ($QueryId -notmatch '^[A-Za-z0-9_-]+$') {
+            throw "Unsafe ClickHouse query_id."
+        }
+        return [int64](Invoke-ClickHouseScalar "SELECT count() FROM system.processes WHERE query_id = '$QueryId'")
+    }
+
+    function Stop-ExactProbeQuery([string]$QueryId) {
+        $before = Get-QueryCountById $QueryId
+        Write-Host "probe_server_query_count_before_kill=$before"
+        if ($before -eq 0) {
+            return [pscustomobject]@{ kill_issued = $false; kill_exit_code = 0; remaining = 0 }
+        }
+        if ($before -ne 1) {
+            throw "Expected at most one exact probe query_id in system.processes."
+        }
+
+        $killId = "${QueryId}_kill"
+        $kill = Invoke-BoundedClickHouseCommand -QueryId $killId -Query "KILL QUERY WHERE query_id = '$QueryId' ASYNC"
+        Write-Host "probe_query_kill_exit_code=$($kill.exit_code)"
+        foreach ($line in $kill.output) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-Host "probe_query_kill_output=$line"
+            }
+        }
+
+        $remaining = $before
+        for ($attempt = 0; $attempt -lt $QueryKillTimeoutSeconds; $attempt++) {
+            $remaining = Get-QueryCountById $QueryId
+            if ($remaining -eq 0) {
+                break
+            }
+            Start-Sleep -Seconds 1
+        }
+        Write-Host "probe_server_query_count_after_kill=$remaining"
+        return [pscustomobject]@{
+            kill_issued = $true
+            kill_exit_code = $kill.exit_code
+            remaining = $remaining
+        }
+    }
+
+    function Get-SchemaVersionPath {
+        $rows = @(& docker compose exec -T clickhouse clickhouse-client --query "SELECT arrayStringConcat(data_paths, ';') FROM system.tables WHERE database = 'markorbit_facts' AND name = 'schema_version' FORMAT TSVRaw")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to resolve schema_version data path."
+        }
+        $values = @($rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($values.Count -ne 1) {
+            throw "Expected exactly one schema_version data path."
+        }
+        $path = ($values[0].Split(';')[0]).Trim()
+        if ($path -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]+/$') {
+            throw "Resolved schema_version path is unsafe."
+        }
+        return $path
+    }
+
+    function Get-TmpInsertNames([string]$DataPath) {
+        if ($DataPath -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]+/$') {
+            throw "Refusing to inspect an unsafe ClickHouse data path."
+        }
+        $rows = @(& docker compose exec -T clickhouse sh -lc "find '$DataPath' -maxdepth 1 -mindepth 1 -type d -name 'tmp_insert_*' -printf '%f\n' 2>/dev/null || true")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect tmp_insert directories."
+        }
+        return @($rows | Where-Object { $_ -match '^tmp_insert_[A-Za-z0-9_-]+$' } | Sort-Object)
+    }
+
+    Write-Host "===== EXACT-MAIN NATIVE MERGETREE RENAME DIAGNOSTIC V2 ====="
     if (git status --porcelain) {
         throw "Working tree must be clean before native MergeTree rename diagnosis."
     }
@@ -43,18 +152,14 @@ try {
             throw "$service must have exactly one running Compose container."
         }
     }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-        (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
     if ($LASTEXITCODE -ne 0) {
         throw "Global Data Engine idle gate failed."
     }
     $workerRunning = @(& docker compose ps --status running -q worker | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect running worker containers."
-    }
     $workerAll = @(& docker compose ps -a -q worker | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect all worker containers."
+        throw "Unable to inspect worker containers."
     }
     Write-Host "worker_running_count=$($workerRunning.Count)"
     Write-Host "worker_container_count_all_states=$($workerAll.Count)"
@@ -64,54 +169,11 @@ try {
     Write-Host "ZERO_WORKER_CONTAINERS_OK"
 
     $clickhouseId = @(& docker compose ps --status running -q clickhouse | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })[0].Trim()
-    $healthLines = @(& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $clickhouseId 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect ClickHouse health."
-    }
-    $health = @($healthLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($health.Count -ne 1 -or $health[0].Trim().ToLowerInvariant() -ne "healthy") {
+    $health = @(& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $clickhouseId 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($LASTEXITCODE -ne 0 -or $health.Count -ne 1 -or $health[0].Trim().ToLowerInvariant() -ne "healthy") {
         throw "ClickHouse must be Docker-health healthy before native MergeTree rename diagnosis."
     }
     Write-Host "clickhouse_docker_health=healthy"
-
-    function Invoke-ClickHouseScalar([string]$Query) {
-        $lines = @(& docker compose exec -T clickhouse clickhouse-client --query $Query)
-        if ($LASTEXITCODE -ne 0) {
-            throw "ClickHouse scalar query failed."
-        }
-        $values = @($lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($values.Count -ne 1) {
-            throw "ClickHouse scalar query returned an unexpected shape."
-        }
-        return $values[0].Trim()
-    }
-
-    function Get-SchemaVersionPath {
-        $rows = @(& docker compose exec -T clickhouse clickhouse-client --query "SELECT arrayStringConcat(data_paths, ';') FROM system.tables WHERE database = 'markorbit_facts' AND name = 'schema_version' FORMAT TSVRaw")
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to resolve schema_version data path."
-        }
-        $values = @($rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($values.Count -ne 1) {
-            throw "Expected exactly one schema_version data path."
-        }
-        $path = ($values[0].Split(';')[0]).Trim()
-        if ($path -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]+/$') {
-            throw "Resolved schema_version path is unsafe."
-        }
-        return $path
-    }
-
-    function Get-TmpInsertNames([string]$DataPath) {
-        if ($DataPath -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]+/$') {
-            throw "Refusing to inspect an unsafe ClickHouse data path."
-        }
-        $rows = @(& docker compose exec -T clickhouse sh -lc "find '$DataPath' -maxdepth 1 -mindepth 1 -type d -name 'tmp_insert_*' -printf '%f\n' 2>/dev/null || true")
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to inspect tmp_insert directories."
-        }
-        return @($rows | Where-Object { $_ -match '^tmp_insert_[A-Za-z0-9_-]+$' } | Sort-Object)
-    }
 
     Write-Host "`n===== PRE-PROBE BUSINESS / ACTIVITY EVIDENCE ====="
     $activeQueries = [int64](Invoke-ClickHouseScalar "SELECT count() FROM system.processes WHERE query NOT LIKE '%system.processes%'")
@@ -134,8 +196,9 @@ try {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmssfff"
     $probeDatabase = "markorbit_native_rename_probe_$timestamp"
     $probeTable = "merge_tree_probe"
-    if ($probeDatabase -notmatch '^markorbit_native_rename_probe_[0-9]{8}_[0-9]{9}$') {
-        throw "Generated probe database name is invalid."
+    $probeQueryId = "markorbit_native_rename_probe_$timestamp"
+    if ($probeDatabase -notmatch '^markorbit_native_rename_probe_[0-9]{8}_[0-9]{9}$' -or $probeQueryId -notmatch '^[A-Za-z0-9_-]+$') {
+        throw "Generated probe identity is invalid."
     }
 
     $evidenceDir = Join-Path $EvidenceRoot "clickhouse_native_merge_tree_rename_$timestamp"
@@ -153,16 +216,19 @@ try {
     $probeTmp = @()
     $probeParts = @()
     $probeRowCount = -1
+    $serverQuerySeenAfterClientReturn = $false
+    $queryKillIssued = $false
+    $serverQueryRemainingAfterKill = 0
 
     try {
         Write-Host "`n===== CREATE DISPOSABLE MERGETREE PROBE ====="
-        & docker compose exec -T clickhouse clickhouse-client --query "CREATE DATABASE $probeDatabase"
-        if ($LASTEXITCODE -ne 0) {
+        $createDb = Invoke-BoundedClickHouseCommand -QueryId "${probeQueryId}_create_db" -Query "CREATE DATABASE $probeDatabase"
+        if ($createDb.exit_code -ne 0) {
             throw "Unable to create disposable probe database."
         }
         $probeCreated = $true
-        & docker compose exec -T clickhouse clickhouse-client --query "CREATE TABLE $probeDatabase.$probeTable (probe_id UInt64, payload String) ENGINE = MergeTree ORDER BY probe_id"
-        if ($LASTEXITCODE -ne 0) {
+        $createTable = Invoke-BoundedClickHouseCommand -QueryId "${probeQueryId}_create_table" -Query "CREATE TABLE $probeDatabase.$probeTable (probe_id UInt64, payload String) ENGINE = MergeTree ORDER BY probe_id"
+        if ($createTable.exit_code -ne 0) {
             throw "Unable to create disposable MergeTree probe table."
         }
 
@@ -175,52 +241,56 @@ try {
             throw "Expected exactly one disposable probe table identity row."
         }
         $identityParts = $identityRows[0] -split "`t", 2
-        if ($identityParts.Count -ne 2) {
-            throw "Disposable probe identity query returned an unexpected shape."
-        }
         $probeUuid = $identityParts[0].Trim().ToLowerInvariant()
         $probePath = ($identityParts[1].Split(';')[0]).Trim()
-        if ($probeUuid -notmatch '^[0-9a-f-]{36}$' -or $probePath -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]+/$') {
+        if ($identityParts.Count -ne 2 -or $probeUuid -notmatch '^[0-9a-f-]{36}$' -or $probePath -notmatch '^/var/lib/clickhouse/[A-Za-z0-9_./-]+/$') {
             throw "Resolved disposable probe identity/path is unsafe."
         }
         Write-Host "probe_database=$probeDatabase"
         Write-Host "probe_table=$probeTable"
         Write-Host "probe_uuid=$probeUuid"
         Write-Host "probe_path=$probePath"
+        Write-Host "probe_query_id=$probeQueryId"
+        Write-Host "probe_receive_timeout_seconds=$ProbeReceiveTimeoutSeconds"
 
-        Write-Host "`n===== ONE-ROW NATIVE MERGETREE INSERT / PART COMMIT ====="
-        $savedErrorActionPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = "Continue"
-            $insertOutput = @(& docker compose exec -T clickhouse clickhouse-client --query "INSERT INTO $probeDatabase.$probeTable VALUES (1, 'native-part-rename-probe')" 2>&1)
-            $insertExitCode = $LASTEXITCODE
-        }
-        finally {
-            $ErrorActionPreference = $savedErrorActionPreference
-        }
+        Write-Host "`n===== BOUNDED ONE-ROW NATIVE MERGETREE INSERT / PART COMMIT ====="
+        $insert = Invoke-BoundedClickHouseCommand -QueryId $probeQueryId -Query "INSERT INTO $probeDatabase.$probeTable VALUES (1, 'native-part-rename-probe')"
+        $insertExitCode = $insert.exit_code
+        $insertOutput = @($insert.output)
         foreach ($line in $insertOutput) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
                 Write-Host "probe_insert_output=$line"
             }
         }
         Write-Host "probe_insert_exit_code=$insertExitCode"
-        $insertSucceeded = ($insertExitCode -eq 0)
+
+        $serverCountAfterClient = Get-QueryCountById $probeQueryId
+        Write-Host "probe_server_query_count_after_client_return=$serverCountAfterClient"
+        $serverQuerySeenAfterClientReturn = ($serverCountAfterClient -gt 0)
+        if ($serverCountAfterClient -gt 0) {
+            $killState = Stop-ExactProbeQuery $probeQueryId
+            $queryKillIssued = $killState.kill_issued
+            $serverQueryRemainingAfterKill = $killState.remaining
+        }
+        if ($serverQueryRemainingAfterKill -ne 0) {
+            throw "Exact disposable probe query remained active after bounded kill wait."
+        }
+
+        $insertSucceeded = ($insertExitCode -eq 0 -and -not $serverQuerySeenAfterClientReturn)
         Write-Host "probe_insert_succeeded=$insertSucceeded"
 
-        if ($probePath) {
-            $probeTmp = @(Get-TmpInsertNames $probePath)
-            $probePartLines = @(& docker compose exec -T clickhouse clickhouse-client --query "SELECT name, active, rows, bytes_on_disk FROM system.parts WHERE database = '$probeDatabase' AND table = '$probeTable' ORDER BY name FORMAT TSVRaw")
-            if ($LASTEXITCODE -ne 0) {
-                throw "Unable to capture disposable probe system.parts evidence."
-            }
-            $probeParts = @($probePartLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            Write-Host "probe_tmp_insert_count=$($probeTmp.Count)"
-            foreach ($name in $probeTmp) {
-                Write-Host "probe_tmp_insert=$name"
-            }
-            foreach ($part in $probeParts) {
-                Write-Host "probe_part=$part"
-            }
+        $probeTmp = @(Get-TmpInsertNames $probePath)
+        $probePartLines = @(& docker compose exec -T clickhouse clickhouse-client --query "SELECT name, active, rows, bytes_on_disk FROM system.parts WHERE database = '$probeDatabase' AND table = '$probeTable' ORDER BY name FORMAT TSVRaw")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to capture disposable probe system.parts evidence."
+        }
+        $probeParts = @($probePartLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        Write-Host "probe_tmp_insert_count=$($probeTmp.Count)"
+        foreach ($name in $probeTmp) {
+            Write-Host "probe_tmp_insert=$name"
+        }
+        foreach ($part in $probeParts) {
+            Write-Host "probe_part=$part"
         }
 
         if ($insertSucceeded) {
@@ -232,24 +302,24 @@ try {
         }
     }
     finally {
-        if ($probeCreated) {
-            Write-Host "`n===== NORMAL SQL PROBE CLEANUP ====="
-            $savedErrorActionPreference = $ErrorActionPreference
-            try {
-                $ErrorActionPreference = "Continue"
-                $dropOutput = @(& docker compose exec -T clickhouse clickhouse-client --query "DROP DATABASE IF EXISTS $probeDatabase SYNC" 2>&1)
-                $dropExitCode = $LASTEXITCODE
-            }
-            finally {
-                $ErrorActionPreference = $savedErrorActionPreference
-            }
-            foreach ($line in $dropOutput) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+        if ($probeCreated -and $serverQueryRemainingAfterKill -eq 0) {
+            Write-Host "`n===== BOUNDED NORMAL SQL PROBE CLEANUP ====="
+            $cleanupQueryId = "${probeQueryId}_cleanup"
+            $drop = Invoke-BoundedClickHouseCommand -QueryId $cleanupQueryId -Query "DROP DATABASE IF EXISTS $probeDatabase SYNC"
+            foreach ($line in $drop.output) {
+                if (-not [string]::IsNullOrWhiteSpace($line)) {
                     Write-Host "probe_cleanup_output=$line"
                 }
             }
-            $cleanupSucceeded = ($dropExitCode -eq 0)
-            Write-Host "probe_cleanup_exit_code=$dropExitCode"
+            Write-Host "probe_cleanup_exit_code=$($drop.exit_code)"
+            $cleanupServerCount = Get-QueryCountById $cleanupQueryId
+            Write-Host "probe_cleanup_server_query_count_after_client_return=$cleanupServerCount"
+            if ($cleanupServerCount -gt 0) {
+                $null = Stop-ExactProbeQuery $cleanupQueryId
+            }
+            $databaseExistsAfterCleanup = [int64](Invoke-ClickHouseScalar "SELECT count() FROM system.databases WHERE name = '$probeDatabase'")
+            Write-Host "probe_database_exists_after_cleanup=$databaseExistsAfterCleanup"
+            $cleanupSucceeded = ($databaseExistsAfterCleanup -eq 0)
             Write-Host "probe_cleanup_succeeded=$cleanupSucceeded"
         }
     }
@@ -271,12 +341,15 @@ try {
     $classification = if ($insertSucceeded) {
         "NATIVE_MERGETREE_RENAME_PASS_SCHEMA_VERSION_SPECIFIC_SUSPECT"
     }
+    elseif ($serverQuerySeenAfterClientReturn) {
+        "NATIVE_MERGETREE_RENAME_HANG_ACTIVE_HOT_BIND_CONFIRMED"
+    }
     else {
         "NATIVE_MERGETREE_RENAME_FAIL_ACTIVE_HOT_BIND_SUSPECT"
     }
 
     $report = [ordered]@{
-        report_version = "CLICKHOUSE_NATIVE_MERGETREE_RENAME_DIAGNOSTIC_V1"
+        report_version = "CLICKHOUSE_NATIVE_MERGETREE_RENAME_DIAGNOSTIC_V2"
         engine_sha = $head
         clickhouse_health = "healthy"
         worker_running_count = $workerRunning.Count
@@ -293,9 +366,14 @@ try {
             table = $probeTable
             uuid = $probeUuid
             data_path = $probePath
+            query_id = $probeQueryId
+            receive_timeout_seconds = $ProbeReceiveTimeoutSeconds
             insert_exit_code = $insertExitCode
             insert_succeeded = $insertSucceeded
-            insert_output = @($insertOutput | ForEach-Object { [string]$_ })
+            insert_output = @($insertOutput)
+            server_query_seen_after_client_return = $serverQuerySeenAfterClientReturn
+            query_kill_issued = $queryKillIssued
+            server_query_remaining_after_kill = $serverQueryRemainingAfterKill
             tmp_insert_dirs = @($probeTmp)
             parts = @($probeParts)
             row_count = $probeRowCount
@@ -325,10 +403,10 @@ try {
     Write-Host "worker_start_performed=False"
     Write-Host "worker_stop_performed=False"
     Write-Host "Report: $reportPath"
-    Write-Host "CLICKHOUSE_NATIVE_MERGETREE_RENAME_DIAGNOSTIC_COMPLETE"
+    Write-Host "CLICKHOUSE_NATIVE_MERGETREE_RENAME_DIAGNOSTIC_V2_COMPLETE"
 
     if (-not $cleanupSucceeded) {
-        throw "Disposable probe cleanup did not complete through normal ClickHouse SQL. No manual filesystem cleanup was attempted."
+        throw "Disposable probe cleanup did not complete through bounded normal ClickHouse SQL. No manual filesystem cleanup was attempted."
     }
 }
 finally {
