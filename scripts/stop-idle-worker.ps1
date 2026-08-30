@@ -11,8 +11,42 @@ try {
         throw "PostgreSQL must be running before the global idle-worker gate."
     }
 
-    $statusCommand = 'psql -At -F "|" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT (SELECT count(*) FROM control.job_run WHERE finished_at IS NULL), (SELECT count(*) FROM control.source_package WHERE status = ''PROCESSING'');"'
-    $statusLines = @(& docker compose exec -T postgres sh -lc $statusCommand)
+    function Get-PostgresContainerEnvValue {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Name
+        )
+
+        $lines = @(& docker compose exec -T postgres printenv $Name)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            throw "Unable to read PostgreSQL container environment variable '$Name'."
+        }
+
+        $value = ($lines -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            throw "PostgreSQL container environment variable '$Name' is empty."
+        }
+
+        return $value
+    }
+
+    $postgresUser = Get-PostgresContainerEnvValue -Name "POSTGRES_USER"
+    $postgresDb = Get-PostgresContainerEnvValue -Name "POSTGRES_DB"
+
+    $statusSql = @'
+SELECT
+    (SELECT count(*) FROM control.job_run WHERE finished_at IS NULL),
+    (SELECT count(*) FROM control.source_package WHERE status = 'PROCESSING');
+'@
+    $statusArgs = @(
+        "compose", "exec", "-T", "postgres",
+        "psql", "-At", "-F", "|",
+        "-U", $postgresUser,
+        "-d", $postgresDb,
+        "-c", $statusSql
+    )
+    $statusLines = @(& docker @statusArgs)
     $statusExit = $LASTEXITCODE
     if ($statusExit -ne 0) {
         throw "Unable to inspect global Data Engine lifecycle state."
@@ -31,8 +65,27 @@ try {
     Write-Host "Global PROCESSING packages: $processingPackages"
 
     if ($activeJobs -ne 0 -or $processingPackages -ne 0) {
-        $detailCommand = 'psql -At -F "|" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT ''JOB'', coalesce(domain, ''''), coalesce(status, ''''), coalesce(id::text, '''') FROM control.job_run WHERE finished_at IS NULL ORDER BY started_at NULLS LAST LIMIT 20; SELECT ''PACKAGE'', coalesce(jurisdiction, ''''), coalesce(source_kind, ''''), coalesce(id::text, '''') FROM control.source_package WHERE status = ''PROCESSING'' ORDER BY updated_at NULLS LAST LIMIT 20;"'
-        $details = @(& docker compose exec -T postgres sh -lc $detailCommand)
+        $detailSql = @'
+SELECT 'JOB', coalesce(domain, ''), coalesce(status, ''), coalesce(id::text, '')
+FROM control.job_run
+WHERE finished_at IS NULL
+ORDER BY started_at NULLS LAST
+LIMIT 20;
+
+SELECT 'PACKAGE', coalesce(jurisdiction, ''), coalesce(source_kind, ''), coalesce(id::text, '')
+FROM control.source_package
+WHERE status = 'PROCESSING'
+ORDER BY updated_at NULLS LAST
+LIMIT 20;
+'@
+        $detailArgs = @(
+            "compose", "exec", "-T", "postgres",
+            "psql", "-At", "-F", "|",
+            "-U", $postgresUser,
+            "-d", $postgresDb,
+            "-c", $detailSql
+        )
+        $details = @(& docker @detailArgs)
         if ($LASTEXITCODE -eq 0 -and $details) {
             Write-Host "Active lifecycle rows:"
             $details | Write-Host

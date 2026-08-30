@@ -15,13 +15,22 @@ def test_idle_worker_stop_is_global_idle_and_explicit() -> None:
     text = _text(IDLE_WORKER)
 
     assert "finished_at IS NULL" in text
-    assert "status = ''PROCESSING''" in text
+    assert "status = 'PROCESSING'" in text
     assert "[switch]$StopIdleWorker" in text
     assert "docker compose stop worker" in text
     assert "GLOBAL_DATA_ENGINE_IDLE_OK" in text
     assert "IDLE_WORKER_STOP_GATE_PASS" in text
 
+    assert 'printenv $Name' in text
+    assert '"POSTGRES_USER"' in text
+    assert '"POSTGRES_DB"' in text
+    assert '$statusArgs = @(' in text
+    assert '$detailArgs = @(' in text
+    assert '& docker @statusArgs' in text
+    assert '& docker @detailArgs' in text
+
     lowered = text.lower()
+    assert "sh -lc" not in lowered
     assert "docker compose start worker" not in lowered
     assert "docker compose restart worker" not in lowered
     assert "docker compose down" not in lowered
