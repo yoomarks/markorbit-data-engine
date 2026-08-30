@@ -66,16 +66,28 @@ SELECT
 
     if ($activeJobs -ne 0 -or $processingPackages -ne 0) {
         $detailSql = @'
-SELECT 'JOB', coalesce(domain, ''), coalesce(status, ''), coalesce(id::text, '')
+SELECT
+    'JOB',
+    coalesce(job_type, ''),
+    coalesce(trigger_type, ''),
+    coalesce(status, ''),
+    run_id::text,
+    started_at::text
 FROM control.job_run
 WHERE finished_at IS NULL
 ORDER BY started_at NULLS LAST
 LIMIT 20;
 
-SELECT 'PACKAGE', coalesce(jurisdiction, ''), coalesce(source_kind, ''), coalesce(id::text, '')
+SELECT
+    'PACKAGE',
+    coalesce(jurisdiction, ''),
+    coalesce(package_kind, ''),
+    coalesce(status, ''),
+    package_id::text,
+    coalesce(file_name, '')
 FROM control.source_package
 WHERE status = 'PROCESSING'
-ORDER BY updated_at NULLS LAST
+ORDER BY package_sequence
 LIMIT 20;
 '@
         $detailArgs = @(
