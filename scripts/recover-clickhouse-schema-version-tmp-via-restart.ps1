@@ -9,12 +9,15 @@ param(
         "tmp_insert_all_2_2_0",
         "tmp_insert_all_3_3_0"
     ),
+    [string]$ExpectedSchemaSnapshot = "5|5|2026-08-10 12:58:08.545",
     [string]$EvidenceRoot = "reports"
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $clickhouseStoppedByOperator = $false
+$restartPerformed = $false
+$alreadyRecovered = $false
 Push-Location $repoRoot
 try {
     $expectedSha = $ExpectedMainSha.Trim().ToLowerInvariant()
@@ -113,6 +116,42 @@ try {
         return $names
     }
 
+    function Get-RunningClickHouseContainerId {
+        $ids = @(& docker compose ps --status running -q clickhouse 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($LASTEXITCODE -ne 0) {
+            return ""
+        }
+        if ($ids.Count -gt 1) {
+            throw "Expected at most one running ClickHouse container during recovery."
+        }
+        if ($ids.Count -eq 1) {
+            return $ids[0].Trim()
+        }
+        return ""
+    }
+
+    function Wait-ClickHouseHealthy {
+        $lastHealth = "not-running"
+        for ($attempt = 1; $attempt -le 90; $attempt++) {
+            $containerId = Get-RunningClickHouseContainerId
+            if ($containerId) {
+                $healthLines = @(& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $containerId 2>$null)
+                if ($LASTEXITCODE -eq 0) {
+                    $healthValues = @($healthLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    if ($healthValues.Count -eq 1) {
+                        $lastHealth = $healthValues[0].Trim().ToLowerInvariant()
+                        if ($lastHealth -eq "healthy") {
+                            Write-Host "clickhouse_docker_health=healthy"
+                            return $containerId
+                        }
+                    }
+                }
+            }
+            Start-Sleep -Seconds 2
+        }
+        throw "ClickHouse did not become Docker-health healthy after controlled start. last_health=$lastHealth"
+    }
+
     Write-Host "`n===== PRE-RESTART TABLE/TMP EVIDENCE ====="
     $clickhouseVersion = Invoke-ClickHouseScalar "SELECT version()"
     Write-Host "clickhouse_version=$clickhouseVersion"
@@ -127,24 +166,37 @@ try {
         throw "schema_version UUID drift detected."
     }
 
-    $actualTmp = @(Get-TmpInsertNames $identity.path)
-    Write-Host "tmp_insert_count_before=$($actualTmp.Count)"
-    foreach ($name in $actualTmp) {
-        Write-Host "tmp_before=$name"
-    }
-    if ($actualTmp.Count -ne $expectedTmp.Count -or (Compare-Object -ReferenceObject $expectedTmp -DifferenceObject $actualTmp)) {
-        throw "schema_version tmp_insert set does not exactly match the frozen incident evidence."
-    }
-    Write-Host "EXACT_TMP_SET_MATCH_OK"
-
     $unfinishedMutations = [int64](Invoke-ClickHouseScalar "SELECT count() FROM system.mutations WHERE database = 'markorbit_facts' AND table = 'schema_version' AND is_done = 0")
     $activeQueries = [int64](Invoke-ClickHouseScalar "SELECT count() FROM system.processes WHERE query NOT LIKE '%system.processes%'")
     $schemaSnapshotBefore = Invoke-ClickHouseScalar "SELECT concat(toString(count()), '|', toString(countDistinct(component)), '|', toString(max(applied_at))) FROM markorbit_facts.schema_version FINAL"
     Write-Host "schema_version_unfinished_mutations=$unfinishedMutations"
     Write-Host "clickhouse_active_queries=$activeQueries"
-    Write-Host "schema_version_snapshot_before=$schemaSnapshotBefore"
+    Write-Host "schema_version_snapshot_current=$schemaSnapshotBefore"
+    Write-Host "schema_version_snapshot_expected=$ExpectedSchemaSnapshot"
     if ($unfinishedMutations -ne 0 -or $activeQueries -ne 0) {
         throw "ClickHouse is not idle enough for a controlled native tmp recovery restart."
+    }
+    if ($schemaSnapshotBefore -ne $ExpectedSchemaSnapshot) {
+        throw "schema_version logical snapshot drifted from the frozen pre-restart evidence."
+    }
+
+    $actualTmp = @(Get-TmpInsertNames $identity.path)
+    Write-Host "tmp_insert_count_current=$($actualTmp.Count)"
+    foreach ($name in $actualTmp) {
+        Write-Host "tmp_current=$name"
+    }
+
+    if ($actualTmp.Count -eq 0) {
+        $alreadyRecovered = $true
+        Write-Host "recovery_mode=ALREADY_RECOVERED_AFTER_INTERRUPTED_RESTART"
+        Write-Host "ZERO_TMP_ALREADY_RECOVERED_OK"
+    }
+    elseif ($actualTmp.Count -eq $expectedTmp.Count -and -not (Compare-Object -ReferenceObject $expectedTmp -DifferenceObject $actualTmp)) {
+        Write-Host "recovery_mode=NATIVE_RESTART_REQUIRED"
+        Write-Host "EXACT_TMP_SET_MATCH_OK"
+    }
+    else {
+        throw "schema_version tmp_insert set is neither the frozen incident set nor the fully recovered zero-tmp state."
     }
 
     $partsBefore = @(& docker compose exec -T clickhouse clickhouse-client --query "SELECT name, active, rows, bytes_on_disk FROM system.parts WHERE database = 'markorbit_facts' AND table = 'schema_version' ORDER BY name FORMAT TSVRaw")
@@ -153,53 +205,41 @@ try {
     }
     foreach ($line in $partsBefore) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
-            Write-Host "schema_part_before=$line"
+            Write-Host "schema_part_current=$line"
         }
     }
 
-    Write-Host "`n===== CONTROLLED CLICKHOUSE-ONLY RESTART ====="
-    & docker compose stop clickhouse | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to stop ClickHouse cleanly."
-    }
-    $clickhouseStoppedByOperator = $true
-    $runningAfterStop = docker compose ps --status running -q clickhouse
-    if ($LASTEXITCODE -ne 0 -or $runningAfterStop) {
-        throw "ClickHouse is still running after controlled stop."
-    }
-    Write-Host "CLICKHOUSE_CONTROLLED_STOP_OK"
-
-    & docker compose start clickhouse | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to start ClickHouse after controlled stop."
-    }
-
-    $ready = $false
-    for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        $runningId = docker compose ps --status running -q clickhouse
-        if ($LASTEXITCODE -eq 0 -and $runningId) {
-            & docker compose exec -T clickhouse clickhouse-client --query "SELECT 1" *> $null
-            if ($LASTEXITCODE -eq 0) {
-                $ready = $true
-                break
-            }
+    if (-not $alreadyRecovered) {
+        Write-Host "`n===== CONTROLLED CLICKHOUSE-ONLY RESTART ====="
+        & docker compose stop clickhouse | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to stop ClickHouse cleanly."
         }
-        Start-Sleep -Seconds 2
-    }
-    if (-not $ready) {
-        throw "ClickHouse did not become query-ready after the controlled restart."
-    }
-    $clickhouseStoppedByOperator = $false
-    Write-Host "CLICKHOUSE_CONTROLLED_RESTART_READY_OK"
+        $clickhouseStoppedByOperator = $true
+        $runningAfterStop = docker compose ps --status running -q clickhouse
+        if ($LASTEXITCODE -ne 0 -or $runningAfterStop) {
+            throw "ClickHouse is still running after controlled stop."
+        }
+        Write-Host "CLICKHOUSE_CONTROLLED_STOP_OK"
 
-    Write-Host "`n===== POST-RESTART NATIVE CLEANUP VERIFICATION ====="
+        & docker compose start clickhouse | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to start ClickHouse after controlled stop."
+        }
+        $null = Wait-ClickHouseHealthy
+        $clickhouseStoppedByOperator = $false
+        $restartPerformed = $true
+        Write-Host "CLICKHOUSE_CONTROLLED_RESTART_READY_OK"
+    }
+
+    Write-Host "`n===== POST-RECOVERY NATIVE CLEANUP VERIFICATION ====="
     $versionAfter = Invoke-ClickHouseScalar "SELECT version()"
     $identityAfter = Get-SchemaIdentityAndPath
     if ($versionAfter -ne $clickhouseVersion) {
-        throw "ClickHouse version changed across the controlled restart."
+        throw "ClickHouse version changed across recovery verification."
     }
     if ($identityAfter.uuid -ne $expectedUuid -or $identityAfter.path -ne $identity.path) {
-        throw "schema_version identity/path changed across the controlled restart."
+        throw "schema_version identity/path changed across recovery verification."
     }
 
     $tmpAfter = @(Get-TmpInsertNames $identityAfter.path)
@@ -213,13 +253,13 @@ try {
 
     $schemaSnapshotAfter = Invoke-ClickHouseScalar "SELECT concat(toString(count()), '|', toString(countDistinct(component)), '|', toString(max(applied_at))) FROM markorbit_facts.schema_version FINAL"
     Write-Host "schema_version_snapshot_after=$schemaSnapshotAfter"
-    if ($schemaSnapshotAfter -ne $schemaSnapshotBefore) {
-        throw "schema_version logical snapshot changed across native tmp cleanup restart."
+    if ($schemaSnapshotAfter -ne $ExpectedSchemaSnapshot) {
+        throw "schema_version logical snapshot changed from the frozen pre-restart evidence."
     }
 
     $unfinishedMutationsAfter = [int64](Invoke-ClickHouseScalar "SELECT count() FROM system.mutations WHERE database = 'markorbit_facts' AND table = 'schema_version' AND is_done = 0")
     if ($unfinishedMutationsAfter -ne 0) {
-        throw "schema_version has an unfinished mutation after restart."
+        throw "schema_version has an unfinished mutation after recovery verification."
     }
 
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -228,40 +268,47 @@ try {
     $evidenceDir = (Resolve-Path -LiteralPath $evidenceDir).Path
     $permissionReport = Join-Path $evidenceDir "active_hot_permission_post_restart.json"
 
-    Write-Host "`n===== POST-RESTART ACTIVE HOT V2 ====="
+    Write-Host "`n===== POST-RECOVERY ACTIVE HOT V2 ====="
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
         (Join-Path $PSScriptRoot "diagnose-clickhouse-active-hot-permissions-v2.ps1") `
         -OutputPath $permissionReport
     if ($LASTEXITCODE -ne 0) {
-        throw "Post-restart active-Hot V2 diagnostic failed."
+        throw "Post-recovery active-Hot V2 diagnostic failed."
     }
     $report = Get-Content -LiteralPath $permissionReport -Raw | ConvertFrom-Json
     if ($report.report_version -ne "CLICKHOUSE_ACTIVE_HOT_PERMISSION_DIAGNOSTIC_V1") {
-        throw "Unexpected post-restart active-Hot report version."
+        throw "Unexpected post-recovery active-Hot report version."
     }
     if (@($report.blockers).Count -ne 0) {
-        throw "Post-restart active-Hot diagnostic still has blockers."
+        throw "Post-recovery active-Hot diagnostic still has blockers."
     }
     if (-not [bool]$report.schema_version.rwx_for_server_identity -or -not [bool]$report.disposable_root_rename_probe.passed -or -not [bool]$report.cn_comparison.rwx_for_server_identity) {
-        throw "Post-restart active-Hot ownership/rename comparison is not fully healthy."
+        throw "Post-recovery active-Hot ownership/rename comparison is not fully healthy."
     }
 
     Write-Host "`n===== RECOVERY RESULT ====="
-    Write-Host "clickhouse_restart_performed=True"
+    Write-Host "clickhouse_restart_performed=$restartPerformed"
+    Write-Host "already_recovered_after_interrupted_restart=$alreadyRecovered"
     Write-Host "clickhouse_native_tmp_cleanup=True"
     Write-Host "manual_filesystem_cleanup_performed=False"
     Write-Host "permission_repair_performed=False"
     Write-Host "worker_start_performed=False"
     Write-Host "schema_apply_performed=False"
     Write-Host "corpus_replay_performed=False"
-    Write-Host "post_restart_permission_blockers=0"
+    Write-Host "post_recovery_permission_blockers=0"
     Write-Host "Evidence directory: $evidenceDir"
     Write-Host "CLICKHOUSE_NATIVE_TMP_RECOVERY_PASS"
 }
 finally {
     if ($clickhouseStoppedByOperator) {
-        Write-Host "Attempting fail-safe ClickHouse start after an interrupted recovery..."
-        & docker compose start clickhouse | Out-Host
+        $runningIds = @(& docker compose ps --status running -q clickhouse 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($LASTEXITCODE -eq 0 -and $runningIds.Count -gt 0) {
+            Write-Host "ClickHouse is already running; fail-safe duplicate start is not needed."
+        }
+        else {
+            Write-Host "Attempting fail-safe ClickHouse start after an interrupted recovery..."
+            & docker compose start clickhouse | Out-Host
+        }
     }
     Pop-Location
 }
