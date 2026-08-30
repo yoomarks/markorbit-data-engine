@@ -88,19 +88,32 @@ def test_admin_job_runtime_diagnostic_is_read_only_and_exact_run_scoped() -> Non
     assert "payload::text" in text
     assert "metrics::text" in text
     assert "error_message" in text
-    assert "worker_started_after_job_claim" in text
+    assert "global_processing_packages=" in text
+    assert "worker_running_count=" in text
+    assert "worker_container_count_all_states=" in text
+    assert "worker_ownership_state=" in text
+    assert "NO_RUNNING_WORKER" in text
+    assert "SINGLE_RUNNING_WORKER" in text
+    assert "MULTIPLE_RUNNING_WORKERS" in text
+    assert "docker compose ps -a -q worker" in text
+    assert "started_after_job_claim" in text
+    assert "finished_after_job_claim" in text
     assert "worker_runtime_matches_exact_checkout" in text
+    assert "NOT_APPLICABLE_NO_RUNNING_WORKER" in text
+    assert "docker exec $workerId python" in text
     assert "app/admin_domain_tasks.py" in text
     assert "app/cn/final_checkpoint.py" in text
     assert "system.processes" in text
     assert "system.query_log" in text
     assert "pg_stat_activity" in text
+    assert "ownership_requires_review=True" in text
     assert "reconciliation_performed=False" in text
     assert "worker_stop_performed=False" in text
     assert "schema_apply_performed=False" in text
     assert "corpus_replay_performed=False" in text
     assert "permission_repair_performed=False" in text
     assert "ADMIN_JOB_RUNTIME_DIAGNOSTIC_COMPLETE" in text
+    assert "Exactly one persistent worker must be running" not in text
 
     lowered = text.lower()
     assert "update control.job_run" not in lowered
