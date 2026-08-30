@@ -138,7 +138,7 @@ def test_prepare_operator_is_single_process_stop_point_not_mutation() -> None:
     assert "origin/main" in text
     assert "EXACT_MAIN_CLEAN_OK" in text
     assert "stop-idle-worker.ps1" in text
-    assert "diagnose-clickhouse-active-hot-permissions.ps1" in text
+    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" in text
     assert "REVIEW_ACTIVE_HOT_PERMISSION_EVIDENCE" in text
     assert "US_CAPACITY_PILOT_PERMISSION_REVIEW_REQUIRED" in text
     assert "Permission repair: NOT_PERFORMED" in text
