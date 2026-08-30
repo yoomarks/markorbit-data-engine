@@ -29,7 +29,19 @@ def test_idle_worker_stop_is_global_idle_and_explicit() -> None:
     assert '& docker @statusArgs' in text
     assert '& docker @detailArgs' in text
 
+    assert "coalesce(job_type, '')" in text
+    assert "coalesce(trigger_type, '')" in text
+    assert "run_id::text" in text
+    assert "coalesce(package_kind, '')" in text
+    assert "package_id::text" in text
+    assert "coalesce(file_name, '')" in text
+    assert "ORDER BY package_sequence" in text
+
     lowered = text.lower()
+    assert "coalesce(domain" not in lowered
+    assert "source_kind" not in lowered
+    assert "coalesce(id::text" not in lowered
+    assert "order by updated_at" not in lowered
     assert "sh -lc" not in lowered
     assert "docker compose start worker" not in lowered
     assert "docker compose restart worker" not in lowered
