@@ -10,6 +10,8 @@ param(
         "tmp_insert_all_3_3_0"
     ),
     [string]$ExpectedSchemaSnapshot = "5|5|2026-08-10 12:58:08.545",
+    [ValidateRange(30, 1800)]
+    [int]$ClickHouseHealthTimeoutSeconds = 600,
     [string]$EvidenceRoot = "reports"
 )
 
@@ -130,17 +132,54 @@ try {
         return ""
     }
 
-    function Wait-ClickHouseHealthy {
+    function Show-ClickHouseStartupDiagnostics([string]$Phase, [string]$ContainerId) {
+        Write-Host "`n===== CLICKHOUSE STARTUP DIAGNOSTICS ====="
+        Write-Host "clickhouse_health_phase=$Phase"
+        $savedErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            if ($ContainerId) {
+                $stateLines = @(& docker inspect --format 'state={{.State.Status}}|running={{.State.Running}}|exit_code={{.State.ExitCode}}|health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|started_at={{.State.StartedAt}}|finished_at={{.State.FinishedAt}}|restart_count={{.RestartCount}}' $ContainerId 2>&1)
+                foreach ($line in $stateLines) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                        Write-Host "clickhouse_container_state=$line"
+                    }
+                }
+                $healthLines = @(& docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}{{println .End "|" .ExitCode "|" .Output}}{{end}}{{end}}' $ContainerId 2>&1)
+                foreach ($line in $healthLines) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                        Write-Host "clickhouse_health_log=$line"
+                    }
+                }
+            }
+            $logLines = @(& docker compose logs --tail 120 --no-color clickhouse 2>&1)
+            foreach ($line in $logLines) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                    Write-Host "clickhouse_startup_log=$line"
+                }
+            }
+        }
+        finally {
+            $ErrorActionPreference = $savedErrorActionPreference
+        }
+        Write-Host "CLICKHOUSE_STARTUP_DIAGNOSTICS_COMPLETE"
+    }
+
+    function Wait-ClickHouseHealthy([string]$Phase) {
         $lastHealth = "not-running"
-        for ($attempt = 1; $attempt -le 90; $attempt++) {
+        $lastContainerId = ""
+        $maxAttempts = [int][Math]::Ceiling($ClickHouseHealthTimeoutSeconds / 2.0)
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             $containerId = Get-RunningClickHouseContainerId
             if ($containerId) {
+                $lastContainerId = $containerId
                 $healthLines = @(& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $containerId 2>$null)
                 if ($LASTEXITCODE -eq 0) {
                     $healthValues = @($healthLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
                     if ($healthValues.Count -eq 1) {
                         $lastHealth = $healthValues[0].Trim().ToLowerInvariant()
                         if ($lastHealth -eq "healthy") {
+                            Write-Host "clickhouse_health_phase=$Phase"
                             Write-Host "clickhouse_docker_health=healthy"
                             return $containerId
                         }
@@ -149,8 +188,13 @@ try {
             }
             Start-Sleep -Seconds 2
         }
-        throw "ClickHouse did not become Docker-health healthy after controlled start. last_health=$lastHealth"
+        Show-ClickHouseStartupDiagnostics -Phase $Phase -ContainerId $lastContainerId
+        throw "ClickHouse did not become Docker-health healthy during $Phase. last_health=$lastHealth"
     }
+
+    Write-Host "`n===== CLICKHOUSE PREFLIGHT HEALTH ====="
+    $null = Wait-ClickHouseHealthy -Phase "preflight"
+    Write-Host "CLICKHOUSE_PREFLIGHT_HEALTHY_OK"
 
     Write-Host "`n===== PRE-RESTART TABLE/TMP EVIDENCE ====="
     $clickhouseVersion = Invoke-ClickHouseScalar "SELECT version()"
@@ -226,7 +270,7 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to start ClickHouse after controlled stop."
         }
-        $null = Wait-ClickHouseHealthy
+        $null = Wait-ClickHouseHealthy -Phase "post-restart"
         $clickhouseStoppedByOperator = $false
         $restartPerformed = $true
         Write-Host "CLICKHOUSE_CONTROLLED_RESTART_READY_OK"
