@@ -28,16 +28,33 @@ def test_operator_pins_e_drive_tooling_location_and_wsl2() -> None:
     assert "EXISTING_TOOLING_DISTRO_WRONG_LOCATION" in t
     assert "INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO" in t
     assert "DISTRO_NOT_AVAILABLE_ONLINE" in t
+    assert "StartsWith('\\\\?\\')" in t
+    assert "Substring(4)" in t
 
 
-def test_operator_verifies_required_ext4_tools_and_preserves_default() -> None:
+def test_operator_verifies_required_ext4_tools_and_preserves_default_fail_safe() -> None:
     t = text()
     for command in ("mkfs.ext4", "lsblk", "blkid", "e2fsck", "resize2fs"):
         assert command in t
     assert "apt-get install -y e2fsprogs util-linux" in t
     assert "$defaultBefore = Get-DefaultWslDistroName" in t
+    assert "finally {" in t
+    assert "$defaultNow = Get-DefaultWslDistroName" in t
     assert "'--set-default',$defaultBefore" in t
     assert "default_restore_performed" in t
+
+
+def test_operator_uses_explicit_dictionary_access_for_ps51_receipts() -> None:
+    t = text()
+    for marker in (
+        "$workerProbe['lines']",
+        "$volumeProbe['exit_code']",
+        "$wslVersion['exit_code']",
+        "$toolProbeFinal['ready']",
+        "$clickhouseBefore['ready']",
+        "$clickhouseAfter['ready']",
+    ):
+        assert marker in t
 
 
 def test_operator_keeps_current_production_data_plane_untouched() -> None:
