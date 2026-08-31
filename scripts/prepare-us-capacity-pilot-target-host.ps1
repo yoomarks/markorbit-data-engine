@@ -13,95 +13,61 @@ try {
     $expectedSha = $ExpectedMainSha.Trim().ToLowerInvariant()
 
     Write-Host "===== EXACT-MAIN SAFETY GATE ====="
-    if (git status --porcelain) {
-        throw "Working tree must be clean before target-host preparation."
-    }
-
+    if (git status --porcelain) { throw "Working tree must be clean before target-host preparation." }
     $branch = (git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -ne "main") {
-        throw "Target-host preparation must run from the local main branch."
-    }
-
+    if ($LASTEXITCODE -ne 0 -or $branch -ne "main") { throw "Target-host preparation must run from local main." }
     & git fetch origin main | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to fetch origin/main."
-    }
-
+    if ($LASTEXITCODE -ne 0) { throw "Unable to fetch origin/main." }
     $head = (git rev-parse HEAD).Trim().ToLowerInvariant()
     $originMain = (git rev-parse origin/main).Trim().ToLowerInvariant()
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to resolve exact Data Engine commit identity."
-    }
-
     Write-Host "HEAD=$head"
     Write-Host "origin/main=$originMain"
     Write-Host "expected=$expectedSha"
-
-    if ($head -ne $expectedSha -or $originMain -ne $expectedSha) {
-        throw "Exact main drift detected. Update local main separately, then re-run this operator with the newly authorized SHA."
-    }
-    if (git status --porcelain) {
-        throw "Working tree changed during the exact-main safety gate."
-    }
+    if ($head -ne $expectedSha -or $originMain -ne $expectedSha) { throw "Exact main drift detected." }
+    if (git status --porcelain) { throw "Working tree changed during exact-main gate." }
     Write-Host "EXACT_MAIN_CLEAN_OK"
 
-    Write-Host "`n===== REQUIRED SERVICES ====="
+    Write-Host "`n===== REQUIRED SERVICES / GLOBAL IDLE ====="
     foreach ($service in @("postgres", "clickhouse")) {
         $running = docker compose ps --status running -q $service
-        if ($LASTEXITCODE -ne 0 -or -not $running) {
-            throw "$service must be running before target-host preparation."
-        }
+        if ($LASTEXITCODE -ne 0 -or -not $running) { throw "$service must be running before target-host preparation." }
     }
-    Write-Host "POSTGRES_CLICKHOUSE_RUNNING_OK"
-
-    Write-Host "`n===== GLOBAL IDLE WORKER GATE ====="
-    $idleArgs = @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-        (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
-    )
-    if ($StopIdleWorker) {
-        $idleArgs += "-StopIdleWorker"
-    }
+    $idleArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'stop-idle-worker.ps1'))
+    if ($StopIdleWorker) { $idleArgs += '-StopIdleWorker' }
     & powershell.exe @idleArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Global idle-worker gate failed. No storage diagnostic or US mutation was started."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Global idle-worker gate failed." }
+    $workerAfter = @(& docker compose ps -a -q worker | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($workerAfter.Count -ne 0) { throw "Worker container in any state is not allowed." }
+    Write-Host "GLOBAL_IDLE_ZERO_WORKER_OK"
 
-    $workerAfter = docker compose ps --status running -q worker
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to verify worker state after the global idle-worker gate."
-    }
-    if ($workerAfter) {
-        throw "Persistent worker remains running. Stop is not authorized or did not complete."
-    }
-    Write-Host "PERSISTENT_WORKER_STOPPED_OK"
-
-    Write-Host "`n===== ACTIVE HOT PERMISSION DIAGNOSTIC ====="
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    Write-Host "`n===== LINUX DATA-VOLUME STORAGE CONTRACT ====="
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     $evidenceDir = Join-Path $EvidenceRoot "us_capacity_pilot_preparation_$timestamp"
     New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
     $evidenceDir = (Resolve-Path -LiteralPath $evidenceDir).Path
-    $permissionReport = Join-Path $evidenceDir "active_hot_permission.json"
-
+    $storageReport = Join-Path $evidenceDir 'active_data_storage_contract.json'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-        (Join-Path $PSScriptRoot "diagnose-clickhouse-active-hot-permissions-v2.ps1") `
-        -OutputPath $permissionReport
-    if ($LASTEXITCODE -ne 0) {
-        throw "Active Hot permission diagnostic failed. No permission repair or US mutation was attempted."
+        (Join-Path $PSScriptRoot 'assert-clickhouse-active-hot-storage-contract.ps1') `
+        -OutputPath $storageReport
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $storageReport -PathType Leaf)) {
+        throw "Linux ClickHouse data-volume contract failed. No US mutation was attempted."
     }
-    if (-not (Test-Path -LiteralPath $permissionReport -PathType Leaf)) {
-        throw "Active Hot permission diagnostic returned no report."
+    $storage = Get-Content -LiteralPath $storageReport -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($storage.report_version -ne 'CLICKHOUSE_ACTIVE_DATA_STORAGE_CONTRACT_V2' -or
+        @($storage.blockers).Count -ne 0 -or
+        -not [bool]$storage.safe_for_clickhouse_merge_tree_writes -or
+        [bool]$storage.windows_host_bind_accepted) {
+        throw "Active ClickHouse data storage is not accepted for US rollout."
     }
 
     Write-Host "`n===== PREPARATION STOP POINT ====="
     Write-Host "Evidence directory: $evidenceDir"
-    Write-Host "Permission report: $permissionReport"
+    Write-Host "Storage report: $storageReport"
     Write-Host "Worker restart: NOT_PERFORMED"
-    Write-Host "Permission repair: NOT_PERFORMED"
     Write-Host "US schema apply: NOT_PERFORMED"
     Write-Host "US replay: NOT_PERFORMED"
-    Write-Host "Next action: REVIEW_ACTIVE_HOT_PERMISSION_EVIDENCE"
-    Write-Host "US_CAPACITY_PILOT_PERMISSION_REVIEW_REQUIRED"
+    Write-Host "Next action: LINUX_VOLUME_STORAGE_ACCEPTED_REVIEW_US_TRANSITION"
+    Write-Host "US_CAPACITY_PILOT_STORAGE_CONTRACT_READY"
 }
 finally {
     Pop-Location
