@@ -1,0 +1,65 @@
+name: Windows PowerShell 5.1 Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  audit-hot-path-binder:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Windows PowerShell 5.1 and audit binder safety
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "PSEdition=$($PSVersionTable.PSEdition)"
+          Write-Host "PSVersion=$($PSVersionTable.PSVersion)"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+
+          $auditPath = Resolve-Path .\scripts\audit-clickhouse-hot-path-regression.ps1
+          $text = Get-Content -LiteralPath $auditPath -Raw -Encoding UTF8
+          if ($text -match 'System\.Collections\.Generic\.List\[object\]') {
+              throw "Audit reintroduced Generic.List[object], which can trigger the PowerShell 5.1 array-subexpression binder bug."
+          }
+          if ($text -match 'return\s+@\(\$rows\)') {
+              throw "Audit reintroduced return @(`$rows), which can trigger the PowerShell 5.1 generic-list binder bug."
+          }
+
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+              $auditPath,
+              [ref]$tokens,
+              [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Audit script failed Windows PowerShell 5.1 parsing."
+          }
+
+          $rows = @()
+          $rows += [pscustomobject][ordered]@{ label = 'root'; exists = $true }
+          $rows += [pscustomobject][ordered]@{ label = 'store'; exists = $true }
+          $materialized = @($rows)
+          if ($materialized.Count -ne 2) {
+              throw "PowerShell 5.1 binder-safe object-array materialization failed."
+          }
+
+          if (-not [string]::Equals('E:\\Hot', 'e:\\hot', [System.StringComparison]::OrdinalIgnoreCase)) {
+              throw "Static ordinal-ignore-case comparison contract failed."
+          }
+
+          Write-Host "WINDOWS_POWERSHELL_51_AUDIT_BINDER_GUARD_PASS"
