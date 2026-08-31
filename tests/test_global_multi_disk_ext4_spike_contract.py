@@ -88,6 +88,15 @@ def test_spike_runs_real_mergetree_background_merge_and_disk_verification() -> N
     assert "permission denied|operation not permitted|cannot rename|failed to rename" in t
 
 
+def test_unexpected_runtime_exceptions_fail_closed_instead_of_forcing_architecture() -> None:
+    t = text()
+    expected = """catch {
+            $runtimeError = $_.Exception.Message
+            $decision = 'SPIKE_BLOCKED'
+        }"""
+    assert expected in t
+
+
 def test_spike_preserves_production_data_plane_and_forbids_broad_mutation() -> None:
     t = text()
     for marker in (
