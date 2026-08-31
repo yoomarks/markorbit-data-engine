@@ -1,0 +1,128 @@
+name: Global Multi-Disk Ext4 Bounded Spike Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse and freeze bounded ext4 spike under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          foreach ($command in @('wsl.exe','diskpart.exe','docker')) {
+              if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+                  throw "Required operator command missing: $command"
+              }
+          }
+
+          $path = Resolve-Path '.\scripts\run-global-multi-disk-ext4-spike.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Bounded ext4 spike operator failed Windows PowerShell 5.1 parsing."
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','ToolingDistro','AcceptedVolume','EvidenceRoot','Apply','CleanupMounts')) {
+              if (-not $command.Parameters.ContainsKey($parameter)) {
+                  throw "Bounded ext4 spike operator must retain parameter: $parameter"
+              }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+              'GLOBAL_MULTI_DISK_EXT4_SPIKE_V1',
+              'READY_FOR_BOUNDED_EXT4_SPIKE_APPLY',
+              'DOCKER_DESKTOP_EXTERNAL_EXT4_GO',
+              'DEDICATED_WSL_CLICKHOUSE_REQUIRED',
+              'SPIKE_BLOCKED',
+              'GLOBAL_MULTI_DISK_EXT4_SPIKE_DONE',
+              'hot_cn_spike.vhdx',
+              'hot_us_spike.vhdx',
+              'hot_global_spike.vhdx',
+              'warm_spike.vhdx',
+              '$SpikeMaximumMiB = 1024',
+              "'--mount','--vhd',`$vhdxPath,'--bare'",
+              "'mkfs.ext4','-F','-L'",
+              'stat -f -c %T /probe',
+              '<spike_hot_cn><volumes>',
+              '<spike_hot_us><volumes>',
+              '<spike_hot_global><volumes>',
+              '<spike_warm><volumes>',
+              'max(level)',
+              'disk_name',
+              'tmp_insert_*',
+              'spike_vhdx_delete_performed=False',
+              'production_clickhouse_mutation_performed=False',
+              'accepted_volume_mutation_performed=False',
+              'corpus_replay_performed=False'
+          )) {
+              if (-not $text.Contains($required)) {
+                  throw "Bounded ext4 spike operator lost required contract marker: $required"
+              }
+          }
+
+          foreach ($forbidden in @(
+              '2023_5.zip',
+              'replay-us-deterministic.ps1',
+              'docker system prune',
+              'docker volume rm',
+              'docker compose down',
+              "wsl.exe' @('--shutdown",
+              'Resize-VHD',
+              'Optimize-VHD',
+              'Mount-VHD',
+              'Remove-Item',
+              'ALTER TABLE',
+              'OPTIMIZE TABLE',
+              '-Apply -All'
+          )) {
+              if ($text.Contains($forbidden)) {
+                  throw "Bounded ext4 spike operator contains forbidden action marker: $forbidden"
+              }
+          }
+
+          $sample = @('sda disk','sdb disk','loop0 loop')
+          $diskNames = @()
+          foreach ($line in $sample) {
+              $fields = @($line.Trim() -split '\s+')
+              if ($fields.Count -ge 2 -and $fields[1] -eq 'disk') { $diskNames += $fields[0] }
+          }
+          if (($diskNames -join ',') -ne 'sda,sdb') {
+              throw "PS5.1 lsblk parser contract failed: $($diskNames -join ',')"
+          }
+
+          $batchCount = 24
+          $rowsPerBatch = 100
+          [int64]$expectedSum = 0
+          for ($batch = 0; $batch -lt $batchCount; $batch++) {
+              $base = $batch * 1000
+              $expectedSum += ([int64]$rowsPerBatch * [int64]$base) + ([int64]($rowsPerBatch - 1) * [int64]$rowsPerBatch / 2)
+          }
+          if ($expectedSum -ne 27718800) {
+              throw "Deterministic MergeTree checksum fixture drifted: $expectedSum"
+          }
+
+          Write-Host WINDOWS_POWERSHELL_51_GLOBAL_MULTI_DISK_EXT4_SPIKE_PASS
