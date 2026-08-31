@@ -55,10 +55,25 @@ jobs:
               'SPIKE_PREFLIGHT_BLOCKED',
               'destructive_action_performed = $false',
               'vhdx_create_performed = $false',
-              'corpus_replay_performed = $false'
+              'corpus_replay_performed = $false',
+              '$workerProbe = Invoke-NativeText',
+              "$workerProbe['lines']"
           )) {
               if (-not $text.Contains($required)) {
-                  throw "Preflight lost required safety marker: $required"
+                  throw "Preflight lost required safety/runtime marker: $required"
               }
+          }
+          if ($text.Contains("@(Invoke-NativeText 'docker' @('ps','-aq'")) {
+              throw 'Preflight must not use PS5.1-unstable inline array member access for worker probe.'
+          }
+          $emptyProbe = [ordered]@{ exit_code = 0; lines = @() }
+          $emptyIds = @($emptyProbe['lines'] | Where-Object { $_.Trim() })
+          if ($emptyIds.Count -ne 0) {
+              throw 'Empty PS5.1 worker probe shape did not remain empty.'
+          }
+          $oneProbe = [ordered]@{ exit_code = 0; lines = @('abc123') }
+          $oneIds = @($oneProbe['lines'] | Where-Object { $_.Trim() })
+          if ($oneIds.Count -ne 1 -or $oneIds[0] -ne 'abc123') {
+              throw 'Single-line PS5.1 worker probe shape was not preserved.'
           }
           Write-Host WINDOWS_POWERSHELL_51_GLOBAL_MULTI_DISK_EXT4_SPIKE_PREFLIGHT_PASS

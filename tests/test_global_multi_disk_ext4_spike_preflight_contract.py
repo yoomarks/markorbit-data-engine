@@ -35,6 +35,13 @@ def test_preflight_checks_wsl_docker_clickhouse_and_vhd_primitives() -> None:
     assert "Get-Command diskpart.exe" in t
 
 
+def test_worker_probe_uses_stable_ps51_result_shape() -> None:
+    t = text()
+    assert "$workerProbe = Invoke-NativeText 'docker' @('ps','-aq'" in t
+    assert "$workerIds = @($workerProbe['lines'] | Where-Object" in t
+    assert "@(Invoke-NativeText 'docker' @('ps','-aq'" not in t
+
+
 def test_preflight_does_not_contain_mutating_spike_actions() -> None:
     t = text()
     forbidden = (
