@@ -86,13 +86,20 @@ function Read-JsonFile([string]$Path, [string]$Label) {
 }
 
 function Invoke-WorkerJson([string[]]$PythonArgs, [string]$Label) {
-    $lines = @(docker compose run --rm --no-deps -T `
-        --volume "${repoRoot}\app:/app/app:ro" `
-        worker python @PythonArgs 2>&1)
-    $exitCode = $LASTEXITCODE
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $lines = @(docker compose run --rm --no-deps -T `
+            --volume "${repoRoot}\app:/app/app:ro" `
+            worker python @PythonArgs)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
     $json = ($lines | ForEach-Object { $_.ToString() }) -join "`n"
     if ($exitCode -ne 0) {
-        throw "$Label failed with exit code $exitCode`: $json"
+        throw "$Label failed with exit code $exitCode."
     }
     if (-not $json.Trim()) { throw "$Label produced no JSON." }
     try { return $json | ConvertFrom-Json }
@@ -314,7 +321,7 @@ try {
             driver = [string]$volumeInspect[0].Driver
             mountpoint = [string]$volumeInspect[0].Mountpoint
             actual_mount_type = [string]$storageContract.actual_mount_type
-            active_rw = [bool]$storageContract.actual_mount_rw
+            active_rw = [bool]$storageContract.mount_rw
         }
         clickhouse = [ordered]@{
             total_bytes = $hotTotal
