@@ -27,9 +27,20 @@ def test_operator_pins_e_drive_tooling_location_and_wsl2() -> None:
     assert "'--set-version',$DistroName,'2'" in t
     assert "EXISTING_TOOLING_DISTRO_WRONG_LOCATION" in t
     assert "INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO" in t
-    assert "DISTRO_NOT_AVAILABLE_ONLINE" in t
     assert "StartsWith('\\\\?\\')" in t
     assert "Substring(4)" in t
+
+
+def test_operator_treats_online_catalog_as_advisory_not_install_authority() -> None:
+    t = text()
+    assert "ONLINE_DISTRO_CATALOG_UNAVAILABLE" in t
+    assert "DISTRO_NOT_LISTED_IN_ONLINE_CATALOG_INSTALL_WILL_DECIDE" in t
+    assert "wsl_online_catalog_exit_code" in t
+    assert "wsl_online_catalog_available" in t
+    assert "wsl_online_catalog_lines" in t
+    assert "advisories = @($catalogAdvisories)" in t
+    assert "DISTRO_NOT_AVAILABLE_ONLINE" not in t
+    assert "$blockers += 'DISTRO_NOT" not in t
 
 
 def test_operator_verifies_required_ext4_tools_and_preserves_default_fail_safe() -> None:
@@ -50,6 +61,8 @@ def test_operator_uses_explicit_dictionary_access_for_ps51_receipts() -> None:
         "$workerProbe['lines']",
         "$volumeProbe['exit_code']",
         "$wslVersion['exit_code']",
+        "$online['exit_code']",
+        "$online['lines']",
         "$toolProbeFinal['ready']",
         "$clickhouseBefore['ready']",
         "$clickhouseAfter['ready']",
