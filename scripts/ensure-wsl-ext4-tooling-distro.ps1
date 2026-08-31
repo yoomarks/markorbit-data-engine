@@ -86,6 +86,9 @@ function Get-DefaultWslDistroName {
 function Normalize-Path([string]$PathValue) {
     if (-not $PathValue) { return $null }
     $expanded = [Environment]::ExpandEnvironmentVariables($PathValue)
+    if ($expanded.StartsWith('\\?\')) {
+        $expanded = $expanded.Substring(4)
+    }
     return [IO.Path]::GetFullPath($expanded).TrimEnd('\')
 }
 
@@ -93,8 +96,8 @@ function Get-ToolProbe([string]$Name) {
     $command = 'for c in mkfs.ext4 lsblk blkid e2fsck resize2fs; do command -v "$c" >/dev/null 2>&1 || exit 10; done'
     $result = Invoke-NativeText 'wsl.exe' @('-d',$Name,'-u','root','--','sh','-lc',$command) -AllowFailure
     return [ordered]@{
-        ready = [bool]($result.exit_code -eq 0)
-        exit_code = $result.exit_code
+        ready = [bool]($result['exit_code'] -eq 0)
+        exit_code = $result['exit_code']
         lines = @($result['lines'])
     }
 }
@@ -106,7 +109,7 @@ function Get-ClickHouseHealth {
     $healthProbe = Invoke-NativeText 'docker' @('inspect','--format','{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}',$containerId) -AllowFailure
     $health = (@($healthProbe['lines']) -join '').Trim()
     $sqlProbe = Invoke-NativeText 'docker' @('compose','exec','-T','clickhouse','clickhouse-client','--query','SELECT 1') -AllowFailure
-    $ready = [bool]($health -eq 'healthy' -and $sqlProbe.exit_code -eq 0 -and ((@($sqlProbe['lines']) -join '') -match '1'))
+    $ready = [bool]($health -eq 'healthy' -and $sqlProbe['exit_code'] -eq 0 -and ((@($sqlProbe['lines']) -join '') -match '1'))
     return [ordered]@{ health = $health; ready = $ready }
 }
 
@@ -129,7 +132,7 @@ try {
     $workerIds = @($workerProbe['lines'] | Where-Object { $_.Trim() })
     $workerCount = $workerIds.Count
     $volumeProbe = Invoke-NativeText 'docker' @('volume','inspect',$AcceptedVolume) -AllowFailure
-    $acceptedVolumePresent = [bool]($volumeProbe.exit_code -eq 0)
+    $acceptedVolumePresent = [bool]($volumeProbe['exit_code'] -eq 0)
     $clickhouseBefore = Get-ClickHouseHealth
 
     $adminRole = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -139,10 +142,10 @@ try {
     $wslVersion = Invoke-NativeText 'wsl.exe' @('--version') -AllowFailure
     $online = Invoke-NativeText 'wsl.exe' @('--list','--online') -AllowFailure
     $onlineText = @($online['lines']) -join "`n"
-    $distroAvailableOnline = [bool]($online.exit_code -eq 0 -and $onlineText -match [regex]::Escape($DistroName))
+    $distroAvailableOnline = [bool]($online['exit_code'] -eq 0 -and $onlineText -match [regex]::Escape($DistroName))
     $defaultBefore = Get-DefaultWslDistroName
     $distrosBefore = @(Get-WslDistroRecords)
-    $existing = @($distrosBefore | Where-Object { $_.name -eq $DistroName })
+    $existing = @($distrosBefore | Where-Object { $_['name'] -eq $DistroName })
 
     $normalizedInstallRoot = Normalize-Path $InstallRoot
     $installDriveName = [IO.Path]::GetPathRoot($normalizedInstallRoot).TrimEnd('\').TrimEnd(':')
@@ -154,8 +157,8 @@ try {
     $existingVersion = $null
     $toolProbeBefore = [ordered]@{ ready = $false; exit_code = $null; lines = @() }
     if ($existing.Count -eq 1) {
-        $existingVersion = $existing[0].version
-        $existingLocationMatches = [bool]((Normalize-Path $existing[0].base_path) -eq $normalizedInstallRoot)
+        $existingVersion = $existing[0]['version']
+        $existingLocationMatches = [bool]((Normalize-Path $existing[0]['base_path']) -eq $normalizedInstallRoot)
         if ($existingLocationMatches -and $existingVersion -eq 2) {
             $toolProbeBefore = Get-ToolProbe $DistroName
         }
@@ -165,8 +168,8 @@ try {
     $blockers = @()
     if ($workerCount -ne 0) { $blockers += 'WORKER_CONTAINER_PRESENT' }
     if (-not $acceptedVolumePresent) { $blockers += 'ACCEPTED_CLICKHOUSE_VOLUME_MISSING' }
-    if (-not $clickhouseBefore.ready) { $blockers += 'CLICKHOUSE_NOT_READY' }
-    if ($wslVersion.exit_code -ne 0) { $blockers += 'WSL_VERSION_UNAVAILABLE' }
+    if (-not $clickhouseBefore['ready']) { $blockers += 'CLICKHOUSE_NOT_READY' }
+    if ($wslVersion['exit_code'] -ne 0) { $blockers += 'WSL_VERSION_UNAVAILABLE' }
     if (-not $installDrive) { $blockers += 'INSTALL_DRIVE_MISSING' }
     if ($installDriveFree -lt $minimumFreeBytes) { $blockers += 'INSTALL_DRIVE_FREE_SPACE_BELOW_10GIB' }
     if ($existing.Count -gt 1) { $blockers += 'DUPLICATE_TOOLING_DISTRO_REGISTRATION' }
@@ -174,7 +177,7 @@ try {
     if ($targetExistsUnregistered) { $blockers += 'INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO' }
     if ($existing.Count -eq 0 -and -not $distroAvailableOnline) { $blockers += 'DISTRO_NOT_AVAILABLE_ONLINE' }
 
-    $alreadyReady = [bool]($existing.Count -eq 1 -and $existingLocationMatches -and $existingVersion -eq 2 -and $toolProbeBefore.ready)
+    $alreadyReady = [bool]($existing.Count -eq 1 -and $existingLocationMatches -and $existingVersion -eq 2 -and $toolProbeBefore['ready'])
     $preflightReady = [bool]($blockers.Count -eq 0)
     $applyPerformed = $false
     $distroInstallPerformed = $false
@@ -191,58 +194,63 @@ try {
         }
         $applyPerformed = $true
 
-        if (-not $alreadyReady -and $existing.Count -eq 0) {
-            $parent = Split-Path -Parent $normalizedInstallRoot
-            New-Item -ItemType Directory -Force -Path $parent | Out-Null
-            $installResult = Invoke-NativeText 'wsl.exe' @('--install','-d',$DistroName,'--location',$normalizedInstallRoot,'--no-launch','--web-download') -AllowFailure
-            if ($installResult.exit_code -ne 0) {
-                throw "WSL distro install failed with exit code $($installResult.exit_code): $(@($installResult['lines']) -join [Environment]::NewLine)"
+        try {
+            if (-not $alreadyReady -and $existing.Count -eq 0) {
+                $parent = Split-Path -Parent $normalizedInstallRoot
+                New-Item -ItemType Directory -Force -Path $parent | Out-Null
+                $installResult = Invoke-NativeText 'wsl.exe' @('--install','-d',$DistroName,'--location',$normalizedInstallRoot,'--no-launch','--web-download') -AllowFailure
+                if ($installResult['exit_code'] -ne 0) {
+                    throw "WSL distro install failed with exit code $($installResult['exit_code']): $(@($installResult['lines']) -join [Environment]::NewLine)"
+                }
+                $distroInstallPerformed = $true
             }
-            $distroInstallPerformed = $true
-        }
 
-        $distrosAfterInstall = @(Get-WslDistroRecords)
-        $installed = @($distrosAfterInstall | Where-Object { $_.name -eq $DistroName })
-        if ($installed.Count -ne 1) { throw "Expected exactly one registered $DistroName after install." }
-        if ((Normalize-Path $installed[0].base_path) -ne $normalizedInstallRoot) {
-            throw "Installed distro base path does not match expected E: tooling root."
-        }
-        if ($installed[0].version -ne 2) {
-            $setVersion = Invoke-NativeText 'wsl.exe' @('--set-version',$DistroName,'2') -AllowFailure
-            if ($setVersion.exit_code -ne 0) {
-                throw "Unable to set $DistroName to WSL2: $(@($setVersion['lines']) -join [Environment]::NewLine)"
+            $distrosAfterInstall = @(Get-WslDistroRecords)
+            $installed = @($distrosAfterInstall | Where-Object { $_['name'] -eq $DistroName })
+            if ($installed.Count -ne 1) { throw "Expected exactly one registered $DistroName after install." }
+            if ((Normalize-Path $installed[0]['base_path']) -ne $normalizedInstallRoot) {
+                throw 'Installed distro base path does not match expected E: tooling root.'
             }
-        }
+            if ($installed[0]['version'] -ne 2) {
+                $setVersion = Invoke-NativeText 'wsl.exe' @('--set-version',$DistroName,'2') -AllowFailure
+                if ($setVersion['exit_code'] -ne 0) {
+                    throw "Unable to set $DistroName to WSL2: $(@($setVersion['lines']) -join [Environment]::NewLine)"
+                }
+            }
 
-        $toolProbe = Get-ToolProbe $DistroName
-        if (-not $toolProbe.ready) {
-            $apt = Invoke-NativeText 'wsl.exe' @('-d',$DistroName,'-u','root','--','sh','-lc','export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y e2fsprogs util-linux') -AllowFailure
-            if ($apt.exit_code -ne 0) {
-                throw "Unable to install ext4 tooling packages: $(@($apt['lines']) -join [Environment]::NewLine)"
+            $toolProbe = Get-ToolProbe $DistroName
+            if (-not $toolProbe['ready']) {
+                $apt = Invoke-NativeText 'wsl.exe' @('-d',$DistroName,'-u','root','--','sh','-lc','export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y e2fsprogs util-linux') -AllowFailure
+                if ($apt['exit_code'] -ne 0) {
+                    throw "Unable to install ext4 tooling packages: $(@($apt['lines']) -join [Environment]::NewLine)"
+                }
+                $packageInstallPerformed = $true
             }
-            $packageInstallPerformed = $true
         }
-
-        $defaultAfterInstall = Get-DefaultWslDistroName
-        if ($defaultBefore -and $defaultAfterInstall -ne $defaultBefore) {
-            $restoreDefault = Invoke-NativeText 'wsl.exe' @('--set-default',$defaultBefore) -AllowFailure
-            if ($restoreDefault.exit_code -ne 0) {
-                throw "Unable to restore original default WSL distro $defaultBefore."
+        finally {
+            if ($defaultBefore) {
+                $defaultNow = Get-DefaultWslDistroName
+                if ($defaultNow -ne $defaultBefore) {
+                    $restoreDefault = Invoke-NativeText 'wsl.exe' @('--set-default',$defaultBefore) -AllowFailure
+                    if ($restoreDefault['exit_code'] -ne 0) {
+                        throw "Unable to restore original default WSL distro $defaultBefore."
+                    }
+                    $defaultRestorePerformed = $true
+                }
             }
-            $defaultRestorePerformed = $true
         }
     }
 
     Write-Host 'tooling_stage=acceptance'
     $distrosFinal = @(Get-WslDistroRecords)
-    $final = @($distrosFinal | Where-Object { $_.name -eq $DistroName })
-    $finalBasePath = if ($final.Count -eq 1) { Normalize-Path $final[0].base_path } else { $null }
-    $finalVersion = if ($final.Count -eq 1) { $final[0].version } else { $null }
+    $final = @($distrosFinal | Where-Object { $_['name'] -eq $DistroName })
+    $finalBasePath = if ($final.Count -eq 1) { Normalize-Path $final[0]['base_path'] } else { $null }
+    $finalVersion = if ($final.Count -eq 1) { $final[0]['version'] } else { $null }
     $toolProbeFinal = if ($final.Count -eq 1 -and $finalBasePath -eq $normalizedInstallRoot -and $finalVersion -eq 2) { Get-ToolProbe $DistroName } else { [ordered]@{ ready = $false; exit_code = $null; lines = @() } }
     $defaultFinal = Get-DefaultWslDistroName
     $clickhouseAfter = Get-ClickHouseHealth
 
-    $toolingReady = [bool]($final.Count -eq 1 -and $finalBasePath -eq $normalizedInstallRoot -and $finalVersion -eq 2 -and $toolProbeFinal.ready -and $clickhouseAfter.ready -and $workerCount -eq 0)
+    $toolingReady = [bool]($final.Count -eq 1 -and $finalBasePath -eq $normalizedInstallRoot -and $finalVersion -eq 2 -and $toolProbeFinal['ready'] -and $clickhouseAfter['ready'] -and $workerCount -eq 0)
     $decision = if ($toolingReady) { 'WSL_EXT4_TOOLING_READY' } elseif ($preflightReady -and -not $Apply) { 'READY_FOR_WSL_EXT4_TOOLING_APPLY' } else { 'WSL_EXT4_TOOLING_BLOCKED' }
 
     $report = [ordered]@{
@@ -265,7 +273,7 @@ try {
         distro_final_count = $final.Count
         distro_final_base_path = $finalBasePath
         distro_final_version = $finalVersion
-        required_tools_ready = $toolProbeFinal.ready
+        required_tools_ready = $toolProbeFinal['ready']
         blockers = @($blockers)
         distro_install_performed = $distroInstallPerformed
         package_install_performed = $packageInstallPerformed
@@ -292,9 +300,9 @@ try {
     Write-Host "distro_final_count=$($final.Count)"
     Write-Host "distro_final_base_path=$finalBasePath"
     Write-Host "distro_final_version=$finalVersion"
-    Write-Host "required_tools_ready=$($toolProbeFinal.ready)"
-    Write-Host "clickhouse_before_ready=$($clickhouseBefore.ready)"
-    Write-Host "clickhouse_after_ready=$($clickhouseAfter.ready)"
+    Write-Host "required_tools_ready=$($toolProbeFinal['ready'])"
+    Write-Host "clickhouse_before_ready=$($clickhouseBefore['ready'])"
+    Write-Host "clickhouse_after_ready=$($clickhouseAfter['ready'])"
     foreach ($blocker in $blockers) { Write-Host "blocker=$blocker" }
     Write-Host "distro_install_performed=$distroInstallPerformed"
     Write-Host "package_install_performed=$packageInstallPerformed"
