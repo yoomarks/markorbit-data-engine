@@ -9,9 +9,10 @@ def source() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
-def test_operator_is_explicit_apply_and_exact_main_guarded() -> None:
+def test_operator_is_explicit_apply_resume_and_exact_main_guarded() -> None:
     text = source()
     assert "[switch]$Apply" in text
+    assert "[switch]$ResumeExisting" in text
     assert "[switch]$CleanupMounts" in text
     assert "Assert-ExactMain 'entry'" in text
     assert "Assert-ExactMain 'exit'" in text
@@ -29,10 +30,38 @@ def test_runtime_identity_and_exact_clickhouse_version_are_frozen() -> None:
     assert "PRODUCTION_CLICKHOUSE_VERSION_NOT_" in text
 
 
+def test_exact_version_download_does_not_use_shell_tmp_interpolation() -> None:
+    text = source()
+    assert '$packagePath = "/tmp/$packageName"' in text
+    assert "-o '$packagePath'" in text
+    assert 'tmp=\'/tmp/$packageName\'' not in text
+    assert '`"`$tmp`"' not in text
+    assert "PACKAGE_INSTALL_PERFORMED" in text
+    assert "PACKAGE_INSTALL_SKIPPED_EXACT_VERSION" in text
+    assert "package SHA256 was not captured" in text
+
+
+def test_resume_requires_exact_retained_runtime_identity() -> None:
+    text = source()
+    assert "Test-SameWindowsPath" in text
+    assert "$runtimeExact" in text
+    assert "$resumeState" in text
+    assert "SPIKE_RUNTIME_PARTIAL_STATE_REQUIRES_RESUME" in text
+    assert "RESUME_RUNTIME_DISTRO_MISSING" in text
+    assert "RESUME_RUNTIME_IDENTITY_MISMATCH" in text
+    assert "RESUME_RUNTIME_ROOT_MISSING" in text
+    assert "RESUME_EXPORT_TAR_MISSING" in text
+    assert "READY_FOR_DEDICATED_WSL_CLICKHOUSE_RESUME" in text
+    assert "runtime_mode" in text
+    assert "resume_existing_requested" in text
+
+
 def test_export_import_are_bounded_and_existing_distros_are_not_unregistered() -> None:
     text = source()
     assert "@('--export',$ToolingDistro,$ExportTar)" in text
     assert "@('--import',$RuntimeDistro,$RuntimeRoot,$ExportTar,'--version','2')" in text
+    assert "if ($runtimeMode -eq 'fresh')" in text
+    assert "resume_existing_runtime" in text
     assert "--unregister" not in text
     assert "runtime_distro_unregister_performed=False" in text
     assert "Remove-Item" not in text
@@ -79,12 +108,13 @@ def test_cross_runtime_connectivity_tests_direct_and_stable_routes() -> None:
     assert "--no-deps" in text
 
 
-def test_decisions_distinguish_storage_go_from_connectivity_blocker() -> None:
+def test_go_requires_stable_docker_to_wsl_endpoint_not_direct_ip() -> None:
     text = source()
+    assert "if ($dockerStableNative -and $appStableHttp)" in text
+    assert "$stableEndpoint = 'host.docker.internal'" in text
     assert "DEDICATED_WSL_CLICKHOUSE_GO" in text
     assert "WSL_CLICKHOUSE_STORAGE_GO_CONNECTIVITY_BLOCKED" in text
     assert "WSL_CLICKHOUSE_SPIKE_BLOCKED" in text
-    assert "READY_FOR_DEDICATED_WSL_CLICKHOUSE_APPLY" in text
 
 
 def test_production_safety_invariants_are_frozen() -> None:
@@ -103,9 +133,9 @@ def test_production_safety_invariants_are_frozen() -> None:
     assert "docker','volume','rm" not in text
 
 
-def test_cleanup_stops_native_server_and_only_unmounts_spike_vhdx() -> None:
+def test_cleanup_stops_server_even_for_resumed_runtime_and_only_unmounts_spike_vhdx() -> None:
     text = source()
-    assert "Stop-SpikeServer" in text
+    assert "if ($serverStarted) { $serverStopped = Stop-SpikeServer }" in text
     assert "wsl.exe' @('--unmount',$VhdxPath)" in text
     assert "server_stopped=" in text
     assert "spike_unmount_performed=" in text
