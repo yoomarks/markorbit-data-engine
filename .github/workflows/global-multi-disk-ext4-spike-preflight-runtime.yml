@@ -1,0 +1,64 @@
+name: Global Multi-Disk Ext4 Spike Preflight Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse ext4 spike preflight under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          foreach ($command in @('wsl.exe','docker','Get-CimInstance','diskpart.exe')) {
+              if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+                  throw "Required preflight command missing: $command"
+              }
+          }
+          $path = Resolve-Path '.\scripts\preflight-global-multi-disk-ext4-spike.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Ext4 spike preflight failed Windows PowerShell 5.1 parsing."
+          }
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume')) {
+              if (-not $command.Parameters.ContainsKey($parameter)) {
+                  throw "Preflight operator must retain parameter: $parameter"
+              }
+          }
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+              'GLOBAL_MULTI_DISK_EXT4_SPIKE_PREFLIGHT_V1',
+              'READY_FOR_BOUNDED_EXT4_SPIKE',
+              'SPIKE_PREFLIGHT_BLOCKED',
+              'destructive_action_performed = $false',
+              'vhdx_create_performed = $false',
+              'corpus_replay_performed = $false'
+          )) {
+              if (-not $text.Contains($required)) {
+                  throw "Preflight lost required safety marker: $required"
+              }
+          }
+          Write-Host WINDOWS_POWERSHELL_51_GLOBAL_MULTI_DISK_EXT4_SPIKE_PREFLIGHT_PASS
