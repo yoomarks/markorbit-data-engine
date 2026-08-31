@@ -94,6 +94,7 @@ jobs:
               'Resize-VHD',
               'Optimize-VHD',
               'Mount-VHD',
+              'Remove-Item',
               'ALTER TABLE',
               'OPTIMIZE TABLE',
               '-Apply -All'
