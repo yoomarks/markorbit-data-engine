@@ -91,10 +91,15 @@ try {
     $workerCount = $workerIds.Count
 
     Write-Host 'preflight_stage=wsl'
+    $hostOs = Get-CimInstance Win32_OperatingSystem
     $wslVersion = Invoke-NativeText 'wsl.exe' @('--version') -AllowFailure
     $wslStatus = Invoke-NativeText 'wsl.exe' @('--status') -AllowFailure
-    $wslMountHelp = Invoke-NativeText 'wsl.exe' @('--mount','--help') -AllowFailure
-    $wslMountVhdSupported = [bool](($wslMountHelp.lines -join "`n") -match '(?i)--vhd' -or ($wslVersion.exit_code -eq 0 -and $wslMountHelp.exit_code -eq 0))
+    $wslHelp = Invoke-NativeText 'wsl.exe' @('--help') -AllowFailure
+    $wslHelpText = @($wslHelp['lines']) -join "`n"
+    $wslMountSupported = [bool]($wslHelpText -match '(?im)(^|\s)--mount(\s|$)')
+    $wslVhdOptionSupported = [bool]($wslHelpText -match '(?im)(^|\s)--vhd(\s|$)')
+    $wslInstallLocationSupported = [bool]($wslHelpText -match '(?im)(^|\s)--location(\s|$)')
+    $wslMountVhdSupported = [bool]($wslVersion.exit_code -eq 0 -and $wslHelp.exit_code -eq 0 -and $wslMountSupported -and $wslVhdOptionSupported)
 
     $distros = @(Get-WslDistros)
     $formattingDistros = @()
@@ -152,12 +157,20 @@ try {
         engine_sha = $ExpectedMainSha.Trim().ToLowerInvariant()
         worker_container_count_all_states = $workerCount
         windows_is_administrator = $isAdministrator
+        windows = [ordered]@{
+            caption = [string]$hostOs.Caption
+            version = [string]$hostOs.Version
+            build_number = [string]$hostOs.BuildNumber
+        }
         wsl = [ordered]@{
             version_exit_code = $wslVersion.exit_code
             version_lines = @($wslVersion.lines)
             status_exit_code = $wslStatus.exit_code
             status_lines = @($wslStatus.lines)
-            mount_help_exit_code = $wslMountHelp.exit_code
+            help_exit_code = $wslHelp.exit_code
+            mount_supported = $wslMountSupported
+            vhd_option_supported = $wslVhdOptionSupported
+            install_location_supported = $wslInstallLocationSupported
             mount_vhd_supported = $wslMountVhdSupported
             distros = @($distros)
             formatting_distros = @($formattingDistros)
@@ -198,8 +211,17 @@ try {
     Write-Host '===== GLOBAL MULTI-DISK EXT4 SPIKE PREFLIGHT RESULT ====='
     Write-Host "decision=$decision"
     Write-Host "worker_container_count_all_states=$workerCount"
+    Write-Host "windows_caption=$([string]$hostOs.Caption)"
+    Write-Host "windows_version=$([string]$hostOs.Version)"
+    Write-Host "windows_build_number=$([string]$hostOs.BuildNumber)"
+    foreach ($line in @($wslVersion['lines'])) { Write-Host "wsl_version_line=$line" }
+    Write-Host "wsl_help_mount_supported=$wslMountSupported"
+    Write-Host "wsl_help_vhd_option_supported=$wslVhdOptionSupported"
+    Write-Host "wsl_help_install_location_supported=$wslInstallLocationSupported"
     Write-Host "wsl_mount_vhd_supported=$wslMountVhdSupported"
+    foreach ($distro in $distros) { Write-Host "wsl_distro=$($distro.name)|version=$($distro.version)|base_path=$($distro.base_path)" }
     Write-Host "wsl_formatting_distro_ready=$formattingReady"
+    foreach ($distro in $formattingDistros) { Write-Host "wsl_formatting_distro=$($distro.name)|version=$($distro.version)|mkfs_ext4=$($distro.mkfs_ext4)" }
     Write-Host "docker_desktop_linux=$dockerDesktopLinux"
     Write-Host "docker_wsl2_kernel=$dockerWslKernel"
     Write-Host "clickhouse_health=$clickhouseHealth"

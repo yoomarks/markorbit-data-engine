@@ -57,7 +57,12 @@ jobs:
               'vhdx_create_performed = $false',
               'corpus_replay_performed = $false',
               '$workerProbe = Invoke-NativeText',
-              "$workerProbe['lines']"
+              "$workerProbe['lines']",
+              "wsl.exe' @('--help')",
+              'wsl_help_mount_supported=',
+              'wsl_help_vhd_option_supported=',
+              'wsl_help_install_location_supported=',
+              'windows_build_number='
           )) {
               if (-not $text.Contains($required)) {
                   throw "Preflight lost required safety/runtime marker: $required"
@@ -65,6 +70,9 @@ jobs:
           }
           if ($text.Contains("@(Invoke-NativeText 'docker' @('ps','-aq'")) {
               throw 'Preflight must not use PS5.1-unstable inline array member access for worker probe.'
+          }
+          if ($text.Contains("wsl.exe' @('--mount','--help')")) {
+              throw 'Preflight must detect WSL capability from canonical wsl --help, not subcommand help.'
           }
           $emptyProbe = [ordered]@{ exit_code = 0; lines = @() }
           $emptyIds = @($emptyProbe['lines'] | Where-Object { $_.Trim() })
@@ -75,5 +83,12 @@ jobs:
           $oneIds = @($oneProbe['lines'] | Where-Object { $_.Trim() })
           if ($oneIds.Count -ne 1 -or $oneIds[0] -ne 'abc123') {
               throw 'Single-line PS5.1 worker probe shape was not preserved.'
+          }
+          $syntheticHelp = "  --mount <DiskPath>`n      --vhd`n  --install <Distro>`n      --location <Location>"
+          $mountSupported = [bool]($syntheticHelp -match '(?im)(^|\s)--mount(\s|$)')
+          $vhdSupported = [bool]($syntheticHelp -match '(?im)(^|\s)--vhd(\s|$)')
+          $locationSupported = [bool]($syntheticHelp -match '(?im)(^|\s)--location(\s|$)')
+          if (-not $mountSupported -or -not $vhdSupported -or -not $locationSupported) {
+              throw 'PS5.1 WSL canonical-help capability parser failed synthetic feature text.'
           }
           Write-Host WINDOWS_POWERSHELL_51_GLOBAL_MULTI_DISK_EXT4_SPIKE_PREFLIGHT_PASS
