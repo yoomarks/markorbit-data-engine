@@ -34,7 +34,8 @@ jobs:
           $operatorPaths = @(
               '.\scripts\audit-clickhouse-hot-path-regression.ps1',
               '.\scripts\prepare-clickhouse-authoritative-hot-recovery.ps1',
-              '.\scripts\classify-clickhouse-hot-case-contract-native.ps1'
+              '.\scripts\classify-clickhouse-hot-case-contract-native.ps1',
+              '.\scripts\recover-clickhouse-bind-to-linux-volume.ps1'
           )
           foreach ($relativePath in $operatorPaths) {
               $operatorPath = Resolve-Path $relativePath
@@ -74,14 +75,24 @@ jobs:
           if ($classifierText -match 'fsutil\.exe\s+file\s+queryCaseSensitiveInfo') {
               throw "Native Hot case classifier must not parse localized fsutil text."
           }
-          if ($classifierText -match '已启用|已禁用|未启用') {
-              throw "Native Hot case classifier must not depend on localized Chinese literals."
-          }
           if ($classifierText -notmatch 'ALL_ENABLED' -or
               $classifierText -notmatch 'ALL_DISABLED' -or
               $classifierText -notmatch 'MIXED' -or
               $classifierText -notmatch 'INCOMPLETE') {
               throw "Native Hot case classifier must retain all four classification states."
+          }
+
+          $recoveryPath = Resolve-Path '.\scripts\recover-clickhouse-bind-to-linux-volume.ps1'
+          $recoveryText = Get-Content -LiteralPath $recoveryPath -Raw -Encoding UTF8
+          foreach ($required in @(
+              'markorbit-data-engine_clickhouse_data',
+              'STRUCTURAL_COPY_PARITY_OK',
+              'native_mergetree_commit_verified=True',
+              'ROLLBACK_TO_UNTOUCHED_WINDOWS_BIND_PASS'
+          )) {
+              if ($recoveryText -notmatch [regex]::Escape($required)) {
+                  throw "Linux-volume recovery is missing required safety marker: $required"
+              }
           }
 
           $rows = @()

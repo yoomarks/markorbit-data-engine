@@ -35,12 +35,13 @@ def test_v2_extends_read_only_hot_permission_evidence() -> None:
         assert forbidden not in lowered
 
 
-def test_prepare_uses_v2_and_still_stops_before_mutation() -> None:
+def test_prepare_uses_linux_volume_contract_and_still_stops_before_mutation() -> None:
     text = PREPARE.read_text(encoding="utf-8")
 
-    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" in text
-    assert "REVIEW_ACTIVE_HOT_PERMISSION_EVIDENCE" in text
-    assert "US_CAPACITY_PILOT_PERMISSION_REVIEW_REQUIRED" in text
-    assert "Permission repair: NOT_PERFORMED" in text
+    assert "assert-clickhouse-active-hot-storage-contract.ps1" in text
+    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" not in text
+    assert "CLICKHOUSE_ACTIVE_DATA_STORAGE_CONTRACT_V2" in text
+    assert "LINUX_VOLUME_STORAGE_ACCEPTED_REVIEW_US_TRANSITION" in text
+    assert "US_CAPACITY_PILOT_STORAGE_CONTRACT_READY" in text
     assert "US schema apply: NOT_PERFORMED" in text
     assert "US replay: NOT_PERFORMED" in text

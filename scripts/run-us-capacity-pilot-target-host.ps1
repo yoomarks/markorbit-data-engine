@@ -27,12 +27,8 @@ try {
 
     function Get-RunningClickHouseContainerId {
         $ids = @(& docker compose ps --status running -q clickhouse 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to inspect ClickHouse container state."
-        }
-        if ($ids.Count -ne 1) {
-            throw "Exactly one running ClickHouse container is required for the bounded US target-host pilot."
-        }
+        if ($LASTEXITCODE -ne 0) { throw "Unable to inspect ClickHouse container state." }
+        if ($ids.Count -ne 1) { throw "Exactly one running ClickHouse container is required for the bounded US target-host pilot." }
         return $ids[0].Trim()
     }
 
@@ -60,84 +56,63 @@ try {
 
     function Assert-NoWorkerContainers {
         $workerIds = @(& docker compose ps -a -q worker | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to inspect worker containers."
-        }
+        if ($LASTEXITCODE -ne 0) { throw "Unable to inspect worker containers." }
         Write-Host "worker_container_count_all_states=$($workerIds.Count)"
-        if ($workerIds.Count -ne 0) {
-            throw "No worker container in any state is allowed at a bounded target-host pilot gate."
-        }
+        if ($workerIds.Count -ne 0) { throw "No worker container in any state is allowed at a bounded target-host pilot gate." }
     }
 
     function Assert-ExactMain([string]$Phase) {
         $head = (git rev-parse HEAD).Trim().ToLowerInvariant()
         $originMain = (git rev-parse origin/main).Trim().ToLowerInvariant()
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to resolve exact main identity during $Phase."
-        }
+        if ($LASTEXITCODE -ne 0) { throw "Unable to resolve exact main identity during $Phase." }
         Write-Host "exact_main_phase=$Phase"
         Write-Host "HEAD=$head"
         Write-Host "origin/main=$originMain"
         Write-Host "expected=$expectedSha"
-        if ($head -ne $expectedSha -or $originMain -ne $expectedSha) {
-            throw "Exact main drift detected during $Phase."
-        }
-        if (git status --porcelain) {
-            throw "Working tree is dirty during $Phase."
-        }
+        if ($head -ne $expectedSha -or $originMain -ne $expectedSha) { throw "Exact main drift detected during $Phase." }
+        if (git status --porcelain) { throw "Working tree is dirty during $Phase." }
     }
 
-    function Invoke-HotV2Gate([string]$OutputPath, [string]$Phase) {
+    function Invoke-StorageContractGate([string]$OutputPath, [string]$Phase) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-            (Join-Path $PSScriptRoot "diagnose-clickhouse-active-hot-permissions-v2.ps1") `
+            (Join-Path $PSScriptRoot "assert-clickhouse-active-hot-storage-contract.ps1") `
             -OutputPath $OutputPath
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
-            throw "Active-Hot V2 failed during $Phase."
+            throw "ClickHouse Linux data-volume contract failed during $Phase."
         }
-        $hot = Get-Content -LiteralPath $OutputPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($hot.report_version -ne "CLICKHOUSE_ACTIVE_HOT_PERMISSION_DIAGNOSTIC_V1" -or `
-            @($hot.blockers).Count -ne 0 -or `
-            -not [bool]$hot.schema_version.rwx_for_server_identity -or `
-            @($hot.schema_version.tmp_insert_dirs).Count -ne 0 -or `
-            -not [bool]$hot.disposable_root_rename_probe.passed -or `
-            -not [bool]$hot.cn_comparison.rwx_for_server_identity) {
-            throw "Active-Hot V2 is not fully healthy during $Phase."
+        $storage = Get-Content -LiteralPath $OutputPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($storage.report_version -ne "CLICKHOUSE_ACTIVE_DATA_STORAGE_CONTRACT_V2" -or `
+            @($storage.blockers).Count -ne 0 -or `
+            -not [bool]$storage.safe_for_clickhouse_merge_tree_writes -or `
+            [string]$storage.actual_mount_type -ne 'volume' -or `
+            [string]$storage.actual_mount_name -ne 'markorbit-data-engine_clickhouse_data' -or `
+            [int64]$storage.schema_version_tmp_insert_count -ne 0 -or `
+            [bool]$storage.windows_host_bind_accepted) {
+            throw "ClickHouse Linux data-volume contract is not fully healthy during $Phase."
         }
-        Write-Host "active_hot_phase=$Phase"
-        Write-Host "active_hot_blockers=0"
-        Write-Host "active_hot_schema_rwx=True"
-        Write-Host "active_hot_tmp_insert_dirs=0"
-        Write-Host "active_hot_root_rename=True"
-        Write-Host "active_hot_cn_comparison_rwx=True"
+        Write-Host "storage_contract_phase=$Phase"
+        Write-Host "active_clickhouse_data_mount_type=volume"
+        Write-Host "active_clickhouse_data_volume=markorbit-data-engine_clickhouse_data"
+        Write-Host "schema_version_tmp_insert_count=0"
+        Write-Host "windows_host_bind_accepted=False"
     }
 
     Write-Host "===== EXACT-MAIN SINGLE-PROCESS SAFETY GATE ====="
-    if (git status --porcelain) {
-        throw "Working tree must be clean before the bounded US target-host pilot."
-    }
+    if (git status --porcelain) { throw "Working tree must be clean before the bounded US target-host pilot." }
     $branch = (git branch --show-current).Trim()
-    if ($LASTEXITCODE -ne 0 -or $branch -ne "main") {
-        throw "Bounded US target-host pilot must run from local main."
-    }
+    if ($LASTEXITCODE -ne 0 -or $branch -ne "main") { throw "Bounded US target-host pilot must run from local main." }
     & git fetch origin main | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to fetch origin/main."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to fetch origin/main." }
     Assert-ExactMain "entry"
     Write-Host "EXACT_MAIN_BOUNDED_US_PILOT_OK"
 
     Write-Host "`n===== REQUIRED SERVICES / GLOBAL IDLE ====="
     foreach ($service in @("postgres", "clickhouse")) {
         $running = docker compose ps --status running -q $service
-        if ($LASTEXITCODE -ne 0 -or -not $running) {
-            throw "$service must be running before the bounded US target-host pilot."
-        }
+        if ($LASTEXITCODE -ne 0 -or -not $running) { throw "$service must be running before the bounded US target-host pilot." }
     }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-        (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Global Data Engine idle gate failed."
-    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Global Data Engine idle gate failed." }
     Assert-NoWorkerContainers
     Wait-ClickHouseHealthy "pre-schema"
     Write-Host "GLOBAL_IDLE_ZERO_WORKER_CLICKHOUSE_HEALTHY_OK"
@@ -146,52 +121,43 @@ try {
     $evidenceDir = Join-Path $EvidenceRoot "us_capacity_pilot_target_host_$timestamp"
     New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
     $evidenceDir = (Resolve-Path -LiteralPath $evidenceDir).Path
-    $hotBeforePath = Join-Path $evidenceDir "active_hot_before_schema.json"
-    $hotAfterPath = Join-Path $evidenceDir "active_hot_after_schema.json"
+    $storageBeforePath = Join-Path $evidenceDir "data_storage_before_schema.json"
+    $storageAfterPath = Join-Path $evidenceDir "data_storage_after_schema.json"
     $transitionPath = Join-Path $evidenceDir "transition.json"
 
-    Write-Host "`n===== ACTIVE HOT PRE-SCHEMA GATE ====="
-    Invoke-HotV2Gate $hotBeforePath "pre-schema"
-    Write-Host "ACTIVE_HOT_PRE_SCHEMA_OK"
+    Write-Host "`n===== LINUX DATA-VOLUME PRE-SCHEMA GATE ====="
+    Invoke-StorageContractGate $storageBeforePath "pre-schema"
+    Write-Host "LINUX_DATA_VOLUME_PRE_SCHEMA_OK"
 
     Write-Host "`n===== APPLY US M1.4 SCHEMA ONLY ====="
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-        (Join-Path $PSScriptRoot "apply-us-m1-schema.ps1")
-    if ($LASTEXITCODE -ne 0) {
-        throw "US M1.4 schema apply failed. No package replay was started."
-    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "apply-us-m1-schema.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "US M1.4 schema apply failed. No package replay was started." }
     Assert-NoWorkerContainers
     Wait-ClickHouseHealthy "post-schema"
     Write-Host "US_M14_SCHEMA_APPLY_OK"
 
-    Write-Host "`n===== ACTIVE HOT POST-SCHEMA GATE ====="
-    Invoke-HotV2Gate $hotAfterPath "post-schema"
-    Write-Host "ACTIVE_HOT_POST_SCHEMA_OK"
+    Write-Host "`n===== LINUX DATA-VOLUME POST-SCHEMA GATE ====="
+    Invoke-StorageContractGate $storageAfterPath "post-schema"
+    Write-Host "LINUX_DATA_VOLUME_POST_SCHEMA_OK"
 
     Write-Host "`n===== US APPLICATION TRANSITION READY GATE ====="
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
         (Join-Path $PSScriptRoot "check-us-application-transition.ps1") `
         -ExpectedHistoryParts $ExpectedHistoryParts `
         -OutputPath $transitionPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "US Application transition is not READY. No package replay was started."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "US Application transition is not READY. No package replay was started." }
     Assert-NoWorkerContainers
     Write-Host "US_APPLICATION_TRANSITION_READY_OK"
 
     Write-Host "`n===== FINAL PRE-MUTATION EXACT-MAIN / IDLE GATE ====="
     & git fetch origin main | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to refresh origin/main before package mutation."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to refresh origin/main before package mutation." }
     Assert-ExactMain "pre-package-mutation"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-        (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Global Data Engine idle gate drifted before package mutation."
-    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "stop-idle-worker.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Global Data Engine idle gate drifted before package mutation." }
     Assert-NoWorkerContainers
     Wait-ClickHouseHealthy "pre-package-mutation"
+    Invoke-StorageContractGate (Join-Path $evidenceDir 'data_storage_pre_package_mutation.json') 'pre-package-mutation'
     Write-Host "FINAL_PRE_MUTATION_GATE_OK"
 
     Write-Host "`n===== EXACTLY ONE FROZEN US CAPACITY PILOT PACKAGE ====="
@@ -205,9 +171,7 @@ try {
         -ExpectedRemainingAfter $ExpectedRemainingAfter `
         -Apply `
         -EvidenceRoot $evidenceDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "Exactly-one-package US capacity pilot failed closed."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Exactly-one-package US capacity pilot failed closed." }
     Assert-NoWorkerContainers
 
     Write-Host "`n===== TARGET-HOST PILOT STOP POINT ====="

@@ -138,10 +138,10 @@ def test_prepare_operator_is_single_process_stop_point_not_mutation() -> None:
     assert "origin/main" in text
     assert "EXACT_MAIN_CLEAN_OK" in text
     assert "stop-idle-worker.ps1" in text
-    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" in text
-    assert "REVIEW_ACTIVE_HOT_PERMISSION_EVIDENCE" in text
-    assert "US_CAPACITY_PILOT_PERMISSION_REVIEW_REQUIRED" in text
-    assert "Permission repair: NOT_PERFORMED" in text
+    assert "assert-clickhouse-active-hot-storage-contract.ps1" in text
+    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" not in text
+    assert "CLICKHOUSE_ACTIVE_DATA_STORAGE_CONTRACT_V2" in text
+    assert "US_CAPACITY_PILOT_STORAGE_CONTRACT_READY" in text
     assert "US schema apply: NOT_PERFORMED" in text
     assert "US replay: NOT_PERFORMED" in text
 
