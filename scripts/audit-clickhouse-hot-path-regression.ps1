@@ -85,11 +85,11 @@ try {
     }
 
     function Get-HotRootSiblingState([string]$HotRoot) {
-        $rows = New-Object System.Collections.Generic.List[object]
+        $rows = @()
         foreach ($dir in @(Get-ChildItem -LiteralPath $HotRoot -Directory -Force -ErrorAction Stop | Sort-Object Name)) {
             $case = Get-CaseSensitivity $dir.FullName
             $topLevelEntryCount = @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction Stop).Count
-            $rows.Add([pscustomobject][ordered]@{
+            $rows += [pscustomobject][ordered]@{
                 name = $dir.Name
                 full_path = $dir.FullName
                 creation_time_utc = $dir.CreationTimeUtc.ToString('o')
@@ -97,9 +97,9 @@ try {
                 top_level_entry_count = $topLevelEntryCount
                 case_sensitive = $case.enabled
                 case_sensitive_query_exit_code = $case.exit_code
-            })
+            }
         }
-        return @($rows)
+        return $rows
     }
 
     function Get-CaseChain([string]$Root, [string]$SchemaUuidRelative) {
@@ -110,19 +110,19 @@ try {
             [ordered]@{ label = 'store_prefix'; path = (Join-Path (Join-Path $Root 'store') '771') },
             [ordered]@{ label = 'schema_version_uuid'; path = (Join-Path (Join-Path $Root 'store') $SchemaUuidRelative) }
         )
-        $rows = New-Object System.Collections.Generic.List[object]
+        $rows = @()
         foreach ($item in $paths) {
             $case = Get-CaseSensitivity $item.path
-            $rows.Add([pscustomobject][ordered]@{
+            $rows += [pscustomobject][ordered]@{
                 label = $item.label
                 path = $item.path
                 exists = [bool]$case.exists
                 case_sensitive = $case.enabled
                 query_exit_code = $case.exit_code
                 query_output = @($case.output)
-            })
+            }
         }
-        return @($rows)
+        return $rows
     }
 
     function Get-LocalEnvHotPath([string]$Root) {
@@ -161,15 +161,17 @@ try {
     $worker = @(& docker compose ps -a -q worker | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($worker.Count -ne 0) { throw 'Worker containers must be absent.' }
 
+    Write-Host 'audit_stage=resolve_expected_paths'
     $acceptedState = Get-OptionalDirectoryState $AcceptedHotPath 'AcceptedHotPath'
     $legacyState = Get-OptionalDirectoryState $RejectedLegacyHotPath 'RejectedLegacyHotPath'
     $hotRoot = Split-Path -Parent $acceptedState.expected_path
     $legacyHotRoot = Split-Path -Parent $legacyState.expected_path
-    if (-not $hotRoot.Equals($legacyHotRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not [string]::Equals([string]$hotRoot, [string]$legacyHotRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'Accepted and rejected Hot paths must share one Hot parent for this audit.'
     }
     $hotRoot = Resolve-ExistingDir $hotRoot 'HotRoot'
 
+    Write-Host 'audit_stage=inspect_clickhouse_mount'
     $clickhouse = @(& docker compose ps --status running -q clickhouse | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($clickhouse.Count -ne 1) { throw 'Exactly one running ClickHouse container required.' }
     $containerId = $clickhouse[0].Trim()
@@ -187,9 +189,11 @@ try {
     $composeConfigFiles = [string]$labels.'com.docker.compose.project.config_files'
     $composeWorkingDir = [string]$labels.'com.docker.compose.project.working_dir'
 
+    Write-Host 'audit_stage=verify_schema_snapshot'
     $snapshot = (& docker compose exec -T clickhouse clickhouse-client --query "SELECT concat(toString(count()), '|', toString(countDistinct(component)), '|', toString(max(applied_at))) FROM markorbit_facts.schema_version FINAL").Trim()
     if ($LASTEXITCODE -ne 0 -or $snapshot -ne $ExpectedSchemaSnapshot) { throw 'schema_version snapshot drifted.' }
 
+    Write-Host 'audit_stage=collect_case_sensitivity'
     $schemaUuidRelative = '771\7716c662-1886-4e4b-a7e2-631c80ac8dd2'
     $actualCaseChain = @(Get-CaseChain $actual $schemaUuidRelative)
     $legacyCase = if ($legacyState.exists) { Get-CaseSensitivity $legacyState.resolved_path } else { Get-CaseSensitivity $legacyState.expected_path }
@@ -229,6 +233,7 @@ try {
             $item.name, $item.case_sensitive, $item.top_level_entry_count, $item.creation_time_utc, $item.last_write_time_utc, $item.full_path)
     }
 
+    Write-Host 'audit_stage=index_metadata_store'
     Write-Host '===== METADATA / STORE UUID INDEX ====='
     $actualMetadata = @(Get-MetadataIndex $actual)
     $actualStore = @(Get-StoreUuidIndex $actual)
@@ -258,8 +263,8 @@ try {
         Test-Path -LiteralPath (Join-Path (Join-Path $acceptedRoot 'store') $schemaUuidRelative) -PathType Container
     } else { $false }
 
-    $actualIsLegacyName = $actual.Equals($legacyState.expected_path, [System.StringComparison]::OrdinalIgnoreCase)
-    $actualIsAcceptedName = $actual.Equals($acceptedState.expected_path, [System.StringComparison]::OrdinalIgnoreCase)
+    $actualIsLegacyName = [string]::Equals([string]$actual, [string]$legacyState.expected_path, [System.StringComparison]::OrdinalIgnoreCase)
+    $actualIsAcceptedName = [string]::Equals([string]$actual, [string]$acceptedState.expected_path, [System.StringComparison]::OrdinalIgnoreCase)
     $classification = if (-not $acceptedState.exists -and $actualIsLegacyName) {
         'ACCEPTED_PATH_MISSING_LEGACY_NAME_ACTIVE_POST_CUTOVER_REGRESSION'
     } elseif (-not $acceptedState.exists) {
@@ -272,12 +277,13 @@ try {
         'UNKNOWN_CLICKHOUSE_HOT_PATH_ACTIVE'
     }
 
+    Write-Host 'audit_stage=write_evidence_report'
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     $evidenceDir = Join-Path $EvidenceRoot "clickhouse_hot_path_regression_$timestamp"
     New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
     $reportPath = Join-Path $evidenceDir 'hot_path_regression.json'
     $report = [ordered]@{
-        report_version = 'CLICKHOUSE_HOT_PATH_REGRESSION_AUDIT_V2'
+        report_version = 'CLICKHOUSE_HOT_PATH_REGRESSION_AUDIT_V2_PS51_SAFE'
         engine_sha = $head
         read_only = $true
         schema_version_snapshot = $snapshot
@@ -349,5 +355,15 @@ try {
     Write-Host 'corpus_replay_performed=False'
     Write-Host "Report: $reportPath"
     Write-Host 'CLICKHOUSE_HOT_PATH_REGRESSION_AUDIT_V2_COMPLETE'
+}
+catch {
+    Write-Host 'AUDIT_RUNTIME_FAILURE'
+    Write-Host "exception_type=$($_.Exception.GetType().FullName)"
+    Write-Host "exception_message=$($_.Exception.Message)"
+    $stack = [string]$_.ScriptStackTrace
+    if (-not [string]::IsNullOrWhiteSpace($stack)) {
+        Write-Host ("script_stack_trace=" + ($stack -replace "`r?`n", ' <- '))
+    }
+    throw
 }
 finally { Pop-Location }
