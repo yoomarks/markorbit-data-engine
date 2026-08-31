@@ -30,6 +30,19 @@ def test_v2_collects_mount_compose_env_and_case_chain_provenance() -> None:
     assert "safe_to_switch = $false" in lowered
 
 
+def test_v2_avoids_windows_powershell_51_generic_object_list_binder_trap() -> None:
+    text = AUDIT.read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "system.collections.generic.list[object]" not in lowered
+    assert "new-object system.collections.generic.list[object]" not in lowered
+    assert "return @($rows)" not in lowered
+    assert "$rows = @()" in text
+    assert "$rows += [pscustomobject][ordered]@{" in text
+    assert "[string]::Equals" in text
+    assert "AUDIT_RUNTIME_FAILURE" in text
+    assert "script_stack_trace=" in text
+
+
 def test_v2_remains_hot_storage_read_only() -> None:
     lowered = AUDIT.read_text(encoding="utf-8").lower()
     for forbidden in (
