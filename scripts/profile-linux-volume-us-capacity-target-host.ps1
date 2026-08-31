@@ -290,13 +290,13 @@ try {
 
     $floorFraction = $HotFloorPercent / 100.0
     $hotFloorBytes = [int64][math]::Ceiling($hotTotal * $floorFraction)
-    $currentFloorDeficit = [int64][math]::Max(0, $hotFloorBytes - $hotFree)
-    $currentHotBudget = [int64][math]::Max(0, $hotFree - $hotFloorBytes)
+    $currentFloorDeficit = [int64][math]::Max([int64]0, [int64]($hotFloorBytes - $hotFree))
+    $currentHotBudget = [int64][math]::Max([int64]0, [int64]($hotFree - $hotFloorBytes))
     $remainingRaw = [int64]$remaining.remaining_raw_bytes
     $projectedRemainingHot = [int64][math]::Ceiling($remainingRaw * ([double]$pilotHot / [double]$pilotRaw))
     $usedBytes = [int64]($hotTotal - $hotFree)
     $requiredTotal = [int64][math]::Ceiling(($usedBytes + $projectedRemainingHot) / (1.0 - $floorFraction))
-    $minimumAdditionalTotal = [int64][math]::Max(0, $requiredTotal - $hotTotal)
+    $minimumAdditionalTotal = [int64][math]::Max([int64]0, [int64]($requiredTotal - $hotTotal))
     $currentCapacityCanPreserveFloor = [bool]($projectedRemainingHot -le $currentHotBudget)
 
     $blockers = @()
