@@ -1,0 +1,43 @@
+name: ClickHouse Linux Volume Recovery Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-helper-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify ClickHouse recovery helper commands
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh clickhouse/clickhouse-server:24.8 -lc '
+            set -eu
+            for cmd in find awk cp rm du df timeout sha256sum sync; do
+              command -v "$cmd" >/dev/null
+            done
+            mkdir -p /tmp/recovery-src/a /tmp/recovery-dst
+            printf test > /tmp/recovery-src/a/file
+            ln /tmp/recovery-src/a/file /tmp/recovery-src/hardlink
+            ln -s a/file /tmp/recovery-src/symlink
+            cp -a /tmp/recovery-src/. /tmp/recovery-dst/
+            test "$(stat -c %h /tmp/recovery-dst/a/file)" -ge 2
+            test "$(readlink /tmp/recovery-dst/symlink)" = "a/file"
+            timeout 5s sh -c "exit 0"
+            du -s -B1 /tmp/recovery-dst >/dev/null
+            df -B1 /tmp/recovery-dst >/dev/null
+            find /tmp/recovery-dst -mindepth 1 -printf "%P\n" | LC_ALL=C sort | sha256sum >/dev/null
+          '
+          echo CLICKHOUSE_LINUX_VOLUME_RECOVERY_HELPER_RUNTIME_PASS
