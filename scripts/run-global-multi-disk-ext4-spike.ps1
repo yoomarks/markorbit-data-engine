@@ -464,12 +464,7 @@ try {
         }
         catch {
             $runtimeError = $_.Exception.Message
-            if ($diskRuntime.Count -eq $diskSpecs.Count -and @($diskRuntime | Where-Object { -not $_['ext4_ready'] }).Count -eq 0) {
-                $decision = 'DEDICATED_WSL_CLICKHOUSE_REQUIRED'
-            }
-            else {
-                $decision = 'SPIKE_BLOCKED'
-            }
+            $decision = 'SPIKE_BLOCKED'
         }
         finally {
             $tempClickHouseRemoved = Remove-SpikeContainer
