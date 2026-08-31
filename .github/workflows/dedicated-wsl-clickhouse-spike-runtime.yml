@@ -1,0 +1,78 @@
+name: Dedicated WSL ClickHouse Spike Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-dedicated-wsl-clickhouse-spike.ps1'
+      - 'tests/test_dedicated_wsl_clickhouse_spike_contract.py'
+      - '.github/workflows/dedicated-wsl-clickhouse-spike-runtime.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and freeze dedicated WSL ClickHouse spike under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/run-dedicated-wsl-clickhouse-spike.ps1'
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$null,
+            [ref]$null
+          )
+          $text = Get-Content -LiteralPath $path -Raw
+
+          $required = @(
+            "[switch]`$Apply",
+            "[switch]`$CleanupMounts",
+            "MarkOrbit-ClickHouse-Spike",
+            "24.8.14.39",
+            "clickhouse-common-static_`$`{ClickHouseVersion`}_amd64.deb",
+            "--export",
+            "--import",
+            "--version','2",
+            "hot_cn_spike.vhdx",
+            "hot_us_spike.vhdx",
+            "hot_global_spike.vhdx",
+            "warm_spike.vhdx",
+            "ENGINE=MergeTree",
+            "max(level)",
+            "uniqExact(disk_name)",
+            "tmp_insert_*",
+            "host.docker.internal",
+            "clickhouse_connect.get_client",
+            "DEDICATED_WSL_CLICKHOUSE_GO",
+            "WSL_CLICKHOUSE_STORAGE_GO_CONNECTIVITY_BLOCKED",
+            "WSL_CLICKHOUSE_SPIKE_BLOCKED",
+            "runtime_distro_unregister_performed=False",
+            "spike_vhdx_delete_performed=False",
+            "production_clickhouse_restart_performed=False",
+            "production_clickhouse_mutation_performed=False",
+            "accepted_volume_mutation_performed=False",
+            "corpus_replay_performed=False",
+            "DEDICATED_WSL_CLICKHOUSE_SPIKE_DONE"
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) {
+              throw "Missing required marker: $marker"
+            }
+          }
+
+          $forbidden = @(
+            '--unregister',
+            'Remove-Item',
+            'mkfs.ext4',
+            "docker','prune",
+            "docker','volume','rm"
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) {
+              throw "Forbidden operator behavior found: $marker"
+            }
+          }
+
+          Write-Host 'DEDICATED_WSL_CLICKHOUSE_SPIKE_PS51_CONTRACT_PASS'
