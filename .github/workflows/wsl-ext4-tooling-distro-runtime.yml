@@ -57,8 +57,14 @@ jobs:
               "'--location',`$normalizedInstallRoot,'--no-launch','--web-download'",
               'INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO',
               'EXISTING_TOOLING_DISTRO_WRONG_LOCATION',
+              'ONLINE_DISTRO_CATALOG_UNAVAILABLE',
+              'DISTRO_NOT_LISTED_IN_ONLINE_CATALOG_INSTALL_WILL_DECIDE',
+              'wsl_online_catalog_exit_code',
+              'wsl_online_catalog_available',
               "`$workerProbe['lines']",
               "`$volumeProbe['exit_code']",
+              "`$online['exit_code']",
+              "`$online['lines']",
               "`$defaultNow = Get-DefaultWslDistroName",
               "'--set-default',`$defaultBefore",
               'wsl_shutdown_performed = $false',
@@ -70,6 +76,7 @@ jobs:
               }
           }
           foreach ($forbidden in @(
+              'DISTRO_NOT_AVAILABLE_ONLINE',
               '--unregister',
               "wsl.exe' @('--shutdown",
               'New-VHD -Path',
@@ -89,6 +96,15 @@ jobs:
           $emptyProbe = [ordered]@{ exit_code = 0; lines = @() }
           if (@($emptyProbe['lines']).Count -ne 0) {
               throw 'PS5.1 empty native receipt shape was not preserved.'
+          }
+          $failedCatalog = [ordered]@{ exit_code = 1; lines = @('catalog unavailable') }
+          $onlineCatalogAvailable = [bool]($failedCatalog['exit_code'] -eq 0)
+          if ($onlineCatalogAvailable) {
+              throw 'Failed online catalog must remain advisory in the PS5.1 contract fixture.'
+          }
+          $blockers = @()
+          if ($blockers -contains 'DISTRO_NOT_AVAILABLE_ONLINE') {
+              throw 'Online catalog failure must not become an install blocker.'
           }
           $extended = '\\?\E:\MarkOrbitData\wsl-tooling\Ubuntu-24.04'
           if (-not $extended.StartsWith('\\?\')) {

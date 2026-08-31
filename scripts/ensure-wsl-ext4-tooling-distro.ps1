@@ -142,7 +142,15 @@ try {
     $wslVersion = Invoke-NativeText 'wsl.exe' @('--version') -AllowFailure
     $online = Invoke-NativeText 'wsl.exe' @('--list','--online') -AllowFailure
     $onlineText = @($online['lines']) -join "`n"
-    $distroAvailableOnline = [bool]($online['exit_code'] -eq 0 -and $onlineText -match [regex]::Escape($DistroName))
+    $onlineCatalogAvailable = [bool]($online['exit_code'] -eq 0)
+    $distroAvailableOnline = [bool]($onlineCatalogAvailable -and $onlineText -match [regex]::Escape($DistroName))
+    $catalogAdvisories = @()
+    if (-not $onlineCatalogAvailable) {
+        $catalogAdvisories += 'ONLINE_DISTRO_CATALOG_UNAVAILABLE'
+    }
+    elseif (-not $distroAvailableOnline) {
+        $catalogAdvisories += 'DISTRO_NOT_LISTED_IN_ONLINE_CATALOG_INSTALL_WILL_DECIDE'
+    }
     $defaultBefore = Get-DefaultWslDistroName
     $distrosBefore = @(Get-WslDistroRecords)
     $existing = @($distrosBefore | Where-Object { $_['name'] -eq $DistroName })
@@ -175,7 +183,6 @@ try {
     if ($existing.Count -gt 1) { $blockers += 'DUPLICATE_TOOLING_DISTRO_REGISTRATION' }
     if ($existing.Count -eq 1 -and -not $existingLocationMatches) { $blockers += 'EXISTING_TOOLING_DISTRO_WRONG_LOCATION' }
     if ($targetExistsUnregistered) { $blockers += 'INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO' }
-    if ($existing.Count -eq 0 -and -not $distroAvailableOnline) { $blockers += 'DISTRO_NOT_AVAILABLE_ONLINE' }
 
     $alreadyReady = [bool]($existing.Count -eq 1 -and $existingLocationMatches -and $existingVersion -eq 2 -and $toolProbeBefore['ready'])
     $preflightReady = [bool]($blockers.Count -eq 0)
@@ -267,7 +274,11 @@ try {
         distro_name = $DistroName
         expected_install_root = $normalizedInstallRoot
         install_drive_free_bytes = $installDriveFree
+        wsl_online_catalog_exit_code = $online['exit_code']
+        wsl_online_catalog_available = $onlineCatalogAvailable
+        wsl_online_catalog_lines = @($online['lines'])
         distro_available_online = $distroAvailableOnline
+        advisories = @($catalogAdvisories)
         default_distro_before = $defaultBefore
         default_distro_final = $defaultFinal
         distro_final_count = $final.Count
@@ -294,7 +305,11 @@ try {
     Write-Host "worker_container_count_all_states=$workerCount"
     Write-Host "distro_name=$DistroName"
     Write-Host "expected_install_root=$normalizedInstallRoot"
+    Write-Host "wsl_online_catalog_exit_code=$($online['exit_code'])"
+    Write-Host "wsl_online_catalog_available=$onlineCatalogAvailable"
     Write-Host "distro_available_online=$distroAvailableOnline"
+    foreach ($advisory in $catalogAdvisories) { Write-Host "advisory=$advisory" }
+    foreach ($line in @($online['lines'])) { Write-Host "wsl_online_catalog_line=$line" }
     Write-Host "default_distro_before=$defaultBefore"
     Write-Host "default_distro_final=$defaultFinal"
     Write-Host "distro_final_count=$($final.Count)"
