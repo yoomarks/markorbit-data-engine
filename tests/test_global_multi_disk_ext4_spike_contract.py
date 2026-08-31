@@ -53,7 +53,8 @@ def test_spike_formats_only_new_vhdx_and_requires_ext4_mount_proof() -> None:
 def test_spike_proves_docker_linux_filesystem_before_clickhouse() -> None:
     t = text()
     assert "runtimeStage = 'docker_bind_visibility'" in t
-    assert "source=/mnt/wsl/" in t
+    assert '"/mnt/wsl/$($spec[\'mount\'])/clickhouse"' in t
+    assert '"type=bind,source=$source,target=/probe"' in t
     assert "stat -f -c %T /probe" in t
     assert "FS_TYPE=" in t
     assert "ext2/ext3|ext4" in t
