@@ -1,0 +1,101 @@
+name: WSL Ext4 Tooling Distro Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse guarded WSL tooling operator under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          foreach ($command in @('wsl.exe','docker','Get-CimInstance')) {
+              if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+                  throw "Required operator command missing: $command"
+              }
+          }
+          $path = Resolve-Path '.\scripts\ensure-wsl-ext4-tooling-distro.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "WSL tooling operator failed Windows PowerShell 5.1 parsing."
+          }
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','DistroName','InstallRoot','AcceptedVolume','Apply')) {
+              if (-not $command.Parameters.ContainsKey($parameter)) {
+                  throw "WSL tooling operator must retain parameter: $parameter"
+              }
+          }
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+              'WSL_EXT4_TOOLING_DISTRO_V1',
+              'READY_FOR_WSL_EXT4_TOOLING_APPLY',
+              'WSL_EXT4_TOOLING_READY',
+              'WSL_EXT4_TOOLING_BLOCKED',
+              "'--location',`$normalizedInstallRoot,'--no-launch','--web-download'",
+              'INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO',
+              'EXISTING_TOOLING_DISTRO_WRONG_LOCATION',
+              "`$workerProbe['lines']",
+              "`$volumeProbe['exit_code']",
+              "`$defaultNow = Get-DefaultWslDistroName",
+              "'--set-default',`$defaultBefore",
+              'wsl_shutdown_performed = $false',
+              'existing_vhdx_mutation_performed = $false',
+              'corpus_replay_performed = $false'
+          )) {
+              if (-not $text.Contains($required)) {
+                  throw "WSL tooling operator lost required contract marker: $required"
+              }
+          }
+          foreach ($forbidden in @(
+              '--unregister',
+              "wsl.exe' @('--shutdown",
+              'New-VHD -Path',
+              'Mount-VHD -Path',
+              'Resize-VHD',
+              'Optimize-VHD',
+              'docker system prune',
+              'docker volume rm',
+              'ALTER TABLE',
+              'OPTIMIZE TABLE',
+              '2023_5.zip'
+          )) {
+              if ($text.Contains($forbidden)) {
+                  throw "WSL tooling operator contains forbidden action marker: $forbidden"
+              }
+          }
+          $emptyProbe = [ordered]@{ exit_code = 0; lines = @() }
+          if (@($emptyProbe['lines']).Count -ne 0) {
+              throw 'PS5.1 empty native receipt shape was not preserved.'
+          }
+          $extended = '\\?\E:\MarkOrbitData\wsl-tooling\Ubuntu-24.04'
+          if (-not $extended.StartsWith('\\?\')) {
+              throw 'Extended Windows path test fixture is invalid.'
+          }
+          $normalized = [IO.Path]::GetFullPath($extended.Substring(4)).TrimEnd('\')
+          if ($normalized -ne 'E:\MarkOrbitData\wsl-tooling\Ubuntu-24.04') {
+              throw "Extended Windows path normalization failed: $normalized"
+          }
+          Write-Host WINDOWS_POWERSHELL_51_WSL_EXT4_TOOLING_DISTRO_PASS
