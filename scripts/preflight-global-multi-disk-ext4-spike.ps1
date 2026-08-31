@@ -86,7 +86,8 @@ try {
     $evidenceDir = (Resolve-Path -LiteralPath $evidenceDir).Path
 
     Write-Host 'preflight_stage=workers'
-    $workerIds = @(Invoke-NativeText 'docker' @('ps','-aq','--filter','label=com.docker.compose.project=markorbit-data-engine','--filter','label=com.docker.compose.service=worker')).lines | Where-Object { $_.Trim() }
+    $workerProbe = Invoke-NativeText 'docker' @('ps','-aq','--filter','label=com.docker.compose.project=markorbit-data-engine','--filter','label=com.docker.compose.service=worker')
+    $workerIds = @($workerProbe['lines'] | Where-Object { $_.Trim() })
     $workerCount = $workerIds.Count
 
     Write-Host 'preflight_stage=wsl'
