@@ -1,0 +1,65 @@
+name: Global Multi-Disk Host Inventory Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse inventory operator under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          foreach ($command in @('Get-CimInstance','Get-CimAssociatedInstance','Get-Disk','Get-PhysicalDisk')) {
+              if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+                  throw "Required read-only host inventory command missing: $command"
+              }
+          }
+          $path = Resolve-Path '.\scripts\inventory-global-multi-disk-host.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Global multi-disk host inventory failed PowerShell 5.1 parsing."
+          }
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','DriveLetters','AcceptedVolume')) {
+              if (-not $command.Parameters.ContainsKey($parameter)) {
+                  throw "Inventory operator must retain parameter: $parameter"
+              }
+          }
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+              'GLOBAL_MULTI_DISK_HOST_INVENTORY_V1',
+              'hot_cn',
+              'hot_us',
+              'hot_global',
+              'destructive_action_performed = $false',
+              'vhdx_create_performed = $false',
+              'corpus_replay_performed = $false'
+          )) {
+              if (-not $text.Contains($required)) {
+                  throw "Inventory operator lost required safety marker: $required"
+              }
+          }
+          Write-Host WINDOWS_POWERSHELL_51_GLOBAL_MULTI_DISK_HOST_INVENTORY_PASS
