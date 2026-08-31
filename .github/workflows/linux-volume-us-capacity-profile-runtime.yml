@@ -1,0 +1,59 @@
+name: Linux Volume US Capacity Profile Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse capacity profiler under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          $path = Resolve-Path '.\scripts\profile-linux-volume-us-capacity-target-host.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Linux-volume capacity profiler failed PowerShell 5.1 parsing."
+          }
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','ExpectedHistoryParts','AcceptedVolume','HotFloorPercent')) {
+              if (-not $command.Parameters.ContainsKey($parameter)) {
+                  throw "Capacity profiler must retain parameter: $parameter"
+              }
+          }
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+              'LINUX_VOLUME_US_CAPACITY_PROFILE_V1',
+              'app.us.remaining_capacity_inventory',
+              'full_corpus_import_authorized = $false',
+              'docker_prune_performed = $false',
+              'volume_resize_performed = $false',
+              'corpus_replay_performed = $false'
+          )) {
+              if (-not $text.Contains($required)) {
+                  throw "Capacity profiler lost required safety marker: $required"
+              }
+          }
+          Write-Host WINDOWS_POWERSHELL_51_LINUX_VOLUME_US_CAPACITY_PROFILE_PASS
