@@ -33,7 +33,8 @@ jobs:
 
           $operatorPaths = @(
               '.\scripts\audit-clickhouse-hot-path-regression.ps1',
-              '.\scripts\prepare-clickhouse-authoritative-hot-recovery.ps1'
+              '.\scripts\prepare-clickhouse-authoritative-hot-recovery.ps1',
+              '.\scripts\classify-clickhouse-hot-case-contract-native.ps1'
           )
           foreach ($relativePath in $operatorPaths) {
               $operatorPath = Resolve-Path $relativePath
@@ -63,6 +64,24 @@ jobs:
               if (-not $command.Parameters.ContainsKey('ExpectedMainSha')) {
                   throw "$relativePath must retain the ExpectedMainSha exact-main contract."
               }
+          }
+
+          $classifierPath = Resolve-Path '.\scripts\classify-clickhouse-hot-case-contract-native.ps1'
+          $classifierText = Get-Content -LiteralPath $classifierPath -Raw -Encoding UTF8
+          if ($classifierText -notmatch 'GetFileInformationByName') {
+              throw "Native Hot case classifier must use GetFileInformationByName."
+          }
+          if ($classifierText -match 'fsutil\.exe\s+file\s+queryCaseSensitiveInfo') {
+              throw "Native Hot case classifier must not parse localized fsutil text."
+          }
+          if ($classifierText -match '已启用|已禁用|未启用') {
+              throw "Native Hot case classifier must not depend on localized Chinese literals."
+          }
+          if ($classifierText -notmatch 'ALL_ENABLED' -or
+              $classifierText -notmatch 'ALL_DISABLED' -or
+              $classifierText -notmatch 'MIXED' -or
+              $classifierText -notmatch 'INCOMPLETE') {
+              throw "Native Hot case classifier must retain all four classification states."
           }
 
           $rows = @()
