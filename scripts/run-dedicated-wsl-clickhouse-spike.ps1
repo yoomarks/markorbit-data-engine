@@ -373,7 +373,7 @@ try {
             $prodConfigWsl = Convert-WindowsPathToWsl $productionConfigPath
             $usersWsl = Convert-WindowsPathToWsl $usersPath
             $overrideWsl = Convert-WindowsPathToWsl $overridePath
-            $prepareConfig = Invoke-RuntimeShell "set -eu; mkdir -p '$runtimeInstallDir/etc/config.d' '$runtimeDataDir/tmp' '$runtimeDataDir/user_files' '$runtimeDataDir/format_schemas'; cp '$prodConfigWsl' '$runtimeInstallDir/etc/config.xml'; cp '$usersWsl' '$runtimeInstallDir/etc/users.xml'; cp '$overrideWsl' '$runtimeInstallDir/etc/config.d/markorbit-spike.xml'; chmod 0644 '$runtimeInstallDir/etc/config.xml' '$runtimeInstallDir/etc/users.xml' '$runtimeInstallDir/etc/config.d/markorbit-spike.xml'" -AllowFailure
+            $prepareConfig = Invoke-RuntimeShell "set -eu; mkdir -p '$runtimeInstallDir/etc/config.d' '$runtimeDataDir/tmp' '$runtimeDataDir/user_files' '$runtimeDataDir/format_schemas' '/var/log/clickhouse-server'; cp '$prodConfigWsl' '$runtimeInstallDir/etc/config.xml'; cp '$usersWsl' '$runtimeInstallDir/etc/users.xml'; cp '$overrideWsl' '$runtimeInstallDir/etc/config.d/markorbit-spike.xml'; chmod 0644 '$runtimeInstallDir/etc/config.xml' '$runtimeInstallDir/etc/users.xml' '$runtimeInstallDir/etc/config.d/markorbit-spike.xml'" -AllowFailure
             if ($prepareConfig['exit_code'] -ne 0) { throw "Unable to prepare isolated ClickHouse config: $(@($prepareConfig['lines']) -join [Environment]::NewLine)" }
             $configPrepared = $true
 
