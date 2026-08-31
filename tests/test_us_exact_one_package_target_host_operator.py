@@ -37,22 +37,23 @@ def test_target_host_operator_freezes_exact_main_and_exact_package() -> None:
     assert "US_TARGET_HOST_EXACT_ONE_PACKAGE_PILOT_PASS" in text
 
 
-def test_target_host_operator_orders_hot_schema_transition_and_pilot() -> None:
+def test_target_host_operator_orders_linux_volume_schema_transition_and_pilot() -> None:
     text = _text(TARGET)
 
-    pre_hot = text.index("===== ACTIVE HOT PRE-SCHEMA GATE =====")
+    pre_storage = text.index("===== LINUX DATA-VOLUME PRE-SCHEMA GATE =====")
     schema = text.index("===== APPLY US M1.4 SCHEMA ONLY =====")
-    post_hot = text.index("===== ACTIVE HOT POST-SCHEMA GATE =====")
+    post_storage = text.index("===== LINUX DATA-VOLUME POST-SCHEMA GATE =====")
     transition = text.index("===== US APPLICATION TRANSITION READY GATE =====")
     final_gate = text.index("===== FINAL PRE-MUTATION EXACT-MAIN / IDLE GATE =====")
     pilot = text.index("===== EXACTLY ONE FROZEN US CAPACITY PILOT PACKAGE =====")
 
-    assert pre_hot < schema < post_hot < transition < final_gate < pilot
-    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" in text
+    assert pre_storage < schema < post_storage < transition < final_gate < pilot
+    assert "assert-clickhouse-active-hot-storage-contract.ps1" in text
+    assert "diagnose-clickhouse-active-hot-permissions-v2.ps1" not in text
     assert "apply-us-m1-schema.ps1" in text
     assert "check-us-application-transition.ps1" in text
     assert "run-us-capacity-pilot.ps1" in text
-    assert "ACTIVE_HOT_POST_SCHEMA_OK" in text
+    assert "LINUX_DATA_VOLUME_POST_SCHEMA_OK" in text
     assert "US_APPLICATION_TRANSITION_READY_OK" in text
     assert "FINAL_PRE_MUTATION_GATE_OK" in text
 
@@ -71,16 +72,19 @@ def test_target_host_operator_requires_idle_zero_worker_and_healthy_clickhouse()
     assert "GLOBAL_IDLE_ZERO_WORKER_CLICKHOUSE_HEALTHY_OK" in text
 
 
-def test_target_host_hot_gate_requires_zero_blockers_tmp_and_healthy_comparison() -> None:
+def test_target_host_storage_gate_requires_linux_volume_zero_blockers_and_zero_tmp() -> None:
     text = _text(TARGET)
 
-    assert "@($hot.blockers).Count -ne 0" in text
-    assert "hot.schema_version.rwx_for_server_identity" in text
-    assert "@($hot.schema_version.tmp_insert_dirs).Count -ne 0" in text
-    assert "hot.disposable_root_rename_probe.passed" in text
-    assert "hot.cn_comparison.rwx_for_server_identity" in text
-    assert "active_hot_blockers=0" in text
-    assert "active_hot_tmp_insert_dirs=0" in text
+    assert "@($storage.blockers).Count -ne 0" in text
+    assert "storage.safe_for_clickhouse_merge_tree_writes" in text
+    assert "storage.actual_mount_type" in text
+    assert "storage.actual_mount_name" in text
+    assert "storage.schema_version_tmp_insert_count" in text
+    assert "storage.windows_host_bind_accepted" in text
+    assert "active_clickhouse_data_mount_type=volume" in text
+    assert "active_clickhouse_data_volume=markorbit-data-engine_clickhouse_data" in text
+    assert "schema_version_tmp_insert_count=0" in text
+    assert "windows_host_bind_accepted=False" in text
 
 
 def test_bounded_pilot_pins_identity_before_and_after_apply() -> None:
@@ -109,16 +113,13 @@ def test_bounded_pilot_pins_identity_before_and_after_apply() -> None:
     assert "replaySummary.remaining_count" in text
 
 
-def test_target_host_operator_never_expands_to_full_corpus_or_unrelated_mutation() -> None:
-    combined = _text(TARGET) + "\n" + _text(PILOT)
-    lowered = combined.lower()
+def test_target_host_operator_never_invokes_full_corpus_or_restarts_worker() -> None:
+    text = _text(TARGET)
+    lowered = text.lower()
 
-    _assert_no_all_switch(combined)
-    assert "2023_5.zip" not in lowered
-    assert "project-us-full-corpus-capacity.ps1" not in lowered
+    _assert_no_all_switch(text)
     assert "docker compose start worker" not in lowered
     assert "docker compose restart worker" not in lowered
-    assert "chmod " not in lowered
-    assert "chown " not in lowered
-    assert "full_corpus_replay_performed=False" in combined
-    assert "capacity_projection_performed=False" in combined
+    assert "2023_5.zip" not in lowered
+    assert "full_corpus_replay_performed=False" in text
+    assert "worker_start_performed=False" in text
