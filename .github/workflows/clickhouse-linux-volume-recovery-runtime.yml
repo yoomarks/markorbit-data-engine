@@ -47,6 +47,6 @@ jobs:
             manifest="$(printf "%s\\t%s\\t%s\\t%s\\n" "$stats" "$symlinks" "$dirs" "$digest")"
             test "$(printf "%s\n" "$manifest" | wc -l | tr -d " ")" = "1"
             test "$(printf "%s\n" "$manifest" | awk -F "\\t" "{print NF}")" = "5"
-            printf "%s\n" "$manifest" | awk -F "\\t" "$5 ~ /^[0-9a-f]{64}$/ {ok=1} END {exit !ok}"
+            printf "%s\n" "$manifest" | awk -F "\\t" "length(\$5) == 64 && \$5 ~ /^[0-9a-f]+$/ {ok=1} END {exit !ok}"
           '
           echo CLICKHOUSE_LINUX_VOLUME_RECOVERY_HELPER_RUNTIME_PASS
