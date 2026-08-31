@@ -56,4 +56,9 @@ jobs:
                   throw "Capacity profiler lost required safety marker: $required"
               }
           }
+          $largeDeficit = [int64]138673193370
+          $maxResult = [math]::Max([int64]0, $largeDeficit)
+          if ($maxResult -ne $largeDeficit) {
+              throw "PowerShell 5.1 Int64 capacity math regression. expected=$largeDeficit actual=$maxResult"
+          }
           Write-Host WINDOWS_POWERSHELL_51_LINUX_VOLUME_US_CAPACITY_PROFILE_PASS
