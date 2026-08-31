@@ -26,13 +26,18 @@ def test_preflight_is_read_only_and_has_required_decisions() -> None:
 def test_preflight_checks_wsl_docker_clickhouse_and_vhd_primitives() -> None:
     t = text()
     assert "wsl.exe' @('--version')" in t
-    assert "wsl.exe' @('--mount','--help')" in t
+    assert "wsl.exe' @('--help')" in t
+    assert "wsl.exe' @('--mount','--help')" not in t
+    assert "wslHelpText -match '(?im)(^|\\s)--mount(\\s|$)'" in t
+    assert "wslHelpText -match '(?im)(^|\\s)--vhd(\\s|$)'" in t
+    assert "wslHelpText -match '(?im)(^|\\s)--location(\\s|$)'" in t
     assert "mkfs.ext4" in t
     assert "docker' @('info','--format','{{json .}}')" in t
     assert "docker' @('volume','inspect',$AcceptedVolume)" in t
     assert "clickhouse-client','--query','SELECT 1'" in t
     assert "Get-Command New-VHD" in t
     assert "Get-Command diskpart.exe" in t
+    assert "Get-CimInstance Win32_OperatingSystem" in t
 
 
 def test_worker_probe_uses_stable_ps51_result_shape() -> None:
@@ -40,6 +45,19 @@ def test_worker_probe_uses_stable_ps51_result_shape() -> None:
     assert "$workerProbe = Invoke-NativeText 'docker' @('ps','-aq'" in t
     assert "$workerIds = @($workerProbe['lines'] | Where-Object" in t
     assert "@(Invoke-NativeText 'docker' @('ps','-aq'" not in t
+
+
+def test_preflight_surfaces_wsl_capability_evidence() -> None:
+    t = text()
+    for marker in (
+        "wsl_version_line=",
+        "wsl_help_mount_supported=",
+        "wsl_help_vhd_option_supported=",
+        "wsl_help_install_location_supported=",
+        "wsl_distro=",
+        "windows_build_number=",
+    ):
+        assert marker in t
 
 
 def test_preflight_does_not_contain_mutating_spike_actions() -> None:
