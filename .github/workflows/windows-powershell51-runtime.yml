@@ -35,7 +35,8 @@ jobs:
               '.\scripts\audit-clickhouse-hot-path-regression.ps1',
               '.\scripts\prepare-clickhouse-authoritative-hot-recovery.ps1',
               '.\scripts\classify-clickhouse-hot-case-contract-native.ps1',
-              '.\scripts\recover-clickhouse-bind-to-linux-volume.ps1'
+              '.\scripts\recover-clickhouse-bind-to-linux-volume.ps1',
+              '.\scripts\reconcile-clickhouse-post-copy-linux-volume.ps1'
           )
           foreach ($relativePath in $operatorPaths) {
               $operatorPath = Resolve-Path $relativePath
@@ -92,6 +93,20 @@ jobs:
           )) {
               if ($recoveryText -notmatch [regex]::Escape($required)) {
                   throw "Linux-volume recovery is missing required safety marker: $required"
+              }
+          }
+
+          $reconcilePath = Resolve-Path '.\scripts\reconcile-clickhouse-post-copy-linux-volume.ps1'
+          $reconcileText = Get-Content -LiteralPath $reconcilePath -Raw -Encoding UTF8
+          foreach ($required in @(
+              'POST_COPY_LINUX_VOLUME_RECONCILIATION_PASS',
+              'STATIC_METADATA_UUID_IDENTITY_OK',
+              'SYSTEM STOP MERGES',
+              'native_mergetree_commit_verified=True',
+              'automatic_windows_bind_rollback_performed=False'
+          )) {
+              if ($reconcileText -notmatch [regex]::Escape($required)) {
+                  throw "Post-copy reconciliation is missing required safety marker: $required"
               }
           }
 
