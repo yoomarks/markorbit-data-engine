@@ -117,7 +117,7 @@ def main() -> int:
 
     settings = get_settings()
     report = build_remaining_capacity_inventory(
-        Path(settings.raw_data_path),
+        Path(settings.raw_data_root),
         expected_history_parts=args.expected_history_parts,
     )
     print(json.dumps(report, ensure_ascii=False, indent=None if args.compact else 2))
