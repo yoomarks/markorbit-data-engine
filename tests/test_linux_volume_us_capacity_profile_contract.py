@@ -59,3 +59,11 @@ def test_operator_preserves_json_stdout_and_storage_contract_field_names() -> No
     assert "worker python @PythonArgs 2>&1" not in t
     assert "$storageContract.mount_rw" in t
     assert "$storageContract.actual_mount_rw" not in t
+
+
+def test_capacity_floor_math_stays_int64_under_windows_powershell51() -> None:
+    t = text()
+    assert "[math]::Max(0," not in t
+    assert "[math]::Max([int64]0, [int64]($hotFloorBytes - $hotFree))" in t
+    assert "[math]::Max([int64]0, [int64]($hotFree - $hotFloorBytes))" in t
+    assert "[math]::Max([int64]0, [int64]($requiredTotal - $hotTotal))" in t
