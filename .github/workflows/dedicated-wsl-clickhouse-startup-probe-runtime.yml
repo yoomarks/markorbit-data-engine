@@ -1,0 +1,82 @@
+name: Dedicated WSL ClickHouse Startup Probe Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/probe-dedicated-wsl-clickhouse-startup.ps1'
+      - 'tests/test_dedicated_wsl_clickhouse_startup_probe_contract.py'
+      - '.github/workflows/dedicated-wsl-clickhouse-startup-probe-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and freeze dedicated WSL ClickHouse startup probe under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw 'This guard must execute under Windows PowerShell 5.1.'
+          }
+          $path = 'scripts/probe-dedicated-wsl-clickhouse-startup.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+              throw ($errors | ForEach-Object { $_.Message } | Out-String)
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            '[switch]$Apply',
+            '[switch]$CleanupMounts',
+            'MarkOrbit-ClickHouse-Spike',
+            '24.8.14.39',
+            'extract-from-config',
+            'native-clickhouse-probe',
+            'startup-probe-runtime.log',
+            'NATIVE_MINIMAL_CONFIG_STARTUP_GO',
+            'NATIVE_STARTUP_PROBE_BLOCKED',
+            'runtime_distro_unregister_performed=False',
+            'spike_vhdx_delete_performed=False',
+            'production_clickhouse_restart_performed=False',
+            'production_clickhouse_mutation_performed=False',
+            'accepted_volume_mutation_performed=False',
+            'corpus_replay_performed=False',
+            'DEDICATED_WSL_CLICKHOUSE_STARTUP_PROBE_DONE'
+          )
+          foreach ($marker in $required) {
+              if (-not $text.Contains($marker)) {
+                  throw "Missing required marker: $marker"
+              }
+          }
+
+          $forbidden = @(
+            '--unregister',
+            'Remove-Item',
+            'mkfs.ext4',
+            "docker','prune",
+            "docker','volume','rm",
+            "docker','cp"
+          )
+          foreach ($marker in $forbidden) {
+              if ($text.Contains($marker)) {
+                  throw "Forbidden startup probe behavior found: $marker"
+              }
+          }
+
+          Write-Host 'DEDICATED_WSL_CLICKHOUSE_STARTUP_PROBE_PS51_CONTRACT_PASS'
