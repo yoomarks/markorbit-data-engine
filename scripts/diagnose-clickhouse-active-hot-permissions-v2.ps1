@@ -10,6 +10,16 @@ try {
         $OutputPath = Join-Path "reports" "clickhouse_active_hot_permission_$((Get-Date).ToString('yyyyMMdd_HHmmss')).json"
     }
 
+    Write-Host "===== ACTIVE HOT STORAGE CONTRACT ====="
+    $storageContractPath = Join-Path (Split-Path -Parent $OutputPath) "active_hot_storage_contract.json"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+        (Join-Path $PSScriptRoot "assert-clickhouse-active-hot-storage-contract.ps1") `
+        -OutputPath $storageContractPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Active Hot storage contract failed before permission diagnostics."
+    }
+    Write-Host "ACTIVE_HOT_STORAGE_CONTRACT_OK"
+
     Write-Host "===== ACTIVE HOT PERMISSION DIAGNOSTIC V2 ====="
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
         (Join-Path $PSScriptRoot "diagnose-clickhouse-active-hot-permissions.ps1") `
@@ -82,6 +92,7 @@ try {
     $report.cn_comparison | Add-Member -NotePropertyName path_stat -NotePropertyValue ([pscustomobject]$cnPathStat) -Force
     $report.cn_comparison | Add-Member -NotePropertyName rwx_for_server_identity -NotePropertyValue $cnRwx -Force
     $report | Add-Member -NotePropertyName comparison_evidence_version -NotePropertyValue "CN_COMPARISON_PATH_V1" -Force
+    $report | Add-Member -NotePropertyName storage_contract_report -NotePropertyValue $storageContractPath -Force
     $report | ConvertTo-Json -Depth 12 | Set-Content -Encoding UTF8 $OutputPath
 
     Write-Host "`n===== SCHEMA_VERSION PATH STATS ====="
@@ -106,6 +117,7 @@ try {
     }
 
     Write-Host "comparison_evidence_version=CN_COMPARISON_PATH_V1"
+    Write-Host "storage_contract_report=$storageContractPath"
     Write-Host "Repair attempted: False"
     Write-Host "Safe to apply schema: False"
     Write-Host "Report: $OutputPath"
