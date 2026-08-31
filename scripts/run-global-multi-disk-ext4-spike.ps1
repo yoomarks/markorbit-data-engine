@@ -73,22 +73,28 @@ function Get-ProductionClickHouseHealth {
     $healthProbe = Invoke-NativeText 'docker' @('inspect','--format','{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}',$containerId) -AllowFailure
     $health = (@($healthProbe['lines']) -join '').Trim()
     $sqlProbe = Invoke-NativeText 'docker' @('compose','exec','-T','clickhouse','clickhouse-client','--query','SELECT 1') -AllowFailure
-    $ready = [bool]($health -eq 'healthy' -and $sqlProbe['exit_code'] -eq 0 -and ((@($sqlProbe['lines']) -join '') -match '^1$'))
+    $ready = [bool]($health -eq 'healthy' -and $sqlProbe['exit_code'] -eq 0 -and ((@($sqlProbe['lines']) -join '').Trim() -eq '1'))
     return [ordered]@{ container_id=$containerId; health=$health; ready=$ready }
 }
 
 function Test-ToolingDistro {
     $command = 'for c in mkfs.ext4 lsblk blkid findmnt; do command -v "$c" >/dev/null 2>&1 || exit 10; done'
+    $command = $command.Replace('\"','"')
     $probe = Invoke-NativeText 'wsl.exe' @('-d',$ToolingDistro,'-u','root','--','sh','-lc',$command) -AllowFailure
     return [bool]($probe['exit_code'] -eq 0)
 }
 
 function Get-WslBlockDisks {
-    $probe = Invoke-NativeText 'wsl.exe' @('-d',$ToolingDistro,'-u','root','--','sh','-lc',"lsblk -dn -o NAME,TYPE | awk '`$2==\"disk\" {print `$1}'") -AllowFailure
+    $probe = Invoke-NativeText 'wsl.exe' @('-d',$ToolingDistro,'-u','root','--','lsblk','-dn','-o','NAME,TYPE') -AllowFailure
     if ($probe['exit_code'] -ne 0) {
         throw "Unable to list WSL block disks: $(@($probe['lines']) -join [Environment]::NewLine)"
     }
-    return @($probe['lines'] | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $names = @()
+    foreach ($line in @($probe['lines'])) {
+        $fields = @($line.Trim() -split '\s+')
+        if ($fields.Count -ge 2 -and $fields[1] -eq 'disk') { $names += $fields[0] }
+    }
+    return @($names)
 }
 
 function Get-MountProbe([string]$MountName) {
@@ -118,11 +124,9 @@ function Invoke-SpikeSql {
 function Remove-SpikeContainer {
     $probe = Invoke-NativeText 'docker' @('ps','-aq','--filter',"name=^/$SpikeContainerName$") -AllowFailure
     $containerId = (@($probe['lines']) -join '').Trim()
-    if ($containerId) {
-        [void](Invoke-NativeText 'docker' @('rm','-f',$SpikeContainerName) -AllowFailure)
-        return $true
-    }
-    return $false
+    if (-not $containerId) { return $false }
+    $remove = Invoke-NativeText 'docker' @('rm','-f',$SpikeContainerName) -AllowFailure
+    return [bool]($remove['exit_code'] -eq 0)
 }
 
 function Unmount-SpikePath([string]$VhdxPath) {
@@ -167,7 +171,8 @@ try {
         $probe = Get-MountProbe $spec['mount']
         if ($probe['exit_code'] -eq 0) { $existingSpikeMounts += $spec['mount'] }
     }
-    $existingTempContainer = ((Invoke-NativeText 'docker' @('ps','-aq','--filter',"name=^/$SpikeContainerName$") -AllowFailure)['lines'] -join '').Trim()
+    $existingTempContainerProbe = Invoke-NativeText 'docker' @('ps','-aq','--filter',"name=^/$SpikeContainerName$") -AllowFailure
+    $existingTempContainer = (@($existingTempContainerProbe['lines']) -join '').Trim()
 
     $blockers = @()
     if ($workerCount -ne 0) { $blockers += 'WORKER_CONTAINER_PRESENT' }
@@ -219,7 +224,7 @@ try {
 
                 $diskpartScript = Join-Path $evidenceDir "diskpart_create_$($spec['key']).txt"
                 @(
-                    "create vdisk file=\"$vhdxPath\" maximum=$SpikeMaximumMiB type=expandable",
+                    "create vdisk file=`"$vhdxPath`" maximum=$SpikeMaximumMiB type=expandable",
                     'exit'
                 ) | Set-Content -LiteralPath $diskpartScript -Encoding ASCII
                 $create = Invoke-NativeText 'diskpart.exe' @('/s',$diskpartScript) -AllowFailure
@@ -285,6 +290,7 @@ try {
             $runtimeStage = 'docker_bind_visibility'
             $allDockerBindReady = $true
             $probeCommand = 'set -eu; fs=$(stat -f -c %T /probe); touch /probe/docker_bind_probe; sync; rm -f /probe/docker_bind_probe; printf "FS_TYPE=%s\n" "$fs"'
+            $probeCommand = $probeCommand.Replace('\"','"')
             foreach ($spec in $diskSpecs) {
                 $source = "/mnt/wsl/$($spec['mount'])/clickhouse"
                 $dockerProbe = Invoke-NativeText 'docker' @('run','--rm','--entrypoint','sh','--mount',"type=bind,source=$source,target=/probe",$ClickHouseImage,'-lc',$probeCommand) -AllowFailure
@@ -349,7 +355,7 @@ try {
                 $spikeReady = $false
                 for ($attempt = 0; $attempt -lt 30; $attempt++) {
                     $readyProbe = Invoke-SpikeSql -Query 'SELECT 1' -AllowFailure
-                    if ($readyProbe['exit_code'] -eq 0 -and ((@($readyProbe['lines']) -join '') -match '^1$')) {
+                    if ($readyProbe['exit_code'] -eq 0 -and ((@($readyProbe['lines']) -join '').Trim() -eq '1')) {
                         $spikeReady = $true
                         break
                     }
