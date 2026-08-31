@@ -48,5 +48,16 @@ jobs:
             test "$(printf "%s\n" "$manifest" | wc -l | tr -d " ")" = "1"
             test "$(printf "%s\n" "$manifest" | awk -F "\\t" "{print NF}")" = "5"
             printf "%s\n" "$manifest" | awk -F "\\t" "length(\$5) == 64 && \$5 ~ /^[0-9a-f]+$/ {ok=1} END {exit !ok}"
+
+            mkdir -p /tmp/identity/metadata/db /tmp/identity/store/abc/abcdef00-0000-0000-0000-000000000001
+            printf metadata > /tmp/identity/metadata/db/table.sql
+            ln -s db/table.sql /tmp/identity/metadata/table-link
+            metadata_count="$(find /tmp/identity/metadata -mindepth 1 \( -type f -o -type l \) -printf ".\n" | wc -l | tr -d " ")"
+            metadata_sha="$(find /tmp/identity/metadata -mindepth 1 \( -type d -printf "D\\t%P\\n" -o -type f -printf "F\\t%P\\t%s\\n" -o -type l -printf "L\\t%P\\t%l\\n" \) | LC_ALL=C sort | sha256sum | awk "{print \$1}")"
+            store_uuid_count="$(find /tmp/identity/store -mindepth 2 -maxdepth 2 -type d -printf ".\n" | wc -l | tr -d " ")"
+            store_uuid_sha="$(find /tmp/identity/store -mindepth 2 -maxdepth 2 -type d -printf "%P\n" | LC_ALL=C sort | sha256sum | awk "{print \$1}")"
+            identity="$(printf "%s\\t%s\\t%s\\t%s\\n" "$metadata_count" "$metadata_sha" "$store_uuid_count" "$store_uuid_sha")"
+            test "$(printf "%s\n" "$identity" | awk -F "\\t" "{print NF}")" = "4"
+            printf "%s\n" "$identity" | awk -F "\\t" "length(\$2) == 64 && length(\$4) == 64 {ok=1} END {exit !ok}"
           '
           echo CLICKHOUSE_LINUX_VOLUME_RECOVERY_HELPER_RUNTIME_PASS
