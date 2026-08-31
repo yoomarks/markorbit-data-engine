@@ -117,7 +117,7 @@ stats="$(find /root -type f -printf '%s\n' | awk '{bytes += $1; count += 1} END 
 symlinks="$(find /root -type l -printf '.\n' | wc -l | tr -d ' ')"
 dirs="$(find /root -mindepth 1 -type d -printf '.\n' | wc -l | tr -d ' ')"
 digest="$(find /root -mindepth 1 \( -type d -printf 'D\t%P\n' -o -type f -printf 'F\t%P\t%s\t%n\n' -o -type l -printf 'L\t%P\t%l\n' \) | LC_ALL=C sort | sha256sum | awk '{print $1}')"
-printf '%s\t%s\t%s\n' "$stats" "$symlinks" "$dirs" "$digest"
+printf '%s\t%s\t%s\t%s\n' "$stats" "$symlinks" "$dirs" "$digest"
 '@
     $line = @(Invoke-DockerRunScript @('--rm','--user','0:0','--mount',$MountSpec) $Image $script |
         ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })[-1]
