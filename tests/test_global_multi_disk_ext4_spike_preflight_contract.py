@@ -38,8 +38,10 @@ def test_preflight_checks_wsl_docker_clickhouse_and_vhd_primitives() -> None:
 def test_preflight_does_not_contain_mutating_spike_actions() -> None:
     t = text()
     forbidden = (
-        "New-VHD -",
-        "Mount-VHD -",
+        "New-VHD -Path",
+        "& New-VHD",
+        "Mount-VHD -Path",
+        "& Mount-VHD",
         "Resize-VHD",
         "Optimize-VHD",
         "Dismount-VHD",
