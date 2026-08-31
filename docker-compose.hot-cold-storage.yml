@@ -7,9 +7,13 @@
 #   docker compose -f docker-compose.yml -f docker-compose.hot-cold-storage.yml config
 #
 # Required environment variables:
-#   CLICKHOUSE_HOT_DATA_PATH   e.g. E:/MarkOrbitData/hot/clickhouse
+#   CLICKHOUSE_HOT_DATA_PATH   e.g. E:/MarkOrbitData/hot/clickhouse-cs
 #   CLICKHOUSE_COLD_DATA_PATH  e.g. F:/MarkOrbitData/cold/clickhouse
 #   CLICKHOUSE_LOG_PATH        e.g. E:/MarkOrbitData/hot/clickhouse-logs
+#
+# The accepted Windows target-host Hot root is clickhouse-cs. The legacy
+# E:/MarkOrbitData/hot/clickhouse root was rejected during #260 cutover and must
+# not be reused as /var/lib/clickhouse.
 services:
   clickhouse:
     volumes:
