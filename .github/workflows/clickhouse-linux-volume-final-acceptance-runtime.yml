@@ -1,0 +1,95 @@
+name: ClickHouse Linux Volume Final Acceptance Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse finalizer under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          $path = Resolve-Path '.\scripts\finalize-clickhouse-linux-volume-acceptance.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Linux-volume finalizer failed PowerShell 5.1 parsing."
+          }
+          $command = Get-Command $path
+          if (-not $command.Parameters.ContainsKey('ExpectedMainSha')) {
+              throw "Finalizer must retain ExpectedMainSha."
+          }
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          if ($text -notmatch 'base64 -d \| timeout __TIMEOUT__s clickhouse-client') {
+              throw "Finalizer must decode SQL Base64 before clickhouse-client."
+          }
+          if ($text -match 'printf %s \$payload \| timeout \$\{TimeoutSeconds\}s clickhouse-client') {
+              throw "Finalizer contains the target-host Base64-as-SQL failure shape."
+          }
+          Write-Host WINDOWS_POWERSHELL_51_LINUX_VOLUME_FINALIZER_PASS
+
+  clickhouse24-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Execute decoded Base64 MergeTree acceptance against ClickHouse 24.8
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f markorbit-final-acceptance-ci >/dev/null 2>&1 || true' EXIT
+
+          docker run -d \
+            --name markorbit-final-acceptance-ci \
+            -e CLICKHOUSE_USER=ci \
+            -e CLICKHOUSE_PASSWORD=ci \
+            -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+            clickhouse/clickhouse-server:24.8 >/dev/null
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if docker exec markorbit-final-acceptance-ci \
+              clickhouse-client --user ci --password ci --query 'SELECT 1' >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "1"
+
+          docker exec markorbit-final-acceptance-ci sh -lc 'command -v base64 >/dev/null && command -v timeout >/dev/null'
+
+          sql='CREATE DATABASE markorbit_final_acceptance_ci; CREATE TABLE markorbit_final_acceptance_ci.t (id UInt64) ENGINE=MergeTree ORDER BY id; INSERT INTO markorbit_final_acceptance_ci.t VALUES (1); SELECT count() FROM markorbit_final_acceptance_ci.t; DROP DATABASE markorbit_final_acceptance_ci SYNC;'
+          sql_b64="$(printf '%s' "$sql" | base64 -w0)"
+
+          output="$(docker exec -e SQL_B64="$sql_b64" markorbit-final-acceptance-ci sh -lc \
+            'printf "%s" "$SQL_B64" | base64 -d | timeout 30s clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query_id markorbit_final_acceptance_ci --multiquery')"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -Fx '1' >/dev/null
+
+          exists="$(docker exec markorbit-final-acceptance-ci clickhouse-client --user ci --password ci --format TSVRaw --query 'EXISTS DATABASE markorbit_final_acceptance_ci')"
+          test "$exists" = "0"
+
+          echo CLICKHOUSE_24_8_DECODED_BASE64_MERGETREE_ACCEPTANCE_PASS
