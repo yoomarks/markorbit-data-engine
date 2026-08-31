@@ -1,0 +1,94 @@
+name: Dedicated WSL ClickHouse Preflight Runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse and freeze dedicated WSL ClickHouse preflight under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+              throw "This guard must execute under Windows PowerShell 5.1."
+          }
+          foreach ($command in @('wsl.exe','docker')) {
+              if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
+                  throw "Required preflight command missing: $command"
+              }
+          }
+
+          $path = Resolve-Path '.\scripts\preflight-dedicated-wsl-clickhouse-spike.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              foreach ($parseError in $errors) {
+                  Write-Host "::error::$($parseError.Message)"
+              }
+              throw "Dedicated WSL ClickHouse preflight failed Windows PowerShell 5.1 parsing."
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','ToolingDistro','RuntimeDistro','RuntimeRoot','ExportTar','AcceptedVolume','SpikeHttpPort','SpikeNativePort','EvidenceRoot')) {
+              if (-not $command.Parameters.ContainsKey($parameter)) {
+                  throw "Dedicated WSL ClickHouse preflight must retain parameter: $parameter"
+              }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+              'DEDICATED_WSL_CLICKHOUSE_PREFLIGHT_V1',
+              'READY_FOR_DEDICATED_WSL_CLICKHOUSE_SPIKE',
+              'DEDICATED_WSL_CLICKHOUSE_PREFLIGHT_BLOCKED',
+              'DEDICATED_WSL_CLICKHOUSE_PREFLIGHT_DONE',
+              'MarkOrbit-ClickHouse-Spike',
+              'hot_cn_spike.vhdx',
+              'hot_us_spike.vhdx',
+              'hot_global_spike.vhdx',
+              'warm_spike.vhdx',
+              'SELECT version()',
+              'production_clickhouse_mutation_performed = $false',
+              'corpus_replay_performed = $false'
+          )) {
+              if (-not $text.Contains($required)) {
+                  throw "Dedicated WSL ClickHouse preflight lost required contract marker: $required"
+              }
+          }
+
+          foreach ($forbidden in @(
+              "wsl.exe' @('--export'",
+              "wsl.exe' @('--import'",
+              "wsl.exe' @('--unregister'",
+              "wsl.exe' @('--mount'",
+              "mkfs.ext4','-F",
+              'docker compose down',
+              'docker system prune',
+              'docker volume rm',
+              'ALTER TABLE',
+              'OPTIMIZE TABLE',
+              '2023_5.zip',
+              'replay-us-deterministic.ps1',
+              'Remove-Item'
+          )) {
+              if ($text.Contains($forbidden)) {
+                  throw "Dedicated WSL ClickHouse preflight contains forbidden mutation marker: $forbidden"
+              }
+          }
+
+          Write-Host WINDOWS_POWERSHELL_51_DEDICATED_WSL_CLICKHOUSE_PREFLIGHT_PASS
