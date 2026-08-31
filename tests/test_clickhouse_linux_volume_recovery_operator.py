@@ -33,6 +33,14 @@ def test_recovery_is_fail_closed_before_authoritative_stop() -> None:
     assert "Exact-main drift before storage mutation" in t
 
 
+def test_structural_manifest_is_one_five_field_tsv_record() -> None:
+    t = text(RECOVERY)
+    assert "printf '%s\\t%s\\t%s\\t%s\\n' \"$stats\" \"$symlinks\" \"$dirs\" \"$digest\"" in t
+    assert "printf '%s\\t%s\\t%s\\n' \"$stats\" \"$symlinks\" \"$dirs\" \"$digest\"" not in t
+    assert '$parts.Count -ne 5' in t
+    assert "$parts[4] -notmatch '^[0-9a-f]{64}$'" in t
+
+
 def test_recovery_keeps_windows_source_readonly_and_uses_stopped_manifest() -> None:
     t = text(RECOVERY)
     assert 'type=bind,source=$source,target=/root,readonly' in t
