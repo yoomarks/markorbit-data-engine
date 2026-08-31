@@ -57,6 +57,10 @@ jobs:
               "'--location',$normalizedInstallRoot,'--no-launch','--web-download'",
               'INSTALL_ROOT_EXISTS_WITHOUT_REGISTERED_DISTRO',
               'EXISTING_TOOLING_DISTRO_WRONG_LOCATION',
+              "$workerProbe['lines']",
+              "$volumeProbe['exit_code']",
+              "$defaultNow = Get-DefaultWslDistroName",
+              "'--set-default',$defaultBefore",
               'wsl_shutdown_performed = $false',
               'existing_vhdx_mutation_performed = $false',
               'corpus_replay_performed = $false'
@@ -85,5 +89,13 @@ jobs:
           $emptyProbe = [ordered]@{ exit_code = 0; lines = @() }
           if (@($emptyProbe['lines']).Count -ne 0) {
               throw 'PS5.1 empty native receipt shape was not preserved.'
+          }
+          $extended = '\\?\E:\MarkOrbitData\wsl-tooling\Ubuntu-24.04'
+          if (-not $extended.StartsWith('\\?\')) {
+              throw 'Extended Windows path test fixture is invalid.'
+          }
+          $normalized = [IO.Path]::GetFullPath($extended.Substring(4)).TrimEnd('\')
+          if ($normalized -ne 'E:\MarkOrbitData\wsl-tooling\Ubuntu-24.04') {
+              throw "Extended Windows path normalization failed: $normalized"
           }
           Write-Host WINDOWS_POWERSHELL_51_WSL_EXT4_TOOLING_DISTRO_PASS
