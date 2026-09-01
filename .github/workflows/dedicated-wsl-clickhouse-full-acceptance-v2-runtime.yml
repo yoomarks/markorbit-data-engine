@@ -1,0 +1,85 @@
+name: Dedicated WSL ClickHouse Full Acceptance V2 Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1'
+      - 'tests/test_dedicated_wsl_clickhouse_full_acceptance_v2_contract.py'
+      - '.github/workflows/dedicated-wsl-clickhouse-full-acceptance-v2-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and freeze full acceptance V2 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found.'
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            '[switch]$Apply',
+            '[switch]$CleanupMounts',
+            'CLEANUP_MOUNTS_REQUIRED_FOR_ACCEPTANCE',
+            'Invoke-WslDiskCommandBounded',
+            'WaitForExit($TimeoutSeconds * 1000)',
+            'Stop-ConfigScopedServer',
+            'ps -eo pid=,comm=,args=',
+            '$2=="clickhouse"',
+            'prepare_minimal_config',
+            'system.disks',
+            'system.storage_policies',
+            '$InsertBatchCount = 24',
+            'ENGINE=MergeTree',
+            'max(level)',
+            'tmp_insert_*',
+            'host.docker.internal',
+            'DEDICATED_WSL_CLICKHOUSE_GO',
+            'WSL_CLICKHOUSE_STORAGE_GO_CONNECTIVITY_BLOCKED',
+            'WSL_CLICKHOUSE_SPIKE_BLOCKED',
+            'server_stopped=$serverStopped',
+            'runtime_distro_unregister_performed=False',
+            'spike_vhdx_delete_performed=False',
+            'production_clickhouse_restart_performed=False',
+            'production_clickhouse_mutation_performed=False',
+            'accepted_volume_mutation_performed=False',
+            'corpus_replay_performed=False',
+            'DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V2_DONE'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
+          }
+          $forbidden = @(
+            '--import',
+            '--export',
+            'mkfs.ext4',
+            '--unregister',
+            'docker cp',
+            'production-config.xml',
+            'nohup clickhouse server',
+            'Remove-Item',
+            "docker','prune",
+            "docker','volume','rm"
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+          }
+          Write-Host 'DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V2_PS51_CONTRACT_PASS'
