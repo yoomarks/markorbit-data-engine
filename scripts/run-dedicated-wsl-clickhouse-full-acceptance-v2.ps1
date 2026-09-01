@@ -185,34 +185,60 @@ function Get-MountProbe([string]$MountName) {
 
 function Get-ConfigScopedProcesses([string]$ConfigPath) {
     $template = @'
-ps -eo pid=,comm=,args= | awk -v needle='__CONFIG__' '$2=="clickhouse" && index($0, needle)>0 {print $1 "|" $0}'
+needle='__CONFIG__'
+for proc in /proc/[0-9]*; do
+  [ -r "$proc/comm" ] || continue
+  comm=$(cat "$proc/comm" 2>/dev/null || true)
+  case "$comm" in
+    clickhouse*) ;;
+    *) continue ;;
+  esac
+  args=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null || true)
+  case "$args" in
+    *"$needle"*)
+      pid=${proc##*/}
+      printf '%s|%s\n' "$pid" "$args"
+      ;;
+  esac
+done
+exit 0
 '@
     $command = $template.Replace('__CONFIG__',$ConfigPath)
     $probe = Invoke-RuntimeShellBounded $command -TimeoutSeconds 8 -AllowFailure
-    if ($probe['timed_out'] -or $probe['exit_code'] -ne 0) { throw "Unable to inspect config-scoped ClickHouse processes for $ConfigPath." }
+    if ($probe['timed_out'] -or $probe['exit_code'] -ne 0) {
+        $output = (@($probe['lines']) -join [Environment]::NewLine)
+        throw "Unable to inspect config-scoped ClickHouse processes for $ConfigPath. exit=$($probe['exit_code']) timed_out=$($probe['timed_out']) output=$output"
+    }
     return @($probe['lines'] | Where-Object { $_.Trim() })
 }
 
 function Stop-ConfigScopedServer([string]$ConfigPath) {
     $before = @(Get-ConfigScopedProcesses $ConfigPath)
-    $template = @'
-set +e
-pids=$(ps -eo pid=,comm=,args= | awk -v needle='__CONFIG__' '$2=="clickhouse" && index($0, needle)>0 {print $1}')
-if [ -n "$pids" ]; then
-  kill $pids 2>/dev/null || true
-  for i in $(seq 1 15); do
-    left=$(ps -eo pid=,comm=,args= | awk -v needle='__CONFIG__' '$2=="clickhouse" && index($0, needle)>0 {print $1}')
-    [ -z "$left" ] && break
-    sleep 1
-  done
-  left=$(ps -eo pid=,comm=,args= | awk -v needle='__CONFIG__' '$2=="clickhouse" && index($0, needle)>0 {print $1}')
-  [ -z "$left" ] || kill -9 $left 2>/dev/null || true
-fi
-exit 0
-'@
-    $command = $template.Replace('__CONFIG__',$ConfigPath)
-    [void](Invoke-RuntimeShellBounded $command -TimeoutSeconds 22 -AllowFailure)
-    $after = @(Get-ConfigScopedProcesses $ConfigPath)
+    $after = @($before)
+    if ($before.Count -gt 0) {
+        $pids = @()
+        foreach ($line in $before) {
+            if ($line -notmatch '^(\d+)\|') { throw "Malformed config-scoped process evidence: $line" }
+            $pids += [string]$Matches[1]
+        }
+        [void](Invoke-RuntimeTextBounded (@('kill') + $pids) -TimeoutSeconds 8 -AllowFailure)
+        for ($attempt=0; $attempt -lt 15; $attempt++) {
+            Start-Sleep -Seconds 1
+            $after = @(Get-ConfigScopedProcesses $ConfigPath)
+            if ($after.Count -eq 0) { break }
+        }
+        if ($after.Count -gt 0) {
+            $leftPids = @()
+            foreach ($line in $after) {
+                if ($line -match '^(\d+)\|') { $leftPids += [string]$Matches[1] }
+            }
+            if ($leftPids.Count -gt 0) {
+                [void](Invoke-RuntimeTextBounded (@('kill','-9') + $leftPids) -TimeoutSeconds 8 -AllowFailure)
+                Start-Sleep -Seconds 1
+            }
+            $after = @(Get-ConfigScopedProcesses $ConfigPath)
+        }
+    }
     return [ordered]@{ before=@($before); after=@($after); stopped=[bool]($after.Count -eq 0) }
 }
 
@@ -582,6 +608,7 @@ try {
         runtime_clickhouse_version=$runtimeClickHouseVersion
         daemon_launch_exit=$daemonLaunchExit
         daemon_pid_observed=$daemonPidObserved
+        process_inspection_authority='procfs_comm_cmdline'
         residual_startup_processes_before=@($residualStartupBefore)
         residual_full_processes_before=@($residualFullBefore)
         residual_startup_cleanup=$residualStartupCleanup
@@ -627,6 +654,7 @@ try {
     Write-Host "runtime_clickhouse_version=$runtimeClickHouseVersion"
     Write-Host "daemon_launch_exit=$daemonLaunchExit"
     Write-Host "daemon_pid_observed=$daemonPidObserved"
+    Write-Host 'process_inspection_authority=procfs_comm_cmdline'
     Write-Host "residual_startup_process_count_before=$($residualStartupBefore.Count)"
     Write-Host "residual_full_process_count_before=$($residualFullBefore.Count)"
     foreach ($mountResult in $mountEvidence) { Write-Host "native_disk=$($mountResult['key'])|ext4=$($mountResult['verified'])|state=$($mountResult['state'])" }
