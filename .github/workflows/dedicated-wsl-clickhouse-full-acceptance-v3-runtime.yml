@@ -44,7 +44,8 @@ jobs:
             'acceptance_v3_resume_gate=',
             'acceptance_v3_stage=v2_single_attempt',
             '$profileOrphanCount -eq ''0''',
-            '$profileMntWslMountCount -eq ''0''',
+            '$profileForeignMntWslMountCount -eq ''0''',
+            '$profile[''mnt_wsl_safety_authority''] -eq ''foreign_children_excluding_docker_desktop_namespace''',
             '$profile[''production_after_ready''] -eq ''True''',
             '$profile[''accepted_volume_after_present''] -eq ''True''',
             '$profile[''worker_count_after''] -eq ''0''',
@@ -52,7 +53,10 @@ jobs:
             '$profile[''wsl_mount_performed''] -eq ''False''',
             '$profile[''wsl_unmount_performed''] -eq ''False''',
             '$profile[''wsl_shutdown_performed''] -eq ''False''',
-            'resume_gate_mnt_wsl_clear=',
+            'resume_gate_foreign_mnt_wsl_clear=',
+            'resume_gate_mnt_wsl_authority=',
+            'resume_profile_docker_managed_mnt_wsl_mount_count=',
+            'resume_profile_foreign_mnt_wsl_mount_count=',
             'automatic_stale_attachment_recovery_authorized=False',
             'automatic_stale_attachment_recovery_performed=False',
             'automatic_stale_attachment_retry_limit=0',
@@ -71,6 +75,9 @@ jobs:
           )
           foreach ($marker in $required) {
             if (-not $text.Contains($marker)) { throw "Missing required V3 marker: $marker" }
+          }
+          if ($text.Contains('$profileMntWslMountCount -eq ''0''')) {
+            throw 'V3 must not gate on total /mnt/wsl count because Docker Desktop owns legitimate mounts there.'
           }
           if (($text -split [regex]::Escape('Invoke-V2 -ApplyV2')).Count -ne 2) {
             throw 'V3 must contain exactly one V2 apply invocation.'
@@ -110,6 +117,9 @@ jobs:
           $profileRequired = @(
             'orphan_ext4_1g_candidate_count=',
             'mnt_wsl_mount_count=',
+            'docker_managed_mnt_wsl_mount_count=',
+            'foreign_mnt_wsl_mount_count=',
+            'mnt_wsl_safety_authority=foreign_children_excluding_docker_desktop_namespace',
             'worker_container_count_after=',
             'production_clickhouse_after_ready=',
             'accepted_volume_after_present=',
