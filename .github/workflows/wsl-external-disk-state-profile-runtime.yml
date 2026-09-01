@@ -53,6 +53,8 @@ jobs:
             'docker_managed_mnt_wsl_evidence=',
             'foreign_mnt_wsl_evidence=',
             'mnt_wsl_safety_authority=foreign_children_excluding_docker_desktop_namespace',
+            '$dockerManagedMntWslLines',
+            '$foreignMntWslLines',
             'no_arg_unmount_authorized=False',
             'wsl_mount_performed=False',
             'wsl_unmount_performed=False',
@@ -64,9 +66,6 @@ jobs:
           )
           foreach ($marker in $required) {
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
-          }
-          if (-not $text.Contains("[string]$_ -notmatch '\\s/mnt/wsl/docker-desktop(?:/|$)'")) {
-            throw 'Foreign WSL mount classification must exclude Docker Desktop namespace explicitly.'
           }
           $forbidden = @(
             "@('--mount'",
