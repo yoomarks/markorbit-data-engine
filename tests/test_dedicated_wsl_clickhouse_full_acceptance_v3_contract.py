@@ -32,7 +32,7 @@ def test_v3_reuses_v2_and_retries_only_once_for_stable_receipt_mount_failure() -
     assert "WSL_E_DISK_ALREADY_MOUNTED" not in text
 
 
-def test_stale_recovery_is_exact_bounded_unquoted_unmount_for_retained_spike_vhdx_only() -> None:
+def test_stale_recovery_tries_raw_and_extended_path_identities_only_for_retained_vhdx() -> None:
     text = source()
     for path in (
         r"D:\MarkOrbitData\spike\hot_cn_spike.vhdx",
@@ -41,20 +41,38 @@ def test_stale_recovery_is_exact_bounded_unquoted_unmount_for_retained_spike_vhd
         r"E:\MarkOrbitData\spike\warm_spike.vhdx",
     ):
         assert path in text
-    assert "Invoke-WslUnmountBounded" in text
-    assert "WaitForExit($TimeoutSeconds * 1000)" in text
-    assert "$argumentText = '--unmount ' + $VhdxPath" in text
+    assert "Invoke-WslUnmountIdentityBounded" in text
+    assert "[ValidateSet('raw','extended')]" in text
+    assert "$detachPath = if ($Identity -eq 'extended') { '\\\\?\\' + $VhdxPath } else { $VhdxPath }" in text
+    assert "foreach ($identity in @('raw','extended'))" in text
+    assert "stale_attachment_identity_attempts_per_vhdx=2" in text
+    assert "recovery_unmount_argument_authority=dual_raw_extended_exact_retained_vhdx_identity" in text
     assert "$allowedVhdxPaths -notcontains $VhdxPath" in text
     assert "$VhdxPath -match '[\\s\"]'" in text
+    assert "$detachPath -match '[\\s\"]'" in text
+    assert "$argumentText = '--unmount ' + $detachPath" in text
     assert "$process.Refresh()" in text
     assert "[int]$process.ExitCode" in text
-    assert "recovery_unmount_argument_authority=unquoted_exact_no_whitespace_retained_vhdx_path" in text
     assert "--unmount \"" not in text
-    assert "@('--unmount'" not in text  # no unbounded native invocation helper path
     assert "stale_attachment_recovery_scope=retained_spike_vhdx_only" in text
     assert "wsl --shutdown" not in text.lower()
     assert "--unregister" not in text
     assert "mkfs.ext4" not in text
+
+
+def test_unmount_exit_is_evidence_only_and_retry_v2_state_remains_authoritative() -> None:
+    text = source()
+    assert "recovery_unmount_exit_authority=evidence_only_retry_v2_state_is_authoritative" in text
+    assert "if ($result['exit_code'] -ne 0)" not in text
+    assert "if ($result['timed_out'])" in text
+
+
+def test_wsl_version_is_captured_as_advisory_evidence() -> None:
+    text = source()
+    assert "Get-WslVersionEvidence" in text
+    assert "& wsl.exe --version" in text
+    assert "wsl_version_probe_exit=" in text
+    assert "wsl_version_evidence=" in text
 
 
 def test_recovery_gate_emits_each_stable_ascii_safety_fact() -> None:
