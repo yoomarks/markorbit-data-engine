@@ -87,7 +87,6 @@ function Invoke-V2([switch]$ApplyV2) {
         production_after_ready=Get-ReceiptValue $lines 'production_clickhouse_after_ready'
         accepted_volume_after_present=Get-ReceiptValue $lines 'accepted_volume_after_present'
         worker_count_after=Get-ReceiptValue $lines 'worker_container_count_after'
-        stale_attachment=[bool](@($lines | Where-Object { $_ -match 'WSL_E_DISK_ALREADY_MOUNTED' }).Count -gt 0)
     }
 }
 
@@ -103,6 +102,12 @@ try {
     $finalDecision = 'READY_FOR_DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V3'
     $staleRecoveryPerformed = $false
     $recoveryEvidence = @()
+    $recoveryGateDecision = $false
+    $recoveryGateStage = $false
+    $recoveryGateServerStopped = $false
+    $recoveryGateProduction = $false
+    $recoveryGateAcceptedVolume = $false
+    $recoveryGateWorkers = $false
 
     if (-not $Apply) {
         Write-Host 'acceptance_v3_stage=v2_preflight'
@@ -121,17 +126,23 @@ try {
         $firstDecision = $first['decision']
         $finalDecision = $firstDecision
 
-        $recoverableStaleAttachment = [bool](
-            $firstDecision -eq 'WSL_CLICKHOUSE_SPIKE_BLOCKED' -and
-            $first['runtime_stage'] -eq 'mount_external_disks' -and
-            $first['stale_attachment'] -and
-            $first['server_stopped'] -eq 'True' -and
-            $first['production_after_ready'] -eq 'True' -and
-            $first['accepted_volume_after_present'] -eq 'True' -and
-            $first['worker_count_after'] -eq '0'
+        $recoveryGateDecision = [bool]($firstDecision -eq 'WSL_CLICKHOUSE_SPIKE_BLOCKED')
+        $recoveryGateStage = [bool]($first['runtime_stage'] -eq 'mount_external_disks')
+        $recoveryGateServerStopped = [bool]($first['server_stopped'] -eq 'True')
+        $recoveryGateProduction = [bool]($first['production_after_ready'] -eq 'True')
+        $recoveryGateAcceptedVolume = [bool]($first['accepted_volume_after_present'] -eq 'True')
+        $recoveryGateWorkers = [bool]($first['worker_count_after'] -eq '0')
+        $recoverableMountFailure = [bool](
+            $recoveryGateDecision -and
+            $recoveryGateStage -and
+            $recoveryGateServerStopped -and
+            $recoveryGateProduction -and
+            $recoveryGateAcceptedVolume -and
+            $recoveryGateWorkers
         )
+        Write-Host "acceptance_v3_recovery_gate=decision:$recoveryGateDecision|stage:$recoveryGateStage|server_stopped:$recoveryGateServerStopped|production:$recoveryGateProduction|accepted_volume:$recoveryGateAcceptedVolume|workers:$recoveryGateWorkers|authorized:$recoverableMountFailure"
 
-        if ($recoverableStaleAttachment) {
+        if ($recoverableMountFailure) {
             Write-Host 'acceptance_v3_stage=stale_attachment_recovery'
             $staleRecoveryPerformed = $true
             foreach ($spec in $diskSpecs) {
@@ -158,6 +169,13 @@ try {
     Write-Host "first_decision=$firstDecision"
     if ($retryDecision) { Write-Host "retry_decision=$retryDecision" }
     Write-Host "stale_attachment_recovery_performed=$staleRecoveryPerformed"
+    Write-Host 'recovery_gate_authority=stable_ascii_v2_receipt'
+    Write-Host "recovery_gate_decision=$recoveryGateDecision"
+    Write-Host "recovery_gate_stage=$recoveryGateStage"
+    Write-Host "recovery_gate_server_stopped=$recoveryGateServerStopped"
+    Write-Host "recovery_gate_production=$recoveryGateProduction"
+    Write-Host "recovery_gate_accepted_volume=$recoveryGateAcceptedVolume"
+    Write-Host "recovery_gate_workers=$recoveryGateWorkers"
     Write-Host 'stale_attachment_recovery_scope=retained_spike_vhdx_only'
     Write-Host 'stale_attachment_retry_limit=1'
     Write-Host 'wsl_shutdown_performed=False'

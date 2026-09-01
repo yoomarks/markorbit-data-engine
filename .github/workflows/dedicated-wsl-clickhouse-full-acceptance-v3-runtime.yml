@@ -37,15 +37,23 @@ jobs:
           $required = @(
             '[switch]$Apply',
             'run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1',
-            'WSL_E_DISK_ALREADY_MOUNTED',
+            'recovery_gate_authority=stable_ascii_v2_receipt',
+            'acceptance_v3_recovery_gate=',
             'acceptance_v3_stage=stale_attachment_recovery',
             'acceptance_v3_stage=v2_retry_once',
             'stale_attachment_retry_limit=1',
             'stale_attachment_recovery_scope=retained_spike_vhdx_only',
+            '$first[''runtime_stage''] -eq ''mount_external_disks''',
             '$first[''server_stopped''] -eq ''True''',
             '$first[''production_after_ready''] -eq ''True''',
             '$first[''accepted_volume_after_present''] -eq ''True''',
             '$first[''worker_count_after''] -eq ''0''',
+            'recovery_gate_decision=',
+            'recovery_gate_stage=',
+            'recovery_gate_server_stopped=',
+            'recovery_gate_production=',
+            'recovery_gate_accepted_volume=',
+            'recovery_gate_workers=',
             'WaitForExit($TimeoutSeconds * 1000)',
             'wsl_shutdown_performed=False',
             'runtime_distro_unregister_performed=False',
@@ -59,6 +67,7 @@ jobs:
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
           }
           $forbidden = @(
+            'WSL_E_DISK_ALREADY_MOUNTED',
             '--unregister',
             'mkfs.ext4',
             'wsl --shutdown',
