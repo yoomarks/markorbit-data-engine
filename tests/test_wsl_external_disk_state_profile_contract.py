@@ -35,9 +35,25 @@ def test_profile_collects_linux_and_windows_attachment_evidence() -> None:
         "Get-Disk",
         "orphan_ext4_1g_candidate_count",
         "mnt_wsl_mount_count",
+        "mnt_wsl_root_mount_count",
+        "docker_managed_mnt_wsl_mount_count",
+        "foreign_mnt_wsl_mount_count",
         "expected_spike_virtual_bytes",
     ):
         assert marker in text
+
+
+def test_profile_distinguishes_docker_namespace_from_foreign_wsl_children() -> None:
+    text = source()
+    assert r"\s/mnt/wsl$" in text
+    assert r"\s/mnt/wsl/docker-desktop(?:/|$)" in text
+    assert r"\s/mnt/wsl/" in text
+    assert "$dockerManagedMntWslLines" in text
+    assert "$foreignMntWslLines" in text
+    assert "docker_managed_mnt_wsl_evidence=" in text
+    assert "foreign_mnt_wsl_evidence=" in text
+    assert "mnt_wsl_safety_authority='foreign_children_excluding_docker_desktop_namespace'" in text
+    assert "mnt_wsl_safety_authority=foreign_children_excluding_docker_desktop_namespace" in text
 
 
 def test_profile_scopes_known_spike_vhdx_and_does_not_mutate_wsl() -> None:

@@ -23,7 +23,8 @@ def test_apply_requires_post_incident_read_only_profile_before_v2() -> None:
     assert "acceptance_v3_stage=post_incident_read_only_resume_gate" in text
     assert "$profile = Invoke-ReadOnlyDiskProfile" in text
     assert "$resumeGateOrphanFree = [bool]($profileOrphanCount -eq '0')" in text
-    assert "$resumeGateMntWslClear = [bool]($profileMntWslMountCount -eq '0')" in text
+    assert "$resumeGateForeignMntWslClear = [bool]($profileForeignMntWslMountCount -eq '0')" in text
+    assert "$profile['mnt_wsl_safety_authority'] -eq 'foreign_children_excluding_docker_desktop_namespace'" in text
     assert "$profile['production_after_ready'] -eq 'True'" in text
     assert "$profile['accepted_volume_after_present'] -eq 'True'" in text
     assert "$profile['worker_count_after'] -eq '0'" in text
@@ -33,7 +34,19 @@ def test_apply_requires_post_incident_read_only_profile_before_v2() -> None:
     assert "$profile['wsl_shutdown_performed'] -eq 'False'" in text
     assert "acceptance_v3_resume_gate=" in text
     assert "resume_gate_ready=" in text
-    assert "resume_gate_mnt_wsl_clear=" in text
+    assert "resume_gate_foreign_mnt_wsl_clear=" in text
+    assert "resume_gate_mnt_wsl_authority=" in text
+
+
+def test_v3_does_not_gate_on_total_mnt_wsl_count() -> None:
+    text = source()
+    assert "mnt_wsl_mount_count=Get-ReceiptValue" in text
+    assert "docker_managed_mnt_wsl_mount_count=Get-ReceiptValue" in text
+    assert "foreign_mnt_wsl_mount_count=Get-ReceiptValue" in text
+    assert "$profileMntWslMountCount -eq '0'" not in text
+    assert "$profileForeignMntWslMountCount -eq '0'" in text
+    assert "resume_profile_docker_managed_mnt_wsl_mount_count=" in text
+    assert "resume_profile_foreign_mnt_wsl_mount_count=" in text
 
 
 def test_v3_runs_v2_apply_at_most_once_and_never_recovers_attachments() -> None:
@@ -57,7 +70,7 @@ def test_resume_gate_does_not_treat_windows_vhd_attachment_state_as_authority() 
     assert "Get-DiskImage" not in text
     assert "attached=" not in text.lower()
     assert "orphan_ext4_1g_candidate_count" in text
-    assert "mnt_wsl_mount_count" in text
+    assert "foreign_mnt_wsl_mount_count" in text
 
 
 def test_non_apply_path_remains_read_only_v2_preflight() -> None:
@@ -81,7 +94,8 @@ def test_post_incident_safety_receipt_is_explicit() -> None:
         "post_incident_profile_invoked=",
         "resume_gate_ready=",
         "resume_gate_orphan_free=",
-        "resume_gate_mnt_wsl_clear=",
+        "resume_gate_foreign_mnt_wsl_clear=",
+        "resume_gate_mnt_wsl_authority=",
         "resume_gate_production=",
         "resume_gate_accepted_volume=",
         "resume_gate_workers=",

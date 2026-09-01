@@ -61,6 +61,9 @@ function Invoke-ReadOnlyDiskProfile {
         decision=Get-ReceiptValue $lines 'decision'
         orphan_count=Get-ReceiptValue $lines 'orphan_ext4_1g_candidate_count'
         mnt_wsl_mount_count=Get-ReceiptValue $lines 'mnt_wsl_mount_count'
+        docker_managed_mnt_wsl_mount_count=Get-ReceiptValue $lines 'docker_managed_mnt_wsl_mount_count'
+        foreign_mnt_wsl_mount_count=Get-ReceiptValue $lines 'foreign_mnt_wsl_mount_count'
+        mnt_wsl_safety_authority=Get-ReceiptValue $lines 'mnt_wsl_safety_authority'
         worker_count_after=Get-ReceiptValue $lines 'worker_container_count_after'
         production_after_ready=Get-ReceiptValue $lines 'production_clickhouse_after_ready'
         accepted_volume_after_present=Get-ReceiptValue $lines 'accepted_volume_after_present'
@@ -113,13 +116,16 @@ try {
     $resumeGateReady = $false
     $resumeGateDecision = $false
     $resumeGateOrphanFree = $false
-    $resumeGateMntWslClear = $false
+    $resumeGateForeignMntWslClear = $false
     $resumeGateProduction = $false
     $resumeGateAcceptedVolume = $false
     $resumeGateWorkers = $false
     $resumeGateProfileReadOnly = $false
+    $resumeGateMntWslAuthority = $false
     $profileOrphanCount = $null
     $profileMntWslMountCount = $null
+    $profileDockerManagedMntWslMountCount = $null
+    $profileForeignMntWslMountCount = $null
     $v2SingleAttemptPerformed = $false
 
     if (-not $Apply) {
@@ -140,9 +146,12 @@ try {
 
         $profileOrphanCount = $profile['orphan_count']
         $profileMntWslMountCount = $profile['mnt_wsl_mount_count']
+        $profileDockerManagedMntWslMountCount = $profile['docker_managed_mnt_wsl_mount_count']
+        $profileForeignMntWslMountCount = $profile['foreign_mnt_wsl_mount_count']
         $resumeGateDecision = [bool]($profile['decision'] -eq 'WSL_EXTERNAL_DISK_STATE_PROFILE_DONE')
         $resumeGateOrphanFree = [bool]($profileOrphanCount -eq '0')
-        $resumeGateMntWslClear = [bool]($profileMntWslMountCount -eq '0')
+        $resumeGateForeignMntWslClear = [bool]($profileForeignMntWslMountCount -eq '0')
+        $resumeGateMntWslAuthority = [bool]($profile['mnt_wsl_safety_authority'] -eq 'foreign_children_excluding_docker_desktop_namespace')
         $resumeGateProduction = [bool]($profile['production_after_ready'] -eq 'True')
         $resumeGateAcceptedVolume = [bool]($profile['accepted_volume_after_present'] -eq 'True')
         $resumeGateWorkers = [bool]($profile['worker_count_after'] -eq '0')
@@ -155,14 +164,15 @@ try {
         $resumeGateReady = [bool](
             $resumeGateDecision -and
             $resumeGateOrphanFree -and
-            $resumeGateMntWslClear -and
+            $resumeGateForeignMntWslClear -and
+            $resumeGateMntWslAuthority -and
             $resumeGateProduction -and
             $resumeGateAcceptedVolume -and
             $resumeGateWorkers -and
             $resumeGateProfileReadOnly
         )
-        Write-Host "acceptance_v3_resume_gate=decision:$resumeGateDecision|orphan_free:$resumeGateOrphanFree|mnt_wsl_clear:$resumeGateMntWslClear|production:$resumeGateProduction|accepted_volume:$resumeGateAcceptedVolume|workers:$resumeGateWorkers|profile_read_only:$resumeGateProfileReadOnly|authorized:$resumeGateReady"
-        Write-Host "acceptance_v3_resume_profile=orphan_ext4_1g_candidate_count:$profileOrphanCount|mnt_wsl_mount_count:$profileMntWslMountCount"
+        Write-Host "acceptance_v3_resume_gate=decision:$resumeGateDecision|orphan_free:$resumeGateOrphanFree|foreign_mnt_wsl_clear:$resumeGateForeignMntWslClear|mnt_wsl_authority:$resumeGateMntWslAuthority|production:$resumeGateProduction|accepted_volume:$resumeGateAcceptedVolume|workers:$resumeGateWorkers|profile_read_only:$resumeGateProfileReadOnly|authorized:$resumeGateReady"
+        Write-Host "acceptance_v3_resume_profile=orphan_ext4_1g_candidate_count:$profileOrphanCount|mnt_wsl_mount_count:$profileMntWslMountCount|docker_managed_mnt_wsl_mount_count:$profileDockerManagedMntWslMountCount|foreign_mnt_wsl_mount_count:$profileForeignMntWslMountCount"
 
         if (-not $resumeGateReady) {
             $finalDecision = 'WSL_CLICKHOUSE_SPIKE_BLOCKED'
@@ -184,13 +194,16 @@ try {
     Write-Host "resume_gate_ready=$resumeGateReady"
     Write-Host "resume_gate_decision=$resumeGateDecision"
     Write-Host "resume_gate_orphan_free=$resumeGateOrphanFree"
-    Write-Host "resume_gate_mnt_wsl_clear=$resumeGateMntWslClear"
+    Write-Host "resume_gate_foreign_mnt_wsl_clear=$resumeGateForeignMntWslClear"
+    Write-Host "resume_gate_mnt_wsl_authority=$resumeGateMntWslAuthority"
     Write-Host "resume_gate_production=$resumeGateProduction"
     Write-Host "resume_gate_accepted_volume=$resumeGateAcceptedVolume"
     Write-Host "resume_gate_workers=$resumeGateWorkers"
     Write-Host "resume_gate_profile_read_only=$resumeGateProfileReadOnly"
     Write-Host "resume_profile_orphan_ext4_1g_candidate_count=$profileOrphanCount"
     Write-Host "resume_profile_mnt_wsl_mount_count=$profileMntWslMountCount"
+    Write-Host "resume_profile_docker_managed_mnt_wsl_mount_count=$profileDockerManagedMntWslMountCount"
+    Write-Host "resume_profile_foreign_mnt_wsl_mount_count=$profileForeignMntWslMountCount"
     Write-Host "v2_single_attempt_performed=$v2SingleAttemptPerformed"
     Write-Host 'automatic_stale_attachment_recovery_authorized=False'
     Write-Host 'automatic_stale_attachment_recovery_performed=False'
