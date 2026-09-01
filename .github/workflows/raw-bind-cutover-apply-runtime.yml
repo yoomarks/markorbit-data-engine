@@ -114,4 +114,10 @@ jobs:
           $round = Get-Utf8TextFromBytes $roundBytes
           if ([string]$round['text'] -ne $updated) { throw 'UTF-8 round trip failed.' }
 
+          # Exercise the exact post-write expression used by the Apply path under Windows PowerShell 5.1.
+          $postWriteExpressionValue = [string](Get-Utf8TextFromBytes $roundBytes)['text']
+          if ($postWriteExpressionValue -ne $updated) {
+            throw 'Post-write env decode/index expression does not return the expected text.'
+          }
+
           Write-Host 'RAW_BIND_CUTOVER_APPLY_PS51_CONTRACT_PASS'
