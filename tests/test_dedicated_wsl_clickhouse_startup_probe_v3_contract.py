@@ -28,6 +28,16 @@ def test_v3_child_powershell_stderr_is_captured_without_stop_promotion() -> None
     assert "$lines = @(& powershell.exe @args 2>&1" not in text
 
 
+def test_v3_does_not_shadow_typed_apply_switch_with_nested_result() -> None:
+    text = source()
+    assert "[switch]$Apply" in text
+    assert "$v2ApplyResult = Invoke-V2 -ApplyV2" in text
+    assert "$nestedDecision = $v2ApplyResult['decision']" in text
+    assert "$v2ApplyResult['exit_code']" in text
+    assert "$apply = Invoke-V2 -ApplyV2" not in text
+    assert "v3_apply_switch_collision_safe=True" in text
+
+
 def test_v3_accepts_real_ext4_state_not_wsl_exit_code() -> None:
     text = source()
     assert "Get-MountProbe" in text
