@@ -1,0 +1,115 @@
+name: Raw Bind Runtime Probe Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-raw-bind-runtime-probe.ps1'
+      - 'tests/test_raw_bind_runtime_probe_contract.py'
+      - '.github/workflows/raw-bind-runtime-probe-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise Raw bind runtime probe helpers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scriptPath = Join-Path $PWD 'scripts\run-raw-bind-runtime-probe.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell parser errors detected.'
+          }
+
+          $text = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $required = @(
+            'RAW_BIND_RUNTIME_PROBE_V1',
+            'RAW_BIND_RUNTIME_PROBE_READY_FOR_APPLY',
+            'RAW_BIND_RUNTIME_PROBE_GO',
+            'RAW_BIND_RUNTIME_PROBE_BLOCKED',
+            'RAW_BIND_RUNTIME_PROBE_DONE',
+            'PRODUCTION_HOT_WARM_SIZING_PLAN',
+            'F:/MarkOrbitData/raw',
+            "'run','--detach','--no-deps'",
+            "'--name',`$probeName,'--entrypoint','python','api'",
+            'probe_stage=read_only_container_walk',
+            'runtime_mount_ready=',
+            'runtime_read_ready=',
+            'raw_delete_authorized=$false',
+            'worker_start_authorized=$false'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing runtime probe marker: $marker" }
+          }
+
+          $forbidden = @(
+            'robocopy.exe',
+            'Copy-Item',
+            'Move-Item',
+            'Remove-Item',
+            'Clear-Content',
+            'WriteAllBytes($envPath',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Resize-VHD',
+            'New-VHD',
+            'mkfs.ext4',
+            'Format-Volume',
+            '--shutdown',
+            '--unregister',
+            "compose','up",
+            "compose','down",
+            "compose','start",
+            "compose','restart",
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden mutation/replay marker present: $marker" }
+          }
+
+          $helperNames = @('Normalize-HostPath','Normalize-DockerBindSource','Get-DotEnvValues')
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) helper functions, found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          $expected = [System.IO.Path]::GetFullPath('F:\MarkOrbitData\raw').TrimEnd('\')
+          $samples = @(
+            'F:\MarkOrbitData\raw',
+            '/run/desktop/mnt/host/f/MarkOrbitData/raw',
+            '/host_mnt/f/MarkOrbitData/raw',
+            '/mnt/host/f/MarkOrbitData/raw'
+          )
+          foreach ($sample in $samples) {
+            $actual = Normalize-DockerBindSource $sample
+            if ($actual -ne $expected) { throw "Docker bind normalization failed for $sample -> $actual" }
+          }
+          if ((Normalize-DockerBindSource '/foreign/runtime/path') -ne '') {
+            throw 'Unknown Docker bind source must fail closed.'
+          }
+
+          $dotenv = @('RAW_DATA_PATH=F:/MarkOrbitData/raw','','VISUAL_RAW_PATH=F:/MarkOrbitData/raw')
+          $raw = @(Get-DotEnvValues -Lines $dotenv -Name 'RAW_DATA_PATH')
+          $visual = @(Get-DotEnvValues -Lines $dotenv -Name 'VISUAL_RAW_PATH')
+          if ($raw.Count -ne 1 -or $raw[0] -ne 'F:/MarkOrbitData/raw') { throw 'RAW_DATA_PATH fixture failed.' }
+          if ($visual.Count -ne 1 -or $visual[0] -ne 'F:/MarkOrbitData/raw') { throw 'VISUAL_RAW_PATH fixture failed.' }
+
+          Write-Host 'RAW_BIND_RUNTIME_PROBE_PS51_CONTRACT_PASS'
