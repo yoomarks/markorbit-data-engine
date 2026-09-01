@@ -226,6 +226,10 @@ try {
     $startupReady = $false
     $runtimeClickHouseVersion = $null
     $logTail = @()
+    $daemonLaunchExit = $null
+    $daemonLaunchLines = @()
+    $daemonPidObserved = $false
+    $daemonPidEvidence = @()
 
     if ($Apply) {
         Write-Host 'probe_stage=apply'
@@ -296,24 +300,43 @@ try {
             }
 
             Write-Host 'probe_step=start_daemon'
-            $startCommand = "set -eu; rm -f '$runtimeInstallDir/server.pid' '$runtimeInstallDir/console.log'; clickhouse server --config-file='$runtimeInstallDir/etc/config.xml' --daemon --pid-file='$runtimeInstallDir/server.pid'; test -s '$runtimeInstallDir/server.pid'"
+            $startCommand = "set -eu; rm -f '$runtimeInstallDir/server.pid' '$runtimeInstallDir/console.log'; : > '$runtimeInstallDir/console.log'; clickhouse server --config-file='$runtimeInstallDir/etc/config.xml' --daemon --pid-file='$runtimeInstallDir/server.pid' >> '$runtimeInstallDir/console.log' 2>&1"
             $start = Invoke-RuntimeShellBounded $startCommand -TimeoutSeconds 15 -AllowFailure
+            $daemonLaunchExit = $start['exit_code']
+            $daemonLaunchLines = @($start['lines'])
             if ($start['timed_out']) { $timedOutStep='start_daemon'; throw 'TIMEOUT starting ClickHouse daemon' }
-            if ($start['exit_code'] -ne 0) { throw "Unable to launch ClickHouse daemon: $(@($start['lines']) -join [Environment]::NewLine)" }
-            $serverStarted = $true
+
+            Write-Host 'probe_step=pid_wait'
+            for ($attempt=0; $attempt -lt 12; $attempt++) {
+                $pidProbe = Invoke-RuntimeShellBounded "if [ -s '$runtimeInstallDir/server.pid' ]; then cat '$runtimeInstallDir/server.pid'; exit 0; fi; exit 1" -TimeoutSeconds 5 -AllowFailure
+                $daemonPidEvidence += "attempt=$attempt|exit=$($pidProbe['exit_code'])|$(@($pidProbe['lines']) -join ';')"
+                if ($pidProbe['exit_code'] -eq 0) {
+                    $daemonPidObserved = $true
+                    $serverStarted = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 500
+            }
 
             Write-Host 'probe_step=readiness_wait'
             for ($attempt=0; $attempt -lt 12; $attempt++) {
                 $probe = Invoke-RuntimeTextBounded @('clickhouse','client','--host','127.0.0.1','--port',$SpikeNativePort.ToString(),'--query','SELECT 1') -TimeoutSeconds 5 -AllowFailure
-                if ($probe['exit_code'] -eq 0 -and ((@($probe['lines']) -join '').Trim() -eq '1')) { $startupReady = $true; break }
+                if ($probe['exit_code'] -eq 0 -and ((@($probe['lines']) -join '').Trim() -eq '1')) {
+                    $startupReady = $true
+                    $serverStarted = $true
+                    break
+                }
                 Start-Sleep -Seconds 1
             }
 
-            Write-Host 'probe_step=collect_logs'
-            $collectLogs = Invoke-RuntimeShellBounded "for f in '$runtimeInstallDir/log/error.log' '$runtimeInstallDir/log/server.log'; do echo ===`$f===; tail -n 160 `"`$f`" 2>/dev/null || true; done" -TimeoutSeconds 10 -AllowFailure
+            Write-Host 'probe_step=collect_startup_diagnostics'
+            $collectLogs = Invoke-RuntimeShellBounded "echo ===pid===; if [ -s '$runtimeInstallDir/server.pid' ]; then cat '$runtimeInstallDir/server.pid'; else echo missing; fi; echo ===process===; ps -eo pid=,ppid=,stat=,args= | grep -F '$runtimeInstallDir/etc/config.xml' | grep -v grep || true; for f in '$runtimeInstallDir/console.log' '$runtimeInstallDir/log/error.log' '$runtimeInstallDir/log/server.log'; do echo ===`$f===; tail -n 160 `"`$f`" 2>/dev/null || true; done" -TimeoutSeconds 10 -AllowFailure
             $logTail = @($collectLogs['lines'])
             @($logTail) | Set-Content -LiteralPath (Join-Path $evidenceDir 'startup-probe-v2-runtime.log') -Encoding UTF8
-            if (-not $startupReady) { throw "Minimal native ClickHouse V2 startup failed: $(@($logTail) -join [Environment]::NewLine)" }
+            if (-not $startupReady) {
+                $launchText = (@($daemonLaunchLines) -join [Environment]::NewLine)
+                throw "Minimal native ClickHouse V2 startup failed. daemon_launch_exit=$daemonLaunchExit daemon_pid_observed=$daemonPidObserved launch_output=$launchText diagnostics=$(@($logTail) -join [Environment]::NewLine)"
+            }
 
             $sqlVersion = Invoke-RuntimeTextBounded @('clickhouse','client','--host','127.0.0.1','--port',$SpikeNativePort.ToString(),'--query','SELECT version()') -TimeoutSeconds 5 -AllowFailure
             $runtimeClickHouseVersion = (@($sqlVersion['lines']) -join '').Trim()
@@ -360,6 +383,10 @@ try {
         runtime_clickhouse_version=$runtimeClickHouseVersion
         startup_ready=$startupReady
         config_extract_evidence=@($configExtractEvidence)
+        daemon_launch_exit=$daemonLaunchExit
+        daemon_launch_output=@($daemonLaunchLines)
+        daemon_pid_observed=$daemonPidObserved
+        daemon_pid_evidence=@($daemonPidEvidence)
         log_tail=@($logTail)
         worker_container_count_before=$workerCountBefore
         worker_container_count_after=$workerCountAfter
@@ -386,7 +413,12 @@ try {
     if ($timedOutStep) { Write-Host "timed_out_step=$timedOutStep" }
     Write-Host "startup_ready=$startupReady"
     Write-Host "runtime_clickhouse_version=$runtimeClickHouseVersion"
+    Write-Host "daemon_launch_exit=$daemonLaunchExit"
+    Write-Host "daemon_pid_observed=$daemonPidObserved"
+    foreach ($line in $daemonLaunchLines) { Write-Host "daemon_launch_output=$line" }
+    foreach ($line in $daemonPidEvidence) { Write-Host "daemon_pid_evidence=$line" }
     foreach ($line in $configExtractEvidence) { Write-Host "config_extract=$line" }
+    foreach ($line in $logTail) { Write-Host "startup_diagnostic=$line" }
     Write-Host "worker_container_count_before=$workerCountBefore"
     Write-Host "worker_container_count_after=$workerCountAfter"
     Write-Host "production_clickhouse_before_ready=$($productionBefore['ready'])"
@@ -395,6 +427,7 @@ try {
     Write-Host "server_stopped=$serverStopped"
     Write-Host "spike_unmount_performed=$spikeUnmountPerformed"
     foreach ($blocker in $blockers) { Write-Host "blocker=$blocker" }
+    Write-Host 'daemon_launch_pid_readiness_separated=True'
     Write-Host 'runtime_distro_unregister_performed=False'
     Write-Host 'spike_vhdx_delete_performed=False'
     Write-Host 'production_clickhouse_restart_performed=False'
