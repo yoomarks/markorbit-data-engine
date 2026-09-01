@@ -43,7 +43,7 @@ jobs:
             'WaitForExit($TimeoutSeconds * 1000)',
             'Stop-ConfigScopedServer',
             "Invoke-RuntimeTextBounded @('ps','-eo','pid=,comm=,args=')",
-            "$comm -notlike 'clickhouse*'",
+            '$comm -notlike ''clickhouse*''',
             '$argsText.Contains($ConfigPath)',
             'process_inspection_authority=native_ps_powershell_filter',
             'Unable to inspect config-scoped ClickHouse processes',
