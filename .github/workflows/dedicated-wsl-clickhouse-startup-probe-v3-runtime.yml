@@ -40,7 +40,7 @@ jobs:
             'probe_v3_stage=v2_preflight',
             'READY_FOR_NATIVE_STARTUP_PROBE_V2',
             '$previous = $ErrorActionPreference',
-            "$ErrorActionPreference = 'Continue'",
+            '$ErrorActionPreference = ''Continue''',
             '$output = @(& powershell.exe @args 2>&1)',
             '$exitCode = $LASTEXITCODE',
             'finally { $ErrorActionPreference = $previous }',
