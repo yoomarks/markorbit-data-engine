@@ -1,0 +1,73 @@
+name: Raw Cold Source Provenance Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-raw-cold-source-provenance.ps1'
+      - 'tests/test_raw_cold_source_provenance_contract.py'
+      - '.github/workflows/raw-cold-source-provenance-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze Raw Cold provenance under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scriptPath = Join-Path $PWD 'scripts\profile-raw-cold-source-provenance.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell parser errors detected.'
+          }
+
+          $text = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $required = @(
+            "RAW_COLD_SOURCE_PROVENANCE_V1",
+            "RAW_COLD_SOURCE_PROVENANCE_CAPTURED",
+            "RAW_COLD_SOURCE_PROVENANCE_DONE",
+            "[System.IO.Directory]::EnumerateFiles",
+            "migration_authorized=`$false",
+            "raw_copy_authorized=`$false",
+            "raw_move_authorized=`$false",
+            "raw_delete_authorized=`$false",
+            "us_package_2_authorized=`$false",
+            "us_bulk_authorized=`$false"
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing safety marker: $marker" }
+          }
+
+          $forbidden = @(
+            'Copy-Item',
+            'Move-Item',
+            'Remove-Item',
+            'robocopy',
+            'rsync',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Resize-VHD',
+            'New-VHD',
+            'mkfs.ext4',
+            'Format-Volume',
+            "'--shutdown'",
+            '--unregister',
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            '2023_5.zip',
+            '-Apply -All'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden mutation/replay marker present: $marker" }
+          }
+
+          Write-Host 'RAW_COLD_SOURCE_PROVENANCE_PS51_CONTRACT_PASS'
