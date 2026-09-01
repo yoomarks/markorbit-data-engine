@@ -43,6 +43,8 @@ jobs:
             'WaitForExit($TimeoutSeconds * 1000)',
             'Stop-ConfigScopedServer',
             "Invoke-RuntimeTextBounded @('ps','-eo','pid=,comm=,args=')",
+            '$processId = [string]$Matches[1]',
+            '$matched += "$processId|$comm|$argsText"',
             '$comm -notlike ''clickhouse*''',
             '$argsText.Contains($ConfigPath)',
             'process_inspection_authority=native_ps_powershell_filter',
@@ -71,6 +73,7 @@ jobs:
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
           }
           $forbidden = @(
+            '$pid = [string]$Matches[1]',
             'awk -v needle',
             '/proc/[0-9]*',
             '"$proc/cmdline"',
