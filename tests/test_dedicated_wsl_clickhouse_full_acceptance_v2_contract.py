@@ -41,6 +41,9 @@ def test_stop_uses_native_ps_and_powershell_filter_without_shell_quoting() -> No
     text = source()
     assert "Stop-ConfigScopedServer" in text
     assert "Invoke-RuntimeTextBounded @('ps','-eo','pid=,comm=,args=')" in text
+    assert "$processId = [string]$Matches[1]" in text
+    assert '$matched += "$processId|$comm|$argsText"' in text
+    assert "$pid = [string]$Matches[1]" not in text
     assert "$comm -notlike 'clickhouse*'" in text
     assert "$argsText.Contains($ConfigPath)" in text
     assert "process_inspection_authority=native_ps_powershell_filter" in text
