@@ -6,6 +6,7 @@ on:
       - 'scripts/run-wsl-noarg-unmount-recovery.ps1'
       - 'tests/test_wsl_noarg_unmount_recovery_contract.py'
       - '.github/workflows/wsl-noarg-unmount-recovery-runtime.yml'
+      - 'docs/incidents/2026-09-01-docker-sigbus-after-wsl-noarg-unmount.md'
   workflow_dispatch:
 
 concurrency:
@@ -79,5 +80,19 @@ jobs:
           )
           foreach ($marker in $forbidden) {
             if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+          }
+
+          $incidentPath = 'docs/incidents/2026-09-01-docker-sigbus-after-wsl-noarg-unmount.md'
+          if (-not (Test-Path -LiteralPath $incidentPath)) {
+            throw 'Missing Docker SIGBUS safety incident record.'
+          }
+          $incident = Get-Content -LiteralPath $incidentPath -Raw
+          foreach ($marker in @(
+            'Full Acceptance V3 remains frozen',
+            'D:\DockerData\DockerDesktopWSL',
+            'SIGBUS: bus error',
+            'no `wsl --unmount` without an explicit disk path'
+          )) {
+            if (-not $incident.Contains($marker)) { throw "Missing incident freeze marker: $marker" }
           }
           Write-Host 'WSL_NOARG_UNMOUNT_RECOVERY_PS51_CONTRACT_PASS'
