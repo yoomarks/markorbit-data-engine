@@ -31,19 +31,23 @@ function Assert-ExactMain([string]$Phase) {
     if (git status --porcelain) { throw "Working tree must be clean during $Phase." }
 }
 
-function Invoke-WslUnmountBounded {
+function Invoke-WslUnmountIdentityBounded {
     param(
         [Parameter(Mandatory = $true)][string]$VhdxPath,
+        [Parameter(Mandatory = $true)][ValidateSet('raw','extended')][string]$Identity,
         [int]$TimeoutSeconds = 30
     )
     $allowedVhdxPaths = @($diskSpecs | ForEach-Object { [string]$_['path'] })
     if ($allowedVhdxPaths -notcontains $VhdxPath) { throw "Refusing WSL detach outside retained spike VHDX scope: $VhdxPath" }
     if ($VhdxPath -match '[\s"]') { throw "Retained spike VHDX path must remain whitespace/quote free for exact WSL detach: $VhdxPath" }
 
+    $detachPath = if ($Identity -eq 'extended') { '\\?\' + $VhdxPath } else { $VhdxPath }
+    if ($detachPath -match '[\s"]') { throw "Resolved WSL detach identity must remain whitespace/quote free: $detachPath" }
+
     $stdoutPath = [System.IO.Path]::GetTempFileName()
     $stderrPath = [System.IO.Path]::GetTempFileName()
     try {
-        $argumentText = '--unmount ' + $VhdxPath
+        $argumentText = '--unmount ' + $detachPath
         $process = Start-Process -FilePath 'wsl.exe' -ArgumentList $argumentText -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
         $completed = $process.WaitForExit($TimeoutSeconds * 1000)
         $timedOut = -not $completed
@@ -59,11 +63,25 @@ function Invoke-WslUnmountBounded {
         if (Test-Path -LiteralPath $stdoutPath) { $lines += @(Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue) }
         if (Test-Path -LiteralPath $stderrPath) { $lines += @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) }
         $exitCode = if ($timedOut) { 124 } else { [int]$process.ExitCode }
-        return [ordered]@{ exit_code=$exitCode; timed_out=$timedOut; lines=@($lines) }
+        return [ordered]@{ identity=$Identity; detach_path=$detachPath; exit_code=$exitCode; timed_out=$timedOut; lines=@($lines) }
     }
     finally {
         [System.IO.File]::Delete($stdoutPath)
         [System.IO.File]::Delete($stderrPath)
+    }
+}
+
+function Get-WslVersionEvidence {
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& wsl.exe --version 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
+    return [ordered]@{
+        exit_code=$exitCode
+        lines=@($output | ForEach-Object { $_.ToString() })
     }
 }
 
@@ -104,6 +122,10 @@ try {
     & git fetch origin main | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch origin/main.' }
     Assert-ExactMain 'entry'
+
+    $wslVersion = Get-WslVersionEvidence
+    Write-Host "wsl_version_probe_exit=$($wslVersion['exit_code'])"
+    foreach ($line in @($wslVersion['lines'])) { Write-Host "wsl_version_evidence=$line" }
 
     $firstDecision = $null
     $retryDecision = $null
@@ -155,12 +177,14 @@ try {
             $staleRecoveryPerformed = $true
             foreach ($spec in $diskSpecs) {
                 $key = [string]$spec['key']
-                Write-Host "acceptance_v3_step=exact_unmount_$key"
-                $result = Invoke-WslUnmountBounded -VhdxPath ([string]$spec['path']) -TimeoutSeconds $MountTimeoutSeconds
-                $outputText = (@($result['lines']) -join ' | ')
-                $recoveryEvidence += [ordered]@{ key=$key; exit_code=$result['exit_code']; timed_out=$result['timed_out']; output=$outputText }
-                Write-Host "stale_recovery=$key|exit=$($result['exit_code'])|timed_out=$($result['timed_out'])|output=$outputText"
-                if ($result['timed_out']) { throw "Timed out reconciling stale WSL attachment for $key." }
+                foreach ($identity in @('raw','extended')) {
+                    Write-Host "acceptance_v3_step=exact_unmount_${key}_$identity"
+                    $result = Invoke-WslUnmountIdentityBounded -VhdxPath ([string]$spec['path']) -Identity $identity -TimeoutSeconds $MountTimeoutSeconds
+                    $outputText = (@($result['lines']) -join ' | ')
+                    $recoveryEvidence += [ordered]@{ key=$key; identity=$identity; detach_path=$result['detach_path']; exit_code=$result['exit_code']; timed_out=$result['timed_out']; output=$outputText }
+                    Write-Host "stale_recovery=$key|identity=$identity|detach_path=$($result['detach_path'])|exit=$($result['exit_code'])|timed_out=$($result['timed_out'])|output=$outputText"
+                    if ($result['timed_out']) { throw "Timed out reconciling stale WSL attachment for $key identity=$identity." }
+                }
             }
             Start-Sleep -Seconds 2
 
@@ -178,7 +202,8 @@ try {
     if ($retryDecision) { Write-Host "retry_decision=$retryDecision" }
     Write-Host "stale_attachment_recovery_performed=$staleRecoveryPerformed"
     Write-Host 'recovery_gate_authority=stable_ascii_v2_receipt'
-    Write-Host 'recovery_unmount_argument_authority=unquoted_exact_no_whitespace_retained_vhdx_path'
+    Write-Host 'recovery_unmount_argument_authority=dual_raw_extended_exact_retained_vhdx_identity'
+    Write-Host 'recovery_unmount_exit_authority=evidence_only_retry_v2_state_is_authoritative'
     Write-Host "recovery_gate_decision=$recoveryGateDecision"
     Write-Host "recovery_gate_stage=$recoveryGateStage"
     Write-Host "recovery_gate_server_stopped=$recoveryGateServerStopped"
@@ -186,6 +211,7 @@ try {
     Write-Host "recovery_gate_accepted_volume=$recoveryGateAcceptedVolume"
     Write-Host "recovery_gate_workers=$recoveryGateWorkers"
     Write-Host 'stale_attachment_recovery_scope=retained_spike_vhdx_only'
+    Write-Host 'stale_attachment_identity_attempts_per_vhdx=2'
     Write-Host 'stale_attachment_retry_limit=1'
     Write-Host 'wsl_shutdown_performed=False'
     Write-Host 'runtime_distro_unregister_performed=False'
