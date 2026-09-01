@@ -184,32 +184,23 @@ function Get-MountProbe([string]$MountName) {
 }
 
 function Get-ConfigScopedProcesses([string]$ConfigPath) {
-    $template = @'
-needle='__CONFIG__'
-for proc in /proc/[0-9]*; do
-  [ -r "$proc/comm" ] || continue
-  comm=$(cat "$proc/comm" 2>/dev/null || true)
-  case "$comm" in
-    clickhouse*) ;;
-    *) continue ;;
-  esac
-  args=$(tr '\000' ' ' < "$proc/cmdline" 2>/dev/null || true)
-  case "$args" in
-    *"$needle"*)
-      pid=${proc##*/}
-      printf '%s|%s\n' "$pid" "$args"
-      ;;
-  esac
-done
-exit 0
-'@
-    $command = $template.Replace('__CONFIG__',$ConfigPath)
-    $probe = Invoke-RuntimeShellBounded $command -TimeoutSeconds 8 -AllowFailure
+    $probe = Invoke-RuntimeTextBounded @('ps','-eo','pid=,comm=,args=') -TimeoutSeconds 8 -AllowFailure
     if ($probe['timed_out'] -or $probe['exit_code'] -ne 0) {
         $output = (@($probe['lines']) -join [Environment]::NewLine)
         throw "Unable to inspect config-scoped ClickHouse processes for $ConfigPath. exit=$($probe['exit_code']) timed_out=$($probe['timed_out']) output=$output"
     }
-    return @($probe['lines'] | Where-Object { $_.Trim() })
+    $matched = @()
+    foreach ($line in @($probe['lines'])) {
+        $text = ([string]$line).Trim()
+        if ($text -notmatch '^(\d+)\s+(\S+)\s+(.+)$') { continue }
+        $pid = [string]$Matches[1]
+        $comm = [string]$Matches[2]
+        $argsText = [string]$Matches[3]
+        if ($comm -notlike 'clickhouse*') { continue }
+        if (-not $argsText.Contains($ConfigPath)) { continue }
+        $matched += "$pid|$comm|$argsText"
+    }
+    return @($matched)
 }
 
 function Stop-ConfigScopedServer([string]$ConfigPath) {
@@ -608,7 +599,7 @@ try {
         runtime_clickhouse_version=$runtimeClickHouseVersion
         daemon_launch_exit=$daemonLaunchExit
         daemon_pid_observed=$daemonPidObserved
-        process_inspection_authority='procfs_comm_cmdline'
+        process_inspection_authority='native_ps_powershell_filter'
         residual_startup_processes_before=@($residualStartupBefore)
         residual_full_processes_before=@($residualFullBefore)
         residual_startup_cleanup=$residualStartupCleanup
@@ -654,7 +645,7 @@ try {
     Write-Host "runtime_clickhouse_version=$runtimeClickHouseVersion"
     Write-Host "daemon_launch_exit=$daemonLaunchExit"
     Write-Host "daemon_pid_observed=$daemonPidObserved"
-    Write-Host 'process_inspection_authority=procfs_comm_cmdline'
+    Write-Host 'process_inspection_authority=native_ps_powershell_filter'
     Write-Host "residual_startup_process_count_before=$($residualStartupBefore.Count)"
     Write-Host "residual_full_process_count_before=$($residualFullBefore.Count)"
     foreach ($mountResult in $mountEvidence) { Write-Host "native_disk=$($mountResult['key'])|ext4=$($mountResult['verified'])|state=$($mountResult['state'])" }
