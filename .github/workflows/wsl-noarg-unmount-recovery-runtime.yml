@@ -6,6 +6,7 @@ on:
       - 'scripts/run-wsl-noarg-unmount-recovery.ps1'
       - 'tests/test_wsl_noarg_unmount_recovery_contract.py'
       - '.github/workflows/wsl-noarg-unmount-recovery-runtime.yml'
+      - 'docs/incidents/2026-09-01-docker-sigbus-after-wsl-noarg-unmount.md'
   workflow_dispatch:
 
 concurrency:
@@ -17,7 +18,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse and freeze bounded no-arg WSL recovery under Windows PowerShell 5.1
+      - name: Parse and freeze disabled no-arg WSL recovery under Windows PowerShell 5.1
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -33,19 +34,14 @@ jobs:
             $errors | ForEach-Object { Write-Error $_.Message }
             throw 'PowerShell 5.1 parser errors found.'
           }
+
           $text = Get-Content -LiteralPath $path -Raw
           $required = @(
-            'READY_FOR_WSL_NOARG_UNMOUNT_RECOVERY',
-            'WSL_NOARG_UNMOUNT_RECOVERY_GO',
-            'WSL_NOARG_UNMOUNT_RECOVERY_BLOCKED',
-            "`$expectedOrphanLabel = 'mo_hot_cn_spike'",
-            'single_expected_labeled_orphan_and_zero_external_mounts',
-            'one_expected_orphan',
-            'no_foreign_spike_shape',
-            'no_external_mounts',
-            "ArgumentList '--unmount'",
-            'no_arg_unmount_attempt_limit=1',
-            'no_arg_unmount_exit_authority=evidence_only_post_lsblk_state_is_authoritative',
+            'PERMANENTLY_DISABLED_AFTER_DOCKER_DESKTOP_SIGBUS',
+            'WSL_NOARG_UNMOUNT_RECOVERY_PERMANENTLY_DISABLED',
+            'D:\DockerData\DockerDesktopWSL',
+            'no_arg_unmount_authorized=False',
+            'no_arg_unmount_performed=False',
             'wsl_mount_performed=False',
             'wsl_shutdown_performed=False',
             'runtime_distro_unregister_performed=False',
@@ -54,16 +50,16 @@ jobs:
             'production_clickhouse_mutation_performed=False',
             'accepted_volume_mutation_performed=False',
             'corpus_replay_performed=False',
-            'WSL_NOARG_UNMOUNT_RECOVERY_DONE'
+            'WSL_NOARG_UNMOUNT_RECOVERY_DISABLED_RECEIPT_DONE'
           )
           foreach ($marker in $required) {
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
           }
-          $unmountInvocation = "ArgumentList '--unmount'"
-          if ([regex]::Matches($text, [regex]::Escape($unmountInvocation)).Count -ne 1) {
-            throw 'Recovery must contain exactly one no-argument WSL unmount invocation.'
-          }
+
           $forbidden = @(
+            "ArgumentList '--unmount'",
+            "@('--unmount'",
+            'wsl.exe --unmount',
             "@('--mount'",
             "'--shutdown'",
             '--unregister',
@@ -80,4 +76,25 @@ jobs:
           foreach ($marker in $forbidden) {
             if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
           }
-          Write-Host 'WSL_NOARG_UNMOUNT_RECOVERY_PS51_CONTRACT_PASS'
+
+          if (-not $text.Contains('if ($Apply)')) {
+            throw 'Disabled operator must retain an explicit Apply fail-closed path.'
+          }
+          if (-not $text.Contains('permanently disabled after the Docker Desktop containerd SIGBUS incident')) {
+            throw 'Apply path must explain the permanent safety disablement.'
+          }
+
+          $incidentPath = 'docs/incidents/2026-09-01-docker-sigbus-after-wsl-noarg-unmount.md'
+          if (-not (Test-Path -LiteralPath $incidentPath)) {
+            throw 'Missing Docker SIGBUS safety incident record.'
+          }
+          $incident = Get-Content -LiteralPath $incidentPath -Raw
+          foreach ($marker in @(
+            'D:\DockerData\DockerDesktopWSL',
+            'SIGBUS: bus error',
+            'no `wsl --unmount` without an explicit disk path'
+          )) {
+            if (-not $incident.Contains($marker)) { throw "Missing incident safety marker: $marker" }
+          }
+
+          Write-Host 'WSL_NOARG_UNMOUNT_RECOVERY_DISABLED_PS51_CONTRACT_PASS'
