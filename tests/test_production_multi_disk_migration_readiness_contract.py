@@ -40,9 +40,10 @@ def test_readiness_reuses_read_only_host_inventory_and_proves_production_source(
         "SELECT countDistinct(table), count(), coalesce(sum(rows),0), coalesce(sum(bytes_on_disk),0) FROM system.parts WHERE active",
         "ACCEPTED_VOLUME_IDENTITY_MISMATCH",
         "RAW_DATA_PATH_NOT_ON_F",
-        "drive_D_total_bytes=",
-        "drive_E_total_bytes=",
-        "drive_F_total_bytes=",
+        "foreach ($letter in @('D:','E:','F:'))",
+        'Write-Host "drive_${key}_total_bytes=',
+        'Write-Host "drive_${key}_free_bytes=',
+        'Write-Host "drive_${key}_filesystem=',
     ):
         assert marker in text
 
