@@ -1,0 +1,87 @@
+name: Raw Bind Cutover Preflight Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-raw-bind-cutover-to-f.ps1'
+      - 'tests/test_raw_bind_cutover_preflight_contract.py'
+      - '.github/workflows/raw-bind-cutover-preflight-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze joint Raw bind cutover preflight under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scriptPath = Join-Path $PWD 'scripts\preflight-raw-bind-cutover-to-f.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell parser errors detected.'
+          }
+
+          $text = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $required = @(
+            'RAW_BIND_CUTOVER_PREFLIGHT_V1',
+            'RAW_BIND_CUTOVER_PREFLIGHT_READY',
+            'RAW_BIND_CUTOVER_PREFLIGHT_BLOCKED',
+            'RAW_BIND_CUTOVER_PREFLIGHT_DONE',
+            'JOINT_RAW_BIND_CUTOVER_APPLY',
+            'F:/MarkOrbitData/raw',
+            'proposed_RAW_DATA_PATH=$proposedComposePath',
+            'proposed_VISUAL_RAW_PATH=$proposedComposePath',
+            "proposed_VISUAL_PROCESSED_PATH='UNCHANGED'",
+            'VISUAL_RAW_NOT_ALIAS_OF_LEGACY_RAW',
+            'VISUAL_PROCESSED_PATH_UNDER_LEGACY_D_RAW',
+            'CURRENT_SHA256_PARITY_FAILED',
+            'RAW_CONSUMER_CONTAINER_RUNNING',
+            'markorbit-data-engine_clickhouse_data',
+            'env_change_authorized=$false',
+            'raw_delete_authorized=$false'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing safety marker: $marker" }
+          }
+
+          if ($text.Contains('[switch]$Apply')) {
+            throw 'Read-only cutover preflight must not expose Apply.'
+          }
+
+          $forbidden = @(
+            'robocopy.exe',
+            'Copy-Item',
+            'Move-Item',
+            'Remove-Item',
+            'Clear-Content',
+            'Set-Content -LiteralPath $envPath',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Resize-VHD',
+            'New-VHD',
+            'mkfs.ext4',
+            'Format-Volume',
+            '--shutdown',
+            '--unregister',
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            "compose','up",
+            "compose','down",
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden mutation/replay marker present: $marker" }
+          }
+
+          Write-Host 'RAW_BIND_CUTOVER_PREFLIGHT_PS51_CONTRACT_PASS'
