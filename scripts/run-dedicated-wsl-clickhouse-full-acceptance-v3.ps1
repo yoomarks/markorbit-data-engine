@@ -36,10 +36,14 @@ function Invoke-WslUnmountBounded {
         [Parameter(Mandatory = $true)][string]$VhdxPath,
         [int]$TimeoutSeconds = 30
     )
+    $allowedVhdxPaths = @($diskSpecs | ForEach-Object { [string]$_['path'] })
+    if ($allowedVhdxPaths -notcontains $VhdxPath) { throw "Refusing WSL detach outside retained spike VHDX scope: $VhdxPath" }
+    if ($VhdxPath -match '[\s"]') { throw "Retained spike VHDX path must remain whitespace/quote free for exact WSL detach: $VhdxPath" }
+
     $stdoutPath = [System.IO.Path]::GetTempFileName()
     $stderrPath = [System.IO.Path]::GetTempFileName()
     try {
-        $argumentText = '--unmount "' + ($VhdxPath.Replace('"','\"')) + '"'
+        $argumentText = '--unmount ' + $VhdxPath
         $process = Start-Process -FilePath 'wsl.exe' -ArgumentList $argumentText -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
         $completed = $process.WaitForExit($TimeoutSeconds * 1000)
         $timedOut = -not $completed
@@ -47,10 +51,14 @@ function Invoke-WslUnmountBounded {
             try { $process.Kill() } catch { }
             try { $process.WaitForExit() } catch { }
         }
+        else {
+            $process.WaitForExit()
+            $process.Refresh()
+        }
         $lines = @()
         if (Test-Path -LiteralPath $stdoutPath) { $lines += @(Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue) }
         if (Test-Path -LiteralPath $stderrPath) { $lines += @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) }
-        $exitCode = if ($timedOut) { 124 } else { $process.ExitCode }
+        $exitCode = if ($timedOut) { 124 } else { [int]$process.ExitCode }
         return [ordered]@{ exit_code=$exitCode; timed_out=$timedOut; lines=@($lines) }
     }
     finally {
@@ -170,6 +178,7 @@ try {
     if ($retryDecision) { Write-Host "retry_decision=$retryDecision" }
     Write-Host "stale_attachment_recovery_performed=$staleRecoveryPerformed"
     Write-Host 'recovery_gate_authority=stable_ascii_v2_receipt'
+    Write-Host 'recovery_unmount_argument_authority=unquoted_exact_no_whitespace_retained_vhdx_path'
     Write-Host "recovery_gate_decision=$recoveryGateDecision"
     Write-Host "recovery_gate_stage=$recoveryGateStage"
     Write-Host "recovery_gate_server_stopped=$recoveryGateServerStopped"
