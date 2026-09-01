@@ -59,7 +59,8 @@ jobs:
           foreach ($marker in $required) {
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
           }
-          if (($text.Split("ArgumentList '--unmount'").Count - 1) -ne 1) {
+          $unmountInvocation = "ArgumentList '--unmount'"
+          if ([regex]::Matches($text, [regex]::Escape($unmountInvocation)).Count -ne 1) {
             throw 'Recovery must contain exactly one no-argument WSL unmount invocation.'
           }
           $forbidden = @(
