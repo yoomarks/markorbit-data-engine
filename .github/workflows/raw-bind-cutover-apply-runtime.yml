@@ -1,0 +1,117 @@
+name: Raw Bind Cutover Apply Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-raw-bind-cutover-to-f.ps1'
+      - 'tests/test_raw_bind_cutover_apply_contract.py'
+      - '.github/workflows/raw-bind-cutover-apply-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise joint Raw bind cutover helpers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scriptPath = Join-Path $PWD 'scripts\run-raw-bind-cutover-to-f.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell parser errors detected.'
+          }
+
+          $text = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $required = @(
+            'RAW_BIND_CUTOVER_APPLY_V1',
+            'RAW_BIND_CUTOVER_READY_FOR_APPLY',
+            'RAW_BIND_CUTOVER_APPLY_GO',
+            'RAW_BIND_CUTOVER_BLOCKED',
+            'RAW_BIND_CUTOVER_DONE',
+            'RAW_BIND_RUNTIME_PROBE',
+            'F:/MarkOrbitData/raw',
+            'preflight-raw-bind-cutover-to-f.ps1',
+            'compose --profile mark-image --profile qcc config --format json',
+            'automatic_env_rollback',
+            'RAW_BIND_RUNTIME_PROBE_NOT_YET_ACCEPTED',
+            'VISUAL_PROCESSED_PATH_UNDER_LEGACY_D_RAW',
+            'raw_delete_authorized=$false',
+            'docker_recreate_performed=$false'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing cutover marker: $marker" }
+          }
+
+          $forbidden = @(
+            'robocopy.exe',
+            'Copy-Item',
+            'Remove-Item',
+            'Clear-Content',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Resize-VHD',
+            'New-VHD',
+            'mkfs.ext4',
+            'Format-Volume',
+            '--shutdown',
+            '--unregister',
+            "compose','up",
+            "compose','down",
+            "compose','start",
+            "compose','restart",
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden mutation/replay marker present: $marker" }
+          }
+
+          $helperNames = @(
+            'Get-DotEnvValues',
+            'Get-Utf8TextFromBytes',
+            'Get-Utf8Bytes',
+            'Get-EnvLines',
+            'Get-NonTargetEnvText',
+            'Set-JointRawEnvText'
+          )
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) helper functions, found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) {
+            Invoke-Expression $functionAst.Extent.Text
+          }
+
+          $fixture = "RAW_DATA_PATH=D:/legacy/raw`r`n`r`nSECRET_VALUE=keep-me`r`nVISUAL_PROCESSED_PATH=D:/legacy/raw/visual_processed`r`n"
+          $nonTargetBefore = Get-NonTargetEnvText $fixture
+          $updated = Set-JointRawEnvText -Text $fixture -ComposePath 'F:/MarkOrbitData/raw'
+          $lines = @(Get-EnvLines $updated)
+          $raw = @(Get-DotEnvValues -Lines $lines -Name 'RAW_DATA_PATH')
+          $visualRaw = @(Get-DotEnvValues -Lines $lines -Name 'VISUAL_RAW_PATH')
+          $processed = @(Get-DotEnvValues -Lines $lines -Name 'VISUAL_PROCESSED_PATH')
+          if ($raw.Count -ne 1 -or $raw[0] -ne 'F:/MarkOrbitData/raw') { throw 'RAW_DATA_PATH helper cutover failed.' }
+          if ($visualRaw.Count -ne 1 -or $visualRaw[0] -ne 'F:/MarkOrbitData/raw') { throw 'VISUAL_RAW_PATH helper cutover failed.' }
+          if ($processed.Count -ne 1 -or $processed[0] -ne 'D:/legacy/raw/visual_processed') { throw 'VISUAL_PROCESSED_PATH changed unexpectedly.' }
+          if ((Get-NonTargetEnvText $updated) -ne $nonTargetBefore) { throw 'Non-target dotenv content changed.' }
+
+          [byte[]]$roundBytes = Get-Utf8Bytes -Text $updated -WithBom $false
+          $round = Get-Utf8TextFromBytes $roundBytes
+          if ([string]$round['text'] -ne $updated) { throw 'UTF-8 round trip failed.' }
+
+          Write-Host 'RAW_BIND_CUTOVER_APPLY_PS51_CONTRACT_PASS'
