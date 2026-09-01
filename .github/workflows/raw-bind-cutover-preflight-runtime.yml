@@ -17,13 +17,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse and freeze joint Raw bind cutover preflight under Windows PowerShell 5.1
+      - name: Parse and exercise joint Raw bind cutover preflight under Windows PowerShell 5.1
         shell: powershell
         run: |
           $scriptPath = Join-Path $PWD 'scripts\preflight-raw-bind-cutover-to-f.ps1'
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
           if ($errors.Count -ne 0) {
             $errors | ForEach-Object { Write-Error $_.Message }
             throw 'PowerShell parser errors detected.'
@@ -45,11 +45,37 @@ jobs:
             'CURRENT_SHA256_PARITY_FAILED',
             'RAW_CONSUMER_CONTAINER_RUNNING',
             'markorbit-data-engine_clickhouse_data',
+            '[AllowEmptyString()]',
+            '[AllowEmptyCollection()]',
             'env_change_authorized=$false',
             'raw_delete_authorized=$false'
           )
           foreach ($marker in $required) {
             if (-not $text.Contains($marker)) { throw "Missing safety marker: $marker" }
+          }
+
+          $dotenvFunction = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Get-DotEnvValues'
+          }, $true)
+          if ($null -eq $dotenvFunction) { throw 'Get-DotEnvValues AST not found.' }
+          Invoke-Expression $dotenvFunction.Extent.Text
+
+          $fixtureLines = @(
+            'RAW_DATA_PATH=./raw_data',
+            '',
+            '# normal dotenv separator/comment area',
+            'VISUAL_RAW_PATH=./raw_data',
+            ''
+          )
+          $rawValues = @(Get-DotEnvValues -Lines $fixtureLines -Name 'RAW_DATA_PATH')
+          if ($rawValues.Count -ne 1 -or $rawValues[0] -ne './raw_data') {
+            throw 'Blank-line dotenv regression failed.'
+          }
+          $emptyValues = @(Get-DotEnvValues -Lines @() -Name 'RAW_DATA_PATH')
+          if ($emptyValues.Count -ne 0) {
+            throw 'Empty dotenv collection regression failed.'
           }
 
           if ($text.Contains('[switch]$Apply')) {
