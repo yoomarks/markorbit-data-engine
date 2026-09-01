@@ -159,9 +159,9 @@ try {
         }
 
         Write-Host 'probe_v3_stage=v2_apply'
-        $apply = Invoke-V2 -ApplyV2
-        $nestedDecision = $apply['decision']
-        if ($apply['exit_code'] -ne 0) { throw "V2 apply process exited $($apply['exit_code'])." }
+        $v2ApplyResult = Invoke-V2 -ApplyV2
+        $nestedDecision = $v2ApplyResult['decision']
+        if ($v2ApplyResult['exit_code'] -ne 0) { throw "V2 apply process exited $($v2ApplyResult['exit_code'])." }
 
         Write-Host 'probe_v3_stage=state_authoritative_cleanup'
         $allDetached = $true
@@ -198,6 +198,7 @@ try {
     if ($nestedDecision) { Write-Host "nested_decision=$nestedDecision" }
     foreach ($advisory in $advisories) { Write-Host "advisory=$advisory" }
     Write-Host 'child_powershell_stderr_capture_safe=True'
+    Write-Host 'v3_apply_switch_collision_safe=True'
     Write-Host 'mount_acceptance_authority=findmnt_ext4_state'
     Write-Host 'unmount_acceptance_authority=findmnt_detached_state'
     Write-Host 'runtime_distro_unregister_performed=False'
