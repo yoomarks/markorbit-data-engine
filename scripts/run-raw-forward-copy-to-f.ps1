@@ -94,7 +94,8 @@ function Get-TreeManifest([string]$Root) {
 function Get-ManifestStats([object[]]$Manifest) {
     $bytes = [int64]0
     foreach ($item in @($Manifest)) { $bytes += [int64]$item.length }
-    return [ordered]@{ file_count=[int64]@($Manifest).Count; total_bytes=$bytes }
+    $count = [int64](@($Manifest).Count)
+    return [ordered]@{ file_count=$count; total_bytes=$bytes }
 }
 
 function Get-WorkerContainerCount {
@@ -207,6 +208,8 @@ try {
     Write-Host 'copy_stage=target_gate'
     $targetFullPath = [System.IO.Path]::GetFullPath($TargetRawRoot)
     $targetDriveRoot = [System.IO.Path]::GetPathRoot($targetFullPath)
+    $targetPathExists = Test-Path -LiteralPath $targetFullPath
+    $targetIsDirectory = Test-Path -LiteralPath $targetFullPath -PathType Container
     $compatibility = Compare-TargetCompatibility $sourceManifestBefore $targetFullPath
     $targetBeforeManifest = @($compatibility['target_manifest'])
     $targetBeforeStats = Get-ManifestStats $targetBeforeManifest
@@ -231,6 +234,7 @@ try {
     if ([int64]$sourceStatsBefore['file_count'] -le 0 -or [int64]$sourceStatsBefore['total_bytes'] -le 0) { $blockers += 'SOURCE_RAW_EMPTY' }
     if ($targetDriveRoot -ne 'F:\') { $blockers += 'TARGET_RAW_NOT_ON_F' }
     if ($sourceRoot.TrimEnd('\').Equals($targetFullPath.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) { $blockers += 'SOURCE_TARGET_SAME_PATH' }
+    if ($targetPathExists -and -not $targetIsDirectory) { $blockers += 'TARGET_RAW_PATH_NOT_DIRECTORY' }
     if ([string]$fVolume.FileSystem -ne 'NTFS') { $blockers += 'TARGET_F_FILESYSTEM_NOT_NTFS' }
     if ($foreignFilesBefore.Count -ne 0) { $blockers += 'TARGET_CONTAINS_FOREIGN_FILES' }
     if ($workerBefore -ne 0) { $blockers += 'WORKER_CONTAINER_COUNT_NOT_ZERO' }
@@ -356,6 +360,7 @@ try {
     else {
         $decision = if ($readyForApply) { 'RAW_FORWARD_COPY_READY_FOR_APPLY' } else { 'RAW_FORWARD_COPY_BLOCKED' }
     }
+    $nextGate = if ($applyAccepted) { 'RAW_DATA_PATH_CUTOVER_PREFLIGHT' } else { 'NONE' }
 
     $receipt = [ordered]@{
         schema='RAW_FORWARD_COPY_V1'
@@ -384,7 +389,7 @@ try {
         hash_mismatch_count=$hashMismatchCount
         hash_mismatch_sample=@($hashMismatchSample)
         blockers=@($allBlockers)
-        next_gate=if ($applyAccepted) { 'RAW_DATA_PATH_CUTOVER_PREFLIGHT' } else { 'NONE' }
+        next_gate=$nextGate
         source_delete_authorized=$false
         env_change_authorized=$false
         raw_move_authorized=$false
