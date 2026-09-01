@@ -41,7 +41,7 @@ jobs:
             'SOURCE_RAW_NOT_ON_D',
             'TARGET_CONTAINS_FOREIGN_FILES',
             'F_HEADROOM_BELOW_RESERVE_AFTER_COPY',
-            'robocopy.exe',
+            '& robocopy.exe @robocopyArgs',
             "'/E'",
             "'/COPY:DAT'",
             "'/DCOPY:DAT'",
@@ -56,11 +56,12 @@ jobs:
             if (-not $text.Contains($marker)) { throw "Missing safety marker: $marker" }
           }
 
-          if (($text.Split('robocopy.exe').Count - 1) -ne 1) {
-            throw 'Expected exactly one robocopy.exe invocation.'
+          $copyInvocation = '& robocopy.exe @robocopyArgs'
+          if (($text.Split($copyInvocation).Count - 1) -ne 1) {
+            throw 'Expected exactly one guarded robocopy invocation.'
           }
           $applyGate = $text.IndexOf('if ($Apply -and $readyForApply)')
-          $copyCall = $text.IndexOf('& robocopy.exe @robocopyArgs')
+          $copyCall = $text.IndexOf($copyInvocation)
           if ($applyGate -lt 0 -or $copyCall -lt 0 -or $applyGate -gt $copyCall) {
             throw 'Robocopy must remain behind the explicit Apply + readiness gate.'
           }
