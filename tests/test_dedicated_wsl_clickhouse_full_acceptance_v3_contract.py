@@ -32,7 +32,7 @@ def test_v3_reuses_v2_and_retries_only_once_for_stable_receipt_mount_failure() -
     assert "WSL_E_DISK_ALREADY_MOUNTED" not in text
 
 
-def test_stale_recovery_is_exact_bounded_unmount_for_retained_spike_vhdx_only() -> None:
+def test_stale_recovery_is_exact_bounded_unquoted_unmount_for_retained_spike_vhdx_only() -> None:
     text = source()
     for path in (
         r"D:\MarkOrbitData\spike\hot_cn_spike.vhdx",
@@ -43,6 +43,13 @@ def test_stale_recovery_is_exact_bounded_unmount_for_retained_spike_vhdx_only() 
         assert path in text
     assert "Invoke-WslUnmountBounded" in text
     assert "WaitForExit($TimeoutSeconds * 1000)" in text
+    assert "$argumentText = '--unmount ' + $VhdxPath" in text
+    assert "$allowedVhdxPaths -notcontains $VhdxPath" in text
+    assert "$VhdxPath -match '[\\s\"]'" in text
+    assert "$process.Refresh()" in text
+    assert "[int]$process.ExitCode" in text
+    assert "recovery_unmount_argument_authority=unquoted_exact_no_whitespace_retained_vhdx_path" in text
+    assert "--unmount \"" not in text
     assert "@('--unmount'" not in text  # no unbounded native invocation helper path
     assert "stale_attachment_recovery_scope=retained_spike_vhdx_only" in text
     assert "wsl --shutdown" not in text.lower()
