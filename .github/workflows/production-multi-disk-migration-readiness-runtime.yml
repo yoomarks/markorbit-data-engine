@@ -1,0 +1,107 @@
+name: Production Multi-Disk Migration Readiness Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-multi-disk-migration-readiness.ps1'
+      - 'scripts/inventory-global-multi-disk-host.ps1'
+      - 'tests/test_production_multi_disk_migration_readiness_contract.py'
+      - '.github/workflows/production-multi-disk-migration-readiness-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze production migration readiness under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/profile-production-multi-disk-migration-readiness.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found in production migration readiness.'
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            '[string]$ExpectedMainSha',
+            'Assert-ExactMain ''entry''',
+            'Assert-ExactMain ''exit''',
+            'Production migration readiness requires elevated Administrator PowerShell.',
+            'inventory-global-multi-disk-host.ps1',
+            'DEDICATED_WSL_CLICKHOUSE_GO',
+            '1d990dc8ab44bdb827538961309c6c33fb38234f',
+            'host.docker.internal',
+            'PRODUCTION_MULTI_DISK_MIGRATION_READINESS_READY_FOR_SIZING_PLAN',
+            'PRODUCTION_MULTI_DISK_MIGRATION_READINESS_BLOCKED',
+            'legacy_windows_bind_cutover_authorized=$false',
+            'live_migration_authorized=$false',
+            'vhdx_create_authorized=$false',
+            'source_volume_delete_authorized=$false',
+            'full_cn_replay_authorized=$false',
+            'us_package_2_authorized=$false',
+            'us_bulk_authorized=$false',
+            'source_copy_performed=$false',
+            'corpus_replay_performed=$false',
+            'PRODUCTION_MULTI_DISK_MIGRATION_READINESS_DONE'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing required readiness marker: $marker" }
+          }
+
+          $forbidden = @(
+            "@('--mount'",
+            "@('--unmount'",
+            "'--shutdown'",
+            '--unregister',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Resize-VHD',
+            'New-VHD',
+            'mkfs.ext4',
+            'Format-Volume',
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            "docker','compose','stop",
+            "docker','compose','down",
+            'Copy-Item',
+            'robocopy',
+            'rsync',
+            '2023_5.zip'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden readiness behavior found: $marker" }
+          }
+
+          $inventoryPath = 'scripts/inventory-global-multi-disk-host.ps1'
+          $inventoryTokens = $null
+          $inventoryErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $inventoryPath),
+            [ref]$inventoryTokens,
+            [ref]$inventoryErrors
+          )
+          if ($inventoryErrors.Count -ne 0) {
+            $inventoryErrors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found in host inventory dependency.'
+          }
+          $inventoryText = Get-Content -LiteralPath $inventoryPath -Raw
+          foreach ($marker in @('GLOBAL_MULTI_DISK_HOST_INVENTORY_V1','read_only = $true','vhdx_create_performed = $false','vhdx_mount_performed = $false','clickhouse_mutation_performed = $false','corpus_replay_performed = $false')) {
+            if (-not $inventoryText.Contains($marker)) { throw "Host inventory dependency lost read-only marker: $marker" }
+          }
+
+          Write-Host 'PRODUCTION_MULTI_DISK_MIGRATION_READINESS_PS51_CONTRACT_PASS'
