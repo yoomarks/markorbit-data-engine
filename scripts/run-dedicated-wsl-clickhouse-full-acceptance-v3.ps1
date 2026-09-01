@@ -113,6 +113,7 @@ try {
     $resumeGateReady = $false
     $resumeGateDecision = $false
     $resumeGateOrphanFree = $false
+    $resumeGateMntWslClear = $false
     $resumeGateProduction = $false
     $resumeGateAcceptedVolume = $false
     $resumeGateWorkers = $false
@@ -141,6 +142,7 @@ try {
         $profileMntWslMountCount = $profile['mnt_wsl_mount_count']
         $resumeGateDecision = [bool]($profile['decision'] -eq 'WSL_EXTERNAL_DISK_STATE_PROFILE_DONE')
         $resumeGateOrphanFree = [bool]($profileOrphanCount -eq '0')
+        $resumeGateMntWslClear = [bool]($profileMntWslMountCount -eq '0')
         $resumeGateProduction = [bool]($profile['production_after_ready'] -eq 'True')
         $resumeGateAcceptedVolume = [bool]($profile['accepted_volume_after_present'] -eq 'True')
         $resumeGateWorkers = [bool]($profile['worker_count_after'] -eq '0')
@@ -153,12 +155,13 @@ try {
         $resumeGateReady = [bool](
             $resumeGateDecision -and
             $resumeGateOrphanFree -and
+            $resumeGateMntWslClear -and
             $resumeGateProduction -and
             $resumeGateAcceptedVolume -and
             $resumeGateWorkers -and
             $resumeGateProfileReadOnly
         )
-        Write-Host "acceptance_v3_resume_gate=decision:$resumeGateDecision|orphan_free:$resumeGateOrphanFree|production:$resumeGateProduction|accepted_volume:$resumeGateAcceptedVolume|workers:$resumeGateWorkers|profile_read_only:$resumeGateProfileReadOnly|authorized:$resumeGateReady"
+        Write-Host "acceptance_v3_resume_gate=decision:$resumeGateDecision|orphan_free:$resumeGateOrphanFree|mnt_wsl_clear:$resumeGateMntWslClear|production:$resumeGateProduction|accepted_volume:$resumeGateAcceptedVolume|workers:$resumeGateWorkers|profile_read_only:$resumeGateProfileReadOnly|authorized:$resumeGateReady"
         Write-Host "acceptance_v3_resume_profile=orphan_ext4_1g_candidate_count:$profileOrphanCount|mnt_wsl_mount_count:$profileMntWslMountCount"
 
         if (-not $resumeGateReady) {
@@ -181,6 +184,7 @@ try {
     Write-Host "resume_gate_ready=$resumeGateReady"
     Write-Host "resume_gate_decision=$resumeGateDecision"
     Write-Host "resume_gate_orphan_free=$resumeGateOrphanFree"
+    Write-Host "resume_gate_mnt_wsl_clear=$resumeGateMntWslClear"
     Write-Host "resume_gate_production=$resumeGateProduction"
     Write-Host "resume_gate_accepted_volume=$resumeGateAcceptedVolume"
     Write-Host "resume_gate_workers=$resumeGateWorkers"
