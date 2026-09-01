@@ -26,7 +26,7 @@ function Invoke-NativeText {
     finally { $ErrorActionPreference = $previous }
     $lines = @($output | ForEach-Object { $_.ToString() })
     if (-not $AllowFailure -and $exitCode -ne 0) {
-        throw "$Command exited $exitCode: $($lines -join ' | ')"
+        throw "$Command exited ${exitCode}: $($lines -join ' | ')"
     }
     return [ordered]@{ exit_code=$exitCode; lines=$lines }
 }
