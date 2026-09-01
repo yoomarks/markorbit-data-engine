@@ -38,6 +38,7 @@ jobs:
             '[switch]$Apply',
             'run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1',
             'recovery_gate_authority=stable_ascii_v2_receipt',
+            'recovery_unmount_argument_authority=unquoted_exact_no_whitespace_retained_vhdx_path',
             'acceptance_v3_recovery_gate=',
             'acceptance_v3_stage=stale_attachment_recovery',
             'acceptance_v3_stage=v2_retry_once',
@@ -48,6 +49,11 @@ jobs:
             '$first[''production_after_ready''] -eq ''True''',
             '$first[''accepted_volume_after_present''] -eq ''True''',
             '$first[''worker_count_after''] -eq ''0''',
+            '$allowedVhdxPaths -notcontains $VhdxPath',
+            'Retained spike VHDX path must remain whitespace/quote free for exact WSL detach',
+            '$argumentText = ''--unmount '' + $VhdxPath',
+            '$process.Refresh()',
+            '[int]$process.ExitCode',
             'recovery_gate_decision=',
             'recovery_gate_stage=',
             'recovery_gate_server_stopped=',
@@ -68,6 +74,7 @@ jobs:
           }
           $forbidden = @(
             'WSL_E_DISK_ALREADY_MOUNTED',
+            '--unmount "',
             '--unregister',
             'mkfs.ext4',
             'wsl --shutdown',
