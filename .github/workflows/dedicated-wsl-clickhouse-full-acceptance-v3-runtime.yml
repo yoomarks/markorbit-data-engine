@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - 'scripts/run-dedicated-wsl-clickhouse-full-acceptance-v3.ps1'
+      - 'scripts/profile-wsl-external-disk-state.ps1'
       - 'tests/test_dedicated_wsl_clickhouse_full_acceptance_v3_contract.py'
+      - 'tests/test_wsl_external_disk_state_profile_contract.py'
       - '.github/workflows/dedicated-wsl-clickhouse-full-acceptance-v3-runtime.yml'
   workflow_dispatch:
 
@@ -17,7 +19,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Parse and freeze full acceptance V3 under Windows PowerShell 5.1
+      - name: Parse and freeze post-incident full acceptance V3 under Windows PowerShell 5.1
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -31,45 +33,34 @@ jobs:
           )
           if ($errors.Count -ne 0) {
             $errors | ForEach-Object { Write-Error $_.Message }
-            throw 'PowerShell 5.1 parser errors found.'
+            throw 'PowerShell 5.1 parser errors found in V3.'
           }
           $text = Get-Content -LiteralPath $path -Raw
           $required = @(
             '[switch]$Apply',
             'run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1',
-            'recovery_gate_authority=stable_ascii_v2_receipt',
-            'recovery_unmount_argument_authority=dual_raw_extended_exact_retained_vhdx_identity',
-            'recovery_unmount_exit_authority=evidence_only_retry_v2_state_is_authoritative',
-            'acceptance_v3_recovery_gate=',
-            'acceptance_v3_stage=stale_attachment_recovery',
-            'acceptance_v3_stage=v2_retry_once',
-            'stale_attachment_retry_limit=1',
-            'stale_attachment_identity_attempts_per_vhdx=2',
-            'stale_attachment_recovery_scope=retained_spike_vhdx_only',
-            '$first[''runtime_stage''] -eq ''mount_external_disks''',
-            '$first[''server_stopped''] -eq ''True''',
-            '$first[''production_after_ready''] -eq ''True''',
-            '$first[''accepted_volume_after_present''] -eq ''True''',
-            '$first[''worker_count_after''] -eq ''0''',
-            'Invoke-WslUnmountIdentityBounded',
-            '[ValidateSet(''raw'',''extended'')]',
-            '$detachPath = if ($Identity -eq ''extended'') { ''\\?\'' + $VhdxPath } else { $VhdxPath }',
-            'foreach ($identity in @(''raw'',''extended''))',
-            '$allowedVhdxPaths -notcontains $VhdxPath',
-            'Resolved WSL detach identity must remain whitespace/quote free',
-            '$argumentText = ''--unmount '' + $detachPath',
-            '$process.Refresh()',
-            '[int]$process.ExitCode',
+            'profile-wsl-external-disk-state.ps1',
+            'acceptance_v3_stage=post_incident_read_only_resume_gate',
+            'acceptance_v3_resume_gate=',
+            'acceptance_v3_stage=v2_single_attempt',
+            '$profileOrphanCount -eq ''0''',
+            '$profileMntWslMountCount -eq ''0''',
+            '$profile[''production_after_ready''] -eq ''True''',
+            '$profile[''accepted_volume_after_present''] -eq ''True''',
+            '$profile[''worker_count_after''] -eq ''0''',
+            '$profile[''no_arg_unmount_authorized''] -eq ''False''',
+            '$profile[''wsl_mount_performed''] -eq ''False''',
+            '$profile[''wsl_unmount_performed''] -eq ''False''',
+            '$profile[''wsl_shutdown_performed''] -eq ''False''',
+            'resume_gate_mnt_wsl_clear=',
+            'automatic_stale_attachment_recovery_authorized=False',
+            'automatic_stale_attachment_recovery_performed=False',
+            'automatic_stale_attachment_retry_limit=0',
+            'no_arg_wsl_unmount_authorized=False',
+            'no_arg_wsl_unmount_performed=False',
             'Get-WslVersionEvidence',
             'wsl_version_probe_exit=',
             'wsl_version_evidence=',
-            'recovery_gate_decision=',
-            'recovery_gate_stage=',
-            'recovery_gate_server_stopped=',
-            'recovery_gate_production=',
-            'recovery_gate_accepted_volume=',
-            'recovery_gate_workers=',
-            'WaitForExit($TimeoutSeconds * 1000)',
             'wsl_shutdown_performed=False',
             'runtime_distro_unregister_performed=False',
             'spike_vhdx_delete_performed=False',
@@ -79,20 +70,56 @@ jobs:
             'DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V3_DONE'
           )
           foreach ($marker in $required) {
-            if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
+            if (-not $text.Contains($marker)) { throw "Missing required V3 marker: $marker" }
+          }
+          if (($text -split [regex]::Escape('Invoke-V2 -ApplyV2')).Count -ne 2) {
+            throw 'V3 must contain exactly one V2 apply invocation.'
           }
           $forbidden = @(
-            'WSL_E_DISK_ALREADY_MOUNTED',
-            '--unmount "',
+            '--unmount',
+            '--shutdown',
             '--unregister',
+            'Invoke-WslUnmountIdentityBounded',
+            'acceptance_v3_stage=stale_attachment_recovery',
+            'acceptance_v3_stage=v2_retry_once',
+            'foreach ($identity in @(''raw'',''extended''))',
+            'WSL_E_DISK_ALREADY_MOUNTED',
             'mkfs.ext4',
-            'wsl --shutdown',
             "docker','prune",
             "docker','volume','rm",
             '2023_5.zip',
             '-Apply -All'
           )
           foreach ($marker in $forbidden) {
-            if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+            if ($text.Contains($marker)) { throw "Forbidden V3 behavior found: $marker" }
+          }
+
+          $profilePath = 'scripts/profile-wsl-external-disk-state.ps1'
+          $profileTokens = $null
+          $profileErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $profilePath),
+            [ref]$profileTokens,
+            [ref]$profileErrors
+          )
+          if ($profileErrors.Count -ne 0) {
+            $profileErrors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found in read-only profile dependency.'
+          }
+          $profileText = Get-Content -LiteralPath $profilePath -Raw
+          $profileRequired = @(
+            'orphan_ext4_1g_candidate_count=',
+            'mnt_wsl_mount_count=',
+            'worker_container_count_after=',
+            'production_clickhouse_after_ready=',
+            'accepted_volume_after_present=',
+            'no_arg_unmount_authorized=False',
+            'wsl_mount_performed=False',
+            'wsl_unmount_performed=False',
+            'wsl_shutdown_performed=False',
+            'WSL_EXTERNAL_DISK_STATE_READ_ONLY_PROFILE_DONE'
+          )
+          foreach ($marker in $profileRequired) {
+            if (-not $profileText.Contains($marker)) { throw "Missing read-only profile dependency marker: $marker" }
           }
           Write-Host 'DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V3_PS51_CONTRACT_PASS'
