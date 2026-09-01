@@ -16,6 +16,18 @@ def test_v3_runs_v2_readonly_preflight_before_any_mount() -> None:
     assert text.index("probe_v3_stage=v2_preflight") < text.index("probe_v3_stage=state_authoritative_mount")
 
 
+def test_v3_child_powershell_stderr_is_captured_without_stop_promotion() -> None:
+    text = source()
+    invoke_v2 = text[text.index("function Invoke-V2"):text.index("try {\n    Write-Host '===== DEDICATED WSL CLICKHOUSE STARTUP PROBE V3 ====='")]
+    assert "$previous = $ErrorActionPreference" in invoke_v2
+    assert "$ErrorActionPreference = 'Continue'" in invoke_v2
+    assert "$output = @(& powershell.exe @args 2>&1)" in invoke_v2
+    assert "$exitCode = $LASTEXITCODE" in invoke_v2
+    assert "finally { $ErrorActionPreference = $previous }" in invoke_v2
+    assert "child_powershell_stderr_capture_safe=True" in text
+    assert "$lines = @(& powershell.exe @args 2>&1" not in text
+
+
 def test_v3_accepts_real_ext4_state_not_wsl_exit_code() -> None:
     text = source()
     assert "Get-MountProbe" in text

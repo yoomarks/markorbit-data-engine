@@ -96,8 +96,14 @@ function Invoke-V2([switch]$ApplyV2) {
     $scriptPath = Join-Path $PSScriptRoot 'probe-dedicated-wsl-clickhouse-startup-v2.ps1'
     $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-ExpectedMainSha',$ExpectedMainSha)
     if ($ApplyV2) { $args += @('-Apply','-CleanupMounts') }
-    $lines = @(& powershell.exe @args 2>&1 | ForEach-Object { $_.ToString() })
-    $exitCode = $LASTEXITCODE
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& powershell.exe @args 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
+    $lines = @($output | ForEach-Object { $_.ToString() })
     foreach ($line in $lines) { Write-Host $line }
     $decisionLine = @($lines | Where-Object { $_ -match '^decision=' } | Select-Object -Last 1)
     $decision = if ($decisionLine.Count -eq 1) { ($decisionLine[0] -replace '^decision=','').Trim() } else { $null }
@@ -191,6 +197,7 @@ try {
     Write-Host "decision=$decision"
     if ($nestedDecision) { Write-Host "nested_decision=$nestedDecision" }
     foreach ($advisory in $advisories) { Write-Host "advisory=$advisory" }
+    Write-Host 'child_powershell_stderr_capture_safe=True'
     Write-Host 'mount_acceptance_authority=findmnt_ext4_state'
     Write-Host 'unmount_acceptance_authority=findmnt_detached_state'
     Write-Host 'runtime_distro_unregister_performed=False'

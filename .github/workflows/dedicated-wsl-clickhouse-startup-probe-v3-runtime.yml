@@ -39,6 +39,12 @@ jobs:
             '[switch]$Apply',
             'probe_v3_stage=v2_preflight',
             'READY_FOR_NATIVE_STARTUP_PROBE_V2',
+            '$previous = $ErrorActionPreference',
+            '$ErrorActionPreference = ''Continue''',
+            '$output = @(& powershell.exe @args 2>&1)',
+            '$exitCode = $LASTEXITCODE',
+            'finally { $ErrorActionPreference = $previous }',
+            'child_powershell_stderr_capture_safe=True',
             'probe_v3_stage=state_authoritative_mount',
             'MOUNT_COMMAND_EXIT_NONZERO_STATE_VERIFIED_',
             'mount_acceptance_authority=findmnt_ext4_state',
@@ -59,6 +65,7 @@ jobs:
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
           }
           $forbidden = @(
+            '$lines = @(& powershell.exe @args 2>&1',
             '--unregister',
             'mkfs.ext4',
             'Remove-Item',
