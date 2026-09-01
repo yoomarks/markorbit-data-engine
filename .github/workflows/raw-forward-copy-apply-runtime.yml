@@ -1,0 +1,95 @@
+name: Raw Forward Copy Apply Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-raw-forward-copy-to-f.ps1'
+      - 'tests/test_raw_forward_copy_apply_contract.py'
+      - '.github/workflows/raw-forward-copy-apply-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze Raw forward-copy apply under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scriptPath = Join-Path $PWD 'scripts\run-raw-forward-copy-to-f.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell parser errors detected.'
+          }
+
+          $text = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $required = @(
+            '[switch]$Apply',
+            'RAW_FORWARD_COPY_V1',
+            'RAW_FORWARD_COPY_READY_FOR_APPLY',
+            'RAW_FORWARD_COPY_PARITY_GO',
+            'RAW_FORWARD_COPY_BLOCKED',
+            'RAW_FORWARD_COPY_DONE',
+            "F:\MarkOrbitData\raw",
+            'SOURCE_RAW_NOT_ON_D',
+            'TARGET_CONTAINS_FOREIGN_FILES',
+            'F_HEADROOM_BELOW_RESERVE_AFTER_COPY',
+            'robocopy.exe',
+            "'/E'",
+            "'/COPY:DAT'",
+            "'/DCOPY:DAT'",
+            "'/J'",
+            'Get-FileHash -LiteralPath $sourceItem.full_path -Algorithm SHA256',
+            'Get-FileHash -LiteralPath $targetItem.full_path -Algorithm SHA256',
+            'RAW_DATA_PATH_CUTOVER_PREFLIGHT',
+            'source_delete_authorized=$false',
+            'env_change_authorized=$false'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing safety marker: $marker" }
+          }
+
+          if (($text.Split('robocopy.exe').Count - 1) -ne 1) {
+            throw 'Expected exactly one robocopy.exe invocation.'
+          }
+          $applyGate = $text.IndexOf('if ($Apply -and $readyForApply)')
+          $copyCall = $text.IndexOf('& robocopy.exe @robocopyArgs')
+          if ($applyGate -lt 0 -or $copyCall -lt 0 -or $applyGate -gt $copyCall) {
+            throw 'Robocopy must remain behind the explicit Apply + readiness gate.'
+          }
+
+          $forbidden = @(
+            "'/MIR'",
+            "'/PURGE'",
+            "'/MOVE'",
+            "'/MOV'",
+            'Remove-Item',
+            'Move-Item',
+            'Clear-Content',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Resize-VHD',
+            'New-VHD',
+            'mkfs.ext4',
+            'Format-Volume',
+            '--shutdown',
+            '--unregister',
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden mutation/replay marker present: $marker" }
+          }
+
+          Write-Host 'RAW_FORWARD_COPY_APPLY_PS51_CONTRACT_PASS'
