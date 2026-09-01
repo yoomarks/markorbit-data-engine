@@ -1,0 +1,83 @@
+name: WSL No-Arg Unmount Recovery Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-wsl-noarg-unmount-recovery.ps1'
+      - 'tests/test_wsl_noarg_unmount_recovery_contract.py'
+      - '.github/workflows/wsl-noarg-unmount-recovery-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze bounded no-arg WSL recovery under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/run-wsl-noarg-unmount-recovery.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found.'
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            'READY_FOR_WSL_NOARG_UNMOUNT_RECOVERY',
+            'WSL_NOARG_UNMOUNT_RECOVERY_GO',
+            'WSL_NOARG_UNMOUNT_RECOVERY_BLOCKED',
+            "`$expectedOrphanLabel = 'mo_hot_cn_spike'",
+            'single_expected_labeled_orphan_and_zero_external_mounts',
+            'one_expected_orphan',
+            'no_foreign_spike_shape',
+            'no_external_mounts',
+            "ArgumentList '--unmount'",
+            'no_arg_unmount_attempt_limit=1',
+            'no_arg_unmount_exit_authority=evidence_only_post_lsblk_state_is_authoritative',
+            'wsl_mount_performed=False',
+            'wsl_shutdown_performed=False',
+            'runtime_distro_unregister_performed=False',
+            'spike_vhdx_mutation_performed=False',
+            'production_clickhouse_restart_performed=False',
+            'production_clickhouse_mutation_performed=False',
+            'accepted_volume_mutation_performed=False',
+            'corpus_replay_performed=False',
+            'WSL_NOARG_UNMOUNT_RECOVERY_DONE'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
+          }
+          $unmountInvocation = "ArgumentList '--unmount'"
+          if ([regex]::Matches($text, [regex]::Escape($unmountInvocation)).Count -ne 1) {
+            throw 'Recovery must contain exactly one no-argument WSL unmount invocation.'
+          }
+          $forbidden = @(
+            "@('--mount'",
+            "'--shutdown'",
+            '--unregister',
+            'mkfs.ext4',
+            'Format-Volume',
+            'Dismount-VHD',
+            'Mount-VHD',
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            '2023_5.zip',
+            '-Apply -All'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+          }
+          Write-Host 'WSL_NOARG_UNMOUNT_RECOVERY_PS51_CONTRACT_PASS'
