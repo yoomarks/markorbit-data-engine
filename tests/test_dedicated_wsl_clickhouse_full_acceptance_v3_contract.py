@@ -16,18 +16,20 @@ def test_v3_is_exact_main_and_explicit_apply_guarded() -> None:
     assert "Full acceptance V3 requires elevated Administrator PowerShell." in text
 
 
-def test_v3_reuses_v2_and_retries_only_once_for_exact_stale_attachment_case() -> None:
+def test_v3_reuses_v2_and_retries_only_once_for_stable_receipt_mount_failure() -> None:
     text = source()
     assert "run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1" in text
-    assert "WSL_E_DISK_ALREADY_MOUNTED" in text
     assert "$first['runtime_stage'] -eq 'mount_external_disks'" in text
     assert "$first['server_stopped'] -eq 'True'" in text
     assert "$first['production_after_ready'] -eq 'True'" in text
     assert "$first['accepted_volume_after_present'] -eq 'True'" in text
     assert "$first['worker_count_after'] -eq '0'" in text
+    assert "recovery_gate_authority=stable_ascii_v2_receipt" in text
+    assert "acceptance_v3_recovery_gate=" in text
     assert "acceptance_v3_stage=v2_retry_once" in text
     assert "stale_attachment_retry_limit=1" in text
     assert text.count("Invoke-V2 -ApplyV2") == 2
+    assert "WSL_E_DISK_ALREADY_MOUNTED" not in text
 
 
 def test_stale_recovery_is_exact_bounded_unmount_for_retained_spike_vhdx_only() -> None:
@@ -46,6 +48,19 @@ def test_stale_recovery_is_exact_bounded_unmount_for_retained_spike_vhdx_only() 
     assert "wsl --shutdown" not in text.lower()
     assert "--unregister" not in text
     assert "mkfs.ext4" not in text
+
+
+def test_recovery_gate_emits_each_stable_ascii_safety_fact() -> None:
+    text = source()
+    for marker in (
+        "recovery_gate_decision=",
+        "recovery_gate_stage=",
+        "recovery_gate_server_stopped=",
+        "recovery_gate_production=",
+        "recovery_gate_accepted_volume=",
+        "recovery_gate_workers=",
+    ):
+        assert marker in text
 
 
 def test_child_powershell_stderr_capture_and_safety_receipt_are_explicit() -> None:
