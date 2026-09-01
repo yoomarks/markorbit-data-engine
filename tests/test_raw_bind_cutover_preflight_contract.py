@@ -140,6 +140,15 @@ def test_preflight_emits_explicit_decision_and_deletion_hold() -> None:
         assert marker in text
 
 
+def test_dotenv_reader_explicitly_accepts_blank_lines_and_empty_files() -> None:
+    text = source()
+    function_start = text.index("function Get-DotEnvValues")
+    function_end = text.index("function Resolve-ConfiguredHostPath")
+    function_text = text[function_start:function_end]
+    assert "[AllowEmptyString()]" in function_text
+    assert "[AllowEmptyCollection()]" in function_text
+
+
 def test_workflow_has_server_side_concurrency() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "concurrency:" in text

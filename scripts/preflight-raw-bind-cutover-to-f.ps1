@@ -50,7 +50,10 @@ function Assert-ExactMain([string]$Phase) {
 
 function Get-DotEnvValues {
     param(
-        [Parameter(Mandatory = $true)][string[]]$Lines,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [AllowEmptyString()]
+        [string[]]$Lines,
         [Parameter(Mandatory = $true)][string]$Name
     )
     $pattern = '^\s*' + [regex]::Escape($Name) + '\s*=(.*)$'
