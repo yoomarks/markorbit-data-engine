@@ -37,8 +37,9 @@ def test_v2_emits_per_step_progress_markers() -> None:
         "probe_step=write_config",
         "probe_step=config_extract_",
         "probe_step=start_daemon",
+        "probe_step=pid_wait",
         "probe_step=readiness_wait",
-        "probe_step=collect_logs",
+        "probe_step=collect_startup_diagnostics",
         "probe_step=stop_server",
         "probe_step=cleanup_unmount_",
     ):
@@ -51,6 +52,31 @@ def test_v2_uses_clickhouse_daemon_not_nohup_backgrounding() -> None:
     assert "nohup clickhouse server" not in text
     assert "NATIVE_MINIMAL_CONFIG_STARTUP_V2_GO" in text
     assert "NATIVE_STARTUP_PROBE_V2_BLOCKED" in text
+
+
+def test_v2_separates_daemon_launch_from_pid_and_readiness() -> None:
+    text = source()
+    start_section = text[text.index("probe_step=start_daemon"):text.index("$sqlVersion = Invoke-RuntimeTextBounded")]
+    assert "test -s '$runtimeInstallDir/server.pid'" not in start_section
+    assert "$daemonLaunchExit = $start['exit_code']" in start_section
+    assert "$daemonPidObserved = $true" in start_section
+    assert "probe_step=pid_wait" in start_section
+    assert "probe_step=readiness_wait" in start_section
+    assert "daemon_launch_pid_readiness_separated=True" in text
+
+
+def test_v2_collects_launch_pid_process_and_logs_before_startup_failure() -> None:
+    text = source()
+    assert "'$runtimeInstallDir/console.log'" in text
+    assert "'$runtimeInstallDir/log/error.log'" in text
+    assert "'$runtimeInstallDir/log/server.log'" in text
+    assert "echo ===pid===" in text
+    assert "echo ===process===" in text
+    assert "daemon_launch_exit" in text
+    assert "daemon_launch_output" in text
+    assert "daemon_pid_observed" in text
+    assert "daemon_pid_evidence" in text
+    assert "startup_diagnostic=" in text
 
 
 def test_v2_reuses_only_retained_nonprod_disks() -> None:
