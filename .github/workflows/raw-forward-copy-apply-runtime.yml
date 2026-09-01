@@ -57,8 +57,9 @@ jobs:
           }
 
           $copyInvocation = '& robocopy.exe @robocopyArgs'
-          if (($text.Split($copyInvocation).Count - 1) -ne 1) {
-            throw 'Expected exactly one guarded robocopy invocation.'
+          $copyInvocationCount = [regex]::Matches($text, [regex]::Escape($copyInvocation)).Count
+          if ($copyInvocationCount -ne 1) {
+            throw "Expected exactly one guarded robocopy invocation; observed $copyInvocationCount."
           }
           $applyGate = $text.IndexOf('if ($Apply -and $readyForApply)')
           $copyCall = $text.IndexOf($copyInvocation)
