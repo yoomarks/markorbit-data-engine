@@ -193,12 +193,12 @@ function Get-ConfigScopedProcesses([string]$ConfigPath) {
     foreach ($line in @($probe['lines'])) {
         $text = ([string]$line).Trim()
         if ($text -notmatch '^(\d+)\s+(\S+)\s+(.+)$') { continue }
-        $pid = [string]$Matches[1]
+        $processId = [string]$Matches[1]
         $comm = [string]$Matches[2]
         $argsText = [string]$Matches[3]
         if ($comm -notlike 'clickhouse*') { continue }
         if (-not $argsText.Contains($ConfigPath)) { continue }
-        $matched += "$pid|$comm|$argsText"
+        $matched += "$processId|$comm|$argsText"
     }
     return @($matched)
 }
