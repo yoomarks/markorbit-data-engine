@@ -42,8 +42,12 @@ jobs:
             'Invoke-WslDiskCommandBounded',
             'WaitForExit($TimeoutSeconds * 1000)',
             'Stop-ConfigScopedServer',
-            'ps -eo pid=,comm=,args=',
-            '$2=="clickhouse"',
+            '/proc/[0-9]*',
+            'case "$comm" in',
+            'clickhouse*)',
+            '"$proc/cmdline"',
+            'process_inspection_authority=procfs_comm_cmdline',
+            'Unable to inspect config-scoped ClickHouse processes',
             'prepare_minimal_config',
             'system.disks',
             'system.storage_policies',
@@ -68,6 +72,9 @@ jobs:
             if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
           }
           $forbidden = @(
+            'awk -v needle',
+            'ps -eo pid=,comm=,args=',
+            '$2=="clickhouse"',
             '--import',
             '--export',
             'mkfs.ext4',

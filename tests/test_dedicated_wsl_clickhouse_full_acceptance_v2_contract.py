@@ -37,11 +37,19 @@ def test_mount_and_unmount_acceptance_are_state_authoritative_and_bounded() -> N
     assert "detached=[bool](-not $after['ready'])" in text
 
 
-def test_stop_falls_back_to_config_scoped_process_identity() -> None:
+def test_stop_uses_procfs_config_scoped_process_identity() -> None:
     text = source()
     assert "Stop-ConfigScopedServer" in text
-    assert "ps -eo pid=,comm=,args=" in text
-    assert '$2=="clickhouse"' in text
+    assert "/proc/[0-9]*" in text
+    assert 'case "$comm" in' in text
+    assert "clickhouse*)" in text
+    assert '"$proc/cmdline"' in text
+    assert "process_inspection_authority=procfs_comm_cmdline" in text
+    assert "Unable to inspect config-scoped ClickHouse processes" in text
+    assert "exit=$($probe['exit_code'])" in text
+    assert "timed_out=$($probe['timed_out'])" in text
+    assert "awk -v needle" not in text
+    assert "ps -eo pid=,comm=,args=" not in text
     assert "$startupProbeConfigPath" in text
     assert "$fullConfigPath" in text
     assert "server_stopped=$serverStopped" in text
