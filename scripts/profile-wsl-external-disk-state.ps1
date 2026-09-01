@@ -150,7 +150,15 @@ try {
     $findmnt = Invoke-RuntimeText @('findmnt','-rn','-o','SOURCE,FSTYPE,TARGET') -AllowFailure
     if ($findmnt['timed_out'] -or $findmnt['exit_code'] -ne 0) { throw 'Unable to collect runtime findmnt inventory.' }
     $mntWslLines = @($findmnt['lines'] | Where-Object { [string]$_ -match '\s/mnt/wsl(?:/|$)' })
+    $mntWslRootLines = @($mntWslLines | Where-Object { [string]$_ -match '\s/mnt/wsl$' })
+    $dockerManagedMntWslLines = @($mntWslLines | Where-Object { [string]$_ -match '\s/mnt/wsl/docker-desktop(?:/|$)' })
+    $foreignMntWslLines = @($mntWslLines | Where-Object {
+        [string]$_ -match '\s/mnt/wsl/' -and
+        [string]$_ -notmatch '\s/mnt/wsl/docker-desktop(?:/|$)'
+    })
     foreach ($line in @($mntWslLines)) { Write-Host "mnt_wsl_evidence=$line" }
+    foreach ($line in @($dockerManagedMntWslLines)) { Write-Host "docker_managed_mnt_wsl_evidence=$line" }
+    foreach ($line in @($foreignMntWslLines)) { Write-Host "foreign_mnt_wsl_evidence=$line" }
 
     Write-Host 'profile_step=runtime_blkid'
     $blkid = Invoke-RuntimeText @('blkid') -AllowFailure
@@ -203,6 +211,11 @@ try {
         orphan_ext4_1g_candidate_count=$orphanCandidates.Count
         orphan_ext4_1g_candidates=@($orphanCandidates)
         mnt_wsl_mount_count=$mntWslLines.Count
+        mnt_wsl_root_mount_count=$mntWslRootLines.Count
+        docker_managed_mnt_wsl_mount_count=$dockerManagedMntWslLines.Count
+        foreign_mnt_wsl_mount_count=$foreignMntWslLines.Count
+        foreign_mnt_wsl_mounts=@($foreignMntWslLines)
+        mnt_wsl_safety_authority='foreign_children_excluding_docker_desktop_namespace'
         vhd_evidence=@($vhdEvidence)
         wsl_version_exit=$wslVersion['exit_code']
         wsl_list_exit=$wslList['exit_code']
@@ -228,6 +241,10 @@ try {
     Write-Host 'decision=WSL_EXTERNAL_DISK_STATE_PROFILE_DONE'
     Write-Host "orphan_ext4_1g_candidate_count=$($orphanCandidates.Count)"
     Write-Host "mnt_wsl_mount_count=$($mntWslLines.Count)"
+    Write-Host "mnt_wsl_root_mount_count=$($mntWslRootLines.Count)"
+    Write-Host "docker_managed_mnt_wsl_mount_count=$($dockerManagedMntWslLines.Count)"
+    Write-Host "foreign_mnt_wsl_mount_count=$($foreignMntWslLines.Count)"
+    Write-Host 'mnt_wsl_safety_authority=foreign_children_excluding_docker_desktop_namespace'
     Write-Host "get_vhd_available=$getVhdAvailable"
     Write-Host "worker_container_count_before=$workerBefore"
     Write-Host "worker_container_count_after=$workerAfter"
