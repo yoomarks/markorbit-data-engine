@@ -1,0 +1,80 @@
+name: WSL External Disk State Profile Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-wsl-external-disk-state.ps1'
+      - 'tests/test_wsl_external_disk_state_profile_contract.py'
+      - '.github/workflows/wsl-external-disk-state-profile-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze read-only WSL disk profile under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/profile-wsl-external-disk-state.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found.'
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            'WSL_EXTERNAL_DISK_STATE_PROFILE_DONE',
+            'WSL_EXTERNAL_DISK_STATE_READ_ONLY_PROFILE_DONE',
+            'profile_step=runtime_lsblk',
+            'profile_step=runtime_findmnt',
+            'profile_step=runtime_blkid',
+            'profile_step=runtime_dmesg_warnings',
+            'profile_step=windows_get_disk',
+            'profile_step=windows_get_vhd',
+            'Get-VHD',
+            'Get-Disk',
+            'orphan_ext4_1g_candidate_count=',
+            'mnt_wsl_mount_count=',
+            'no_arg_unmount_authorized=False',
+            'wsl_mount_performed=False',
+            'wsl_unmount_performed=False',
+            'wsl_shutdown_performed=False',
+            'production_clickhouse_restart_performed=False',
+            'production_clickhouse_mutation_performed=False',
+            'accepted_volume_mutation_performed=False',
+            'corpus_replay_performed=False'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
+          }
+          $forbidden = @(
+            "@('--mount'",
+            "@('--unmount'",
+            "'--shutdown'",
+            '--unregister',
+            'mkfs.ext4',
+            'Format-Volume',
+            'Dismount-VHD',
+            'Mount-VHD',
+            "docker','restart",
+            "docker','prune",
+            "docker','volume','rm",
+            '2023_5.zip',
+            '-Apply -All'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+          }
+          Write-Host 'WSL_EXTERNAL_DISK_STATE_PROFILE_PS51_CONTRACT_PASS'
