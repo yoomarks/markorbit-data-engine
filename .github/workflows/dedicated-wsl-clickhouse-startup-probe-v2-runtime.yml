@@ -1,0 +1,74 @@
+name: Dedicated WSL ClickHouse Startup Probe V2 Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/probe-dedicated-wsl-clickhouse-startup-v2.ps1'
+      - 'tests/test_dedicated_wsl_clickhouse_startup_probe_v2_contract.py'
+      - '.github/workflows/dedicated-wsl-clickhouse-startup-probe-v2-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and freeze bounded startup probe V2 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/probe-dedicated-wsl-clickhouse-startup-v2.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found.'
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            '[switch]$Apply',
+            '[switch]$CleanupMounts',
+            'Invoke-WslDiskCommandBounded',
+            'WaitForExit($TimeoutSeconds * 1000)',
+            "timeout','--signal=TERM','--kill-after=5s'",
+            'probe_step=mount_',
+            'probe_step=start_daemon',
+            'probe_step=readiness_wait',
+            'probe_step=cleanup_unmount_',
+            '--daemon --pid-file=',
+            'timed_out_step',
+            'NATIVE_MINIMAL_CONFIG_STARTUP_V2_GO',
+            'NATIVE_STARTUP_PROBE_V2_BLOCKED',
+            'runtime_distro_unregister_performed=False',
+            'spike_vhdx_delete_performed=False',
+            'production_clickhouse_restart_performed=False',
+            'production_clickhouse_mutation_performed=False',
+            'accepted_volume_mutation_performed=False',
+            'corpus_replay_performed=False',
+            'DEDICATED_WSL_CLICKHOUSE_STARTUP_PROBE_V2_DONE'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
+          }
+          $forbidden = @(
+            'nohup clickhouse server',
+            '--unregister',
+            'mkfs.ext4',
+            'Remove-Item',
+            "docker','prune",
+            "docker','volume','rm"
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+          }
+          Write-Host 'DEDICATED_WSL_CLICKHOUSE_STARTUP_PROBE_V2_PS51_CONTRACT_PASS'
