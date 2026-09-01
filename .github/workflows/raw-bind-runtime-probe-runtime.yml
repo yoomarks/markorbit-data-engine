@@ -39,7 +39,7 @@ jobs:
             'PRODUCTION_HOT_WARM_SIZING_PLAN',
             'F:/MarkOrbitData/raw',
             "'run','--detach','--no-deps'",
-            "'--name',$probeName,'--entrypoint','python','api'",
+            "'--name',`$probeName,'--entrypoint','python','api'",
             'probe_stage=read_only_container_walk',
             'runtime_mount_ready=',
             'runtime_read_ready=',
