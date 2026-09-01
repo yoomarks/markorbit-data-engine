@@ -45,6 +45,9 @@ jobs:
             '$exitCode = $LASTEXITCODE',
             'finally { $ErrorActionPreference = $previous }',
             'child_powershell_stderr_capture_safe=True',
+            '$v2ApplyResult = Invoke-V2 -ApplyV2',
+            '$nestedDecision = $v2ApplyResult[''decision'']',
+            'v3_apply_switch_collision_safe=True',
             'probe_v3_stage=state_authoritative_mount',
             'MOUNT_COMMAND_EXIT_NONZERO_STATE_VERIFIED_',
             'mount_acceptance_authority=findmnt_ext4_state',
@@ -66,6 +69,7 @@ jobs:
           }
           $forbidden = @(
             '$lines = @(& powershell.exe @args 2>&1',
+            '$apply = Invoke-V2 -ApplyV2',
             '--unregister',
             'mkfs.ext4',
             'Remove-Item',
