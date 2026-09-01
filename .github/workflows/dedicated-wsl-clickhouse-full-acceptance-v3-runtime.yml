@@ -1,0 +1,73 @@
+name: Dedicated WSL ClickHouse Full Acceptance V3 Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-dedicated-wsl-clickhouse-full-acceptance-v3.ps1'
+      - 'tests/test_dedicated_wsl_clickhouse_full_acceptance_v3_contract.py'
+      - '.github/workflows/dedicated-wsl-clickhouse-full-acceptance-v3-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and freeze full acceptance V3 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/run-dedicated-wsl-clickhouse-full-acceptance-v3.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors found.'
+          }
+          $text = Get-Content -LiteralPath $path -Raw
+          $required = @(
+            '[switch]$Apply',
+            'run-dedicated-wsl-clickhouse-full-acceptance-v2.ps1',
+            'WSL_E_DISK_ALREADY_MOUNTED',
+            'acceptance_v3_stage=stale_attachment_recovery',
+            'acceptance_v3_stage=v2_retry_once',
+            'stale_attachment_retry_limit=1',
+            'stale_attachment_recovery_scope=retained_spike_vhdx_only',
+            '$first[''server_stopped''] -eq ''True''',
+            '$first[''production_after_ready''] -eq ''True''',
+            '$first[''accepted_volume_after_present''] -eq ''True''',
+            '$first[''worker_count_after''] -eq ''0''',
+            'WaitForExit($TimeoutSeconds * 1000)',
+            'wsl_shutdown_performed=False',
+            'runtime_distro_unregister_performed=False',
+            'spike_vhdx_delete_performed=False',
+            'production_clickhouse_mutation_performed=False',
+            'accepted_volume_mutation_performed=False',
+            'corpus_replay_performed=False',
+            'DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V3_DONE'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) { throw "Missing required marker: $marker" }
+          }
+          $forbidden = @(
+            '--unregister',
+            'mkfs.ext4',
+            'wsl --shutdown',
+            "docker','prune",
+            "docker','volume','rm",
+            '2023_5.zip',
+            '-Apply -All'
+          )
+          foreach ($marker in $forbidden) {
+            if ($text.Contains($marker)) { throw "Forbidden behavior found: $marker" }
+          }
+          Write-Host 'DEDICATED_WSL_CLICKHOUSE_FULL_ACCEPTANCE_V3_PS51_CONTRACT_PASS'
