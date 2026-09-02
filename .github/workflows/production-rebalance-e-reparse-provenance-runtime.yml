@@ -85,21 +85,23 @@ jobs:
           }
           foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
 
-          $absolute = Resolve-ReparseTargetLexically 'E:\root\metadata\default' '\??\E:\root\store\abc'
-          if ($absolute -ne 'E:\root\store\abc') {
+          # Use D: because the hosted Windows runner always has this drive. The production
+          # script still freezes the target-host legacy paths to E:.
+          $absolute = Resolve-ReparseTargetLexically 'D:\root\metadata\default' '\??\D:\root\store\abc'
+          if ($absolute -ne 'D:\root\store\abc') {
             throw "NT namespace target normalization failed: $absolute"
           }
-          $relative = Resolve-ReparseTargetLexically 'E:\root\metadata\default' '..\store\abc'
-          if ($relative -ne 'E:\root\store\abc') {
+          $relative = Resolve-ReparseTargetLexically 'D:\root\metadata\default' '..\store\abc'
+          if ($relative -ne 'D:\root\store\abc') {
             throw "Relative target normalization failed: $relative"
           }
-          if (-not (Test-PathContains 'E:\root' $relative)) {
+          if (-not (Test-PathContains 'D:\root' $relative)) {
             throw 'Internal target containment fixture failed.'
           }
-          if (Test-PathContains 'E:\root' 'F:\other\store') {
+          if (Test-PathContains 'D:\root' 'C:\other\store') {
             throw 'Cross-drive target containment fixture failed.'
           }
-          if ((Resolve-ReparseTargetLexically 'E:\root\metadata\default' '\Device\HarddiskVolume1\x') -ne '') {
+          if ((Resolve-ReparseTargetLexically 'D:\root\metadata\default' '\Device\HarddiskVolume1\x') -ne '') {
             throw 'Unsupported rooted target must remain unresolved.'
           }
 
