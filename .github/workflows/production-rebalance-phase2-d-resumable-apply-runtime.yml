@@ -79,6 +79,10 @@ jobs:
             'Imported Assert-ExactMain lost Boundary parameter.',
             'Imported Normalize-HostPath lost Path parameter.',
             'Imported Normalize-HostPath argument binding failed.',
+            'function Expand-JsonArrayForPowerShell51',
+            'authority_manifest_json_expanded_count=',
+            'PS5.1 top-level JSON array expansion failed.',
+            'manifest_json_array_expansion_ps51=True',
             'phase2_d_file_delete_authorized=False',
             'recursive_legacy_raw_root_delete_authorized=False',
             'visual_processed_delete_authorized=False'

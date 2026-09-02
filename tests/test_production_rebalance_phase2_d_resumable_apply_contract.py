@@ -96,6 +96,21 @@ def test_imported_preflight_helpers_preserve_full_definition_and_parameter_signa
         assert marker in text
 
 
+def test_manifest_json_array_is_explicitly_expanded_for_powershell51() -> None:
+    text = _text()
+    for marker in (
+        "function Expand-JsonArrayForPowerShell51",
+        "foreach ($item in $Value) { $items += ,$item }",
+        "$parsedEntries = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json",
+        "$entries = @(Expand-JsonArrayForPowerShell51 -Value $parsedEntries)",
+        "authority_manifest_json_expanded_count=",
+        "PS5.1 top-level JSON array expansion failed.",
+        "manifest_json_array_expansion_ps51=True",
+    ):
+        assert marker in text
+    assert "@(Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json)" not in text
+
+
 def test_exact_d_f_and_visual_processed_boundaries_remain_frozen() -> None:
     text = _text()
     for marker in (
@@ -195,6 +210,8 @@ def test_contract_mode_exercises_signature_binding_create_only_journal_and_path_
         "Imported Normalize-HostPath argument binding failed.",
         "Imported Test-PathContains argument binding failed.",
         "Imported Test-PathsOverlap argument binding failed.",
+        "PS5.1 top-level JSON array expansion failed.",
+        "manifest_json_array_expansion_ps51=True",
         "Atomic PREPARED journal fixture failed.",
         "Authority journal overwrite did not fail closed.",
         "Unsafe authority relative path did not fail closed.",
