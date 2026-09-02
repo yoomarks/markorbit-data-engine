@@ -99,12 +99,14 @@ def test_exact_d_f_and_visual_processed_boundaries_remain_frozen() -> None:
         assert marker in text
 
 
-def test_prepared_journal_is_atomic_and_contains_zero_mutation_state() -> None:
+def test_prepared_journal_is_create_only_atomic_and_zero_mutation() -> None:
     text = _text()
     for marker in (
         "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_JOURNAL_V1",
-        "Save-JournalAtomic",
-        "[System.IO.File]::Replace",
+        "Save-JournalCreateOnly",
+        "[System.IO.File]::Move($temporary, $fullPath)",
+        "Authority journal final path already exists; refusing overwrite.",
+        "Authority journal overwrite did not fail closed.",
         "state='PREPARED'",
         "phase='awaiting_separate_apply_implementation_and_audit'",
         "mutation_started=$false",
@@ -116,6 +118,7 @@ def test_prepared_journal_is_atomic_and_contains_zero_mutation_state() -> None:
         "env_sha256",
     ):
         assert marker in text
+    assert "[System.IO.File]::Replace" not in text
 
 
 def test_authority_prepare_revalidates_production_references_and_capacity() -> None:
@@ -171,11 +174,12 @@ def test_success_advances_only_to_separate_apply_implementation() -> None:
     assert "PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH" not in text
 
 
-def test_contract_mode_exercises_atomic_prepared_journal_and_path_fail_closed() -> None:
+def test_contract_mode_exercises_create_only_prepared_journal_and_path_fail_closed() -> None:
     text = _text()
     for marker in (
         "Invoke-ContractFixture",
         "Atomic PREPARED journal fixture failed.",
+        "Authority journal overwrite did not fail closed.",
         "Unsafe authority relative path did not fail closed.",
         "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS",
     ):
