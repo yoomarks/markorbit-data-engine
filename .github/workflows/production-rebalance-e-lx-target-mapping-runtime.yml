@@ -1,0 +1,113 @@
+name: Production Rebalance E LX Target Mapping Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-rebalance-e-lx-target-mapping.ps1'
+      - 'tests/test_production_rebalance_e_lx_target_mapping_contract.py'
+      - '.github/workflows/production-rebalance-e-lx-target-mapping-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise frozen LX target mapping under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'LX target mapping contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\profile-production-rebalance-e-lx-target-mapping.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in LX target mapping gate.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume','LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot')) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing LX mapping parameter: $parameter" }
+          }
+          if ($command.Parameters.ContainsKey('Apply')) { throw 'Read-only LX mapping gate must not expose -Apply.' }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_REBALANCE_E_LX_TARGET_MAPPING_V1',
+            '/var/lib/clickhouse/',
+            'required_native_kind=''LX_SYMLINK''',
+            'required_lx_version=2',
+            'LX_TARGET_PREFIX_REJECTED',
+            'LX_TARGET_PATH_INVALID',
+            'LX_TARGET_MISSING',
+            'LX_TARGET_IS_REPARSE_POINT',
+            'REBALANCE_E_LX_MAPPING_INTERNAL_TARGETS',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_DESIGN',
+            'phase1_delete_authorized=$false',
+            'reparse_delete_authorized=$false',
+            'mutation_performed=$false',
+            'PRODUCTION_REBALANCE_E_LX_TARGET_MAPPING_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing LX target mapping marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item','Move-Item','Copy-Item','robocopy','rsync','New-VHD','Resize-VHD',
+            'Mount-VHD','Dismount-VHD','Optimize-VHD','Format-Volume','docker volume rm',
+            'docker system prune','docker compose down','docker compose restart',
+            'wsl.exe --shutdown','wsl.exe --unmount','ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden LX target mapping behavior found: $forbidden" }
+          }
+
+          $helperNames = @('Normalize-HostPath','Test-PathContains','Resolve-LxClickHouseTarget')
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) LX mapping helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          $root = Join-Path $env:RUNNER_TEMP 'lx-clickhouse-root'
+          $target = Join-Path $root 'store\abc\abc123'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+
+          $good = Resolve-LxClickHouseTarget $root '/var/lib/clickhouse/store/abc/abc123/'
+          if ($good.mapping_error -or -not $good.accepted_linux_prefix -or -not $good.target_exists -or
+              -not $good.target_is_directory -or $good.target_is_reparse_point -or
+              -not $good.mapped_target_inside_candidate_root -or $good.mapped_target -ne $target) {
+            throw "Accepted LX mapping fixture failed: $($good | ConvertTo-Json -Compress)"
+          }
+
+          $prefixRejected = Resolve-LxClickHouseTarget $root '/etc/passwd'
+          if ($prefixRejected.mapping_error -ne 'LX_TARGET_PREFIX_REJECTED') {
+            throw "Foreign Linux prefix did not fail closed: $($prefixRejected.mapping_error)"
+          }
+
+          $traversal = Resolve-LxClickHouseTarget $root '/var/lib/clickhouse/store/../outside'
+          if ($traversal.mapping_error -ne 'LX_TARGET_PATH_INVALID') {
+            throw "Traversal segment did not fail closed: $($traversal.mapping_error)"
+          }
+
+          $missing = Resolve-LxClickHouseTarget $root '/var/lib/clickhouse/store/abc/missing/'
+          if ($missing.mapping_error -ne 'LX_TARGET_MISSING' -or $missing.target_exists) {
+            throw "Missing target did not fail closed: $($missing.mapping_error)"
+          }
+
+          Write-Host 'PRODUCTION_REBALANCE_E_LX_TARGET_MAPPING_PS51_CONTRACT_PASS'
