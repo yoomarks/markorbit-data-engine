@@ -1,4 +1,4 @@
-name: Production Storage Reserve Exception Review Runtime
+name: Production Storage Layout Replan Runtime
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse and exercise reserve exception review contract under Windows PowerShell 5.1
+      - name: Parse and exercise storage layout replan contract under Windows PowerShell 5.1
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -28,12 +28,13 @@ jobs:
           $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
           if ($errors.Count -ne 0) {
             $errors | ForEach-Object { Write-Host $_.Message }
-            throw 'Reserve exception review script failed Windows PowerShell 5.1 parse.'
+            throw 'Storage layout replan script failed Windows PowerShell 5.1 parse.'
           }
 
           $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
-          if ($paramNames -contains 'Apply') { throw 'Reserve exception review must not expose Apply.' }
-          if ($paramNames -contains 'Resume') { throw 'Reserve exception review must not expose Resume.' }
+          foreach ($forbidden in @('Apply','Resume','AcknowledgeDelete','AcknowledgeMove')) {
+            if ($paramNames -contains $forbidden) { throw "Storage layout replan must not expose destructive parameter: $forbidden" }
+          }
 
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
             -ExpectedMainSha $env:GITHUB_SHA `
@@ -41,4 +42,4 @@ jobs:
             -ContractOnly
           if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
 
-          Write-Host 'PRODUCTION_STORAGE_RESERVE_EXCEPTION_REVIEW_CONTRACT_DIRECT_INVOCATION_OK'
+          Write-Host 'PRODUCTION_STORAGE_LAYOUT_REPLAN_CONTRACT_DIRECT_INVOCATION_OK'

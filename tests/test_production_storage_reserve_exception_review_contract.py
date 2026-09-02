@@ -9,7 +9,7 @@ def _text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
-def test_reserve_review_is_strictly_read_only() -> None:
+def test_layout_replan_is_strictly_read_only() -> None:
     text = _text()
     assert "[switch]$Apply" not in text
     assert "Remove-Item" not in text
@@ -20,15 +20,15 @@ def test_reserve_review_is_strictly_read_only() -> None:
     assert "wsl --unmount" not in text.lower()
     assert "OPTIMIZE TABLE" not in text
     assert "ALTER TABLE" not in text
-    assert " MOVE " not in text
     assert "read_only=True" in text
     assert "mutation_performed=False" in text
-    assert "temporary_20_percent_exception_granted=False" in text
+    assert "e_backup_delete_authorized=False" in text
+    assert "cn_warm_move_authorized=False" in text
     assert "vhdx_create_authorized=False" in text
     assert "accepted_volume_mutation_authorized=False" in text
 
 
-def test_reserve_review_binds_exact_post_d_refresh_provenance() -> None:
+def test_layout_replan_binds_exact_post_d_refresh_provenance() -> None:
     text = _text()
     assert "a18e51a42bee13b9062ad271fd378840a8119d7f" in text
     assert "PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH_V1" in text
@@ -40,72 +40,86 @@ def test_reserve_review_binds_exact_post_d_refresh_provenance() -> None:
     assert "$changed.Count -ne 3" in text
 
 
-def test_reserve_review_reuses_fresh_sizing_and_runtime_gates() -> None:
+def test_e_backup_and_f_recovery_are_exact_frozen_paths() -> None:
     text = _text()
-    assert "plan-production-hot-warm-sizing.ps1" in text
-    assert "PRODUCTION_HOT_WARM_SIZING_PLAN_V1" in text
-    assert "PRODUCTION_HOT_WARM_SIZING_PLAN_READY" in text
-    assert "RECOMMENDED_30_PERCENT_PLAN_FITS" in text
+    assert "E:\\DockerDataBackup\\DockerDesktopWSL_20260901_before_recovery" in text
+    assert "F:\\MarkOrbitData\\recovery" in text
+    assert "F:\\MarkOrbitData\\recovery\\docker_data_precompact_20260828_023021.vhdx" in text
+    assert "Get-DirectoryInventoryNoFollow" in text
+    assert "Get-BackupReferenceInventory" in text
+    assert "Get-WslBasePaths" in text
+    assert "e_backup_reference_count" in text
+    assert "e_backup_technical_reclaim_candidate" in text
+    assert "e_backup_duplicate_identity_proven=False" in text
+    assert "drive_E_backup_reclaim_projection_is_not_delete_authority=True" in text
+
+
+def test_cn_user_architecture_moves_goods_and_events_to_warm_model_only() -> None:
+    text = _text()
+    assert "WARM_GOODS_CATEGORY" in text
+    assert "WARM_EVENT_HISTORY" in text
+    assert "HOT_CURRENT_SERVING_CONSERVATIVE" in text
+    assert "cn_observed_event" in text
+    assert "cn_goods_" in text
+    assert "EndsWith('_event'" in text
+    assert "cn_layout table=" in text
+    assert "cn_layout_hot_bytes" in text
+    assert "cn_layout_warm_bytes" in text
+    assert "move_authorized=$false" in text
+
+
+def test_layout_replan_uses_fresh_system_metadata_without_mutation() -> None:
+    text = _text()
+    assert "app.cn.capacity_profile" in text
+    assert "CN_HOT_WARM_CAPACITY_PROFILE_V1" in text
+    assert "full_corpus_scan" in text
+    assert "mutation_performed" in text
+    assert "Get-DriveSnapshot 'D'" in text
+    assert "Get-DriveSnapshot 'E'" in text
+    assert "Get-DriveSnapshot 'F'" in text
     assert "Assert-RawConsumersStopped" in text
     assert "Get-ProductionClickHouseHealth" in text
     assert "Assert-AcceptedProductionMount" in text
     assert "Assert-ComposeRawBindings" in text
-    assert "RAW_DATA_PATH" in text
-    assert "VISUAL_RAW_PATH" in text
-    assert "VISUAL_PROCESSED_PATH" in text
     assert "Assert-ExactMain 'entry'" in text
     assert "Assert-ExactMain 'exit'" in text
 
 
-def test_reserve_review_uses_physical_and_active_copy_math() -> None:
+def test_layout_replan_models_d_hot_and_e_warm_with_safety_margin() -> None:
     text = _text()
-    assert "$sourceDiskUsed = [int64]($sourceDiskTotal - $sourceDiskFree)" in text
-    assert "$sourceActive = [int64]$plan.current_payload.source_active_bytes_on_disk" in text
-    assert "$warmCandidate = [int64]$plan.current_payload.cn_conditional_warm_candidate_bytes" in text
-    assert "$warmSplitDRequired = [int64]($sourceActive - $warmCandidate)" in text
-    assert "$warmSplitERequired = $warmCandidate" in text
-    assert "full_physical_to_D" in text
-    assert "active_only_to_D" in text
-    assert "active_data_with_warm_split" in text
-    assert "copy_contract_proven=$false" in text
-    assert "vhdx_authorized=$false" in text
+    assert "CopySafetyMarginPercent" in text
+    assert "Add-CopySafetyMargin" in text
+    assert "$dHotPayload =" in text
+    assert "$eWarmPayload =" in text
+    assert "$dHotPhysicalRequired = Add-CopySafetyMargin $dHotPayload" in text
+    assert "$eWarmPhysicalRequired = Add-CopySafetyMargin $eWarmPayload" in text
+    assert "drive_D_recommended_new_budget_bytes" in text
+    assert "drive_D_hard_new_budget_bytes" in text
+    assert "scenario_d_recommended_margin_bytes" in text
+    assert "scenario_e_projected_recommended_margin_bytes" in text
+    assert "scenario_d_recommended_fit" in text
+    assert "scenario_e_projected_recommended_fit" in text
 
 
-def test_full_physical_copy_cannot_be_silently_replaced_by_active_bytes() -> None:
+def test_replan_only_advances_to_separate_e_backup_reclaim_preflight() -> None:
     text = _text()
-    assert "$fullPhysicalMarginHard = Get-SignedMargin $dHardBudget $sourceDiskUsed" in text
-    assert "$activeDOnlyMarginHard = Get-SignedMargin $dHardBudget $sourceActive" in text
-    assert "$fullPhysicalHardFit = [bool]($fullPhysicalMarginHard -ge 0)" in text
-    assert "$activeDOnlyHardFit = [bool]($activeDOnlyMarginHard -ge 0)" in text
-    assert "source_disk_used_bytes=$sourceDiskUsed" in text
-    assert "source_active_bytes=$sourceActive" in text
-
-
-def test_warm_split_only_advances_to_copy_contract_preflight() -> None:
-    text = _text()
-    assert "PRODUCTION_STORAGE_RESERVE_EXCEPTION_REVIEW_COPY_CONTRACT_REQUIRED" in text
-    assert "PRODUCTION_ACTIVE_DATA_WARM_SPLIT_COPY_CONTRACT_PREFLIGHT" in text
+    assert "PRODUCTION_STORAGE_LAYOUT_REPLAN_READY" in text
+    assert "PRODUCTION_E_BACKUP_RECLAIM_PREFLIGHT" in text
+    assert "PRODUCTION_E_BACKUP_PROVENANCE_REVIEW" in text
     assert "PRODUCTION_STORAGE_COEXISTENCE_REDESIGN" in text
-    assert "PRODUCTION_VHDX_PROVISIONING_PREFLIGHT" in text
-    # Arithmetic warm-split fit alone must not grant the temporary exception.
-    assert "temporary_20_percent_exception_granted=$false" in text
+    assert "PRODUCTION_CN_WARM_SCOPE_EXPANSION_REVIEW" in text
+    assert "PRODUCTION_VHDX_PROVISIONING_PREFLIGHT" not in text
 
 
-def test_read_only_du_inventory_is_metadata_only() -> None:
+def test_contract_fixture_locks_classification_and_capacity_math() -> None:
     text = _text()
-    assert "du -sk" in text
-    assert "/var/lib/clickhouse" in text
-    assert "source_top_level_allocated=" in text
-    assert "root_allocated_bytes" in text
-
-
-def test_contract_fixture_locks_budget_and_signed_margin_math() -> None:
-    text = _text()
-    assert "Get-NewAllocationBudget 1000 700 20" in text
-    assert "$budget -ne 500" in text
-    assert "Get-SignedMargin 500 450" in text
-    assert "Get-SignedMargin 500 550" in text
-    assert "PRODUCTION_STORAGE_RESERVE_EXCEPTION_REVIEW_PS51_CONTRACT_PASS" in text
+    assert "Get-UserArchitectureTier 'cn_goods_item_current'" in text
+    assert "Get-UserArchitectureTier 'cn_observed_event'" in text
+    assert "Get-UserArchitectureTier 'cn_goods_scope_event'" in text
+    assert "Get-UserArchitectureTier 'cn_case_current'" in text
+    assert "Get-NewAllocationBudget 1000 700 30" in text
+    assert "Get-RequiredCapacityBytes 700 30" in text
+    assert "PRODUCTION_STORAGE_LAYOUT_REPLAN_PS51_CONTRACT_PASS" in text
 
 
 def test_workflow_exists_and_invokes_contract_only() -> None:
