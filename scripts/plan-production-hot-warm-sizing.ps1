@@ -173,10 +173,30 @@ function Sum-TableBytes([object[]]$Tables) {
     return $sum
 }
 
+function Get-ShallowReadinessRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$RunId
+    )
+    if ([string]::IsNullOrWhiteSpace($RunId) -or $RunId -notmatch '^[0-9A-Za-z_-]+$') {
+        throw 'Sizing readiness run id must be a short filesystem-safe token.'
+    }
+    $relative = Join-Path (Join-Path 'reports' '_rdy') $RunId
+    return [ordered]@{
+        relative=$relative
+        absolute=(Join-Path $RepositoryRoot $relative)
+    }
+}
+
 function Invoke-ReadinessReceipt([string]$SizingRelativeRoot) {
-    $readinessRelativeRoot = Join-Path $SizingRelativeRoot 'readiness'
-    $readinessAbsoluteRoot = Join-Path $repoRoot $readinessRelativeRoot
+    $null = $SizingRelativeRoot
+    $runId = '{0}_{1}' -f (Get-Date -Format 'yyyyMMdd_HHmmssfff'), $PID
+    $readinessRoot = Get-ShallowReadinessRoot -RepositoryRoot $repoRoot -RunId $runId
+    $readinessRelativeRoot = [string]$readinessRoot.relative
+    $readinessAbsoluteRoot = [string]$readinessRoot.absolute
     New-Item -ItemType Directory -Force -Path $readinessAbsoluteRoot | Out-Null
+    Write-Host 'readiness_evidence_strategy=SHALLOW_REPO_REPORTS'
+    Write-Host "readiness_evidence_root=$readinessAbsoluteRoot"
     $script = Join-Path $PSScriptRoot 'profile-production-multi-disk-migration-readiness.ps1'
     $childArgs = @(
         '-NoProfile','-ExecutionPolicy','Bypass','-File',$script,
