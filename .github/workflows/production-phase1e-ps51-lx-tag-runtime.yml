@@ -1,0 +1,38 @@
+name: production-phase1e-ps51-lx-tag-runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-rebalance-phase1-e-reparse-safe-delete.ps1'
+      - 'tests/test_production_rebalance_phase1_e_ps51_lx_tag_contract.py'
+      - '.github/workflows/production-phase1e-ps51-lx-tag-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  powershell-51-lx-tag:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify unsigned LX tag under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          $tag = [Convert]::ToUInt32('A000001D', 16)
+          if ($tag -ne 2684354589) {
+            throw "Unexpected LX tag value: $tag"
+          }
+          $script = Get-Content -LiteralPath 'scripts/run-production-rebalance-phase1-e-reparse-safe-delete.ps1' -Raw
+          if ($script -match '\[uint32\]0xA000001D') {
+            throw 'Unsafe signed hexadecimal UInt32 cast is still present.'
+          }
+          Write-Host "lx_symlink_reparse_tag=$tag"
+      - name: Run dependency-free contract check
+        shell: powershell
+        run: |
+          python -c "import runpy; ns=runpy.run_path(r'tests/test_production_rebalance_phase1_e_ps51_lx_tag_contract.py'); ns['test_phase1e_lx_tag_is_ps51_safe_unsigned_value']()"

@@ -16,6 +16,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
+$script:LxSymlinkReparseTag = [Convert]::ToUInt32('A000001D', 16)
 
 function Invoke-NativeText {
     param(
@@ -408,7 +409,7 @@ function Assert-LxManifestEntries([object[]]$Entries) {
     foreach ($entry in $reparseEntries) {
         $identity = [MarkOrbit.NativeSafeDelete]::Query([string]$entry.full_path)
         if (-not [string]::IsNullOrWhiteSpace([string]$identity.Error)) { throw "Native LX identity query failed for $($entry.relative_path): $($identity.Error)" }
-        if ([uint32]$identity.Tag -ne [uint32]0xA000001D) { throw "Non-LX reparse object found at destructive boundary: $($entry.relative_path)" }
+        if ([uint32]$identity.Tag -ne $script:LxSymlinkReparseTag) { throw "Non-LX reparse object found at destructive boundary: $($entry.relative_path)" }
         if ([uint32]$identity.LxVersion -ne [uint32]2) { throw "Unsupported LX version at destructive boundary: $($entry.relative_path)" }
     }
     Write-Host "native_lx_reparse_verified_count=$($reparseEntries.Count)"
@@ -489,7 +490,7 @@ function Remove-TreeFromManifest {
     Write-Journal $JournalPath $Journal
     $count = 0
     foreach ($entry in $reparseEntries) {
-        [MarkOrbit.NativeSafeDelete]::UnlinkChecked([string]$entry.full_path, [uint32]0xA000001D, [uint32]2, $true)
+        [MarkOrbit.NativeSafeDelete]::UnlinkChecked([string]$entry.full_path, $script:LxSymlinkReparseTag, [uint32]2, $true)
         $count++
         if (($count % 25) -eq 0 -or $count -eq $reparseEntries.Count) { Write-Host "${TreeName}_reparse_unlink_progress=$count/$($reparseEntries.Count)" }
     }
