@@ -100,7 +100,10 @@ jobs:
             throw 'Recursive legacy D Raw deletion is forbidden.'
           }
 
-          $helperNames = @('Normalize-HostPath','Test-PathContains','Get-ResidualDeficitBytes','Compare-RawMetadataManifests')
+          $helperNames = @(
+            'Normalize-HostPath','Test-PathContains','Get-ResidualDeficitBytes',
+            'Compare-RawMetadataManifests','Assert-NoReparsePoints','Assert-ComposeRawBindings'
+          )
           $functionAsts = $ast.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -142,5 +145,28 @@ jobs:
           if (Compare-RawMetadataManifests $left $changed) {
             throw 'Metadata stability helper accepted changed-size fixture.'
           }
+
+          $tempRoot = Join-Path $env:RUNNER_TEMP 'markorbit-rebalance-reparse-fixture'
+          if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path (Join-Path $tempRoot 'nested') | Out-Null
+          Set-Content -LiteralPath (Join-Path $tempRoot 'nested\file.txt') -Value 'fixture' -Encoding UTF8
+          Assert-NoReparsePoints $tempRoot
+          Remove-Item -LiteralPath $tempRoot -Recurse -Force
+
+          $script:RawTargetRoot = 'F:\MarkOrbitData\raw'
+          $script:LegacyRawRoot = 'D:\yoomarks\markorbit-data-engine\raw_data'
+          $composeFixture = @(
+            [pscustomobject]@{service='api'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='mark-image-worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='qcc-acquisition'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='api'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/visual-raw'},
+            [pscustomobject]@{service='worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/visual-raw'},
+            [pscustomobject]@{service='mark-image-worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/visual-raw'},
+            [pscustomobject]@{service='api'; source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; normalized_source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; target='/data/visual-processed'},
+            [pscustomobject]@{service='worker'; source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; normalized_source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; target='/data/visual-processed'},
+            [pscustomobject]@{service='mark-image-worker'; source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; normalized_source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; target='/data/visual-processed'}
+          )
+          Assert-ComposeRawBindings $composeFixture
 
           Write-Host 'PRODUCTION_STORAGE_REBALANCE_GUARDED_APPLY_PS51_CONTRACT_PASS'
