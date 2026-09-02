@@ -1,0 +1,54 @@
+name: Production Rebalance Phase2D Resumable Delete Apply Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-rebalance-phase2-d-resumable-delete.ps1'
+      - 'tests/test_production_rebalance_phase2_d_resumable_delete_apply_contract.py'
+      - '.github/workflows/production-rebalance-phase2-d-resumable-delete-apply-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise resumable journal/recovery contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\run-production-rebalance-phase2-d-resumable-delete.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'Phase2D resumable Apply script failed Windows PowerShell 5.1 parsing.'
+          }
+
+          $command = Get-Command $scriptPath
+          foreach ($required in @(
+            'ExpectedMainSha',
+            'AuthorityJournalPath',
+            'ResumeJournalPath',
+            'AcceptedFullShaDryRunReceiptPath',
+            'AcceptedBoundaryDryRunReceiptPath',
+            'Apply',
+            'AcknowledgeLegacyDRawDuplicateDelete',
+            'AcknowledgeTemporary20PercentFloor',
+            'AcknowledgeResumeAfterPartialFailure',
+            'ContractOnly'
+          )) {
+            if (-not $command.Parameters.ContainsKey($required)) {
+              throw "Missing Phase2D Apply parameter: $required"
+            }
+          }
+
+          & $scriptPath -ExpectedMainSha '${{ github.event.pull_request.head.sha || github.sha }}' -ContractOnly
+          if (-not $?) { throw 'Phase2D resumable Apply ContractOnly invocation failed.' }
+          Write-Host 'PHASE2D_RESUMABLE_DELETE_APPLY_CONTRACT_DIRECT_INVOCATION_OK'
