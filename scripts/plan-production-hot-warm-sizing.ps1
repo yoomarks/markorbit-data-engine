@@ -109,7 +109,13 @@ function Get-LatestAcceptedPilotReceipt {
     if ($PilotReceiptPath) {
         return (Resolve-Path -LiteralPath $PilotReceiptPath).Path
     }
-    $candidates = @(Get-ChildItem -LiteralPath $EvidenceRoot -Recurse -Filter 'pilot_receipt.json' -File -ErrorAction SilentlyContinue |
+    $pilotEvidenceRoot = Join-Path $repoRoot 'reports'
+    if (-not (Test-Path -LiteralPath $pilotEvidenceRoot -PathType Container)) {
+        throw "Canonical pilot evidence root is missing: $pilotEvidenceRoot"
+    }
+    $pilotEvidenceRoot = (Resolve-Path -LiteralPath $pilotEvidenceRoot).Path
+    Write-Host "pilot_evidence_discovery_root=$pilotEvidenceRoot"
+    $candidates = @(Get-ChildItem -LiteralPath $pilotEvidenceRoot -Recurse -Filter 'pilot_receipt.json' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending)
     foreach ($candidate in $candidates) {
         try {
@@ -123,7 +129,7 @@ function Get-LatestAcceptedPilotReceipt {
         }
         catch {}
     }
-    throw "No accepted US_BOUNDED_CAPACITY_PILOT_RECEIPT_V1 found under $EvidenceRoot."
+    throw "No accepted US_BOUNDED_CAPACITY_PILOT_RECEIPT_V1 found under canonical reports root $pilotEvidenceRoot."
 }
 
 function Get-RequiredCapacityBytes {
