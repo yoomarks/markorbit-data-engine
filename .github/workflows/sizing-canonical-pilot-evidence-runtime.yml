@@ -1,0 +1,81 @@
+name: Sizing Canonical Pilot Evidence Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/plan-production-hot-warm-sizing.ps1'
+      - 'tests/test_sizing_canonical_pilot_evidence_contract.py'
+      - '.github/workflows/sizing-canonical-pilot-evidence-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exercise canonical pilot discovery under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $env:GITHUB_WORKSPACE 'scripts\plan-production-hot-warm-sizing.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            throw "PowerShell parse failed: $($errors | ForEach-Object { $_.Message } | Out-String)"
+          }
+
+          $functionAst = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-LatestAcceptedPilotReceipt'
+          }, $true)
+          if (-not $functionAst) { throw 'Get-LatestAcceptedPilotReceipt function not found.' }
+          Invoke-Expression $functionAst.Extent.Text
+
+          $fixtureRoot = Join-Path $env:RUNNER_TEMP 'markorbit-sizing-pilot-fixture'
+          if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
+          $repoRoot = Join-Path $fixtureRoot 'repo'
+          $canonicalDir = Join-Path $repoRoot 'reports\accepted-pilot'
+          $EvidenceRoot = Join-Path $repoRoot 'reports\nested\rebalance\sizing\fresh-output-only'
+          New-Item -ItemType Directory -Force -Path $canonicalDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $EvidenceRoot | Out-Null
+
+          $acceptedPath = Join-Path $canonicalDir 'pilot_receipt.json'
+          [ordered]@{
+            receipt_version='US_BOUNDED_CAPACITY_PILOT_RECEIPT_V1'
+            safe=$true
+            projection_input_ready=$true
+            status='PASS'
+            pilot=[ordered]@{ receipt_identity='fixture-accepted'; raw_bytes=10; hot_bytes=20 }
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $acceptedPath -Encoding UTF8
+
+          $PilotReceiptPath = ''
+          $resolved = Get-LatestAcceptedPilotReceipt
+          if ((Resolve-Path -LiteralPath $resolved).Path -ne (Resolve-Path -LiteralPath $acceptedPath).Path) {
+            throw "Nested EvidenceRoot incorrectly controlled pilot discovery: $resolved"
+          }
+
+          $overrideDir = Join-Path $fixtureRoot 'explicit-override'
+          New-Item -ItemType Directory -Force -Path $overrideDir | Out-Null
+          $overridePath = Join-Path $overrideDir 'pilot_receipt.json'
+          '{}' | Set-Content -LiteralPath $overridePath -Encoding UTF8
+          $PilotReceiptPath = $overridePath
+          $resolvedOverride = Get-LatestAcceptedPilotReceipt
+          if ((Resolve-Path -LiteralPath $resolvedOverride).Path -ne (Resolve-Path -LiteralPath $overridePath).Path) {
+            throw 'Explicit PilotReceiptPath did not retain priority.'
+          }
+
+          $PilotReceiptPath = ''
+          '{}' | Set-Content -LiteralPath $acceptedPath -Encoding UTF8
+          $failedClosed = $false
+          try { $null = Get-LatestAcceptedPilotReceipt }
+          catch { $failedClosed = $true }
+          if (-not $failedClosed) { throw 'Invalid canonical pilot receipt did not fail closed.' }
+
+          Write-Host 'SIZING_CANONICAL_PILOT_EVIDENCE_PS51_PASS'
