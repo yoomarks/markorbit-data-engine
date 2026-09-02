@@ -74,6 +74,16 @@ def test_preflight_to_authority_provenance_is_exactly_three_tooling_files() -> N
         assert marker in text
 
 
+def test_imported_preflight_helpers_survive_in_script_scope() -> None:
+    text = _text()
+    for marker in (
+        "function script:$name",
+        "Imported helper did not survive in script scope.",
+        "Get-Command Normalize-HostPath -CommandType Function",
+    ):
+        assert marker in text
+
+
 def test_exact_d_f_and_visual_processed_boundaries_remain_frozen() -> None:
     text = _text()
     for marker in (
