@@ -50,7 +50,13 @@ def test_native_unlink_revalidates_lx_tag_and_version_without_following_target()
     ):
         assert marker in text
     assert "[MarkOrbit.NativeSafeDelete]::UnlinkChecked" in text
-    assert "[uint32]0xA000001D, [uint32]2, $true" in text
+    assert "$script:LxSymlinkReparseTag = [Convert]::ToUInt32('A000001D', 16)" in text
+    assert "[uint32]$identity.Tag -ne $script:LxSymlinkReparseTag" in text
+    assert (
+        "UnlinkChecked([string]$entry.full_path, $script:LxSymlinkReparseTag, "
+        "[uint32]2, $true)"
+    ) in text
+    assert "[uint32]0xA000001D" not in text
 
 
 def test_apply_never_uses_recursive_delete_or_target_mutation_surfaces() -> None:
