@@ -16,6 +16,7 @@ def test_sizing_plan_reuses_authoritative_read_only_inputs() -> None:
         "PRODUCTION_MULTI_DISK_MIGRATION_READINESS_READY_FOR_SIZING_PLAN",
         "app.cn.capacity_profile",
         "CN_HOT_WARM_CAPACITY_PROFILE_V1",
+        "facts_snapshot_within_source_baseline",
         "app.us.remaining_capacity_inventory",
         "US_BOUNDED_CAPACITY_PILOT_RECEIPT_V1",
         "APPLICATION_ONLY_DO_NOT_GENERALIZE_TO_ASSIGNMENT_TTAB_OR_GLOBAL",
@@ -27,7 +28,7 @@ def test_sizing_plan_reuses_authoritative_read_only_inputs() -> None:
         assert marker in text
 
 
-def test_sizing_plan_freezes_conservative_cn_and_us_scope() -> None:
+def test_sizing_plan_freezes_conservative_cn_us_and_warm_scope() -> None:
     text = _text()
     assert "$hotCnPayload = $cnCurrentBytes" in text
     assert "$projectedUsApplicationPayload" in text
@@ -35,7 +36,20 @@ def test_sizing_plan_freezes_conservative_cn_and_us_scope() -> None:
     assert "assignment_capacity_inferred_from_application=$false" in text
     assert "ttab_capacity_inferred_from_application=$false" in text
     assert "global_capacity_inferred_from_us_application=$false" in text
+    assert "future_warm_capacity_claimed_without_evidence=$false" in text
+    assert "warm_future_us_global_sufficiency_claimed=$false" in text
     assert "source_volume_reclaim_counted_as_current_free_space=$false" in text
+
+
+def test_sizing_plan_separates_final_capacity_from_current_provisioning() -> None:
+    text = _text()
+    assert "$eRecommendedFinalFits = [bool]($warmCandidateRecommended -le $eHostRecommendedUsable)" in text
+    assert "$eHardFinalFits = [bool]($warmCandidateHard -le $eHostHardUsable)" in text
+    assert "$eCurrentRecommendedProvisionFits = [bool]($warmCandidateRecommended -le $eCurrentRecommendedNewBudget)" in text
+    assert "$eCurrentHardProvisionFits = [bool]($warmCandidateHard -le $eCurrentHardNewBudget)" in text
+    assert "e_current_recommended_provision_fits" in text
+    assert "e_current_hard_provision_fits" in text
+    assert "REBALANCE_REQUIRED_BEFORE_PROVISION" in text
 
 
 def test_sizing_plan_has_host_and_disk_reserve_math() -> None:
@@ -53,6 +67,13 @@ def test_sizing_plan_has_host_and_disk_reserve_math() -> None:
         "coexistence_state",
     ):
         assert marker in text
+
+
+def test_facts_snapshot_must_be_positive_and_within_source_baseline() -> None:
+    text = _text()
+    assert "$factsRows -gt 0 -and $factsBytes -gt 0" in text
+    assert "$factsRows -le $sourceRows -and $factsBytes -le $sourceBytes" in text
+    assert "markorbit_facts metadata snapshot is invalid or exceeds" in text
 
 
 def test_sizing_plan_never_authorizes_or_performs_mutation() -> None:
