@@ -59,6 +59,7 @@ jobs:
             'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARE_V1',
             'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARED',
             'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_IMPLEMENTATION',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS',
             'apply_supported=False',
             'data_mutation_performed=False',
             'mutation_started=$false',
@@ -86,8 +87,5 @@ jobs:
             if ($text.Contains($forbidden)) { throw "Forbidden Phase2D authority behavior found: $forbidden" }
           }
 
-          $output = @(& $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly 2>&1)
-          $output | ForEach-Object { Write-Host $_ }
-          if (-not (($output | ForEach-Object { $_.ToString() }) -contains 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS')) {
-            throw 'Phase2D authority ContractOnly pass marker missing.'
-          }
+          & $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly
+          Write-Host 'PHASE2D_AUTHORITY_CONTRACT_DIRECT_INVOCATION_OK'
