@@ -74,19 +74,19 @@ def test_preflight_to_authority_provenance_is_exactly_three_tooling_files() -> N
         assert marker in text
 
 
-def test_imported_preflight_helpers_preserve_script_scope_and_parameter_signatures() -> None:
+def test_imported_preflight_helpers_preserve_full_definition_and_parameter_signatures() -> None:
     text = _text()
     for marker in (
-        "function script:$name$parameterText",
-        "$inlineParameters = @($functionAst.Parameters)",
-        "$inlineParameters.Count",
-        "$_.Extent.Text",
-        "$parameterAst.Name.VariablePath.UserPath",
+        "$definitionText = [string]$functionAst.Extent.Text",
+        "[regex]::Escape($name)",
+        "${1}script:",
+        "Unable to scope accepted helper definition:",
+        "$functionAst.Body.ParamBlock",
+        "$expectedParameterNames",
         "$imported.Parameters.ContainsKey($parameterName)",
         "Imported helper parameter signature was lost:",
         "imported_helper_parameter_signatures_preserved=True",
         "Imported helper did not survive in script scope.",
-        "Get-Command Normalize-HostPath -CommandType Function",
         "Imported Assert-ExactMain lost Boundary parameter.",
         "Imported Normalize-HostPath lost Path parameter.",
         "Imported Normalize-HostPath argument binding failed.",
