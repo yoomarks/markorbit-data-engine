@@ -1,0 +1,73 @@
+name: Production Rebalance Phase2D Resumable Delete Dry Run
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-rebalance-phase2-d-resumable-delete.ps1'
+      - 'tests/test_production_rebalance_phase2_d_resumable_delete_dry_run_contract.py'
+      - '.github/workflows/production-rebalance-phase2-d-resumable-delete-dry-run-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise zero-delete dry-run contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Dry-run contract must execute under Windows PowerShell 5.1.' }
+          $path = Resolve-Path 'scripts\preflight-production-rebalance-phase2-d-resumable-delete.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in Phase2D resumable delete dry-run.'
+          }
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha','AuthorityJournalPath','AcceptedVolume','LegacyRawRoot','RawTargetRoot',
+            'LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot','ContractOnly'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing dry-run parameter: $parameter" }
+          }
+          foreach ($forbiddenParameter in @(
+            'Apply','ResumeJournalPath','AcceptedDryRunReceiptPath','AcknowledgeLegacyDRawDuplicateDelete',
+            'AcknowledgeTemporary20PercentFloor','AcknowledgeResumeAfterPartialFailure'
+          )) {
+            if ($command.Parameters.ContainsKey($forbiddenParameter)) { throw "Forbidden destructive parameter exposed: $forbiddenParameter" }
+          }
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            '74cc3379fc7ff81f29a9235b7c55a0ffda2f4090',
+            '6cd4399aaaf47aab3c5dde6dfd87dc7a29be676ce0d3da93d3d6e493f2f35253',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_DELETE_READY_FOR_APPLY',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_DELETE_APPLY_IMPLEMENTATION',
+            'apply_supported=False',
+            'data_mutation_performed=False',
+            'phase2_d_file_delete_authorized=False',
+            'recursive_legacy_raw_root_delete_authorized=False',
+            'visual_processed_delete_authorized=False',
+            'PHASE2D_RESUMABLE_DELETE_DRY_RUN_PS51_CONTRACT_PASS'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing dry-run marker: $required" }
+          }
+          foreach ($forbidden in @(
+            '[System.IO.File]::Delete','Remove-Item','RemoveDirectoryW','Directory]::Delete','Directory.Delete','robocopy','rsync',
+            'docker compose down','docker compose restart','docker system prune','docker volume rm',
+            'wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD',
+            'ALTER TABLE','OPTIMIZE TABLE','2023_5.zip','PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_DELETE_GO'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden dry-run behavior found: $forbidden" }
+          }
+          & $path -ExpectedMainSha $env:GITHUB_SHA -AuthorityJournalPath 'C:\fixture\unused.json' -ContractOnly
+          Write-Host 'PHASE2D_RESUMABLE_DELETE_DRY_RUN_CONTRACT_DIRECT_INVOCATION_OK'
