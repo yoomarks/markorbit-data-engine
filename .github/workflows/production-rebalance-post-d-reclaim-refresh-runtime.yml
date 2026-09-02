@@ -1,0 +1,73 @@
+name: Production Rebalance Post-D Reclaim Refresh Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-rebalance-post-d-reclaim-refresh.ps1'
+      - 'tests/test_production_rebalance_post_d_reclaim_refresh_contract.py'
+      - '.github/workflows/production-rebalance-post-d-reclaim-refresh-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise post-D reclaim refresh contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\preflight-production-rebalance-post-d-reclaim-refresh.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'Post-D reclaim refresh failed Windows PowerShell 5.1 parsing.'
+          }
+
+          $command = Get-Command $scriptPath
+          foreach ($required in @(
+            'ExpectedMainSha',
+            'AcceptedApplyReceiptPath',
+            'AcceptedVolume',
+            'LegacyRawRoot',
+            'RawTargetRoot',
+            'LegacyEHotRoot',
+            'LegacyEHotLogsRoot',
+            'EvidenceRoot',
+            'ContractOnly'
+          )) {
+            if (-not $command.Parameters.ContainsKey($required)) {
+              throw "Missing post-D reclaim refresh parameter: $required"
+            }
+          }
+          if ($command.Parameters.ContainsKey('Apply')) {
+            throw 'Post-D reclaim refresh must not expose an Apply parameter.'
+          }
+
+          $text = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          foreach ($forbidden in @(
+            '[System.IO.File]::Delete',
+            '[System.IO.Directory]::Delete',
+            'Remove-Item',
+            'wsl.exe --shutdown',
+            'wsl.exe --unmount',
+            'docker volume rm',
+            'docker system prune'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden mutation surface in post-D refresh: $forbidden" }
+          }
+
+          & $scriptPath -ExpectedMainSha '${{ github.event.pull_request.head.sha || github.sha }}' -ContractOnly
+          if (-not $?) { throw 'Post-D reclaim refresh ContractOnly invocation failed.' }
+          Write-Host 'PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH_CONTRACT_DIRECT_INVOCATION_OK'
