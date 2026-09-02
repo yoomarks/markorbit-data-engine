@@ -54,8 +54,11 @@ jobs:
             'PRODUCTION_HOT_WARM_SIZING_PLAN_V1',
             'PRODUCTION_MULTI_DISK_MIGRATION_READINESS_READY_FOR_SIZING_PLAN',
             'CN_HOT_WARM_CAPACITY_PROFILE_V1',
+            'facts_snapshot_within_source_baseline=',
             'US_BOUNDED_CAPACITY_PILOT_RECEIPT_V1',
             'APPLICATION_ONLY_DO_NOT_GENERALIZE_TO_ASSIGNMENT_TTAB_OR_GLOBAL',
+            'e_current_recommended_provision_fits',
+            'warm_future_us_global_sufficiency_claimed=$false',
             'PRODUCTION_HOT_WARM_SIZING_PLAN_READY',
             'PRODUCTION_STORAGE_REBALANCE_PLAN',
             'vhdx_create_authorized=$false',
@@ -116,6 +119,14 @@ jobs:
           }
           if ((Get-CurrentNewAllocationBudgetBytes -TotalBytes 1000 -FreeBytes 150 -FreePercent 20) -ne 0) {
             throw 'Fail-closed zero allocation fixture failed.'
+          }
+          $invalidCaught = $false
+          try {
+            Get-CurrentNewAllocationBudgetBytes -TotalBytes 100 -FreeBytes 101 -FreePercent 20 | Out-Null
+          }
+          catch { $invalidCaught = $true }
+          if (-not $invalidCaught) {
+            throw 'Invalid host free-byte evidence must fail closed.'
           }
 
           Write-Host 'PRODUCTION_HOT_WARM_SIZING_PS51_CONTRACT_PASS'
