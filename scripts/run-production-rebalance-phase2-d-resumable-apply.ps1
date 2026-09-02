@@ -45,14 +45,15 @@ function Import-AcceptedPreflightHelpers {
         $matches = @($functions | Where-Object { $_.Name -eq $name })
         if ($matches.Count -ne 1) { throw "Expected exactly one accepted helper definition: $name" }
         $functionAst = $matches[0]
+        $inlineParameters = @($functionAst.Parameters)
         $parameterText = ''
-        if ($functionAst.Parameters.Count -gt 0) {
-            $parameterText = '(' + ((@($functionAst.Parameters) | ForEach-Object { $_.Extent.Text }) -join ', ') + ')'
+        if ($inlineParameters.Count -gt 0) {
+            $parameterText = '(' + (($inlineParameters | ForEach-Object { $_.Extent.Text }) -join ', ') + ')'
         }
         $scriptScopedDefinition = "function script:$name$parameterText $($functionAst.Body.Extent.Text)"
         Invoke-Expression $scriptScopedDefinition
         $imported = Get-Command $name -CommandType Function -ErrorAction Stop
-        foreach ($parameterAst in @($functionAst.Parameters)) {
+        foreach ($parameterAst in $inlineParameters) {
             $parameterName = [string]$parameterAst.Name.VariablePath.UserPath
             if (-not $imported.Parameters.ContainsKey($parameterName)) {
                 throw "Imported helper parameter signature was lost: $name.$parameterName"
