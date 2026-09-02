@@ -1,0 +1,84 @@
+name: Readiness Shallow Host Inventory Evidence Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-multi-disk-migration-readiness.ps1'
+      - 'tests/test_readiness_shallow_host_inventory_evidence_contract.py'
+      - '.github/workflows/readiness-shallow-host-inventory-evidence-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise shallow host inventory evidence helper
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Shallow host inventory evidence contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\profile-production-multi-disk-migration-readiness.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in production migration readiness.'
+          }
+
+          $helper = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Get-ShallowHostInventoryRoot'
+          }, $true))
+          if ($helper.Count -ne 1) { throw "Expected one Get-ShallowHostInventoryRoot helper; found $($helper.Count)." }
+          Invoke-Expression $helper[0].Extent.Text
+
+          $repoRoot = 'D:\yoomarks\markorbit-data-engine'
+          $runId = '20260902_090308123_123456'
+          $root = Get-ShallowHostInventoryRoot -RepositoryRoot $repoRoot -RunId $runId
+          $expected = 'D:\yoomarks\markorbit-data-engine\reports\_hi\20260902_090308123_123456'
+          if ($root -ne $expected) { throw "Unexpected shallow host inventory root: $root" }
+
+          $receipt = Join-Path $root 'global_multi_disk_host_inventory_20260902_090308\global_multi_disk_host_inventory.json'
+          if ($receipt.Length -ge 200) { throw "Shallow inventory receipt path lost path-length margin: $($receipt.Length)" }
+          if ($root.Contains('production_storage_rebalance_inventory_')) {
+            throw 'Shallow host inventory root must not inherit rebalance nesting.'
+          }
+
+          $invalidRejected = $false
+          try { [void](Get-ShallowHostInventoryRoot -RepositoryRoot $repoRoot -RunId 'bad/path') }
+          catch { $invalidRejected = $true }
+          if (-not $invalidRejected) { throw 'Unsafe host inventory run id was not rejected.' }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          if ($text.Contains("`$inventoryRoot = Join-Path `$evidenceDir 'inventory'")) {
+            throw 'Legacy deeply nested readiness inventory root is still executable.'
+          }
+          foreach ($forbidden in @(
+            'Remove-Item',
+            'Move-Item',
+            'Copy-Item',
+            'robocopy',
+            'Optimize-VHD',
+            'docker system prune',
+            'wsl.exe --shutdown',
+            'wsl.exe --unmount',
+            '2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden readiness behavior found: $forbidden" }
+          }
+
+          Write-Host 'READINESS_SHALLOW_HOST_INVENTORY_EVIDENCE_PS51_CONTRACT_PASS'
