@@ -53,13 +53,16 @@ def test_review_imports_complete_dynamic_helper_closure() -> None:
     for marker in (
         "Get-OptionalPropertyValue",
         "Get-OptionalArrayProperty",
+        "Test-PathsOverlap",
         "Get-AllContainerMounts",
         "Get-ComposeBindMounts",
+        "Get-WslBasePaths",
         "Get-BackupReferenceInventory",
         "Get-DirectoryInventoryNoFollowAllocated",
         "Get-AllocatedFileBytes",
     ):
         assert marker in source
+    assert "Get-BackupReferenceInventory 'C:\\fixture\\backup' @() @() $fakeEnv" in source
     assert "Required helper missing" in source
 
 
@@ -71,7 +74,7 @@ def test_review_classifies_expected_docker_desktop_snapshot_roles() -> None:
     assert "docker_data_empty_placeholder_snapshot" in source
     assert "main\\ext4.vhdx" in source
     assert "docker_desktop_system_distro_snapshot" in source
-    assert "expected_role_set_ready" in source
+    assert "expectedRoleSetReady" in source
     assert "unresolved" in source
 
 
@@ -79,7 +82,7 @@ def test_review_correlates_e_snapshot_to_current_d_counterparts() -> None:
     source = text()
     assert "D:\\DockerData\\DockerDesktopWSL" in source
     assert "current_counterpart_exists" in source
-    assert "current_counterparts_ready" in source
+    assert "currentCounterpartsReady" in source
     assert "d_counterpart relative_path=" in source
     assert "current_counterpart_missing_count" in source
 
@@ -125,7 +128,7 @@ def test_review_fail_closed_and_never_authorizes_reclaim() -> None:
 def test_review_rechecks_inventory_production_env_and_exact_main() -> None:
     source = text()
     assert "inventory.metadata_manifest_sha256" in source
-    assert "e_backup_inventory_stable=" in source
+    assert "e_backup_inventory_stable=$inventoryStable" in source
     assert "Assert-ExactMain 'review_final'" in source
     assert "Assert-ProductionBoundary 'final'" in source
     assert "env_unchanged" in source
