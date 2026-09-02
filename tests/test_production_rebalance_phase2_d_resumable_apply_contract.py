@@ -78,7 +78,8 @@ def test_imported_preflight_helpers_preserve_script_scope_and_parameter_signatur
     text = _text()
     for marker in (
         "function script:$name$parameterText",
-        "$functionAst.Parameters.Count",
+        "$inlineParameters = @($functionAst.Parameters)",
+        "$inlineParameters.Count",
         "$_.Extent.Text",
         "$parameterAst.Name.VariablePath.UserPath",
         "$imported.Parameters.ContainsKey($parameterName)",
