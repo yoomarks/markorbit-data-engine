@@ -1,0 +1,134 @@
+name: Production Storage Rebalance Candidate Inventory Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-storage-rebalance-candidates.ps1'
+      - 'tests/test_production_storage_rebalance_candidate_inventory_contract.py'
+      - '.github/workflows/production-storage-rebalance-candidate-inventory-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise rebalance inventory helpers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Rebalance inventory contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\profile-production-storage-rebalance-candidates.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in rebalance inventory.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha',
+            'AcceptedVolume',
+            'LegacyRawRoot',
+            'RawTargetRoot',
+            'LegacyEHotRoot',
+            'LegacyEHotLogsRoot',
+            'DockerColdBackupRoot',
+            'EvidenceRoot'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) {
+              throw "Rebalance inventory lost parameter: $parameter"
+            }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_STORAGE_REBALANCE_CANDIDATE_INVENTORY_V1',
+            'plan-production-hot-warm-sizing.ps1',
+            'PRODUCTION_STORAGE_REBALANCE_PLAN',
+            'REBALANCE_TEMPORARY_HARD_FLOOR_CANDIDATES_FOUND',
+            'PRODUCTION_REBALANCE_APPLY_PLAN_WITH_TEMPORARY_20_PERCENT_REVIEW',
+            'legacy_raw_to_f_metadata_parity_exact',
+            'COLD_RECOVERY_BACKUP_SECONDARY_CANDIDATE_ONLY',
+            'temporary_20_percent_floor_apply_authorized=$false',
+            'legacy_e_hot_delete_authorized=$false',
+            'legacy_raw_delete_authorized=$false',
+            'accepted_volume_delete_authorized=$false',
+            'docker_data_vhdx_compact_authorized=$false',
+            'us_package_2_authorized=$false',
+            'us_bulk_authorized=$false',
+            'PRODUCTION_STORAGE_REBALANCE_CANDIDATE_INVENTORY_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing rebalance inventory marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item',
+            'Move-Item',
+            'Copy-Item',
+            'robocopy',
+            'rsync',
+            'New-VHD',
+            'Resize-VHD',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Optimize-VHD',
+            'Format-Volume',
+            'mkfs.ext4',
+            'docker volume rm',
+            'docker system prune',
+            'docker compose down',
+            'docker compose restart',
+            'wsl.exe --shutdown',
+            'wsl.exe --unmount',
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden rebalance inventory behavior found: $forbidden" }
+          }
+
+          $helperNames = @('Get-ReserveBytes','Get-AdditionalFreeRequired','Test-PathContains')
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          if ((Get-ReserveBytes -TotalBytes 1000 -FreePercent 30) -ne 300) {
+            throw '30% host reserve fixture failed.'
+          }
+          if ((Get-ReserveBytes -TotalBytes 1000 -FreePercent 20) -ne 200) {
+            throw '20% host reserve fixture failed.'
+          }
+          if ((Get-AdditionalFreeRequired -CurrentFreeBytes 500 -ReserveBytes 300 -AllocationBytes 400) -ne 200) {
+            throw 'Recommended deficit fixture failed.'
+          }
+          if ((Get-AdditionalFreeRequired -CurrentFreeBytes 500 -ReserveBytes 200 -AllocationBytes 250) -ne 0) {
+            throw 'Hard-floor no-deficit fixture failed.'
+          }
+          if (-not (Test-PathContains 'D:\root' 'D:\root\child')) {
+            throw 'Path containment child fixture failed.'
+          }
+          if (Test-PathContains 'D:\root\child' 'D:\root') {
+            throw 'Path containment direction fixture failed.'
+          }
+
+          Write-Host 'PRODUCTION_STORAGE_REBALANCE_CANDIDATE_INVENTORY_PS51_CONTRACT_PASS'
