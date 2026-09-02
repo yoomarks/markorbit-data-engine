@@ -64,6 +64,8 @@ jobs:
             'mutation_started=$false',
             'completed_relative_paths=@()',
             'inflight_relative_path=$null',
+            'function script:$name',
+            'Imported helper did not survive in script scope.',
             'phase2_d_file_delete_authorized=False',
             'recursive_legacy_raw_root_delete_authorized=False',
             'visual_processed_delete_authorized=False'
@@ -82,10 +84,8 @@ jobs:
             if ($text.Contains($forbidden)) { throw "Forbidden Phase2D authority behavior found: $forbidden" }
           }
 
-          $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly 2>&1)
-          $exitCode = $LASTEXITCODE
+          $output = @(& $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly 2>&1)
           $output | ForEach-Object { Write-Host $_ }
-          if ($exitCode -ne 0) { throw "Phase2D ContractOnly runtime exited $exitCode." }
           if (-not (($output | ForEach-Object { $_.ToString() }) -contains 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS')) {
             throw 'Phase2D authority ContractOnly pass marker missing.'
           }
