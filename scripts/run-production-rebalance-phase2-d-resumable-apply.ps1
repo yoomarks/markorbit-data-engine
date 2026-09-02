@@ -29,96 +29,27 @@ $script:AcceptedManifestBytes = [int64]57920246250
 $script:JournalVersion = 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_JOURNAL_V1'
 $script:ReceiptVersion = 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_V1'
 
-function Invoke-NativeText {
-    param(
-        [Parameter(Mandatory = $true)][string]$Command,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments,
-        [switch]$AllowFailure
-    )
-    $previousPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        $outputLines = @(& $Command @Arguments 2>&1)
-        $nativeExitCode = $LASTEXITCODE
-    }
-    finally { $ErrorActionPreference = $previousPreference }
-    $renderedLines = @($outputLines | ForEach-Object { $_.ToString() })
-    if (-not $AllowFailure -and $nativeExitCode -ne 0) {
-        throw "$Command failed with exit code ${nativeExitCode}: $($renderedLines -join [Environment]::NewLine)"
-    }
-    return [ordered]@{ exit_code=$nativeExitCode; lines=@($renderedLines) }
-}
-
-function Assert-ExactMain([string]$Boundary) {
-    $expected = $ExpectedMainSha.Trim().ToLowerInvariant()
-    $headSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
-    $originMainSha = (git rev-parse origin/main).Trim().ToLowerInvariant()
-    Write-Host "exact_main_phase=$Boundary"
-    Write-Host "HEAD=$headSha"
-    Write-Host "origin/main=$originMainSha"
-    Write-Host "expected=$expected"
-    if ($headSha -ne $expected -or $originMainSha -ne $expected) { throw "Exact main drift detected during $Boundary." }
-    if (git status --porcelain) { throw "Working tree must be clean during $Boundary." }
-}
-
-function Normalize-HostPath([string]$Path) {
-    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
-    $candidate = $Path.Trim()
-    if ($candidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) { $candidate = $candidate.Substring(4) }
-    if ($candidate.StartsWith('\??\', [System.StringComparison]::OrdinalIgnoreCase)) { $candidate = $candidate.Substring(4) }
-    if (-not ([System.IO.Path]::IsPathRooted($candidate) -and $candidate -match '^[A-Za-z]:[\\/]')) { return '' }
-    return [System.IO.Path]::GetFullPath($candidate).TrimEnd('\')
-}
-
-function Test-PathContains([string]$ParentPath, [string]$ChildPath) {
-    $parent = Normalize-HostPath $ParentPath
-    $child = Normalize-HostPath $ChildPath
-    if (-not $parent -or -not $child) { return $false }
-    if ($child.Equals($parent, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
-    return $child.StartsWith($parent + '\', [System.StringComparison]::OrdinalIgnoreCase)
-}
-
-function Test-PathsOverlap([string]$LeftPath, [string]$RightPath) {
-    return [bool]((Test-PathContains $LeftPath $RightPath) -or (Test-PathContains $RightPath $LeftPath))
-}
-
-function Get-OptionalPropertyValue([object]$Object, [string]$Name) {
-    if ($null -eq $Object) { return $null }
-    $property = $Object.PSObject.Properties[$Name]
-    if ($null -eq $property) { return $null }
-    return $property.Value
-}
-
-function Get-OptionalArrayProperty([object]$Object, [string]$Name) {
-    $value = Get-OptionalPropertyValue $Object $Name
-    if ($null -eq $value) { return @() }
-    return @($value)
-}
-
-function Get-DotEnvValues {
-    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
-    $values = @{}
-    foreach ($line in @($Lines)) {
-        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        $trimmed = $line.Trim()
-        if ($trimmed.StartsWith('#')) { continue }
-        $equals = $trimmed.IndexOf('=')
-        if ($equals -le 0) { continue }
-        $key = $trimmed.Substring(0, $equals).Trim()
-        $value = $trimmed.Substring($equals + 1).Trim()
-        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
-            if ($value.Length -ge 2) { $value = $value.Substring(1, $value.Length - 2) }
-        }
-        $values[$key] = $value
-    }
-    return $values
-}
-
-function Get-DriveSnapshot([string]$Letter) {
-    $root = "${Letter}:\"
-    if (-not (Test-Path -LiteralPath $root)) { throw "Required drive missing: $root" }
-    $drive = New-Object System.IO.DriveInfo($root)
-    return [ordered]@{ drive="${Letter}:"; total_bytes=[int64]$drive.TotalSize; free_bytes=[int64]$drive.AvailableFreeSpace; filesystem=[string]$drive.DriveFormat }
+# Reuse only the already-PS5.1-tested read-only helpers from the accepted Phase2D preflight.
+$helperScriptPath = Join-Path $PSScriptRoot 'preflight-production-rebalance-phase2-d-full-sha256.ps1'
+$helperTokens = $null
+$helperErrors = $null
+$helperAst = [System.Management.Automation.Language.Parser]::ParseFile($helperScriptPath, [ref]$helperTokens, [ref]$helperErrors)
+if ($helperErrors.Count -ne 0) { throw 'Accepted Phase2D preflight helper source no longer parses.' }
+$helperNames = @(
+    'Invoke-NativeText','Assert-ExactMain','Normalize-HostPath','Test-PathContains','Test-PathsOverlap',
+    'Get-OptionalPropertyValue','Get-OptionalArrayProperty','Get-DotEnvValues','Get-DriveSnapshot',
+    'Get-ProductionClickHouseHealth','Assert-AcceptedProductionMount','Assert-RawConsumersStopped',
+    'Get-AllContainerMounts','Get-ComposeBindMounts','Assert-ComposeRawBindings','Assert-NoReparsePoints',
+    'Get-RawDeletionManifest'
+)
+$helperFunctions = $helperAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $helperNames -contains $node.Name
+}, $true)
+foreach ($helperName in $helperNames) {
+    $matches = @($helperFunctions | Where-Object { $_.Name -eq $helperName })
+    if ($matches.Count -ne 1) { throw "Expected exactly one accepted helper definition: $helperName" }
+    Invoke-Expression $matches[0].Extent.Text
 }
 
 function Get-Sha256([string]$Path) {
@@ -135,117 +66,6 @@ function Get-TextSha256([string]$Text) {
     finally { $algorithm.Dispose() }
 }
 
-function Get-ProductionClickHouseHealth {
-    $idProbe = Invoke-NativeText 'docker' @('compose','ps','--status','running','-q','clickhouse') -AllowFailure
-    $ids = @($idProbe.lines | Where-Object { $_.Trim() })
-    if ($idProbe.exit_code -ne 0 -or $ids.Count -ne 1) { return [ordered]@{ ready=$false; health=$null; container_id=$null } }
-    $containerId = $ids[0].Trim()
-    $healthProbe = Invoke-NativeText 'docker' @('inspect','--format','{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}',$containerId) -AllowFailure
-    $sqlProbe = Invoke-NativeText 'docker' @('compose','exec','-T','clickhouse','clickhouse-client','--query','SELECT 1') -AllowFailure
-    $health = (@($healthProbe.lines) -join '').Trim().ToLowerInvariant()
-    $ready = [bool]($healthProbe.exit_code -eq 0 -and $health -eq 'healthy' -and $sqlProbe.exit_code -eq 0 -and ((@($sqlProbe.lines) -join '').Trim() -eq '1'))
-    return [ordered]@{ ready=$ready; health=$health; container_id=$containerId }
-}
-
-function Assert-AcceptedProductionMount([string]$ContainerId) {
-    $probe = Invoke-NativeText 'docker' @('inspect','--format','{{json .Mounts}}',$ContainerId) -AllowFailure
-    if ($probe.exit_code -ne 0) { throw 'Unable to inspect production ClickHouse mounts.' }
-    try { $mounts = ((@($probe.lines) -join "`n") | ConvertFrom-Json) }
-    catch { throw "Production ClickHouse mount JSON invalid: $($_.Exception.Message)" }
-    $matches = @($mounts | Where-Object { [string]$_.Destination -eq '/var/lib/clickhouse' })
-    $ready = [bool]($matches.Count -eq 1 -and [string]$matches[0].Type -eq 'volume' -and [string]$matches[0].Name -eq $AcceptedVolume)
-    Write-Host "accepted_production_mount_ready=$ready"
-    if (-not $ready) { throw 'Production ClickHouse data mount is not the accepted named volume.' }
-}
-
-function Assert-RawConsumersStopped {
-    $runningTotal = 0
-    foreach ($service in @('api','worker','mark-image-worker','qcc-acquisition')) {
-        $probe = Invoke-NativeText 'docker' @('compose','--profile','mark-image','--profile','qcc','ps','-a','-q',$service) -AllowFailure
-        if ($probe.exit_code -ne 0) { throw "Unable to inspect Raw consumer service $service." }
-        $running = 0
-        foreach ($containerId in @($probe.lines | Where-Object { $_.Trim() })) {
-            $state = Invoke-NativeText 'docker' @('inspect','--format','{{.State.Running}}',$containerId.Trim()) -AllowFailure
-            if ($state.exit_code -ne 0) { throw "Unable to inspect Raw consumer container for $service." }
-            if (((@($state.lines) -join '').Trim().ToLowerInvariant()) -eq 'true') { $running++ }
-        }
-        $runningTotal += $running
-        Write-Host "raw_consumer_service=$service running_count=$running"
-    }
-    Write-Host "running_raw_consumer_count=$runningTotal"
-    if ($runningTotal -ne 0) { throw "All Raw consumer services must remain absent/stopped; observed $runningTotal." }
-}
-
-function Get-AllContainerMounts {
-    $idsProbe = Invoke-NativeText 'docker' @('ps','-a','-q') -AllowFailure
-    if ($idsProbe.exit_code -ne 0) { throw 'Unable to enumerate Docker containers.' }
-    $entries = @()
-    foreach ($containerId in @($idsProbe.lines | Where-Object { $_.Trim() })) {
-        $id = $containerId.Trim()
-        $inspectProbe = Invoke-NativeText 'docker' @('inspect','--format','{{json .}}',$id) -AllowFailure
-        if ($inspectProbe.exit_code -ne 0) { throw "Unable to inspect container $id." }
-        $json = (@($inspectProbe.lines) -join "`n").Trim()
-        if (-not $json) { throw "Docker inspect produced no JSON for $id." }
-        try { $container = $json | ConvertFrom-Json }
-        catch { throw "Docker inspect produced invalid JSON for ${id}: $($_.Exception.Message)" }
-        $state = Get-OptionalPropertyValue $container 'State'
-        if ($null -eq $state) { throw "Docker inspect omitted State for $id." }
-        $runningValue = Get-OptionalPropertyValue $state 'Running'
-        if ($null -eq $runningValue) { throw "Docker inspect omitted State.Running for $id." }
-        foreach ($mount in @(Get-OptionalArrayProperty $container 'Mounts')) {
-            $source = [string](Get-OptionalPropertyValue $mount 'Source')
-            $entries += [pscustomobject]@{
-                container_id=[string](Get-OptionalPropertyValue $container 'Id')
-                container_name=([string](Get-OptionalPropertyValue $container 'Name')).TrimStart('/')
-                running=[bool]$runningValue
-                source=$source
-                normalized_source=(Normalize-HostPath $source)
-                destination=[string](Get-OptionalPropertyValue $mount 'Destination')
-            }
-        }
-    }
-    return @($entries)
-}
-
-function Get-ComposeBindMounts {
-    $probe = Invoke-NativeText 'docker' @('compose','--profile','mark-image','--profile','qcc','config','--format','json') -AllowFailure
-    if ($probe.exit_code -ne 0) { throw 'Unable to resolve current Docker Compose model.' }
-    try { $config = ((@($probe.lines) -join "`n") | ConvertFrom-Json) }
-    catch { throw "Current Docker Compose model is invalid JSON: $($_.Exception.Message)" }
-    $services = Get-OptionalPropertyValue $config 'services'
-    if ($null -eq $services) { throw 'Current Docker Compose model omitted services.' }
-    $entries = @()
-    foreach ($serviceProperty in @($services.PSObject.Properties)) {
-        foreach ($mount in @(Get-OptionalArrayProperty $serviceProperty.Value 'volumes')) {
-            if ([string](Get-OptionalPropertyValue $mount 'type') -ne 'bind') { continue }
-            $source = [string](Get-OptionalPropertyValue $mount 'source')
-            $target = [string](Get-OptionalPropertyValue $mount 'target')
-            if (-not $source -or -not $target) { throw "Compose bind for service $($serviceProperty.Name) omitted source or target." }
-            $entries += [pscustomobject]@{ service=[string]$serviceProperty.Name; source=$source; normalized_source=(Normalize-HostPath $source); target=$target }
-        }
-    }
-    return @($entries)
-}
-
-function Assert-ComposeRawBindings([object[]]$ComposeBinds, [string]$ProtectedVisualProcessed) {
-    foreach ($service in @('api','worker','mark-image-worker','qcc-acquisition')) {
-        $raw = @($ComposeBinds | Where-Object { $_.service -eq $service -and $_.target -eq '/data/raw' })
-        if ($raw.Count -ne 1 -or -not (Normalize-HostPath $raw[0].normalized_source).Equals((Normalize-HostPath $RawTargetRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Compose /data/raw for $service does not resolve exactly to accepted F Raw target."
-        }
-    }
-    foreach ($service in @('api','worker','mark-image-worker')) {
-        $visualRaw = @($ComposeBinds | Where-Object { $_.service -eq $service -and $_.target -eq '/data/visual-raw' })
-        if ($visualRaw.Count -ne 1 -or -not (Normalize-HostPath $visualRaw[0].normalized_source).Equals((Normalize-HostPath $RawTargetRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Compose /data/visual-raw for $service does not resolve exactly to accepted F Raw target."
-        }
-        $visualProcessed = @($ComposeBinds | Where-Object { $_.service -eq $service -and $_.target -eq '/data/visual-processed' })
-        if ($visualProcessed.Count -ne 1 -or -not (Normalize-HostPath $visualProcessed[0].normalized_source).Equals($ProtectedVisualProcessed, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Compose /data/visual-processed for $service does not resolve exactly to protected D subtree."
-        }
-    }
-}
-
 function Assert-ReferenceBoundary([string]$SourceRoot, [string]$ProtectedRoot) {
     $composeBinds = @(Get-ComposeBindMounts)
     Assert-ComposeRawBindings $composeBinds $ProtectedRoot
@@ -256,13 +76,17 @@ function Assert-ReferenceBoundary([string]$SourceRoot, [string]$ProtectedRoot) {
     $unexpectedComposeRefs = @($dComposeRefs | Where-Object { -not (Test-PathContains $ProtectedRoot $_.normalized_source) })
     Write-Host "phase2_d_unexpected_container_reference_count=$($unexpectedContainerRefs.Count)"
     Write-Host "phase2_d_unexpected_compose_reference_count=$($unexpectedComposeRefs.Count)"
-    if ($unexpectedContainerRefs.Count -ne 0 -or $unexpectedComposeRefs.Count -ne 0) { throw 'Legacy D Raw has references outside protected visual_processed subtree.' }
+    if ($unexpectedContainerRefs.Count -ne 0 -or $unexpectedComposeRefs.Count -ne 0) {
+        throw 'Legacy D Raw has references outside protected visual_processed subtree.'
+    }
 }
 
 function Assert-EnvBindings([string]$EnvPath, [string]$ExpectedEnvSha, [string]$TargetRoot, [string]$ProtectedRoot) {
     if (-not (Test-Path -LiteralPath $EnvPath -PathType Leaf)) { throw '.env is required.' }
     $currentSha = Get-Sha256 $EnvPath
-    if ($ExpectedEnvSha -and -not $currentSha.Equals($ExpectedEnvSha, [System.StringComparison]::OrdinalIgnoreCase)) { throw '.env changed after Phase2D dry-run authority was frozen.' }
+    if ($ExpectedEnvSha -and -not $currentSha.Equals($ExpectedEnvSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw '.env changed after Phase2D dry-run authority was frozen.'
+    }
     $values = Get-DotEnvValues @(Get-Content -LiteralPath $EnvPath -Encoding UTF8)
     $raw = if ($values.ContainsKey('RAW_DATA_PATH')) { Normalize-HostPath ([string]$values['RAW_DATA_PATH']) } else { '' }
     $visualRaw = if ($values.ContainsKey('VISUAL_RAW_PATH')) { Normalize-HostPath ([string]$values['VISUAL_RAW_PATH']) } else { $raw }
@@ -271,23 +95,6 @@ function Assert-EnvBindings([string]$EnvPath, [string]$ExpectedEnvSha, [string]$
     if (-not $visualRaw.Equals($TargetRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'VISUAL_RAW_PATH no longer points to accepted F Raw target.' }
     if (-not $visualProcessed.Equals($ProtectedRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'VISUAL_PROCESSED_PATH no longer points to protected D subtree.' }
     return $currentSha
-}
-
-function Assert-NoReparsePoints([string]$Root) {
-    $normalized = Normalize-HostPath $Root
-    if (-not $normalized -or -not (Test-Path -LiteralPath $normalized -PathType Container)) { throw "Required directory missing: $Root" }
-    $stack = New-Object 'System.Collections.Generic.Stack[string]'
-    $stack.Push($normalized)
-    while ($stack.Count -gt 0) {
-        $directory = $stack.Pop()
-        $attributes = [System.IO.File]::GetAttributes($directory)
-        if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Reparse point found in Phase2D tree: $directory" }
-        foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($directory)) {
-            $entryAttributes = [System.IO.File]::GetAttributes($entry)
-            if (($entryAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Reparse point found in Phase2D tree: $entry" }
-            if (($entryAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) { $stack.Push($entry) }
-        }
-    }
 }
 
 function Get-ProtectedTreeSignature([string]$Root) {
@@ -313,15 +120,16 @@ function Get-ProtectedTreeSignature([string]$Root) {
             }
         }
     }
-    $canonical = (@($records | Sort-Object) -join "`n")
-    return Get-TextSha256 $canonical
+    return Get-TextSha256 ((@($records | Sort-Object) -join "`n"))
 }
 
 function Assert-SafeRelativePath([string]$RelativePath) {
     if ([string]::IsNullOrWhiteSpace($RelativePath)) { throw 'Manifest relative path is empty.' }
     if ([System.IO.Path]::IsPathRooted($RelativePath) -or $RelativePath.Contains(':')) { throw "Manifest relative path is rooted: $RelativePath" }
     foreach ($segment in @($RelativePath -split '[\\/]')) {
-        if ([string]::IsNullOrWhiteSpace($segment) -or $segment -eq '.' -or $segment -eq '..') { throw "Manifest relative path contains unsafe segment: $RelativePath" }
+        if ([string]::IsNullOrWhiteSpace($segment) -or $segment -eq '.' -or $segment -eq '..') {
+            throw "Manifest relative path contains unsafe segment: $RelativePath"
+        }
     }
 }
 
@@ -334,7 +142,9 @@ function Assert-ManifestEntryPaths([object]$Entry, [string]$SourceRoot, [string]
     $actualTarget = Normalize-HostPath ([string]$Entry.target_path)
     if (-not $actualSource.Equals($expectedSource, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Manifest source path mismatch: $relative" }
     if (-not $actualTarget.Equals($expectedTarget, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Manifest target path mismatch: $relative" }
-    if (-not (Test-PathContains $SourceRoot $actualSource) -or (Test-PathContains $ProtectedRoot $actualSource)) { throw "Manifest source escapes authorized non-protected D boundary: $relative" }
+    if (-not (Test-PathContains $SourceRoot $actualSource) -or (Test-PathContains $ProtectedRoot $actualSource)) {
+        throw "Manifest source escapes authorized non-protected D boundary: $relative"
+    }
     if (-not (Test-PathContains $TargetRoot $actualTarget)) { throw "Manifest target escapes accepted F boundary: $relative" }
 }
 
@@ -349,41 +159,33 @@ function Assert-NormalFileIdentity {
     $normalized = Normalize-HostPath $Path
     if (-not $normalized -or -not (Test-Path -LiteralPath $normalized -PathType Leaf)) { throw "$Role file is missing: $Path" }
     $attributes = [System.IO.File]::GetAttributes($normalized)
-    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or ($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) { throw "$Role is not a normal non-reparse file: $normalized" }
+    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or ($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+        throw "$Role is not a normal non-reparse file: $normalized"
+    }
     $info = New-Object System.IO.FileInfo($normalized)
     if ([int64]$info.Length -ne $ExpectedLength) { throw "$Role length mismatch: $normalized" }
     if ($HashContent) {
         $actualSha = Get-Sha256 $normalized
-        if (-not $actualSha.Equals($ExpectedSha256.Trim().ToLowerInvariant(), [System.StringComparison]::OrdinalIgnoreCase)) { throw "$Role SHA256 mismatch: $normalized" }
+        if (-not $actualSha.Equals($ExpectedSha256.Trim().ToLowerInvariant(), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Role SHA256 mismatch: $normalized"
+        }
     }
 }
 
-function Remove-AuthorizedSourceFile([object]$Entry, [string]$SourceRoot, [string]$ProtectedRoot) {
-    Assert-ManifestEntryPaths $Entry $SourceRoot $RawTargetRoot $ProtectedRoot
+function Remove-AuthorizedSourceFile([object]$Entry, [string]$SourceRoot, [string]$TargetRoot, [string]$ProtectedRoot) {
+    Assert-ManifestEntryPaths $Entry $SourceRoot $TargetRoot $ProtectedRoot
     $normalized = Normalize-HostPath ([string]$Entry.source_path)
-    if ((Test-PathContains $ProtectedRoot $normalized) -or -not (Test-PathContains $SourceRoot $normalized)) { throw 'Delete path is outside the manifest-authorized non-protected D boundary.' }
+    if ((Test-PathContains $ProtectedRoot $normalized) -or -not (Test-PathContains $SourceRoot $normalized)) {
+        throw 'Delete path is outside the manifest-authorized non-protected D boundary.'
+    }
     $attributes = [System.IO.File]::GetAttributes($normalized)
-    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or ($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) { throw "Refusing to delete non-normal source object: $normalized" }
+    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or ($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+        throw "Refusing to delete non-normal source object: $normalized"
+    }
     $info = New-Object System.IO.FileInfo($normalized)
     if ([int64]$info.Length -ne [int64]$Entry.length) { throw "Source length changed immediately before delete: $normalized" }
     [System.IO.File]::Delete($normalized)
     if (Test-Path -LiteralPath $normalized) { throw "Authorized D source file remains after delete: $normalized" }
-}
-
-function Get-CurrentCandidateMetadata([string]$SourceRoot, [string]$ProtectedRoot) {
-    $source = Normalize-HostPath $SourceRoot
-    $protected = Normalize-HostPath $ProtectedRoot
-    $prefix = $source + '\'
-    $entries = @()
-    foreach ($filePath in [System.IO.Directory]::EnumerateFiles($source, '*', [System.IO.SearchOption]::AllDirectories)) {
-        $full = [System.IO.Path]::GetFullPath($filePath)
-        if (Test-PathContains $protected $full) { continue }
-        $attributes = [System.IO.File]::GetAttributes($full)
-        if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Reparse point found in current D candidate set: $full" }
-        $info = New-Object System.IO.FileInfo($full)
-        $entries += [pscustomobject]@{ relative_path=$full.Substring($prefix.Length); source_path=$full; length=[int64]$info.Length }
-    }
-    return @($entries | Sort-Object relative_path)
 }
 
 function Find-AcceptedPhase2PreflightReceipt {
@@ -397,8 +199,7 @@ function Find-AcceptedPhase2PreflightReceipt {
         $candidatePaths = @($directories | ForEach-Object { Join-Path $_.FullName 'production_rebalance_phase2_d_full_sha256_preflight.json' })
     }
     foreach ($path in $candidatePaths) {
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        if (-not (Test-PathContains $reportsRoot $path)) { continue }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or -not (Test-PathContains $reportsRoot $path)) { continue }
         try { $receipt = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json }
         catch { continue }
         if ([string]$receipt.receipt_version -ne 'PRODUCTION_REBALANCE_PHASE2_D_FULL_SHA256_PREFLIGHT_V1') { continue }
@@ -433,14 +234,20 @@ function Assert-PreflightReceiptProvenance([object]$Receipt) {
     Write-Host "preflight_to_current_changed_file_count=$($changed.Count)"
     Write-Host "preflight_to_current_unexpected_changed_file_count=$($unexpected.Count)"
     Write-Host "preflight_to_current_missing_tooling_file_count=$($missing.Count)"
-    if ($unexpected.Count -ne 0 -or $missing.Count -ne 0 -or $changed.Count -ne $allowed.Count) { throw 'Accepted Phase2D preflight provenance invalidated by changes outside the exact resumable-apply tooling delta.' }
+    if ($unexpected.Count -ne 0 -or $missing.Count -ne 0 -or $changed.Count -ne $allowed.Count) {
+        throw 'Accepted Phase2D preflight provenance invalidated by changes outside the exact resumable-apply tooling delta.'
+    }
 }
 
 function Get-ManifestAuthority([object]$Preflight, [string]$PreflightPath, [string]$SourceRoot, [string]$TargetRoot, [string]$ProtectedRoot) {
     $manifestPath = [System.IO.Path]::GetFullPath([string]$Preflight.verified_sha256_manifest_path)
     $preflightDirectory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($PreflightPath))
-    if (-not [System.IO.Path]::GetDirectoryName($manifestPath).Equals($preflightDirectory, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Verified manifest must remain in the accepted preflight evidence directory.' }
-    if (-not [System.IO.Path]::GetFileName($manifestPath).Equals('phase2_d_verified_sha256_manifest.json', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Verified manifest filename changed.' }
+    if (-not [System.IO.Path]::GetDirectoryName($manifestPath).Equals($preflightDirectory, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Verified manifest must remain in the accepted preflight evidence directory.'
+    }
+    if (-not [System.IO.Path]::GetFileName($manifestPath).Equals('phase2_d_verified_sha256_manifest.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Verified manifest filename changed.'
+    }
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Accepted verified SHA256 manifest is missing.' }
     try { $entries = @(Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json) }
     catch { throw "Accepted verified SHA256 manifest is invalid JSON: $($_.Exception.Message)" }
@@ -456,18 +263,38 @@ function Get-ManifestAuthority([object]$Preflight, [string]$PreflightPath, [stri
         if (-not [bool]$entry.hash_equal) { throw "Verified manifest contains non-equal hash entry: $relative" }
         $sourceSha = ([string]$entry.source_sha256).Trim().ToLowerInvariant()
         $targetSha = ([string]$entry.target_sha256).Trim().ToLowerInvariant()
-        if ($sourceSha -notmatch '^[0-9a-f]{64}$' -or $targetSha -notmatch '^[0-9a-f]{64}$' -or $sourceSha -ne $targetSha) { throw "Verified manifest hash pair invalid: $relative" }
+        if ($sourceSha -notmatch '^[0-9a-f]{64}$' -or $targetSha -notmatch '^[0-9a-f]{64}$' -or $sourceSha -ne $targetSha) {
+            throw "Verified manifest hash pair invalid: $relative"
+        }
         if ([int64]$entry.length -lt 0) { throw "Verified manifest contains negative length: $relative" }
         $bytes += [int64]$entry.length
     }
     if ($bytes -ne $script:AcceptedManifestBytes) { throw "Verified manifest byte total changed: $bytes" }
-    $manifestSha = Get-Sha256 $manifestPath
-    $receiptSha = Get-Sha256 $PreflightPath
-    return [ordered]@{ path=$manifestPath; sha256=$manifestSha; preflight_receipt_sha256=$receiptSha; entries=@($entries); bytes=$bytes }
+    return [ordered]@{
+        path=$manifestPath
+        sha256=(Get-Sha256 $manifestPath)
+        preflight_receipt_sha256=(Get-Sha256 $PreflightPath)
+        entries=@($entries)
+        bytes=$bytes
+    }
 }
 
-function Assert-InitialManifestMatchesCurrentSource([object[]]$Entries, [string]$SourceRoot, [string]$ProtectedRoot) {
-    $current = @(Get-CurrentCandidateMetadata $SourceRoot $ProtectedRoot)
+function Get-AuthorityMap([object[]]$Entries) {
+    $map = @{}
+    foreach ($entry in $Entries) { $map[([string]$entry.relative_path).ToLowerInvariant()] = $entry }
+    return $map
+}
+
+function Assert-NoUnauthorizedCurrentSourceFiles([object[]]$Entries, [string]$SourceRoot, [string]$ProtectedRoot) {
+    $authority = Get-AuthorityMap $Entries
+    foreach ($current in @(Get-RawDeletionManifest $SourceRoot $ProtectedRoot)) {
+        $key = ([string]$current.relative_path).ToLowerInvariant()
+        if (-not $authority.ContainsKey($key)) { throw "Unapproved file appeared in D candidate root: $($current.relative_path)" }
+    }
+}
+
+function Assert-InitialManifestMatchesCurrentSource([object[]]$Entries, [string]$SourceRoot, [string]$TargetRoot, [string]$ProtectedRoot) {
+    $current = @(Get-RawDeletionManifest $SourceRoot $ProtectedRoot)
     if ($current.Count -ne $Entries.Count) { throw "Current D candidate count no longer matches accepted authority: $($current.Count) != $($Entries.Count)" }
     $currentMap = @{}
     foreach ($item in $current) { $currentMap[([string]$item.relative_path).ToLowerInvariant()] = $item }
@@ -475,15 +302,8 @@ function Assert-InitialManifestMatchesCurrentSource([object[]]$Entries, [string]
         $key = ([string]$entry.relative_path).ToLowerInvariant()
         if (-not $currentMap.ContainsKey($key)) { throw "Current D candidate missing authority entry: $($entry.relative_path)" }
         if ([int64]$currentMap[$key].length -ne [int64]$entry.length) { throw "Current D candidate length changed: $($entry.relative_path)" }
-    }
-}
-
-function Assert-NoUnauthorizedCurrentSourceFiles([object[]]$Entries, [string]$SourceRoot, [string]$ProtectedRoot) {
-    $authority = @{}
-    foreach ($entry in $Entries) { $authority[([string]$entry.relative_path).ToLowerInvariant()] = $true }
-    foreach ($current in @(Get-CurrentCandidateMetadata $SourceRoot $ProtectedRoot)) {
-        $key = ([string]$current.relative_path).ToLowerInvariant()
-        if (-not $authority.ContainsKey($key)) { throw "Unapproved file appeared in D candidate root: $($current.relative_path)" }
+        Assert-NormalFileIdentity -Path ([string]$entry.source_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.source_sha256) -Role 'D dry-run source metadata'
+        Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F dry-run target metadata'
     }
 }
 
@@ -549,29 +369,27 @@ function Assert-JournalAuthority([object]$Journal, [string]$JournalPath, [object
     if (-not (Test-PathContains $reportsRoot ([System.IO.Path]::GetFullPath($JournalPath))) { throw 'Resume journal must remain under repository reports.' }
 }
 
-function Get-ReconciledJournalState([object]$Journal, [object[]]$Entries, [string]$SourceRoot, [string]$TargetRoot, [string]$ProtectedRoot, [string]$JournalPath, [switch]$AllowRecoveryWrite) {
+function Get-ReconciledJournalState([object]$Journal, [object[]]$Entries, [string]$JournalPath, [switch]$AllowRecoveryWrite) {
     $completed = Get-CompletedSet $Journal
     $inflight = [string](Get-OptionalPropertyValue $Journal 'inflight_relative_path')
     if (-not [string]::IsNullOrWhiteSpace($inflight) -and $completed.ContainsKey($inflight.ToLowerInvariant())) { throw 'Journal inflight path is already completed.' }
-    $manifestMap = @{}
-    foreach ($entry in $Entries) { $manifestMap[([string]$entry.relative_path).ToLowerInvariant()] = $entry }
+    $manifestMap = Get-AuthorityMap $Entries
     foreach ($completedPath in @($completed.Keys)) { if (-not $manifestMap.ContainsKey($completedPath)) { throw "Journal completion is not in authority manifest: $completedPath" } }
     if (-not [string]::IsNullOrWhiteSpace($inflight) -and -not $manifestMap.ContainsKey($inflight.ToLowerInvariant())) { throw 'Journal inflight path is not in authority manifest.' }
 
-    $recomputedCompletedBytes = [int64]0
-    $recomputedCompletedCount = [int64]0
+    $recomputedCount = [int64]0
+    $recomputedBytes = [int64]0
     $remainingBytes = [int64]0
-    $recovered = [int64]0
     foreach ($entry in $Entries) {
         $relative = [string]$entry.relative_path
         $sourceExists = Test-Path -LiteralPath ([string]$entry.source_path) -PathType Leaf
         $disposition = Get-ResumeDisposition $completed $inflight $relative $sourceExists
-        Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F authority target'
+        Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F authority target metadata'
         switch ($disposition) {
             'completed' {
                 Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F completed target' -HashContent
-                $recomputedCompletedCount++
-                $recomputedCompletedBytes += [int64]$entry.length
+                $recomputedCount++
+                $recomputedBytes += [int64]$entry.length
             }
             'recover_completed' {
                 Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F inflight recovery target' -HashContent
@@ -584,9 +402,8 @@ function Get-ReconciledJournalState([object]$Journal, [object[]]$Entries, [strin
                 Save-JournalAtomic $JournalPath $Journal
                 $completed[$relative.ToLowerInvariant()] = $true
                 $inflight = ''
-                $recomputedCompletedCount++
-                $recomputedCompletedBytes += [int64]$entry.length
-                $recovered++
+                $recomputedCount++
+                $recomputedBytes += [int64]$entry.length
             }
             'retry_inflight' {
                 Assert-NormalFileIdentity -Path ([string]$entry.source_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.source_sha256) -Role 'D inflight source' -HashContent
@@ -594,13 +411,15 @@ function Get-ReconciledJournalState([object]$Journal, [object[]]$Entries, [strin
                 $remainingBytes += [int64]$entry.length
             }
             'pending' {
-                Assert-NormalFileIdentity -Path ([string]$entry.source_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.source_sha256) -Role 'D pending source'
+                Assert-NormalFileIdentity -Path ([string]$entry.source_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.source_sha256) -Role 'D pending source metadata'
                 $remainingBytes += [int64]$entry.length
             }
         }
     }
-    if ([int64]$Journal.deleted_file_count -ne $recomputedCompletedCount -or [int64]$Journal.deleted_bytes -ne $recomputedCompletedBytes) { throw 'Journal completed counters disagree with completed path set.' }
-    return [ordered]@{ completed_set=$completed; completed_count=$recomputedCompletedCount; completed_bytes=$recomputedCompletedBytes; remaining_bytes=$remainingBytes; recovered_inflight_count=$recovered }
+    if ([int64]$Journal.deleted_file_count -ne $recomputedCount -or [int64]$Journal.deleted_bytes -ne $recomputedBytes) {
+        throw 'Journal completed counters disagree with completed path set.'
+    }
+    return [ordered]@{ completed_set=$completed; completed_count=$recomputedCount; completed_bytes=$recomputedBytes; remaining_bytes=$remainingBytes }
 }
 
 function Assert-OperationalBoundary([string]$Boundary, [string]$EnvPath, [string]$EnvSha, [string]$SourceRoot, [string]$TargetRoot, [string]$ProtectedRoot, [string]$ProtectedSignature, [int64]$EMinFreeBytes) {
@@ -612,11 +431,25 @@ function Assert-OperationalBoundary([string]$Boundary, [string]$EnvPath, [string
     Assert-AcceptedProductionMount $production.container_id
     Assert-EnvBindings $EnvPath $EnvSha $TargetRoot $ProtectedRoot | Out-Null
     $currentProtectedSignature = Get-ProtectedTreeSignature $ProtectedRoot
-    if (-not $currentProtectedSignature.Equals($ProtectedSignature, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Protected visual_processed metadata changed after dry-run authority was frozen.' }
-    if (Test-Path -LiteralPath $LegacyEHotRoot -or Test-Path -LiteralPath $LegacyEHotLogsRoot) { throw 'Legacy E roots reappeared after Phase1E.' }
+    if (-not $currentProtectedSignature.Equals($ProtectedSignature, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Protected visual_processed metadata changed after dry-run authority was frozen.'
+    }
+    if ((Test-Path -LiteralPath $LegacyEHotRoot) -or (Test-Path -LiteralPath $LegacyEHotLogsRoot)) { throw 'Legacy E roots reappeared after Phase1E.' }
     $driveE = Get-DriveSnapshot 'E'
     if ([int64]$driveE.free_bytes -lt $EMinFreeBytes) { throw 'E free space regressed below the accepted Phase2D preflight baseline.' }
     Assert-ReferenceBoundary $SourceRoot $ProtectedRoot
+}
+
+function Set-PartialFailure([object]$Journal, [string]$JournalPath, [string]$Message) {
+    $Journal.state='PARTIAL_FAILURE'
+    $Journal.phase='partial_failure'
+    $Journal.failure=[ordered]@{
+        message=$Message
+        inflight_relative_path=[string](Get-OptionalPropertyValue $Journal 'inflight_relative_path')
+        failed_at_utc=(Get-Date).ToUniversalTime().ToString('o')
+    }
+    try { Save-JournalAtomic $JournalPath $Journal }
+    catch { Write-Host "journal_partial_failure_persist_error=$($_.Exception.Message)" }
 }
 
 function Invoke-ContractFixture {
@@ -638,32 +471,28 @@ function Invoke-ContractFixture {
     Assert-ManifestEntryPaths $entry $source $target $protected
     Assert-NormalFileIdentity -Path $sourceFile -ExpectedLength 4 -ExpectedSha256 $sha -Role 'fixture source' -HashContent
     Assert-NormalFileIdentity -Path $targetFile -ExpectedLength 4 -ExpectedSha256 $sha -Role 'fixture target' -HashContent
-    $pending = Get-ResumeDisposition @{} '' 'one.bin' $true
-    if ($pending -ne 'pending') { throw 'Pending resume disposition fixture failed.' }
+    if ((Get-ResumeDisposition @{} '' 'one.bin' $true) -ne 'pending') { throw 'Pending resume disposition fixture failed.' }
     $journalPath = Join-Path $fixtureBase 'journal.json'
-    $journal = [ordered]@{ journal_version=$script:JournalVersion; engine_sha=$ExpectedMainSha; state='MUTATING'; inflight_relative_path='one.bin'; completed_relative_paths=@(); deleted_file_count=[int64]0; deleted_bytes=[int64]0; recovered_inflight_count=[int64]0; updated_at_utc=$null }
+    $journal = [ordered]@{ journal_version=$script:JournalVersion; engine_sha=$ExpectedMainSha; state='MUTATING'; phase='fixture'; inflight_relative_path='one.bin'; completed_relative_paths=@(); deleted_file_count=[int64]0; deleted_bytes=[int64]0; recovered_inflight_count=[int64]0; updated_at_utc=$null }
     Save-JournalAtomic $journalPath $journal
     $journal.phase='fixture_second_atomic_save'
     Save-JournalAtomic $journalPath $journal
-    $loaded = Load-Journal $journalPath
-    if ([string]$loaded.inflight_relative_path -ne 'one.bin') { throw 'Atomic journal fixture failed.' }
-    Remove-AuthorizedSourceFile $entry $source $protected
-    if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf) -or -not (Test-Path -LiteralPath $protectedFile -PathType Leaf)) { throw 'Authorized delete escaped source file boundary in fixture.' }
-    $recover = Get-ResumeDisposition @{} 'one.bin' 'one.bin' $false
-    if ($recover -ne 'recover_completed') { throw 'Inflight absent recovery disposition fixture failed.' }
+    if ([string](Load-Journal $journalPath).inflight_relative_path -ne 'one.bin') { throw 'Atomic journal fixture failed.' }
+    Remove-AuthorizedSourceFile $entry $source $target $protected
+    if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf) -or -not (Test-Path -LiteralPath $protectedFile -PathType Leaf)) {
+        throw 'Authorized delete escaped source file boundary in fixture.'
+    }
+    if ((Get-ResumeDisposition @{} 'one.bin' 'one.bin' $false) -ne 'recover_completed') { throw 'Inflight absent recovery disposition fixture failed.' }
     $pendingAbsentFailed = $false
-    try { Get-ResumeDisposition @{} '' 'one.bin' $false | Out-Null }
-    catch { $pendingAbsentFailed = $true }
+    try { Get-ResumeDisposition @{} '' 'one.bin' $false | Out-Null } catch { $pendingAbsentFailed = $true }
     if (-not $pendingAbsentFailed) { throw 'Pending absent source did not fail closed.' }
     [System.IO.File]::WriteAllBytes($sourceFile, [byte[]](1,2,3,4))
     $completedPresentFailed = $false
-    try { Get-ResumeDisposition @{ 'one.bin'=$true } '' 'one.bin' $true | Out-Null }
-    catch { $completedPresentFailed = $true }
+    try { Get-ResumeDisposition @{ 'one.bin'=$true } '' 'one.bin' $true | Out-Null } catch { $completedPresentFailed = $true }
     if (-not $completedPresentFailed) { throw 'Completed source reappearance did not fail closed.' }
     [System.IO.File]::WriteAllBytes($targetFile, [byte[]](5,6,7,8))
     $tamperFailed = $false
-    try { Assert-NormalFileIdentity -Path $targetFile -ExpectedLength 4 -ExpectedSha256 $sha -Role 'tampered target' -HashContent }
-    catch { $tamperFailed = $true }
+    try { Assert-NormalFileIdentity -Path $targetFile -ExpectedLength 4 -ExpectedSha256 $sha -Role 'tampered target' -HashContent } catch { $tamperFailed = $true }
     if (-not $tamperFailed) { throw 'F target tamper did not fail closed.' }
     Write-Host 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_PS51_CONTRACT_PASS'
 }
@@ -701,7 +530,9 @@ try {
     if (-not $sourceRoot.Equals('D:\yoomarks\markorbit-data-engine\raw_data', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'LegacyRawRoot must remain exact approved D Raw root.' }
     if (-not $targetRoot.Equals('F:\MarkOrbitData\raw', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'RawTargetRoot must remain exact accepted F Raw root.' }
     if (-not $eHot.Equals('E:\MarkOrbitData\hot\clickhouse', [System.StringComparison]::OrdinalIgnoreCase) -or -not $eLogs.Equals('E:\MarkOrbitData\hot\clickhouse-logs', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Legacy E boundary changed.' }
-    if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container) -or -not (Test-Path -LiteralPath $targetRoot -PathType Container) -or -not (Test-Path -LiteralPath $protectedRoot -PathType Container)) { throw 'Required D/F/protected directory boundary is missing.' }
+    foreach ($requiredDir in @($sourceRoot,$targetRoot,$protectedRoot)) {
+        if (-not (Test-Path -LiteralPath $requiredDir -PathType Container)) { throw "Required Phase2D directory boundary is missing: $requiredDir" }
+    }
 
     $envPath = Join-Path $repoRoot '.env'
     $preflightResult = Find-AcceptedPhase2PreflightReceipt
@@ -734,7 +565,7 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($ResumeJournalPath)) {
         if ($Apply) { throw 'Fresh direct Apply is forbidden.' }
-        Assert-InitialManifestMatchesCurrentSource $authority.entries $sourceRoot $protectedRoot
+        Assert-InitialManifestMatchesCurrentSource $authority.entries $sourceRoot $targetRoot $protectedRoot
         $envSha = Assert-EnvBindings $envPath '' $targetRoot $protectedRoot
         $protectedSignature = Get-ProtectedTreeSignature $protectedRoot
         Assert-OperationalBoundary 'dry_run' $envPath $envSha $sourceRoot $targetRoot $protectedRoot $protectedSignature $eMinFreeBytes
@@ -794,6 +625,9 @@ try {
         $applyAccepted=$false
         $mutationPerformed=$false
         $receiptPath = Join-Path $evidenceDir 'production_rebalance_phase2_d_resumable_apply_dry_run.json'
+        $finalFreeBytes=$projectedFree
+        $finalHardResidual=$hardResidual
+        $preferredResidual=$recommendedResidual
     }
     else {
         $journalPath = [System.IO.Path]::GetFullPath($ResumeJournalPath)
@@ -809,9 +643,10 @@ try {
             Write-Host "Journal: $journalPath"
             return
         }
+
         Assert-OperationalBoundary 'resume_pre_mutation' $envPath ([string]$journal.env_sha256_before) $sourceRoot $targetRoot $protectedRoot ([string]$journal.protected_tree_signature) ([int64]$journal.accepted_e_min_free_bytes)
         Assert-NoUnauthorizedCurrentSourceFiles $authority.entries $sourceRoot $protectedRoot
-        $reconciled = Get-ReconciledJournalState $journal $authority.entries $sourceRoot $targetRoot $protectedRoot $journalPath -AllowRecoveryWrite
+        $reconciled = Get-ReconciledJournalState $journal $authority.entries $journalPath -AllowRecoveryWrite
         $driveDBeforeMutation = Get-DriveSnapshot 'D'
         $projectedFromRemaining = [int64]$driveDBeforeMutation.free_bytes + [int64]$reconciled.remaining_bytes
         if ($projectedFromRemaining -lt [int64]$journal.required_hard_free_bytes) { throw 'Remaining authorized reclaim no longer reaches the temporary 20-percent hard floor.' }
@@ -830,7 +665,6 @@ try {
 
         try {
             $completed = Get-CompletedSet $journal
-            $processedThisRun = [int64]0
             foreach ($entry in $authority.entries) {
                 $relative = [string]$entry.relative_path
                 $key = $relative.ToLowerInvariant()
@@ -856,7 +690,7 @@ try {
                 Save-JournalAtomic $journalPath $journal
                 Assert-NormalFileIdentity -Path ([string]$entry.source_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.source_sha256) -Role 'D source before delete' -HashContent
                 Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F target before delete' -HashContent
-                Remove-AuthorizedSourceFile $entry $sourceRoot $protectedRoot
+                Remove-AuthorizedSourceFile $entry $sourceRoot $targetRoot $protectedRoot
                 $journal.completed_relative_paths = @($journal.completed_relative_paths) + @($relative)
                 $journal.inflight_relative_path = $null
                 $journal.deleted_file_count = [int64]$journal.deleted_file_count + 1
@@ -864,54 +698,53 @@ try {
                 $journal.phase='delete_authorized_manifest_files'
                 Save-JournalAtomic $journalPath $journal
                 $completed[$key] = $true
-                $processedThisRun++
                 $completedCount = [int64]$journal.deleted_file_count
-                if (($completedCount % 25) -eq 0 -or $completedCount -eq $script:AcceptedManifestFileCount) { Write-Host "phase2_d_apply_progress=$completedCount/$script:AcceptedManifestFileCount" }
+                if (($completedCount % 25) -eq 0 -or $completedCount -eq $script:AcceptedManifestFileCount) {
+                    Write-Host "phase2_d_apply_progress=$completedCount/$($script:AcceptedManifestFileCount)"
+                }
                 if (($completedCount % 100) -eq 0 -and $completedCount -lt $script:AcceptedManifestFileCount) {
                     Assert-OperationalBoundary "progress_$completedCount" $envPath ([string]$journal.env_sha256_before) $sourceRoot $targetRoot $protectedRoot ([string]$journal.protected_tree_signature) ([int64]$journal.accepted_e_min_free_bytes)
                     Assert-ExactMain "delete_progress_$completedCount"
                 }
             }
+
+            $completedFinal = Get-CompletedSet $journal
+            if ($completedFinal.Count -ne $script:AcceptedManifestFileCount -or [int64]$journal.deleted_file_count -ne $script:AcceptedManifestFileCount -or [int64]$journal.deleted_bytes -ne $script:AcceptedManifestBytes) {
+                throw 'Phase2D journal did not complete the full immutable authority manifest.'
+            }
+            if (-not [string]::IsNullOrWhiteSpace([string](Get-OptionalPropertyValue $journal 'inflight_relative_path'))) { throw 'Phase2D journal still has an inflight path after deletion loop.' }
+            $remainingCurrent = @(Get-RawDeletionManifest $sourceRoot $protectedRoot)
+            if ($remainingCurrent.Count -ne 0) { throw "Authorized D duplicate files remain after apply: $($remainingCurrent.Count)" }
+            foreach ($entry in $authority.entries) {
+                if (Test-Path -LiteralPath ([string]$entry.source_path)) { throw "Authorized D source still exists after completion: $($entry.relative_path)" }
+                Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F final target metadata'
+            }
+            Assert-OperationalBoundary 'post_delete' $envPath ([string]$journal.env_sha256_before) $sourceRoot $targetRoot $protectedRoot ([string]$journal.protected_tree_signature) ([int64]$journal.accepted_e_min_free_bytes)
+            $driveDAfter = Get-DriveSnapshot 'D'
+            if ([int64]$driveDAfter.free_bytes -lt [int64]$journal.required_hard_free_bytes) { throw 'D free space is below the accepted temporary 20-percent hard floor after Phase2D.' }
+            $preferredResidual = [int64][math]::Max([int64]0, [int64]([int64]$journal.required_recommended_free_bytes - [int64]$driveDAfter.free_bytes))
+            Write-Host "d_free_after_bytes=$($driveDAfter.free_bytes)"
+            Write-Host "d_required_hard_free_bytes=$($journal.required_hard_free_bytes)"
+            Write-Host "d_required_recommended_free_bytes=$($journal.required_recommended_free_bytes)"
+            Write-Host "d_recommended_residual_after_apply_bytes=$preferredResidual"
+            Assert-ExactMain 'exit'
+            $journal.state='GO'
+            $journal.phase='complete'
+            $journal.failure=$null
+            Save-JournalAtomic $journalPath $journal
         }
         catch {
-            $journal.state='PARTIAL_FAILURE'
-            $journal.phase='partial_failure'
-            $journal.failure=[ordered]@{ message=$_.Exception.Message; inflight_relative_path=[string](Get-OptionalPropertyValue $journal 'inflight_relative_path'); failed_at_utc=(Get-Date).ToUniversalTime().ToString('o') }
-            try { Save-JournalAtomic $journalPath $journal } catch { Write-Host "journal_partial_failure_persist_error=$($_.Exception.Message)" }
-            throw "Phase2D resumable apply entered PARTIAL_FAILURE. Do not manually delete or blindly rerun. Journal: ${journalPath}. Error: $($journal.failure.message)"
+            if ([string]$journal.state -ne 'GO') { Set-PartialFailure $journal $journalPath $_.Exception.Message }
+            throw "Phase2D resumable apply entered PARTIAL_FAILURE. Do not manually delete or blindly rerun. Journal: ${journalPath}. Error: $($_.Exception.Message)"
         }
 
-        $completedFinal = Get-CompletedSet $journal
-        if ($completedFinal.Count -ne $script:AcceptedManifestFileCount -or [int64]$journal.deleted_file_count -ne $script:AcceptedManifestFileCount -or [int64]$journal.deleted_bytes -ne $script:AcceptedManifestBytes) { throw 'Phase2D journal did not complete the full immutable authority manifest.' }
-        if (-not [string]::IsNullOrWhiteSpace([string](Get-OptionalPropertyValue $journal 'inflight_relative_path'))) { throw 'Phase2D journal still has an inflight path after deletion loop.' }
-        Assert-NoUnauthorizedCurrentSourceFiles $authority.entries $sourceRoot $protectedRoot
-        $remainingCurrent = @(Get-CurrentCandidateMetadata $sourceRoot $protectedRoot)
-        if ($remainingCurrent.Count -ne 0) { throw "Authorized D duplicate files remain after apply: $($remainingCurrent.Count)" }
-        foreach ($entry in $authority.entries) {
-            if (Test-Path -LiteralPath ([string]$entry.source_path) { throw "Authorized D source still exists after completion: $($entry.relative_path)" }
-            Assert-NormalFileIdentity -Path ([string]$entry.target_path) -ExpectedLength ([int64]$entry.length) -ExpectedSha256 ([string]$entry.target_sha256) -Role 'F final target metadata'
-        }
-        Assert-OperationalBoundary 'post_delete' $envPath ([string]$journal.env_sha256_before) $sourceRoot $targetRoot $protectedRoot ([string]$journal.protected_tree_signature) ([int64]$journal.accepted_e_min_free_bytes)
-        $driveDAfter = Get-DriveSnapshot 'D'
-        if ([int64]$driveDAfter.free_bytes -lt [int64]$journal.required_hard_free_bytes) { throw 'D free space is below the accepted temporary 20-percent hard floor after Phase2D.' }
-        $recommendedResidual = [int64][math]::Max([int64]0, [int64]([int64]$journal.required_recommended_free_bytes - [int64]$driveDAfter.free_bytes))
-        Write-Host "d_free_after_bytes=$($driveDAfter.free_bytes)"
-        Write-Host "d_required_hard_free_bytes=$($journal.required_hard_free_bytes)"
-        Write-Host "d_required_recommended_free_bytes=$($journal.required_recommended_free_bytes)"
-        Write-Host "d_recommended_residual_after_apply_bytes=$recommendedResidual"
-        Assert-ExactMain 'exit'
-
-        $journal.state='GO'
-        $journal.phase='complete'
-        $journal.failure=$null
-        Save-JournalAtomic $journalPath $journal
         $decision='PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO'
         $nextGate='PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH'
         $applyAccepted=$true
         $mutationPerformed=$true
         $receiptPath = Join-Path ([System.IO.Path]::GetDirectoryName($journalPath)) 'production_rebalance_phase2_d_resumable_apply.json'
-        $projectedFree=[int64]$driveDAfter.free_bytes
-        $hardResidual=[int64]0
+        $finalFreeBytes=[int64]$driveDAfter.free_bytes
+        $finalHardResidual=[int64]0
     }
 
     $productionFinal = Get-ProductionClickHouseHealth
@@ -922,6 +755,7 @@ try {
     if (-not $envUnchanged) { throw '.env changed during Phase2D resumable apply.' }
     $protectedUnchanged = [bool]((Get-ProtectedTreeSignature $protectedRoot).Equals([string]$journal.protected_tree_signature, [System.StringComparison]::OrdinalIgnoreCase))
     if (-not $protectedUnchanged) { throw 'Protected visual_processed changed during Phase2D resumable apply.' }
+    Assert-ExactMain 'receipt_boundary'
 
     $receipt = [ordered]@{
         receipt_version=$script:ReceiptVersion
@@ -936,10 +770,32 @@ try {
         authority_manifest_path=$authority.path
         authority_manifest_sha256=$authority.sha256
         journal_path=$journalPath
-        manifest=[ordered]@{ file_count=[int64]$authority.entries.Count; bytes=[int64]$authority.bytes; original_authority_preserved=$true; target_sha256_verified_at_each_delete_boundary=[bool]$Apply }
-        capacity=[ordered]@{ required_hard_free_bytes=$requiredHardFreeBytes; required_recommended_free_bytes=$requiredRecommendedFreeBytes; projected_or_final_free_bytes=[int64]$projectedFree; hard_residual_bytes=[int64]$hardResidual; preferred_30_percent_exception_remains=[bool]($requiredRecommendedFreeBytes -gt $projectedFree) }
-        protected=[ordered]@{ path=$protectedRoot; tree_signature=[string]$journal.protected_tree_signature; unchanged=$protectedUnchanged; delete_authorized=$false }
-        production=[ordered]@{ accepted_volume=$AcceptedVolume; clickhouse_ready_final=[bool]$productionFinal.ready; accepted_production_mount_ready=$true; running_raw_consumer_count=0 }
+        manifest=[ordered]@{
+            file_count=[int64]$authority.entries.Count
+            bytes=[int64]$authority.bytes
+            original_authority_preserved=$true
+            target_sha256_verified_at_each_delete_boundary=[bool]$Apply
+        }
+        capacity=[ordered]@{
+            required_hard_free_bytes=$requiredHardFreeBytes
+            required_recommended_free_bytes=$requiredRecommendedFreeBytes
+            projected_or_final_free_bytes=[int64]$finalFreeBytes
+            hard_residual_bytes=[int64]$finalHardResidual
+            preferred_30_percent_exception_remains=[bool]($requiredRecommendedFreeBytes -gt $finalFreeBytes)
+            preferred_residual_bytes=[int64]$preferredResidual
+        }
+        protected=[ordered]@{
+            path=$protectedRoot
+            tree_signature=[string]$journal.protected_tree_signature
+            unchanged=$protectedUnchanged
+            delete_authorized=$false
+        }
+        production=[ordered]@{
+            accepted_volume=$AcceptedVolume
+            clickhouse_ready_final=[bool]$productionFinal.ready
+            accepted_production_mount_ready=$true
+            running_raw_consumer_count=0
+        }
         constraints=[ordered]@{
             recursive_legacy_raw_root_delete_authorized=$false
             visual_processed_delete_authorized=$false
@@ -973,6 +829,8 @@ try {
     Write-Host "authority_manifest_sha256=$($authority.sha256)"
     Write-Host "journal_path=$journalPath"
     Write-Host "protected_visual_processed_unchanged=$protectedUnchanged"
+    Write-Host "d_hard_residual_bytes=$finalHardResidual"
+    Write-Host "d_preferred_30_percent_residual_bytes=$preferredResidual"
     Write-Host 'recursive_legacy_raw_root_delete_authorized=False'
     Write-Host 'visual_processed_delete_authorized=False'
     Write-Host 'accepted_volume_delete_authorized=False'
