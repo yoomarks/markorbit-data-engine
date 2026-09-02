@@ -1,0 +1,136 @@
+name: Production Rebalance E Native Reparse Provenance Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-rebalance-e-reparse-native-provenance.ps1'
+      - 'tests/test_production_rebalance_e_native_reparse_provenance_contract.py'
+      - '.github/workflows/production-rebalance-e-native-reparse-provenance-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise native reparse buffers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Native reparse contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\profile-production-rebalance-e-reparse-native-provenance.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in native reparse profiler.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume','LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot')) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing parameter: $parameter" }
+          }
+          if ($command.Parameters.ContainsKey('Apply')) { throw 'Read-only native profiler must not expose -Apply.' }
+
+          $helperNames = @('Normalize-HostPath','Test-PathContains','Resolve-ReparseTargetLexically','Ensure-NativeReparseType')
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+          Ensure-NativeReparseType
+
+          function Set-U16([byte[]]$Buffer, [int]$Offset, [uint16]$Value) {
+            [Buffer]::BlockCopy([BitConverter]::GetBytes($Value), 0, $Buffer, $Offset, 2)
+          }
+          function Set-U32([byte[]]$Buffer, [int]$Offset, [uint32]$Value) {
+            [Buffer]::BlockCopy([BitConverter]::GetBytes($Value), 0, $Buffer, $Offset, 4)
+          }
+          function New-ReparseBuffer([uint32]$Tag, [string]$Kind, [string]$Target) {
+            if ($Kind -eq 'LX') {
+              [byte[]]$targetBytes = [Text.Encoding]::UTF8.GetBytes($Target)
+              [byte[]]$buffer = New-Object byte[] (12 + $targetBytes.Length)
+              Set-U32 $buffer 0 $Tag
+              Set-U16 $buffer 4 ([uint16](4 + $targetBytes.Length))
+              Set-U32 $buffer 8 2
+              [Buffer]::BlockCopy($targetBytes, 0, $buffer, 12, $targetBytes.Length)
+              return ,$buffer
+            }
+            [byte[]]$targetBytes = [Text.Encoding]::Unicode.GetBytes($Target)
+            if ($Kind -eq 'SYMLINK') {
+              [byte[]]$buffer = New-Object byte[] (20 + $targetBytes.Length)
+              Set-U32 $buffer 0 $Tag
+              Set-U16 $buffer 4 ([uint16](12 + $targetBytes.Length))
+              Set-U16 $buffer 8 0
+              Set-U16 $buffer 10 ([uint16]$targetBytes.Length)
+              Set-U16 $buffer 12 0
+              Set-U16 $buffer 14 0
+              Set-U32 $buffer 16 0
+              [Buffer]::BlockCopy($targetBytes, 0, $buffer, 20, $targetBytes.Length)
+              return ,$buffer
+            }
+            [byte[]]$buffer = New-Object byte[] (16 + $targetBytes.Length)
+            Set-U32 $buffer 0 $Tag
+            Set-U16 $buffer 4 ([uint16](8 + $targetBytes.Length))
+            Set-U16 $buffer 8 0
+            Set-U16 $buffer 10 ([uint16]$targetBytes.Length)
+            Set-U16 $buffer 12 0
+            Set-U16 $buffer 14 0
+            [Buffer]::BlockCopy($targetBytes, 0, $buffer, 16, $targetBytes.Length)
+            return ,$buffer
+          }
+
+          $tagSymlink = [Convert]::ToUInt32('A000000C', 16)
+          $tagMount = [Convert]::ToUInt32('A0000003', 16)
+          $tagLx = [Convert]::ToUInt32('A000001D', 16)
+          $tagUnknown = [Convert]::ToUInt32('80000042', 16)
+
+          [byte[]]$symlink = New-ReparseBuffer $tagSymlink 'SYMLINK' '..\..\store\aa'
+          $s = [MarkOrbit.NativeReparsePoint]::ParseBuffer($symlink, $symlink.Length)
+          if ($s.Kind -ne 'SYMLINK' -or $s.Target -ne '..\..\store\aa' -or $s.Error) {
+            throw "SYMLINK parser fixture failed: kind=$($s.Kind) target=$($s.Target) error=$($s.Error)"
+          }
+
+          [byte[]]$mount = New-ReparseBuffer $tagMount 'MOUNT' '\??\D:\root\store\bb'
+          $m = [MarkOrbit.NativeReparsePoint]::ParseBuffer($mount, $mount.Length)
+          if ($m.Kind -ne 'MOUNT_POINT' -or $m.Target -ne '\??\D:\root\store\bb' -or $m.Error) {
+            throw "MOUNT parser fixture failed: kind=$($m.Kind) target=$($m.Target) error=$($m.Error)"
+          }
+
+          [byte[]]$lx = New-ReparseBuffer $tagLx 'LX' '../../store/cc'
+          $l = [MarkOrbit.NativeReparsePoint]::ParseBuffer($lx, $lx.Length)
+          if ($l.Kind -ne 'LX_SYMLINK' -or $l.Target -ne '../../store/cc' -or $l.LxVersion -ne 2 -or $l.Error) {
+            throw "LX parser fixture failed: kind=$($l.Kind) target=$($l.Target) version=$($l.LxVersion) error=$($l.Error)"
+          }
+
+          [byte[]]$unknown = New-Object byte[] 8
+          Set-U32 $unknown 0 $tagUnknown
+          Set-U16 $unknown 4 0
+          $u = [MarkOrbit.NativeReparsePoint]::ParseBuffer($unknown, $unknown.Length)
+          if ($u.Kind -ne 'UNKNOWN' -or $u.Error -ne 'UNSUPPORTED_REPARSE_TAG') {
+            throw "Unknown tag must fail closed: kind=$($u.Kind) error=$($u.Error)"
+          }
+
+          $relative = Resolve-ReparseTargetLexically 'D:\root\data\facts\table' '..\..\store\aa'
+          if ($relative -ne 'D:\root\store\aa' -or -not (Test-PathContains 'D:\root' $relative)) {
+            throw "Relative target containment failed: $relative"
+          }
+          $nt = Resolve-ReparseTargetLexically 'D:\root\metadata\default' '\??\D:\root\store\bb'
+          if ($nt -ne 'D:\root\store\bb') { throw "NT namespace normalization failed: $nt" }
+
+          Write-Host 'PRODUCTION_REBALANCE_E_NATIVE_REPARSE_PS51_CONTRACT_PASS'
