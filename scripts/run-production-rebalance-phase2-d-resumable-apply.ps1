@@ -194,16 +194,17 @@ function Assert-CurrentMetadataMatchesAuthority([object[]]$Entries, [string]$Sou
 
 function Get-ProtectedTreeSignature([string]$Root) {
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw 'Protected visual_processed directory is missing.' }
+    $normalizedRoot = Normalize-HostPath $Root
     $records = @()
     $stack = New-Object 'System.Collections.Generic.Stack[string]'
-    $stack.Push((Normalize-HostPath $Root))
+    $stack.Push($normalizedRoot)
     while ($stack.Count -gt 0) {
         $directory = $stack.Pop()
         foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($directory)) {
             $full = [System.IO.Path]::GetFullPath($entry)
             $attributes = [System.IO.File]::GetAttributes($full)
             if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Protected visual_processed gained a reparse point: $full" }
-            $relative = $full.Substring((Normalize-HostPath $Root).Length).TrimStart('\')
+            $relative = $full.Substring($normalizedRoot.Length).TrimStart('\')
             if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
                 $records += "D|$relative|$([int64]$attributes)"
                 $stack.Push($full)
@@ -239,15 +240,16 @@ function Assert-CurrentBindings([string]$SourceRoot, [string]$TargetRoot, [strin
     if ($unexpectedContainers.Count -ne 0 -or $unexpectedCompose.Count -ne 0) { throw 'D Raw has references outside protected visual_processed.' }
 }
 
-function Save-JournalAtomic([string]$Path, [object]$Journal) {
+function Save-JournalCreateOnly([string]$Path, [object]$Journal) {
     $Journal.updated_at_utc = (Get-Date).ToUniversalTime().ToString('o')
-    $directory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($Path))
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $directory = [System.IO.Path]::GetDirectoryName($fullPath)
     if (-not (Test-Path -LiteralPath $directory -PathType Container)) { [System.IO.Directory]::CreateDirectory($directory) | Out-Null }
+    if (Test-Path -LiteralPath $fullPath) { throw 'Authority journal final path already exists; refusing overwrite.' }
     $temporary = Join-Path $directory ('.journal-' + [Guid]::NewGuid().ToString('N') + '.tmp')
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($temporary, ($Journal | ConvertTo-Json -Depth 20), $encoding)
-    if (Test-Path -LiteralPath $Path -PathType Leaf) { [System.IO.File]::Replace($temporary, $Path, $null) }
-    else { [System.IO.File]::Move($temporary, $Path) }
+    [System.IO.File]::Move($temporary, $fullPath)
 }
 
 function Invoke-ContractFixture {
@@ -256,11 +258,12 @@ function Invoke-ContractFixture {
     [System.IO.Directory]::CreateDirectory($base) | Out-Null
     $journalPath = Join-Path $base 'journal.json'
     $journal = [ordered]@{ journal_version=$script:JournalVersion; state='PREPARED'; mutation_started=$false; completed_relative_paths=@(); inflight_relative_path=$null; updated_at_utc=$null }
-    Save-JournalAtomic $journalPath $journal
-    $journal.state='PREPARED'
-    Save-JournalAtomic $journalPath $journal
+    Save-JournalCreateOnly $journalPath $journal
     $loaded = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$loaded.journal_version -ne $script:JournalVersion -or [bool]$loaded.mutation_started) { throw 'Atomic PREPARED journal fixture failed.' }
+    $overwriteFailed = $false
+    try { Save-JournalCreateOnly $journalPath $journal } catch { $overwriteFailed = $true }
+    if (-not $overwriteFailed) { throw 'Authority journal overwrite did not fail closed.' }
     Assert-SafeRelativePath 'folder\file.bin'
     $unsafeFailed = $false
     try { Assert-SafeRelativePath '..\escape.bin' } catch { $unsafeFailed = $true }
@@ -388,7 +391,7 @@ try {
         created_at_utc=(Get-Date).ToUniversalTime().ToString('o')
         updated_at_utc=$null
     }
-    Save-JournalAtomic $journalPath $journal
+    Save-JournalCreateOnly $journalPath $journal
 
     $receipt = [ordered]@{
         receipt_version=$script:ReceiptVersion
