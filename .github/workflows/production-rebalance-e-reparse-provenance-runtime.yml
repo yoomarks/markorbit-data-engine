@@ -1,0 +1,106 @@
+name: Production Rebalance E Reparse Provenance Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-rebalance-e-reparse-provenance.ps1'
+      - 'tests/test_production_rebalance_e_reparse_provenance_contract.py'
+      - '.github/workflows/production-rebalance-e-reparse-provenance-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise reparse provenance helpers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'E reparse provenance contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\profile-production-rebalance-e-reparse-provenance.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in E reparse provenance profiler.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume','LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot')) {
+            if (-not $command.Parameters.ContainsKey($parameter)) {
+              throw "E reparse provenance profiler lost parameter: $parameter"
+            }
+          }
+          if ($command.Parameters.ContainsKey('Apply')) {
+            throw 'Read-only E reparse provenance profiler must not expose -Apply.'
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_REBALANCE_E_REPARSE_PROVENANCE_V1',
+            'REBALANCE_E_REPARSE_PROVENANCE_INTERNAL_LEXICAL_TARGETS',
+            'REBALANCE_E_REPARSE_PROVENANCE_UNRESOLVED',
+            'REBALANCE_E_REPARSE_PROVENANCE_DANGLING',
+            'REBALANCE_E_REPARSE_PROVENANCE_ESCAPES_DELETION_ROOT',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_DESIGN',
+            'non_traversing_inventory=$true',
+            'phase1_delete_authorized=$false',
+            'reparse_delete_authorized=$false',
+            'mutation_performed=$false',
+            'PRODUCTION_REBALANCE_E_REPARSE_PROVENANCE_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing E reparse provenance marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item','Move-Item','Copy-Item','robocopy','rsync','New-VHD','Resize-VHD',
+            'Mount-VHD','Dismount-VHD','Optimize-VHD','Format-Volume','docker volume rm',
+            'docker system prune','docker compose down','docker compose restart',
+            'wsl.exe --shutdown','wsl.exe --unmount','ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden E reparse provenance behavior found: $forbidden" }
+          }
+
+          $helperNames = @('Normalize-HostPath','Test-PathContains','Resolve-ReparseTargetLexically')
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) E reparse helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          $absolute = Resolve-ReparseTargetLexically 'E:\root\metadata\default' '\??\E:\root\store\abc'
+          if ($absolute -ne 'E:\root\store\abc') {
+            throw "NT namespace target normalization failed: $absolute"
+          }
+          $relative = Resolve-ReparseTargetLexically 'E:\root\metadata\default' '..\store\abc'
+          if ($relative -ne 'E:\root\store\abc') {
+            throw "Relative target normalization failed: $relative"
+          }
+          if (-not (Test-PathContains 'E:\root' $relative)) {
+            throw 'Internal target containment fixture failed.'
+          }
+          if (Test-PathContains 'E:\root' 'F:\other\store') {
+            throw 'Cross-drive target containment fixture failed.'
+          }
+          if ((Resolve-ReparseTargetLexically 'E:\root\metadata\default' '\Device\HarddiskVolume1\x') -ne '') {
+            throw 'Unsupported rooted target must remain unresolved.'
+          }
+
+          Write-Host 'PRODUCTION_REBALANCE_E_REPARSE_PROVENANCE_PS51_CONTRACT_PASS'
