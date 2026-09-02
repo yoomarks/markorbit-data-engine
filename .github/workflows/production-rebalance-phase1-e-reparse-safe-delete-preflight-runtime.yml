@@ -1,0 +1,146 @@
+name: Production Rebalance Phase1E Reparse Safe Delete Preflight Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-rebalance-phase1-e-reparse-safe-delete.ps1'
+      - 'tests/test_production_rebalance_phase1_e_reparse_safe_delete_preflight_contract.py'
+      - '.github/workflows/production-rebalance-phase1-e-reparse-safe-delete-preflight-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise non-following deletion inventory under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Phase1E reparse-safe preflight contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\preflight-production-rebalance-phase1-e-reparse-safe-delete.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in Phase1E reparse-safe preflight.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume','LegacyEHotRoot','LegacyEHotLogsRoot','ExpectedReparsePointCount','EvidenceRoot')) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing safe-preflight parameter: $parameter" }
+          }
+          if ($command.Parameters.ContainsKey('Apply')) { throw 'Read-only Phase1E safe preflight must not expose -Apply.' }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_PREFLIGHT_V1',
+            'PRODUCTION_REBALANCE_E_LX_TARGET_MAPPING_V1',
+            'REBALANCE_E_LX_MAPPING_INTERNAL_TARGETS',
+            'DO_NOT_DESCEND_INTO_REPARSE_POINTS',
+            'POSTORDER_NORMAL_OBJECTS_NATIVE_UNLINK_REPARSE_NO_FOLLOW',
+            'REPARSE_PATH_SET_MISMATCH',
+            'ACTUAL_REPARSE_POINT_COUNT_CHANGED',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_PREFLIGHT_READY',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_APPLY_DESIGN',
+            'phase1_delete_authorized=$false',
+            'reparse_delete_authorized=$false',
+            'mutation_performed=$false',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_PREFLIGHT_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing safe-preflight marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item','Move-Item','Copy-Item','robocopy','rsync','DeleteFileW','RemoveDirectoryW',
+            'New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD','Optimize-VHD','Format-Volume',
+            'docker volume rm','docker system prune','docker compose down','docker compose restart',
+            'wsl.exe --shutdown','wsl.exe --unmount','ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden safe-preflight behavior found: $forbidden" }
+          }
+
+          $helperNames = @(
+            'Normalize-HostPath','Test-PathContains','Convert-RelativePathToBase64',
+            'Get-RelativeDepth','Get-NonTraversingDeletionInventory','Compare-PathSets'
+          )
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) safe-preflight helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($helperName in $helperNames) {
+            $match = @($functionAsts | Where-Object { $_.Name -eq $helperName })
+            if ($match.Count -ne 1) { throw "Expected exactly one helper definition: $helperName" }
+            Invoke-Expression $match[0].Extent.Text
+          }
+
+          $fixtureBase = Join-Path $env:RUNNER_TEMP ('phase1e-safe-' + [Guid]::NewGuid().ToString('N'))
+          $root = Join-Path $fixtureBase 'candidate'
+          $inside = Join-Path $root 'inside'
+          $outside = Join-Path $fixtureBase 'outside-target'
+          New-Item -ItemType Directory -Force -Path $inside | Out-Null
+          New-Item -ItemType Directory -Force -Path $outside | Out-Null
+          [System.IO.File]::WriteAllBytes((Join-Path $inside 'local.bin'), [byte[]](1,2,3))
+          [System.IO.File]::WriteAllBytes((Join-Path $outside 'sentinel.bin'), (New-Object byte[] 100))
+
+          $junction = Join-Path $root 'do-not-follow'
+          New-Item -ItemType Junction -Path $junction -Target $outside | Out-Null
+          $junctionAttributes = [System.IO.File]::GetAttributes($junction)
+          if (($junctionAttributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+            throw 'Junction fixture is not a reparse point.'
+          }
+
+          $manifest = Join-Path $fixtureBase 'candidate.manifest.tsv'
+          $inventory = Get-NonTraversingDeletionInventory -Root $root -ManifestPath $manifest
+          if (-not $inventory.exists -or -not $inventory.root_is_directory -or $inventory.root_is_reparse_point -or -not $inventory.enumeration_complete) {
+            throw "Normal candidate inventory failed: $($inventory | ConvertTo-Json -Compress -Depth 5)"
+          }
+          if ($inventory.regular_file_count -ne 1 -or $inventory.regular_file_bytes -ne 3) {
+            throw "Junction target was traversed or local file accounting failed: files=$($inventory.regular_file_count) bytes=$($inventory.regular_file_bytes)"
+          }
+          if ($inventory.reparse_point_count -ne 1 -or @($inventory.reparse_paths).Count -ne 1 -or
+              -not ([string]$inventory.reparse_paths[0]).Equals($junction, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Reparse object was not recorded exactly once: $($inventory | ConvertTo-Json -Compress -Depth 5)"
+          }
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf) -or [string]::IsNullOrWhiteSpace([string]$inventory.manifest_sha256)) {
+            throw 'Non-following manifest or SHA256 is missing.'
+          }
+
+          $exactSet = Compare-PathSets -Expected @($junction) -Actual @($inventory.reparse_paths)
+          if (-not $exactSet.exact -or $exactSet.missing_count -ne 0 -or $exactSet.unexpected_count -ne 0) {
+            throw "Exact reparse set fixture failed: $($exactSet | ConvertTo-Json -Compress)"
+          }
+          $mismatchSet = Compare-PathSets -Expected @($junction) -Actual @()
+          if ($mismatchSet.exact -or $mismatchSet.missing_count -ne 1) {
+            throw "Missing reparse set did not fail closed: $($mismatchSet | ConvertTo-Json -Compress)"
+          }
+
+          $rootJunction = Join-Path $fixtureBase 'root-junction'
+          New-Item -ItemType Junction -Path $rootJunction -Target $outside | Out-Null
+          $rootManifest = Join-Path $fixtureBase 'root-junction.manifest.tsv'
+          $rootInventory = Get-NonTraversingDeletionInventory -Root $rootJunction -ManifestPath $rootManifest
+          if (-not $rootInventory.exists -or -not $rootInventory.root_is_reparse_point -or $rootInventory.regular_file_count -ne 0) {
+            throw "Reparse root did not fail closed without traversal: $($rootInventory | ConvertTo-Json -Compress -Depth 5)"
+          }
+
+          if (-not (Test-Path -LiteralPath (Join-Path $outside 'sentinel.bin') -PathType Leaf)) {
+            throw 'External junction target was modified during read-only helper fixture.'
+          }
+
+          Write-Host 'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_PREFLIGHT_PS51_CONTRACT_PASS'
