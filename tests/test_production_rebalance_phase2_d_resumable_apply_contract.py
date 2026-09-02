@@ -8,23 +8,35 @@ def _text() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
-def test_phase2d_apply_requires_audited_resume_and_both_destructive_acknowledgements() -> None:
+def test_phase2d_authority_prepare_has_no_apply_or_delete_surface() -> None:
     text = _text()
-    for marker in (
+    for forbidden in (
         "[switch]$Apply",
         "$ResumeJournalPath",
         "$AcknowledgeLegacyDRawDuplicateDelete",
         "$AcknowledgeTemporary20PercentFloor",
         "$AcknowledgeResumeAfterPartialFailure",
-        "-Apply is forbidden without -ResumeJournalPath from an audited no-Apply dry-run.",
-        "-Apply requires explicit -AcknowledgeLegacyDRawDuplicateDelete.",
-        "-Apply requires explicit -AcknowledgeTemporary20PercentFloor.",
-        "requires explicit -AcknowledgeResumeAfterPartialFailure after operator audit",
+        "[System.IO.File]::Delete",
+        "Remove-Item",
+        "RemoveDirectoryW",
+        "DeleteNormalDirectoryChecked",
+        "Directory]::Delete",
+        "Directory.Delete",
+        "robocopy",
+        "rsync",
+    ):
+        assert forbidden not in text
+    for marker in (
+        "apply_supported=False",
+        "data_mutation_performed=False",
+        "phase2_d_file_delete_authorized=False",
+        "recursive_legacy_raw_root_delete_authorized=False",
+        "visual_processed_delete_authorized=False",
     ):
         assert marker in text
 
 
-def test_phase2d_apply_freezes_exact_accepted_target_preflight_authority() -> None:
+def test_phase2d_authority_freezes_exact_accepted_target_preflight() -> None:
     text = _text()
     for marker in (
         "2f20083a0153e0f7f2568ebd86719adaf3d88b48",
@@ -35,15 +47,16 @@ def test_phase2d_apply_freezes_exact_accepted_target_preflight_authority() -> No
         "AcceptedManifestBytes = [int64]57920246250",
         "authority_manifest_sha256",
         "accepted_preflight_receipt_sha256",
-        "original_authority_preserved=$true",
-        "Verified manifest must remain in the accepted preflight evidence directory.",
-        "Verified manifest file count changed",
-        "Verified manifest byte total changed",
+        "Authority manifest is not colocated with the accepted preflight receipt.",
+        "Authority manifest file count changed",
+        "Authority manifest byte total changed",
+        "Authority manifest contains a hash mismatch",
+        "Authority SHA pair is invalid",
     ):
         assert marker in text
 
 
-def test_preflight_to_apply_provenance_is_exactly_three_tooling_files() -> None:
+def test_preflight_to_authority_provenance_is_exactly_three_tooling_files() -> None:
     text = _text()
     for allowed in (
         "scripts/run-production-rebalance-phase2-d-resumable-apply.ps1",
@@ -53,101 +66,64 @@ def test_preflight_to_apply_provenance_is_exactly_three_tooling_files() -> None:
         assert allowed in text
     for marker in (
         "git' @('merge-base','--is-ancestor'",
+        "preflight_to_current_changed_file_count=",
         "preflight_to_current_unexpected_changed_file_count=",
         "preflight_to_current_missing_tooling_file_count=",
-        "changes outside the exact resumable-apply tooling delta",
+        "exact three-file authority-preparation tooling delta",
     ):
         assert marker in text
 
 
-def test_phase2d_apply_never_recursively_deletes_raw_root_or_visual_processed() -> None:
+def test_exact_d_f_and_visual_processed_boundaries_remain_frozen() -> None:
     text = _text()
     for marker in (
         r"D:\yoomarks\markorbit-data-engine\raw_data",
         r"F:\MarkOrbitData\raw",
         "visual_processed",
-        "recursive_legacy_raw_root_delete_authorized=False",
-        "visual_processed_delete_authorized=False",
-        "Delete path is outside the manifest-authorized non-protected D boundary.",
-        "[System.IO.File]::Delete($normalized)",
-    ):
-        assert marker in text
-    for forbidden in (
-        "Remove-Item",
-        "RemoveDirectoryW",
-        "DeleteNormalDirectoryChecked",
-        "Directory]::Delete",
-        "Directory.Delete",
-        "robocopy",
-        "rsync",
-    ):
-        assert forbidden not in text
-
-
-def test_each_source_delete_requires_exact_source_and_f_target_sha256() -> None:
-    text = _text()
-    for marker in (
-        "Assert-NormalFileIdentity",
-        "D source before delete",
-        "F target before delete",
-        "-HashContent",
-        "source_sha256",
-        "target_sha256",
-        "Source length changed immediately before delete",
-        "target_sha256_verified_at_each_delete_boundary",
+        "RAW_DATA_PATH",
+        "VISUAL_RAW_PATH",
+        "VISUAL_PROCESSED_PATH",
+        "D Raw has references outside protected visual_processed.",
+        "Protected visual_processed leaked into authority manifest",
     ):
         assert marker in text
 
 
-def test_journal_is_atomic_manifest_bound_and_crash_resumable() -> None:
+def test_prepared_journal_is_atomic_and_contains_zero_mutation_state() -> None:
     text = _text()
     for marker in (
-        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_JOURNAL_V1",
+        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_JOURNAL_V1",
         "Save-JournalAtomic",
         "[System.IO.File]::Replace",
-        "inflight_relative_path",
-        "completed_relative_paths",
-        "PREPARED",
-        "MUTATING",
-        "PARTIAL_FAILURE",
-        "GO",
-        "recover_completed",
-        "retry_inflight",
-        "Pending D source is absent without journal completion/inflight evidence",
-        "Journal says completed but D source still exists",
-        "Authority manifest bytes changed after dry-run",
-        "Accepted preflight receipt bytes changed after dry-run",
-        "Do not manually delete or blindly rerun",
+        "state='PREPARED'",
+        "phase='awaiting_separate_apply_implementation_and_audit'",
+        "mutation_started=$false",
+        "completed_relative_paths=@()",
+        "inflight_relative_path=$null",
+        "deleted_file_count=[int64]0",
+        "deleted_bytes=[int64]0",
+        "protected_tree_signature",
+        "env_sha256",
     ):
         assert marker in text
 
 
-def test_dry_run_has_no_mutation_and_only_go_advances_to_post_reclaim_refresh() -> None:
-    text = _text()
-    for marker in (
-        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_READY_FOR_APPLY",
-        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO",
-        "PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH",
-        "apply_accepted=$applyAccepted",
-        "mutation_performed=$mutationPerformed",
-    ):
-        assert marker in text
-    assert "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_READY_FOR_APPLY" in text
-    assert "Fresh direct Apply is forbidden." in text
-
-
-def test_operational_boundaries_stay_closed() -> None:
+def test_authority_prepare_revalidates_production_references_and_capacity() -> None:
     text = _text()
     for marker in (
         "Assert-RawConsumersStopped",
         "Get-ProductionClickHouseHealth",
         "Assert-AcceptedProductionMount",
-        "Assert-ReferenceBoundary",
-        "Assert-EnvBindings",
-        "Protected visual_processed metadata changed after dry-run authority was frozen.",
-        "Legacy E roots reappeared after Phase1E.",
+        "Assert-ComposeRawBindings",
+        "Assert-NoReparsePoints",
+        "Assert-CurrentMetadataMatchesAuthority",
+        "Get-ProtectedTreeSignature",
+        "Legacy E roots reappeared after accepted Phase1E.",
         "temporary 20-percent hard floor",
-        "preferred_30_percent_exception_remains",
+        "d_hard_residual_after_projected_bytes=",
+        "d_recommended_residual_after_projected_bytes=",
+        ".env changed during authority preparation.",
+        "Protected visual_processed changed during authority preparation.",
     ):
         assert marker in text
     for forbidden in (
@@ -169,16 +145,28 @@ def test_operational_boundaries_stay_closed() -> None:
         assert forbidden not in text
 
 
-def test_contract_mode_exercises_delete_resume_and_tamper_without_production_paths() -> None:
+def test_success_advances_only_to_separate_apply_implementation() -> None:
+    text = _text()
+    for marker in (
+        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARE_V1",
+        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARED",
+        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_IMPLEMENTATION",
+        "read_only=$true",
+        "data_mutation_performed=$false",
+        "production_invariant_preserved=$true",
+        "env_unchanged=$true",
+    ):
+        assert marker in text
+    assert "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO" not in text
+    assert "PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH" not in text
+
+
+def test_contract_mode_exercises_atomic_prepared_journal_and_path_fail_closed() -> None:
     text = _text()
     for marker in (
         "Invoke-ContractFixture",
-        "Pending resume disposition fixture failed.",
-        "Authorized delete escaped source file boundary in fixture.",
-        "Inflight absent recovery disposition fixture failed.",
-        "Pending absent source did not fail closed.",
-        "Completed source reappearance did not fail closed.",
-        "F target tamper did not fail closed.",
-        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_PS51_CONTRACT_PASS",
+        "Atomic PREPARED journal fixture failed.",
+        "Unsafe authority relative path did not fail closed.",
+        "PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS",
     ):
         assert marker in text
