@@ -1,0 +1,81 @@
+name: Production Rebalance Phase2D Resumable Delete Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-rebalance-phase2-d-resumable-delete.ps1'
+      - 'tests/test_production_rebalance_phase2_d_resumable_delete_contract.py'
+      - '.github/workflows/production-rebalance-phase2-d-resumable-delete-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise resumable journal contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Phase2D resumable delete contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\run-production-rebalance-phase2-d-resumable-delete.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in Phase2D resumable delete operator.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha','AuthorityJournalPath','ResumeJournalPath','AcceptedDryRunReceiptPath',
+            'AcceptedVolume','LegacyRawRoot','RawTargetRoot','LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot',
+            'Apply','AcknowledgeLegacyDRawDuplicateDelete','AcknowledgeTemporary20PercentFloor',
+            'AcknowledgeResumeAfterPartialFailure','ContractOnly'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing Phase2D resumable delete parameter: $parameter" }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            '74cc3379fc7ff81f29a9235b7c55a0ffda2f4090',
+            '6cd4399aaaf47aab3c5dde6dfd87dc7a29be676ce0d3da93d3d6e493f2f35253',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_DELETE_READY_FOR_APPLY',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_DELETE_GO',
+            'PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH',
+            'Save-JournalAtomic',
+            '[System.IO.File]::Replace($temporary, $fullPath, $backup, $true)',
+            'Pending D authority file absent without journal evidence:',
+            'resume_inflight_recovered_complete=',
+            'partial_failure_requires_explicit_resume',
+            'phase2_d_final_verification=all_D_absent_and_F_sha_exact',
+            'recursive_legacy_raw_root_delete_authorized=False',
+            'visual_processed_delete_authorized=False',
+            'PHASE2D_RESUMABLE_DELETE_JOURNAL_FIXTURE_PASS'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing Phase2D resumable delete marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item','RemoveDirectoryW','Directory]::Delete','Directory.Delete','robocopy','rsync',
+            'docker compose down','docker compose restart','docker system prune','docker volume rm',
+            'wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD',
+            'ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden Phase2D resumable delete behavior found: $forbidden" }
+          }
+
+          & $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly
+          Write-Host 'PHASE2D_RESUMABLE_DELETE_CONTRACT_DIRECT_INVOCATION_OK'
