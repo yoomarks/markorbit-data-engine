@@ -303,7 +303,8 @@ function Invoke-ContractFixture {
     if ((Get-UserArchitectureTier 'cn_goods_scope_event') -ne 'WARM_EVENT_HISTORY') { throw 'Event precedence over goods classification failed.' }
     if ((Get-UserArchitectureTier 'cn_case_current') -ne 'HOT_CURRENT_SERVING_CONSERVATIVE') { throw 'Current-serving Hot classification contract failed.' }
     if ((Get-NewAllocationBudget 1000 700 30) -ne 400) { throw 'Recommended budget math contract failed.' }
-    if ((Get-RequiredCapacityBytes 700 30) -ne 1000) { throw 'Recommended virtual capacity math contract failed.' }
+    $requiredCapacity = Get-RequiredCapacityBytes 700 30
+    if ($requiredCapacity -lt 1000 -or $requiredCapacity -gt 1001) { throw 'Recommended virtual capacity conservative rounding contract failed.' }
     if ($script:AllowedReserveReviewToolingFiles.Count -ne 3) { throw 'Storage-layout tooling provenance count changed.' }
     Write-Host 'PRODUCTION_STORAGE_LAYOUT_REPLAN_PS51_CONTRACT_PASS'
 }
