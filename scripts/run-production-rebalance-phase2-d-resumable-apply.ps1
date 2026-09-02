@@ -45,16 +45,29 @@ function Import-AcceptedPreflightHelpers {
         $matches = @($functions | Where-Object { $_.Name -eq $name })
         if ($matches.Count -ne 1) { throw "Expected exactly one accepted helper definition: $name" }
         $functionAst = $matches[0]
-        $inlineParameters = @($functionAst.Parameters)
-        $parameterText = ''
-        if ($inlineParameters.Count -gt 0) {
-            $parameterText = '(' + (($inlineParameters | ForEach-Object { $_.Extent.Text }) -join ', ') + ')'
-        }
-        $scriptScopedDefinition = "function script:$name$parameterText $($functionAst.Body.Extent.Text)"
+        $definitionText = [string]$functionAst.Extent.Text
+        $pattern = '^(\s*function\s+)' + [regex]::Escape($name) + '(?=\s*(?:\(|\{))'
+        $replacement = '${1}script:' + $name
+        $scriptScopedDefinition = [regex]::Replace(
+            $definitionText,
+            $pattern,
+            $replacement,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        if ($scriptScopedDefinition -eq $definitionText) { throw "Unable to scope accepted helper definition: $name" }
         Invoke-Expression $scriptScopedDefinition
         $imported = Get-Command $name -CommandType Function -ErrorAction Stop
-        foreach ($parameterAst in $inlineParameters) {
-            $parameterName = [string]$parameterAst.Name.VariablePath.UserPath
+        $expectedParameterNames = @()
+        foreach ($parameterAst in $functionAst.Parameters) {
+            $expectedParameterNames += [string]$parameterAst.Name.VariablePath.UserPath
+        }
+        if ($null -ne $functionAst.Body.ParamBlock) {
+            foreach ($parameterAst in $functionAst.Body.ParamBlock.Parameters) {
+                $expectedParameterNames += [string]$parameterAst.Name.VariablePath.UserPath
+            }
+        }
+        $expectedParameterNames = @($expectedParameterNames | Select-Object -Unique)
+        foreach ($parameterName in $expectedParameterNames) {
             if (-not $imported.Parameters.ContainsKey($parameterName)) {
                 throw "Imported helper parameter signature was lost: $name.$parameterName"
             }
