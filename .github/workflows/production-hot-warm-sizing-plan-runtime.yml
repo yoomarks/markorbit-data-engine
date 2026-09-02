@@ -1,0 +1,132 @@
+name: Production Hot Warm Sizing Plan Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/plan-production-hot-warm-sizing.ps1'
+      - 'tests/test_production_hot_warm_sizing_plan_contract.py'
+      - '.github/workflows/production-hot-warm-sizing-plan-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise production sizing math under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Sizing contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\plan-production-hot-warm-sizing.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha',
+            'ExpectedHistoryParts',
+            'AcceptedVolume',
+            'HostRecommendedFreePercent',
+            'HostHardFreePercent',
+            'DiskRecommendedFreePercent',
+            'DiskHardFreePercent'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) {
+              throw "Sizing operator lost parameter: $parameter"
+            }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_HOT_WARM_SIZING_PLAN_V1',
+            'PRODUCTION_MULTI_DISK_MIGRATION_READINESS_READY_FOR_SIZING_PLAN',
+            'CN_HOT_WARM_CAPACITY_PROFILE_V1',
+            'facts_snapshot_within_source_baseline=',
+            'US_BOUNDED_CAPACITY_PILOT_RECEIPT_V1',
+            'APPLICATION_ONLY_DO_NOT_GENERALIZE_TO_ASSIGNMENT_TTAB_OR_GLOBAL',
+            'e_current_recommended_provision_fits',
+            'warm_future_us_global_sufficiency_claimed=$false',
+            'PRODUCTION_HOT_WARM_SIZING_PLAN_READY',
+            'PRODUCTION_STORAGE_REBALANCE_PLAN',
+            'vhdx_create_authorized=$false',
+            'live_migration_authorized=$false',
+            'us_package_2_authorized=$false',
+            'us_bulk_authorized=$false',
+            'PRODUCTION_HOT_WARM_SIZING_PLAN_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing sizing marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'New-VHD',
+            'Resize-VHD',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Format-Volume',
+            'mkfs.ext4',
+            'wsl.exe --shutdown',
+            'wsl.exe --unmount',
+            'robocopy',
+            'Copy-Item',
+            'Move-Item',
+            'Remove-Item',
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden sizing behavior found: $forbidden" }
+          }
+
+          $helperNames = @(
+            'Get-RequiredCapacityBytes',
+            'Get-HostUsableBytes',
+            'Get-CurrentNewAllocationBudgetBytes'
+          )
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) sizing helpers; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          if ((Get-RequiredCapacityBytes -PayloadBytes 80 -FreePercent 20) -ne 100) {
+            throw '20% disk-floor fixture failed.'
+          }
+          if ((Get-RequiredCapacityBytes -PayloadBytes 70 -FreePercent 30) -ne 100) {
+            throw '30% disk-floor fixture failed.'
+          }
+          if ((Get-HostUsableBytes -TotalBytes 1000 -FreePercent 30) -ne 700) {
+            throw '30% host usable fixture failed.'
+          }
+          if ((Get-CurrentNewAllocationBudgetBytes -TotalBytes 1000 -FreeBytes 500 -FreePercent 30) -ne 200) {
+            throw 'Current coexistence budget fixture failed.'
+          }
+          if ((Get-CurrentNewAllocationBudgetBytes -TotalBytes 1000 -FreeBytes 150 -FreePercent 20) -ne 0) {
+            throw 'Fail-closed zero allocation fixture failed.'
+          }
+          $invalidCaught = $false
+          try {
+            Get-CurrentNewAllocationBudgetBytes -TotalBytes 100 -FreeBytes 101 -FreePercent 20 | Out-Null
+          }
+          catch { $invalidCaught = $true }
+          if (-not $invalidCaught) {
+            throw 'Invalid host free-byte evidence must fail closed.'
+          }
+
+          Write-Host 'PRODUCTION_HOT_WARM_SIZING_PS51_CONTRACT_PASS'
