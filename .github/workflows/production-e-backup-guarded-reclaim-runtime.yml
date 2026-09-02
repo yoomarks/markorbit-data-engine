@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: production-e-backup-guarded-reclaim-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-powershell51:
