@@ -8,6 +8,10 @@ on:
       - '.github/workflows/production-phase1e-ps51-lx-tag-runtime.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   powershell-51-lx-tag:
     runs-on: windows-latest
