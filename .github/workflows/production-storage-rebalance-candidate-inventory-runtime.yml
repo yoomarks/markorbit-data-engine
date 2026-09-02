@@ -101,7 +101,7 @@ jobs:
             if ($text.Contains($forbidden)) { throw "Forbidden rebalance inventory behavior found: $forbidden" }
           }
 
-          $helperNames = @('Get-ReserveBytes','Get-AdditionalFreeRequired','Test-PathContains')
+          $helperNames = @('Normalize-HostPath','Get-ReserveBytes','Get-AdditionalFreeRequired','Test-PathContains')
           $functionAsts = $ast.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
