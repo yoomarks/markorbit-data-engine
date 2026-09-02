@@ -90,6 +90,13 @@ function Get-TextSha256([string]$Text) {
     finally { $algorithm.Dispose() }
 }
 
+function Expand-JsonArrayForPowerShell51([object]$Value) {
+    if ($null -eq $Value) { return @() }
+    $items = @()
+    foreach ($item in $Value) { $items += ,$item }
+    return $items
+}
+
 function Assert-SafeRelativePath([string]$RelativePath) {
     if ([string]::IsNullOrWhiteSpace($RelativePath)) { throw 'Authority relative path is empty.' }
     if ([System.IO.Path]::IsPathRooted($RelativePath) -or $RelativePath.Contains(':')) { throw "Authority relative path is rooted: $RelativePath" }
@@ -165,8 +172,10 @@ function Get-AuthorityManifest([object]$Receipt, [string]$ReceiptPath, [string]$
         throw 'Authority manifest filename changed.'
     }
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Authority manifest is missing.' }
-    try { $entries = @(Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json) }
+    try { $parsedEntries = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw "Authority manifest is invalid JSON: $($_.Exception.Message)" }
+    $entries = @(Expand-JsonArrayForPowerShell51 -Value $parsedEntries)
+    Write-Host "authority_manifest_json_expanded_count=$($entries.Count)"
     if ($entries.Count -ne $script:AcceptedManifestFileCount) { throw "Authority manifest file count changed: $($entries.Count)" }
     $seen = @{}
     $bytes = [int64]0
@@ -288,6 +297,12 @@ function Invoke-ContractFixture {
     if ((Normalize-HostPath 'C:\root\..\target') -ne 'C:\target') { throw 'Imported Normalize-HostPath argument binding failed.' }
     if (-not (Test-PathContains 'C:\root' 'C:\root\child')) { throw 'Imported Test-PathContains argument binding failed.' }
     if (-not (Test-PathsOverlap 'C:\root' 'C:\root\child')) { throw 'Imported Test-PathsOverlap argument binding failed.' }
+    $manifestFixtureParsed = '[{"relative_path":"one.bin"},{"relative_path":"two.bin"}]' | ConvertFrom-Json
+    $manifestFixtureEntries = @(Expand-JsonArrayForPowerShell51 -Value $manifestFixtureParsed)
+    if ($manifestFixtureEntries.Count -ne 2 -or [string]$manifestFixtureEntries[0].relative_path -ne 'one.bin' -or [string]$manifestFixtureEntries[1].relative_path -ne 'two.bin') {
+        throw 'PS5.1 top-level JSON array expansion failed.'
+    }
+    Write-Host 'manifest_json_array_expansion_ps51=True'
     $base = Join-Path $env:TEMP ('phase2d-authority-' + [Guid]::NewGuid().ToString('N'))
     [System.IO.Directory]::CreateDirectory($base) | Out-Null
     $journalPath = Join-Path $base 'journal.json'
