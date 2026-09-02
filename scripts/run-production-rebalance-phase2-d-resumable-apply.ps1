@@ -44,7 +44,8 @@ function Import-AcceptedPreflightHelpers {
     foreach ($name in $names) {
         $matches = @($functions | Where-Object { $_.Name -eq $name })
         if ($matches.Count -ne 1) { throw "Expected exactly one accepted helper definition: $name" }
-        Invoke-Expression $matches[0].Extent.Text
+        $scriptScopedDefinition = "function script:$name $($matches[0].Body.Extent.Text)"
+        Invoke-Expression $scriptScopedDefinition
     }
 }
 
@@ -250,6 +251,7 @@ function Save-JournalAtomic([string]$Path, [object]$Journal) {
 }
 
 function Invoke-ContractFixture {
+    if (-not (Get-Command Normalize-HostPath -CommandType Function -ErrorAction SilentlyContinue)) { throw 'Imported helper did not survive in script scope.' }
     $base = Join-Path $env:TEMP ('phase2d-authority-' + [Guid]::NewGuid().ToString('N'))
     [System.IO.Directory]::CreateDirectory($base) | Out-Null
     $journalPath = Join-Path $base 'journal.json'
