@@ -1,0 +1,78 @@
+name: Production Hot Warm Sizing Shallow Readiness Evidence Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/plan-production-hot-warm-sizing.ps1'
+      - 'tests/test_production_hot_warm_sizing_shallow_readiness_evidence_contract.py'
+      - '.github/workflows/production-hot-warm-sizing-shallow-readiness-evidence-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exercise shallow readiness root helper under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Shallow readiness evidence contract must run under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\plan-production-hot-warm-sizing.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in production Hot/Warm sizing.'
+          }
+
+          $helper = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Get-ShallowReadinessRoot'
+          }, $true)
+          if ($helper.Count -ne 1) { throw "Expected one Get-ShallowReadinessRoot helper; found $($helper.Count)." }
+          Invoke-Expression $helper[0].Extent.Text
+
+          $repo = (Get-Location).Path
+          $runId = '20260902_151028_62040'
+          $root = Get-ShallowReadinessRoot -RepositoryRoot $repo -RunId $runId
+          $expectedRelative = Join-Path (Join-Path 'reports' '_rdy') $runId
+          if ([string]$root.relative -ne $expectedRelative) {
+            throw "Unexpected shallow relative root: $($root.relative)"
+          }
+          if ([string]$root.absolute -ne (Join-Path $repo $expectedRelative)) {
+            throw "Unexpected shallow absolute root: $($root.absolute)"
+          }
+
+          $receipt = Join-Path ([string]$root.absolute) 'production_multi_disk_migration_readiness_20260902_151028\receipt.json'
+          if ($receipt.Length -ge 240) {
+            throw "Shallow readiness receipt path lacks safe Windows path margin: length=$($receipt.Length) path=$receipt"
+          }
+
+          $rejected = $false
+          try { Get-ShallowReadinessRoot -RepositoryRoot $repo -RunId '..\bad' | Out-Null }
+          catch { $rejected = $true }
+          if (-not $rejected) { throw 'Unsafe readiness run id was not rejected.' }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          if ($text.Contains("Join-Path `$SizingRelativeRoot 'readiness'")) {
+            throw 'Sizing still nests readiness evidence under the caller EvidenceRoot.'
+          }
+          if (-not $text.Contains('readiness_evidence_strategy=SHALLOW_REPO_REPORTS')) {
+            throw 'Shallow readiness evidence marker is missing.'
+          }
+
+          Write-Host 'PRODUCTION_HOT_WARM_SIZING_SHALLOW_READINESS_EVIDENCE_PS51_CONTRACT_PASS'
