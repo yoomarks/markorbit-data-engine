@@ -74,12 +74,23 @@ def test_preflight_to_authority_provenance_is_exactly_three_tooling_files() -> N
         assert marker in text
 
 
-def test_imported_preflight_helpers_survive_in_script_scope() -> None:
+def test_imported_preflight_helpers_preserve_script_scope_and_parameter_signatures() -> None:
     text = _text()
     for marker in (
-        "function script:$name",
+        "function script:$name$parameterText",
+        "$functionAst.Parameters.Count",
+        "$_.Extent.Text",
+        "$parameterAst.Name.VariablePath.UserPath",
+        "$imported.Parameters.ContainsKey($parameterName)",
+        "Imported helper parameter signature was lost:",
+        "imported_helper_parameter_signatures_preserved=True",
         "Imported helper did not survive in script scope.",
         "Get-Command Normalize-HostPath -CommandType Function",
+        "Imported Assert-ExactMain lost Boundary parameter.",
+        "Imported Normalize-HostPath lost Path parameter.",
+        "Imported Normalize-HostPath argument binding failed.",
+        "Imported Test-PathContains argument binding failed.",
+        "Imported Test-PathsOverlap argument binding failed.",
     ):
         assert marker in text
 
@@ -174,10 +185,15 @@ def test_success_advances_only_to_separate_apply_implementation() -> None:
     assert "PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH" not in text
 
 
-def test_contract_mode_exercises_create_only_prepared_journal_and_path_fail_closed() -> None:
+def test_contract_mode_exercises_signature_binding_create_only_journal_and_path_fail_closed() -> None:
     text = _text()
     for marker in (
         "Invoke-ContractFixture",
+        "Imported Assert-ExactMain lost Boundary parameter.",
+        "Imported Normalize-HostPath lost Path parameter.",
+        "Imported Normalize-HostPath argument binding failed.",
+        "Imported Test-PathContains argument binding failed.",
+        "Imported Test-PathsOverlap argument binding failed.",
         "Atomic PREPARED journal fixture failed.",
         "Authority journal overwrite did not fail closed.",
         "Unsafe authority relative path did not fail closed.",
