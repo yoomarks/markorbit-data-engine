@@ -1,0 +1,91 @@
+name: Production Rebalance Phase2D Authority Prepare Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-rebalance-phase2-d-resumable-apply.ps1'
+      - 'tests/test_production_rebalance_phase2_d_resumable_apply_contract.py'
+      - '.github/workflows/production-rebalance-phase2-d-resumable-apply-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise zero-delete authority contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Phase2D authority contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\run-production-rebalance-phase2-d-resumable-apply.ps1'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in Phase2D authority preparation.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha','AcceptedVolume','LegacyRawRoot','RawTargetRoot',
+            'LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot','AcceptedPreflightReceiptPath',
+            'ContractOnly'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing Phase2D authority parameter: $parameter" }
+          }
+          foreach ($forbiddenParameter in @(
+            'Apply','ResumeJournalPath','AcknowledgeLegacyDRawDuplicateDelete',
+            'AcknowledgeTemporary20PercentFloor','AcknowledgeResumeAfterPartialFailure'
+          )) {
+            if ($command.Parameters.ContainsKey($forbiddenParameter)) { throw "Forbidden destructive parameter exposed: $forbiddenParameter" }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_JOURNAL_V1',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARE_V1',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARED',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_IMPLEMENTATION',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS',
+            'apply_supported=False',
+            'data_mutation_performed=False',
+            'mutation_started=$false',
+            'completed_relative_paths=@()',
+            'inflight_relative_path=$null',
+            'Save-JournalCreateOnly',
+            'Authority journal final path already exists; refusing overwrite.',
+            'function script:$name',
+            'Imported helper did not survive in script scope.',
+            'phase2_d_file_delete_authorized=False',
+            'recursive_legacy_raw_root_delete_authorized=False',
+            'visual_processed_delete_authorized=False'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing Phase2D authority marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            '[System.IO.File]::Delete','[System.IO.File]::Replace','Remove-Item','RemoveDirectoryW','DeleteNormalDirectoryChecked',
+            'Directory]::Delete','Directory.Delete','robocopy','rsync',
+            'docker compose down','docker compose restart','docker system prune','docker volume rm',
+            'wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD',
+            'ALTER TABLE','OPTIMIZE TABLE','2023_5.zip',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO','PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden Phase2D authority behavior found: $forbidden" }
+          }
+
+          & $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly
+          Write-Host 'PHASE2D_AUTHORITY_CONTRACT_DIRECT_INVOCATION_OK'
