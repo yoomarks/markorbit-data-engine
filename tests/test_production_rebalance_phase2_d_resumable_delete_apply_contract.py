@@ -66,7 +66,6 @@ def test_only_authorized_source_file_is_deleted_and_root_is_never_recursively_re
     assert "Delete boundary rejected protected visual_processed path" in TEXT
     assert "recursive_legacy_raw_root_delete_authorized=False" in TEXT
     assert "[System.IO.Directory]::Delete" not in TEXT
-    # Production deletion must never use broad recursive deletion.
     production_prefix = TEXT.split("function Invoke-ContractFixture", 1)[0]
     assert "Remove-Item" not in production_prefix
 
@@ -106,9 +105,9 @@ def test_inflight_is_reconciled_before_resume_capacity_math():
 
 
 def test_resume_state_fails_closed_for_completed_present_pending_absent_and_f_tamper():
-    assert "D authority file expected absent but exists" in TEXT
+    assert "$Side authority file expected absent but exists" in TEXT
     assert "Pending D authority file absent without journal evidence" in TEXT
-    assert "F authority SHA changed" in TEXT
+    assert "$Side authority SHA changed" in TEXT
     assert "Inflight path is already completed" in TEXT
 
 
