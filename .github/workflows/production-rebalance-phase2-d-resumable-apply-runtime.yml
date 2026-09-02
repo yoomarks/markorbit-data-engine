@@ -1,4 +1,4 @@
-name: Production Rebalance Phase2D Resumable Apply Runtime
+name: Production Rebalance Phase2D Authority Prepare Runtime
 
 on:
   pull_request:
@@ -21,64 +21,71 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse and exercise resumable manifest-bound contract under Windows PowerShell 5.1
+      - name: Parse and exercise zero-delete authority contract under Windows PowerShell 5.1
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           if ($PSVersionTable.PSVersion.Major -ne 5) {
-            throw 'Phase2D resumable apply contract must execute under Windows PowerShell 5.1.'
+            throw 'Phase2D authority contract must execute under Windows PowerShell 5.1.'
           }
 
           $path = Resolve-Path 'scripts\run-production-rebalance-phase2-d-resumable-apply.ps1'
           $tokens = $null
           $errors = $null
-          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors.Count -ne 0) {
             $errors | ForEach-Object { Write-Error $_.Message }
-            throw 'PowerShell 5.1 parser errors detected in Phase2D resumable apply.'
+            throw 'PowerShell 5.1 parser errors detected in Phase2D authority preparation.'
           }
 
           $command = Get-Command $path
           foreach ($parameter in @(
             'ExpectedMainSha','AcceptedVolume','LegacyRawRoot','RawTargetRoot',
             'LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot','AcceptedPreflightReceiptPath',
-            'ResumeJournalPath','AcknowledgeLegacyDRawDuplicateDelete',
-            'AcknowledgeTemporary20PercentFloor','AcknowledgeResumeAfterPartialFailure',
-            'Apply','ContractOnly'
+            'ContractOnly'
           )) {
-            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing Phase2D resumable parameter: $parameter" }
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing Phase2D authority parameter: $parameter" }
+          }
+          foreach ($forbiddenParameter in @(
+            'Apply','ResumeJournalPath','AcknowledgeLegacyDRawDuplicateDelete',
+            'AcknowledgeTemporary20PercentFloor','AcknowledgeResumeAfterPartialFailure'
+          )) {
+            if ($command.Parameters.ContainsKey($forbiddenParameter)) { throw "Forbidden destructive parameter exposed: $forbiddenParameter" }
           }
 
           $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
           foreach ($required in @(
-            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_JOURNAL_V1',
-            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_READY_FOR_APPLY',
-            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO',
-            'PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH',
-            'inflight_relative_path',
-            'completed_relative_paths',
-            'recover_completed',
-            'retry_inflight',
-            'PARTIAL_FAILURE',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_JOURNAL_V1',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARE_V1',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PREPARED',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_IMPLEMENTATION',
+            'apply_supported=False',
+            'data_mutation_performed=False',
+            'mutation_started=$false',
+            'completed_relative_paths=@()',
+            'inflight_relative_path=$null',
+            'phase2_d_file_delete_authorized=False',
             'recursive_legacy_raw_root_delete_authorized=False',
             'visual_processed_delete_authorized=False'
           )) {
-            if (-not $text.Contains($required)) { throw "Missing Phase2D resumable marker: $required" }
+            if (-not $text.Contains($required)) { throw "Missing Phase2D authority marker: $required" }
           }
 
           foreach ($forbidden in @(
-            'Remove-Item','RemoveDirectoryW','DeleteNormalDirectoryChecked','robocopy','rsync',
+            '[System.IO.File]::Delete','Remove-Item','RemoveDirectoryW','DeleteNormalDirectoryChecked',
+            'Directory]::Delete','Directory.Delete','robocopy','rsync',
             'docker compose down','docker compose restart','docker system prune','docker volume rm',
             'wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD',
-            'ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+            'ALTER TABLE','OPTIMIZE TABLE','2023_5.zip',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO','PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH'
           )) {
-            if ($text.Contains($forbidden)) { throw "Forbidden Phase2D resumable behavior found: $forbidden" }
+            if ($text.Contains($forbidden)) { throw "Forbidden Phase2D authority behavior found: $forbidden" }
           }
 
           $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly 2>&1)
           $exitCode = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }
           if ($exitCode -ne 0) { throw "Phase2D ContractOnly runtime exited $exitCode." }
-          if (-not (($output | ForEach-Object { $_.ToString() }) -contains 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_PS51_CONTRACT_PASS')) {
-            throw 'Phase2D ContractOnly pass marker missing.'
+          if (-not (($output | ForEach-Object { $_.ToString() }) -contains 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_AUTHORITY_PS51_CONTRACT_PASS')) {
+            throw 'Phase2D authority ContractOnly pass marker missing.'
           }
