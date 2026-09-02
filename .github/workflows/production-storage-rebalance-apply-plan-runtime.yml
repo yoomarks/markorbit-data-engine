@@ -1,0 +1,141 @@
+name: Production Storage Rebalance Apply Plan Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/plan-production-storage-rebalance-apply.ps1'
+      - 'tests/test_production_storage_rebalance_apply_plan_contract.py'
+      - '.github/workflows/production-storage-rebalance-apply-plan-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise temporary-20-percent rebalance plan helpers under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Production rebalance apply plan contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\plan-production-storage-rebalance-apply.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in production rebalance apply plan.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume','EvidenceRoot')) {
+            if (-not $command.Parameters.ContainsKey($parameter)) {
+              throw "Production rebalance apply plan lost parameter: $parameter"
+            }
+          }
+          if ($command.Parameters.ContainsKey('Apply')) {
+            throw 'Read-only rebalance apply plan must not expose -Apply.'
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_STORAGE_REBALANCE_APPLY_PLAN_V1',
+            'PRODUCTION_REBALANCE_TEMPORARY_20_PERCENT_APPLY_PLAN_READY',
+            'PRODUCTION_REBALANCE_GUARDED_APPLY_WITH_TEMPORARY_20_PERCENT_ACK',
+            'DELETE_EXACT_UNREFERENCED_LEGACY_NTFS_CLICKHOUSE_TREE',
+            'DELETE_ONLY_FULL_SHA256_VERIFIED_DUPLICATE_RAW_FILES',
+            'candidate_inventory_evidence_strategy=SHALLOW_REPO_REPORTS',
+            'apply_authorized=$false',
+            'legacy_e_hot_delete_authorized=$false',
+            'legacy_raw_delete_authorized=$false',
+            'accepted_volume_delete_authorized=$false',
+            'vhdx_create_authorized=$false',
+            'us_package_2_authorized=$false',
+            'us_bulk_authorized=$false',
+            'PRODUCTION_STORAGE_REBALANCE_APPLY_PLAN_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing production rebalance plan marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item',
+            'Move-Item',
+            'Copy-Item',
+            'robocopy',
+            'rsync',
+            'New-VHD',
+            'Resize-VHD',
+            'Mount-VHD',
+            'Dismount-VHD',
+            'Optimize-VHD',
+            'Format-Volume',
+            'mkfs.ext4',
+            'docker volume rm',
+            'docker system prune',
+            'docker compose down',
+            'docker compose restart',
+            'wsl.exe --shutdown',
+            'wsl.exe --unmount',
+            'ALTER TABLE',
+            'OPTIMIZE TABLE',
+            '2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden production rebalance plan behavior found: $forbidden" }
+          }
+
+          $helperNames = @('Get-ProjectedFreeBytes','Get-ResidualDeficitBytes','Assert-TemporaryHardFloorCandidate')
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) plan helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          if ((Get-ProjectedFreeBytes -CurrentFreeBytes 100 -PlannedReclaimBytes 25) -ne 125) {
+            throw 'Projected-free helper fixture failed.'
+          }
+          if ((Get-ResidualDeficitBytes -CurrentDeficitBytes 50 -PlannedReclaimBytes 20) -ne 30) {
+            throw 'Residual-deficit helper fixture failed.'
+          }
+          if ((Get-ResidualDeficitBytes -CurrentDeficitBytes 20 -PlannedReclaimBytes 50) -ne 0) {
+            throw 'Residual-deficit zero-floor fixture failed.'
+          }
+
+          $script:AcceptedVolume = 'markorbit-data-engine_clickhouse_data'
+          $valid = [pscustomobject]@{
+            receipt_version='PRODUCTION_STORAGE_REBALANCE_CANDIDATE_INVENTORY_V1'
+            decision='REBALANCE_TEMPORARY_HARD_FLOOR_CANDIDATES_FOUND'
+            next_gate='PRODUCTION_REBALANCE_APPLY_PLAN_WITH_TEMPORARY_20_PERCENT_REVIEW'
+            read_only=$true
+            production_invariant_preserved=$true
+            env_unchanged=$true
+            production=[pscustomobject]@{
+              accepted_production_mount_ready=$true
+              accepted_volume='markorbit-data-engine_clickhouse_data'
+              worker_container_count=0
+            }
+          }
+          Assert-TemporaryHardFloorCandidate $valid
+
+          $invalid = $valid.PSObject.Copy()
+          $invalid.decision = 'REBALANCE_CANDIDATE_EVIDENCE_INSUFFICIENT'
+          $blocked = $false
+          try { Assert-TemporaryHardFloorCandidate $invalid }
+          catch { $blocked = $true }
+          if (-not $blocked) { throw 'Temporary-hard-floor candidate helper failed to reject the wrong decision.' }
+
+          Write-Host 'PRODUCTION_STORAGE_REBALANCE_APPLY_PLAN_PS51_CONTRACT_PASS'
