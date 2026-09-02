@@ -1,0 +1,84 @@
+name: Production Rebalance Phase2D Resumable Apply Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-rebalance-phase2-d-resumable-apply.ps1'
+      - 'tests/test_production_rebalance_phase2_d_resumable_apply_contract.py'
+      - '.github/workflows/production-rebalance-phase2-d-resumable-apply-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise resumable manifest-bound contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Phase2D resumable apply contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\run-production-rebalance-phase2-d-resumable-apply.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in Phase2D resumable apply.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha','AcceptedVolume','LegacyRawRoot','RawTargetRoot',
+            'LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot','AcceptedPreflightReceiptPath',
+            'ResumeJournalPath','AcknowledgeLegacyDRawDuplicateDelete',
+            'AcknowledgeTemporary20PercentFloor','AcknowledgeResumeAfterPartialFailure',
+            'Apply','ContractOnly'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing Phase2D resumable parameter: $parameter" }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_JOURNAL_V1',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_READY_FOR_APPLY',
+            'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_GO',
+            'PRODUCTION_REBALANCE_POST_D_RECLAIM_REFRESH',
+            'inflight_relative_path',
+            'completed_relative_paths',
+            'recover_completed',
+            'retry_inflight',
+            'PARTIAL_FAILURE',
+            'recursive_legacy_raw_root_delete_authorized=False',
+            'visual_processed_delete_authorized=False'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing Phase2D resumable marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Remove-Item','RemoveDirectoryW','DeleteNormalDirectoryChecked','robocopy','rsync',
+            'docker compose down','docker compose restart','docker system prune','docker volume rm',
+            'wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD',
+            'ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden Phase2D resumable behavior found: $forbidden" }
+          }
+
+          $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path -ExpectedMainSha $env:GITHUB_SHA -ContractOnly 2>&1)
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) { throw "Phase2D ContractOnly runtime exited $exitCode." }
+          if (-not (($output | ForEach-Object { $_.ToString() }) -contains 'PRODUCTION_REBALANCE_PHASE2_D_RESUMABLE_APPLY_PS51_CONTRACT_PASS')) {
+            throw 'Phase2D ContractOnly pass marker missing.'
+          }
