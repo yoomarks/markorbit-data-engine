@@ -106,13 +106,30 @@ function Get-RawDataPathEvidence {
     }
 }
 
-function Invoke-HostInventory([string]$InventoryRoot) {
+function Get-ShallowHostInventoryRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$RunId
+    )
+    if ([string]::IsNullOrWhiteSpace($RunId) -or $RunId -notmatch '^[0-9A-Za-z_-]+$') {
+        throw 'Host inventory run id must be a short filesystem-safe token.'
+    }
+    return Join-Path $RepositoryRoot (Join-Path 'reports' (Join-Path '_hi' $RunId))
+}
+
+function Invoke-HostInventory {
+    $runId = '{0}_{1}' -f (Get-Date -Format 'yyyyMMdd_HHmmssfff'), $PID
+    $inventoryRoot = Get-ShallowHostInventoryRoot -RepositoryRoot $repoRoot -RunId $runId
+    New-Item -ItemType Directory -Path $inventoryRoot -Force | Out-Null
+    Write-Host 'host_inventory_evidence_strategy=SHALLOW_REPO_REPORTS'
+    Write-Host "host_inventory_evidence_root=$inventoryRoot"
+
     $scriptPath = Join-Path $PSScriptRoot 'inventory-global-multi-disk-host.ps1'
     $childArgs = @(
         '-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,
         '-ExpectedMainSha',$ExpectedMainSha,
         '-AcceptedVolume',$AcceptedVolume,
-        '-EvidenceRoot',$InventoryRoot
+        '-EvidenceRoot',$inventoryRoot
     )
     $previous = $ErrorActionPreference
     try {
@@ -125,12 +142,17 @@ function Invoke-HostInventory([string]$InventoryRoot) {
     foreach ($line in $lines) { Write-Host $line }
     if ($exitCode -ne 0) { throw "Global multi-disk host inventory exited $exitCode." }
 
-    $directories = @(Get-ChildItem -LiteralPath $InventoryRoot -Directory -Filter 'global_multi_disk_host_inventory_*' |
+    $directories = @(Get-ChildItem -LiteralPath $inventoryRoot -Directory -Filter 'global_multi_disk_host_inventory_*' |
         Sort-Object LastWriteTime -Descending)
     if ($directories.Count -ne 1) { throw "Expected exactly one isolated host inventory directory; observed $($directories.Count)." }
     $reportPath = Join-Path $directories[0].FullName 'global_multi_disk_host_inventory.json'
     if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw 'Host inventory JSON receipt is missing.' }
-    return Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    return [ordered]@{
+        report=$report
+        receipt_path=$reportPath
+        evidence_root=$inventoryRoot
+    }
 }
 
 try {
@@ -148,8 +170,6 @@ try {
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     $evidenceDir = Join-Path $repoRoot (Join-Path $EvidenceRoot "production_multi_disk_migration_readiness_$timestamp")
     New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
-    $inventoryRoot = Join-Path $evidenceDir 'inventory'
-    New-Item -ItemType Directory -Path $inventoryRoot -Force | Out-Null
 
     Write-Host 'readiness_stage=production_invariants'
     $workerCount = Get-WorkerContainerCount
@@ -158,7 +178,8 @@ try {
     if (-not $production['ready']) { throw 'Production ClickHouse must be healthy.' }
 
     Write-Host 'readiness_stage=host_inventory'
-    $inventory = Invoke-HostInventory $inventoryRoot
+    $inventoryResult = Invoke-HostInventory
+    $inventory = $inventoryResult['report']
 
     Write-Host 'readiness_stage=accepted_source_snapshot'
     $diskLine = Get-ClickHouseTsv "SELECT name, path, free_space, total_space FROM system.disks WHERE name = 'default'"
@@ -251,6 +272,11 @@ try {
             docker_application_plane_allowed=$true
             stable_endpoint='host.docker.internal'
         }
+        host_inventory_evidence=[ordered]@{
+            strategy='SHALLOW_REPO_REPORTS'
+            evidence_root=[string]$inventoryResult['evidence_root']
+            receipt_path=[string]$inventoryResult['receipt_path']
+        }
         production=[ordered]@{
             clickhouse_ready=[bool]$production['ready']
             clickhouse_health=[string]$production['health']
@@ -326,6 +352,8 @@ try {
     Write-Host "architecture_decision=$acceptedArchitectureDecision"
     Write-Host "architecture_proof_main_sha=$acceptedArchitectureProofSha"
     Write-Host "ready_for_sizing_plan=$readyForSizing"
+    Write-Host 'host_inventory_evidence_strategy=SHALLOW_REPO_REPORTS'
+    Write-Host "host_inventory_receipt_path=$([string]$inventoryResult['receipt_path'])"
     foreach ($letter in @('D:','E:','F:')) {
         if ($driveMap.ContainsKey($letter)) {
             $key = $letter.TrimEnd(':')
