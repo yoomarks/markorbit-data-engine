@@ -44,9 +44,22 @@ function Import-AcceptedPreflightHelpers {
     foreach ($name in $names) {
         $matches = @($functions | Where-Object { $_.Name -eq $name })
         if ($matches.Count -ne 1) { throw "Expected exactly one accepted helper definition: $name" }
-        $scriptScopedDefinition = "function script:$name $($matches[0].Body.Extent.Text)"
+        $functionAst = $matches[0]
+        $parameterText = ''
+        if ($functionAst.Parameters.Count -gt 0) {
+            $parameterText = '(' + ((@($functionAst.Parameters) | ForEach-Object { $_.Extent.Text }) -join ', ') + ')'
+        }
+        $scriptScopedDefinition = "function script:$name$parameterText $($functionAst.Body.Extent.Text)"
         Invoke-Expression $scriptScopedDefinition
+        $imported = Get-Command $name -CommandType Function -ErrorAction Stop
+        foreach ($parameterAst in @($functionAst.Parameters)) {
+            $parameterName = [string]$parameterAst.Name.VariablePath.UserPath
+            if (-not $imported.Parameters.ContainsKey($parameterName)) {
+                throw "Imported helper parameter signature was lost: $name.$parameterName"
+            }
+        }
     }
+    Write-Host 'imported_helper_parameter_signatures_preserved=True'
 }
 
 function Get-Sha256([string]$Path) {
@@ -254,6 +267,13 @@ function Save-JournalCreateOnly([string]$Path, [object]$Journal) {
 
 function Invoke-ContractFixture {
     if (-not (Get-Command Normalize-HostPath -CommandType Function -ErrorAction SilentlyContinue)) { throw 'Imported helper did not survive in script scope.' }
+    $exactMainCommand = Get-Command Assert-ExactMain -CommandType Function -ErrorAction Stop
+    if (-not $exactMainCommand.Parameters.ContainsKey('Boundary')) { throw 'Imported Assert-ExactMain lost Boundary parameter.' }
+    $normalizeCommand = Get-Command Normalize-HostPath -CommandType Function -ErrorAction Stop
+    if (-not $normalizeCommand.Parameters.ContainsKey('Path')) { throw 'Imported Normalize-HostPath lost Path parameter.' }
+    if ((Normalize-HostPath 'C:\root\..\target') -ne 'C:\target') { throw 'Imported Normalize-HostPath argument binding failed.' }
+    if (-not (Test-PathContains 'C:\root' 'C:\root\child')) { throw 'Imported Test-PathContains argument binding failed.' }
+    if (-not (Test-PathsOverlap 'C:\root' 'C:\root\child')) { throw 'Imported Test-PathsOverlap argument binding failed.' }
     $base = Join-Path $env:TEMP ('phase2d-authority-' + [Guid]::NewGuid().ToString('N'))
     [System.IO.Directory]::CreateDirectory($base) | Out-Null
     $journalPath = Join-Path $base 'journal.json'
