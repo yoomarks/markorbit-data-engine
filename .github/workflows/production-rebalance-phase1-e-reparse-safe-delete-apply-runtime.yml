@@ -1,0 +1,119 @@
+name: Production Rebalance Phase1E Reparse Safe Delete Apply Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-rebalance-phase1-e-reparse-safe-delete.ps1'
+      - 'tests/test_production_rebalance_phase1_e_reparse_safe_delete_apply_contract.py'
+      - '.github/workflows/production-rebalance-phase1-e-reparse-safe-delete-apply-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise native no-follow unlink under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Phase1E safe-delete contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\run-production-rebalance-phase1-e-reparse-safe-delete.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in Phase1E safe-delete apply.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @('ExpectedMainSha','AcceptedVolume','LegacyEHotRoot','LegacyEHotLogsRoot','ExpectedReparsePointCount','AcknowledgeLegacyEDuplicateDelete','Apply')) {
+            if (-not $command.Parameters.ContainsKey($parameter)) { throw "Missing safe-delete apply parameter: $parameter" }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_APPLY_V1',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_READY_FOR_APPLY',
+            'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_GO',
+            'PRODUCTION_REBALANCE_PHASE1_E_SAFE_DELETE_JOURNAL_V1',
+            'FILE_FLAG_OPEN_REPARSE_POINT',
+            'FSCTL_GET_REPARSE_POINT',
+            '0xA000001D',
+            'Boundary non-following manifest SHA changed after accepted same-main preflight.',
+            'Phase1E native no-follow delete entered partial-failure state.',
+            'accepted_volume_delete_authorized=$false',
+            'us_package_2_authorized=$false',
+            'us_bulk_authorized=$false'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing safe-delete apply marker: $required" }
+          }
+          foreach ($forbidden in @(
+            'Remove-Item -Recurse','docker compose down','docker compose restart','docker system prune',
+            'docker volume rm','wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD',
+            'Mount-VHD','Dismount-VHD','Optimize-VHD','ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden safe-delete behavior found: $forbidden" }
+          }
+
+          $helper = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Ensure-NativeSafeDeleteType'
+          }, $true)
+          if ($helper.Count -ne 1) { throw "Expected one Ensure-NativeSafeDeleteType helper; found $($helper.Count)." }
+          Invoke-Expression $helper[0].Extent.Text
+          Ensure-NativeSafeDeleteType
+
+          $fixture = Join-Path $env:RUNNER_TEMP 'phase1e-native-safe-delete'
+          $target = Join-Path $fixture 'external-target'
+          $link = Join-Path $fixture 'junction-link'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          $sentinel = Join-Path $target 'sentinel.bin'
+          [System.IO.File]::WriteAllBytes($sentinel, (New-Object byte[] 101))
+          $mklink = "mklink /J `"$link`" `"$target`""
+          & cmd.exe /d /c $mklink | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "Unable to create junction fixture; exit=$LASTEXITCODE" }
+
+          $mountTag = [Convert]::ToUInt32('A0000003', 16)
+          $lxTag = [Convert]::ToUInt32('A000001D', 16)
+          $identity = [MarkOrbit.NativeSafeDelete]::Query($link)
+          if ($identity.Error -or $identity.Tag -ne $mountTag) {
+            throw "Unexpected junction identity: error=$($identity.Error) tag=0x$($identity.Tag.ToString('X8'))"
+          }
+
+          $rejected = $false
+          try { [MarkOrbit.NativeSafeDelete]::UnlinkChecked($link, $lxTag, [uint32]2, $true) }
+          catch { $rejected = $true }
+          if (-not $rejected) { throw 'Production LX guard failed to reject a non-LX junction.' }
+          if (-not [MarkOrbit.NativeSafeDelete]::ExistsNoFollow($link)) { throw 'Rejected junction was unexpectedly removed.' }
+          if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) { throw 'Rejected unlink touched external target.' }
+
+          [MarkOrbit.NativeSafeDelete]::UnlinkChecked($link, $mountTag, [uint32]0, $false)
+          if ([MarkOrbit.NativeSafeDelete]::ExistsNoFollow($link)) { throw 'Junction link object remains after checked unlink.' }
+          if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) { throw 'Checked unlink dereferenced or damaged the external target.' }
+          if ((Get-Item -LiteralPath $sentinel).Length -ne 101) { throw 'External sentinel changed during link unlink.' }
+
+          $normalRoot = Join-Path $fixture 'normal-tree'
+          $normalDir = Join-Path $normalRoot 'child'
+          $normalFile = Join-Path $normalDir 'payload.bin'
+          New-Item -ItemType Directory -Force -Path $normalDir | Out-Null
+          [System.IO.File]::WriteAllBytes($normalFile, (New-Object byte[] 17))
+          [MarkOrbit.NativeSafeDelete]::DeleteNormalFileChecked($normalFile, [int64]17)
+          [MarkOrbit.NativeSafeDelete]::DeleteNormalDirectoryChecked($normalDir)
+          [MarkOrbit.NativeSafeDelete]::DeleteNormalDirectoryChecked($normalRoot)
+          if ([MarkOrbit.NativeSafeDelete]::ExistsNoFollow($normalRoot)) { throw 'Normal native delete fixture remains.' }
+
+          Write-Host 'PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_APPLY_PS51_CONTRACT_PASS'
