@@ -115,8 +115,8 @@ def test_dry_run_has_no_mutation_and_advances_only_to_explicit_apply() -> None:
     assert "if (-not $Apply)" in text
     assert "PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_READY_FOR_APPLY" in text
     assert "PRODUCTION_REBALANCE_PHASE1_E_REPARSE_SAFE_DELETE_APPLY'" in text
-    assert "apply_accepted=$false" in text
-    assert "mutation_performed=$false" in text
+    assert "$applyAccepted=$false" in text
+    assert "$mutationPerformed=$false" in text
 
 
 def test_bulk_and_platform_mutation_boundaries_remain_closed() -> None:
