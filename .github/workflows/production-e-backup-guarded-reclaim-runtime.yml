@@ -1,0 +1,44 @@
+name: Production E Backup Guarded Reclaim Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-e-backup-guarded-reclaim.ps1'
+      - 'tests/test_production_e_backup_guarded_reclaim_contract.py'
+      - '.github/workflows/production-e-backup-guarded-reclaim-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: production-e-backup-guarded-reclaim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise guarded E reclaim under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\run-production-e-backup-guarded-reclaim.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'Guarded E reclaim failed Windows PowerShell 5.1 parse.'
+          }
+
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          foreach ($required in @('Apply','AcknowledgeSupersededEBackupDelete','ResumeJournalPath','AcknowledgeResumePartialReclaim','AcceptedBoundaryReceiptPath')) {
+            if ($paramNames -notcontains $required) { throw "Guarded E reclaim missing required parameter: $required" }
+          }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -AcceptedProvenanceReceiptPath 'C:\fixture\unused.json' `
+            -ContractOnly
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+
+          Write-Host 'PRODUCTION_E_BACKUP_GUARDED_RECLAIM_CONTRACT_DIRECT_INVOCATION_OK'
