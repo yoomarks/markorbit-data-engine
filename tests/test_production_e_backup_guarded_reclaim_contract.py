@@ -26,12 +26,14 @@ def test_operator_is_manifest_bound_to_exact_four_snapshot_files() -> None:
         "disk\\docker_data.empty.vhdx",
         "main\\ext4.vhdx",
         "disk\\docker_data.vhdx",
-        "frozen_manifest_file_count",
+        "frozen_manifest_file_count=4",
         "853980217998",
+        "933a8a1a87ba66f1c919d73aaed3c625ce33bd391648f649a5852405324dc7c3",
+        "83fdd0f4f02a9a2745af008c3a57cd249ea8a4b601d7e93f4c1206fbf6d1b70f",
     ):
         assert marker in source
-    assert "Frozen E reclaim manifest must contain exactly four files" in source
-    assert "E backup metadata manifest SHA changed" in source
+    assert "$script:FrozenManifest.Count -ne 4" in source
+    assert "Accepted E backup metadata manifest SHA changed" in source
     assert "E backup manifest path set changed" in source
 
 
@@ -93,6 +95,22 @@ def test_journal_is_persisted_before_and_after_each_exact_file_delete() -> None:
     assert "deleted_bytes" in function
 
 
+def test_journal_declares_resume_and_final_fields_before_mutation() -> None:
+    source = text()
+    journal = source.split("function New-ApplyJournal", 1)[1].split(
+        "function Resolve-ResumeJournal", 1
+    )[0]
+    for marker in (
+        "completed_utc=$null",
+        "e_free_after_bytes=$null",
+        "e_free_gain_bytes=$null",
+        "failure_relative_path=$null",
+        "failure_message=$null",
+    ):
+        assert marker in journal
+    assert "[System.IO.File]::Replace($tmp, $Path, $backup, $true)" in source
+
+
 def test_partial_failure_resume_is_fail_closed_and_manifest_bound() -> None:
     source = text()
     assert "[string]$ResumeJournalPath" in source
@@ -103,6 +121,17 @@ def test_partial_failure_resume_is_fail_closed_and_manifest_bound() -> None:
     assert "resume_recovered_absent_inflight" in source
     assert "resume_retry_inflight" in source
     assert "Pending manifest file missing" in source
+
+
+def test_contractonly_exercises_atomic_journal_and_temp_four_file_delete() -> None:
+    source = text()
+    fixture = source.split("function Invoke-ContractFixture", 1)[1].split("try {", 1)[0]
+    assert "markorbit_guarded_reclaim_" in fixture
+    assert "Save-JournalAtomic $fixtureJournalPath $fixtureJournal" in fixture
+    assert "foreach ($entry in $fixtureEntries) { Delete-ExactManifestFile" in fixture
+    assert "Remove-OnlyEmptySnapshotDirectories $fixtureRoot" in fixture
+    assert "Fixture journal delete count failed" in fixture
+    assert "Fixture empty-only root cleanup failed" in fixture
 
 
 def test_apply_rechecks_production_exact_main_env_and_refs() -> None:
@@ -116,6 +145,15 @@ def test_apply_rechecks_production_exact_main_env_and_refs() -> None:
         ".env changed during guarded reclaim apply",
     ):
         assert marker in source
+
+
+def test_success_requires_actual_30_percent_warm_admission() -> None:
+    source = text()
+    assert "618860039242" in source
+    assert "Get-ERecommendedBudget" in source
+    assert "Actual E reclaim did not preserve recommended 30-percent Warm admission" in source
+    assert "recommended_30_percent_admission=$true" in source
+    assert "e_recommended_margin_after_bytes" in source
 
 
 def test_success_advances_only_to_cn_warm_equivalence_preflight() -> None:
