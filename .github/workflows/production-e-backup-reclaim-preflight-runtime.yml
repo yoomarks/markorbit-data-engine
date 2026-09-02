@@ -1,0 +1,45 @@
+name: Production E Backup Reclaim Preflight Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-e-backup-reclaim.ps1'
+      - 'tests/test_production_e_backup_reclaim_preflight_contract.py'
+      - '.github/workflows/production-e-backup-reclaim-preflight-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise E backup reclaim preflight contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\preflight-production-e-backup-reclaim.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'E backup reclaim preflight failed Windows PowerShell 5.1 parse.'
+          }
+
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          foreach ($forbidden in @('Apply','Resume','AcknowledgeDelete','AcknowledgeMove')) {
+            if ($paramNames -contains $forbidden) { throw "E backup reclaim preflight must not expose destructive parameter: $forbidden" }
+          }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -AcceptedLayoutReplanReceiptPath 'C:\fixture\unused.json' `
+            -ContractOnly
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+
+          Write-Host 'PRODUCTION_E_BACKUP_RECLAIM_PREFLIGHT_CONTRACT_DIRECT_INVOCATION_OK'
