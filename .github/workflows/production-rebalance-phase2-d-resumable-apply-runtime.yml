@@ -64,6 +64,8 @@ jobs:
             'mutation_started=$false',
             'completed_relative_paths=@()',
             'inflight_relative_path=$null',
+            'Save-JournalCreateOnly',
+            'Authority journal final path already exists; refusing overwrite.',
             'function script:$name',
             'Imported helper did not survive in script scope.',
             'phase2_d_file_delete_authorized=False',
@@ -74,7 +76,7 @@ jobs:
           }
 
           foreach ($forbidden in @(
-            '[System.IO.File]::Delete','Remove-Item','RemoveDirectoryW','DeleteNormalDirectoryChecked',
+            '[System.IO.File]::Delete','[System.IO.File]::Replace','Remove-Item','RemoveDirectoryW','DeleteNormalDirectoryChecked',
             'Directory]::Delete','Directory.Delete','robocopy','rsync',
             'docker compose down','docker compose restart','docker system prune','docker volume rm',
             'wsl.exe --shutdown','wsl.exe --unmount','New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD',
