@@ -126,7 +126,7 @@ jobs:
             throw "Unknown tag must fail closed: kind=$($u.Kind) error=$($u.Error)"
           }
 
-          $relative = Resolve-ReparseTargetLexically 'D:\root\data\table' '..\..\store\aa'
+          $relative = Resolve-ReparseTargetLexically 'D:\root\data\facts\table' '..\..\store\aa'
           if ($relative -ne 'D:\root\store\aa' -or -not (Test-PathContains 'D:\root' $relative)) {
             throw "Relative target containment failed: $relative"
           }
