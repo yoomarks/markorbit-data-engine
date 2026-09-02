@@ -144,6 +144,7 @@ function Get-HostUsableBytes {
         [Parameter(Mandatory = $true)][double]$FreePercent
     )
     if ($TotalBytes -lt 0) { throw 'TotalBytes must be non-negative.' }
+    if ($FreePercent -le 0 -or $FreePercent -ge 100) { throw 'FreePercent must be between 0 and 100.' }
     $usableFraction = 1.0 - ($FreePercent / 100.0)
     return [int64][math]::Floor([double]$TotalBytes * $usableFraction)
 }
@@ -154,6 +155,8 @@ function Get-CurrentNewAllocationBudgetBytes {
         [Parameter(Mandatory = $true)][int64]$FreeBytes,
         [Parameter(Mandatory = $true)][double]$FreePercent
     )
+    if ($TotalBytes -lt 0 -or $FreeBytes -lt 0 -or $FreeBytes -gt $TotalBytes) { throw 'Invalid host total/free byte evidence.' }
+    if ($FreePercent -le 0 -or $FreePercent -ge 100) { throw 'FreePercent must be between 0 and 100.' }
     $reserve = [int64][math]::Ceiling([double]$TotalBytes * ($FreePercent / 100.0))
     return [int64][math]::Max([int64]0, [int64]($FreeBytes - $reserve))
 }
@@ -238,9 +241,17 @@ try {
     }
 
     $sourceBaseline = $readiness.production.source_baseline
-    if ([int64]$capacityProfile.active_totals.rows_from_parts -ne [int64]$sourceBaseline.active_rows -or
-        [int64]$capacityProfile.active_totals.bytes_on_disk -ne [int64]$sourceBaseline.active_bytes_on_disk) {
-        throw 'CN/system.parts capacity snapshot does not match the refreshed readiness source baseline.'
+    $factsRows = [int64]$capacityProfile.active_totals.rows_from_parts
+    $factsBytes = [int64]$capacityProfile.active_totals.bytes_on_disk
+    $sourceRows = [int64]$sourceBaseline.active_rows
+    $sourceBytes = [int64]$sourceBaseline.active_bytes_on_disk
+    $factsSnapshotWithinSourceBaseline = [bool](
+        $factsRows -gt 0 -and $factsBytes -gt 0 -and
+        $factsRows -le $sourceRows -and $factsBytes -le $sourceBytes
+    )
+    Write-Host "facts_snapshot_within_source_baseline=$factsSnapshotWithinSourceBaseline"
+    if (-not $factsSnapshotWithinSourceBaseline) {
+        throw 'markorbit_facts metadata snapshot is invalid or exceeds the refreshed production source baseline.'
     }
 
     $allTables = @($capacityProfile.tables)
@@ -324,13 +335,19 @@ try {
     $hotGlobalHardQuota = [int64][math]::Max([int64]0, [int64]($dHostHardUsable - $hardCoreHot))
     $dRecommendedFinalFits = [bool]($hotGlobalRecommendedQuota -ge $hotGlobalExistingRecommended)
     $dHardFinalFits = [bool]($hotGlobalHardQuota -ge $hotGlobalExistingHard)
-    $eRecommendedFinalFits = [bool]($warmCandidateRecommended -le $eCurrentRecommendedNewBudget)
-    $eHardFinalFits = [bool]($warmCandidateHard -le $eCurrentHardNewBudget)
+
+    # Final E architecture fit uses total physical capacity after a separately
+    # accepted rebalance. Current E free-space fit is evaluated independently
+    # below so existing unrelated bytes do not become a false architecture blocker.
+    $eRecommendedFinalFits = [bool]($warmCandidateRecommended -le $eHostRecommendedUsable)
+    $eHardFinalFits = [bool]($warmCandidateHard -le $eHostHardUsable)
+    $eCurrentRecommendedProvisionFits = [bool]($warmCandidateRecommended -le $eCurrentRecommendedNewBudget)
+    $eCurrentHardProvisionFits = [bool]($warmCandidateHard -le $eCurrentHardNewBudget)
 
     # This is only a lower-bound coexistence check: the new ext4 plane must at
     # least materialize the current active source bytes while the accepted Docker
     # source remains retained. VHDX quotas are not counted as preallocated bytes.
-    $sourceActiveBytes = [int64]$sourceBaseline.active_bytes_on_disk
+    $sourceActiveBytes = $sourceBytes
     $dCoexistenceRecommendedLowerBoundFits = [bool]($sourceActiveBytes -le $dCurrentRecommendedNewBudget)
     $dCoexistenceHardLowerBoundFits = [bool]($sourceActiveBytes -le $dCurrentHardNewBudget)
 
@@ -341,9 +358,9 @@ try {
     } else {
         'CAPACITY_ARCHITECTURE_BLOCKED'
     }
-    $coexistenceState = if ($dCoexistenceRecommendedLowerBoundFits -and $eRecommendedFinalFits) {
+    $coexistenceState = if ($dCoexistenceRecommendedLowerBoundFits -and $eCurrentRecommendedProvisionFits) {
         'CURRENT_HOST_CAN_PROVISION_WITH_RECOMMENDED_RESERVE'
-    } elseif ($dCoexistenceHardLowerBoundFits -and $eHardFinalFits) {
+    } elseif ($dCoexistenceHardLowerBoundFits -and $eCurrentHardProvisionFits) {
         'CURRENT_HOST_HARD_FLOOR_ONLY'
     } else {
         'REBALANCE_REQUIRED_BEFORE_PROVISION'
@@ -351,7 +368,7 @@ try {
 
     $planBlockers = @()
     if (-not $dHardFinalFits) { $planBlockers += 'D_FINAL_HOT_PLAN_CANNOT_FIT_20_PERCENT_HOST_AND_DISK_FLOORS' }
-    if (-not $eHardFinalFits) { $planBlockers += 'E_WARM_CANDIDATE_PLAN_CANNOT_FIT_20_PERCENT_HOST_AND_DISK_FLOORS' }
+    if (-not $eHardFinalFits) { $planBlockers += 'E_FINAL_WARM_PLAN_CANNOT_FIT_20_PERCENT_HOST_AND_DISK_FLOORS' }
 
     $decision = if ($planBlockers.Count -eq 0) {
         'PRODUCTION_HOT_WARM_SIZING_PLAN_READY'
@@ -391,14 +408,17 @@ try {
             cn_profile_version=[string]$capacityProfile.profile_version
             cn_query_scope=[string]$capacityProfile.query_scope
             cn_full_corpus_scan=[bool]$capacityProfile.full_corpus_scan
+            facts_snapshot_within_source_baseline=$factsSnapshotWithinSourceBaseline
             us_pilot_receipt_path=$pilotPath
             us_pilot_receipt_identity=[string]$pilot.pilot.receipt_identity
             us_remaining_inventory_version=[string]$remaining.inventory_version
             us_application_projection_scope='APPLICATION_ONLY_DO_NOT_GENERALIZE_TO_ASSIGNMENT_TTAB_OR_GLOBAL'
         }
         current_payload=[ordered]@{
-            source_active_rows=[int64]$sourceBaseline.active_rows
+            source_active_rows=$sourceRows
             source_active_bytes_on_disk=$sourceActiveBytes
+            facts_active_rows=$factsRows
+            facts_active_bytes_on_disk=$factsBytes
             cn_active_bytes=$cnCurrentBytes
             cn_explicit_hot_contract_bytes=$cnExplicitHotContractBytes
             cn_conditional_warm_candidate_bytes=$cnWarmCandidateBytes
@@ -459,6 +479,7 @@ try {
                 hot_global_existing_minimum_capacity_bytes=$hotGlobalExistingRecommended
                 warm_candidate_capacity_bytes=$warmCandidateRecommended
                 global_future_scale_sufficiency_claimed=$false
+                warm_future_us_global_sufficiency_claimed=$false
             }
             hard_floor=[ordered]@{
                 hot_cn_capacity_bytes=$hotCnHard
@@ -467,6 +488,7 @@ try {
                 hot_global_existing_minimum_capacity_bytes=$hotGlobalExistingHard
                 warm_candidate_capacity_bytes=$warmCandidateHard
                 global_future_scale_sufficiency_claimed=$false
+                warm_future_us_global_sufficiency_claimed=$false
             }
         }
         fit=[ordered]@{
@@ -478,6 +500,8 @@ try {
             e_hard_final_fits=$eHardFinalFits
             d_coexistence_recommended_lower_bound_fits=$dCoexistenceRecommendedLowerBoundFits
             d_coexistence_hard_lower_bound_fits=$dCoexistenceHardLowerBoundFits
+            e_current_recommended_provision_fits=$eCurrentRecommendedProvisionFits
+            e_current_hard_provision_fits=$eCurrentHardProvisionFits
             coexistence_lower_bound_bytes=$sourceActiveBytes
         }
         blockers=@($planBlockers)
@@ -496,6 +520,7 @@ try {
             assignment_capacity_inferred_from_application=$false
             ttab_capacity_inferred_from_application=$false
             global_capacity_inferred_from_us_application=$false
+            future_warm_capacity_claimed_without_evidence=$false
         }
         production_invariant_preserved=[bool]($productionBefore['ready'] -and $productionAfter['ready'])
         env_unchanged=$envUnchanged
@@ -522,6 +547,7 @@ try {
     Write-Host "next_gate=$nextGate"
     Write-Host "final_capacity_state=$finalCapacityState"
     Write-Host "coexistence_state=$coexistenceState"
+    Write-Host "facts_snapshot_within_source_baseline=$factsSnapshotWithinSourceBaseline"
     Write-Host ("cn_active_gib={0:N2}" -f ($cnCurrentBytes / $gib))
     Write-Host ("cn_conditional_warm_candidate_gib={0:N2}" -f ($cnWarmCandidateBytes / $gib))
     Write-Host ("us_current_active_gib={0:N2}" -f ($usCurrentBytes / $gib))
@@ -536,6 +562,7 @@ try {
     Write-Host "d_recommended_final_fits=$dRecommendedFinalFits"
     Write-Host "d_coexistence_recommended_lower_bound_fits=$dCoexistenceRecommendedLowerBoundFits"
     Write-Host "e_recommended_final_fits=$eRecommendedFinalFits"
+    Write-Host "e_current_recommended_provision_fits=$eCurrentRecommendedProvisionFits"
     Write-Host "vhdx_create_authorized=False"
     Write-Host "live_migration_authorized=False"
     Write-Host "us_package_2_authorized=False"
