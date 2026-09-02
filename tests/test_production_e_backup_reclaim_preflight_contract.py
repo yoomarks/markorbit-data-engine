@@ -47,6 +47,14 @@ def test_preflight_binds_exact_accepted_layout_receipt() -> None:
     assert "duplicate_identity_proven" in source
 
 
+def test_preflight_imports_transitive_phase2d_optional_array_helper() -> None:
+    source = text()
+    assert "'Get-OptionalPropertyValue','Get-OptionalArrayProperty','Get-DotEnvValues'" in source
+    assert "'Get-AllContainerMounts','Get-ComposeBindMounts','Get-BackupReferenceInventory'" in source
+    assert "Get-OptionalArrayProperty $optionalFixture 'Mounts'" in source
+    assert "Get-OptionalArrayProperty $optionalFixture 'Missing'" in source
+
+
 def test_preflight_uses_actual_allocated_bytes_not_only_logical_projection() -> None:
     source = text()
     assert "GetCompressedFileSizeW" in source
