@@ -1,0 +1,172 @@
+name: Production Storage Rebalance Guarded Apply Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-storage-rebalance-guarded-apply.ps1'
+      - 'tests/test_production_storage_rebalance_guarded_apply_contract.py'
+      - '.github/workflows/production-storage-rebalance-guarded-apply-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and freeze guarded two-phase destructive boundaries under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Production rebalance guarded apply contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\run-production-storage-rebalance-guarded-apply.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in guarded production rebalance apply.'
+          }
+
+          $command = Get-Command $path
+          foreach ($parameter in @(
+            'ExpectedMainSha','Phase','AcceptedVolume','LegacyRawRoot','RawTargetRoot',
+            'LegacyEHotRoot','LegacyEHotLogsRoot','EvidenceRoot',
+            'AcknowledgeTemporary20Percent','Apply'
+          )) {
+            if (-not $command.Parameters.ContainsKey($parameter)) {
+              throw "Production rebalance guarded apply lost parameter: $parameter"
+            }
+          }
+
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          foreach ($required in @(
+            "[ValidateSet('Phase1E','Phase2D')]",
+            '-Apply requires explicit -AcknowledgeTemporary20Percent.',
+            'PRODUCTION_STORAGE_REBALANCE_GUARDED_APPLY_V1',
+            'PRODUCTION_REBALANCE_PHASE1_E_GO',
+            'PRODUCTION_REBALANCE_PHASE2_D_GO',
+            'PRODUCTION_HOT_WARM_SIZING_REFRESH_AFTER_REBALANCE',
+            'phase2_d_verified_sha256_manifest.json',
+            'recursive_legacy_raw_root_delete_authorized=$false',
+            'visual_processed_delete_authorized=$false',
+            'accepted_volume_delete_authorized=$false',
+            'vhdx_create_authorized=$false',
+            'us_package_2_authorized=$false',
+            'us_bulk_authorized=$false',
+            'PRODUCTION_STORAGE_REBALANCE_GUARDED_APPLY_DONE'
+          )) {
+            if (-not $text.Contains($required)) { throw "Missing guarded apply marker: $required" }
+          }
+
+          foreach ($forbidden in @(
+            'Move-Item','Copy-Item','robocopy','rsync','New-VHD','Resize-VHD','Mount-VHD',
+            'Dismount-VHD','Optimize-VHD','Format-Volume','mkfs.ext4','docker volume rm',
+            'docker system prune','docker compose down','docker compose restart',
+            'wsl.exe --shutdown','wsl.exe --unmount','ALTER TABLE','OPTIMIZE TABLE','2023_5.zip'
+          )) {
+            if ($text.Contains($forbidden)) { throw "Forbidden guarded apply behavior found: $forbidden" }
+          }
+
+          $removeCommands = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+              $node.GetCommandName() -eq 'Remove-Item'
+          }, $true))
+          if ($removeCommands.Count -ne 3) {
+            throw "Guarded apply must contain exactly three scoped Remove-Item call sites; observed $($removeCommands.Count)."
+          }
+          $removeTexts = @($removeCommands | ForEach-Object { $_.Extent.Text })
+          if (@($removeTexts | Where-Object { $_ -eq 'Remove-Item -LiteralPath $legacyEHotNormalized -Recurse -Force' }).Count -ne 1) {
+            throw 'Exact E legacy ClickHouse recursive delete call changed.'
+          }
+          if (@($removeTexts | Where-Object { $_ -eq 'Remove-Item -LiteralPath $legacyELogsNormalized -Recurse -Force' }).Count -ne 1) {
+            throw 'Exact E legacy ClickHouse-log recursive delete call changed.'
+          }
+          if (@($removeTexts | Where-Object { $_ -eq 'Remove-Item -LiteralPath $entry.source_path -Force' }).Count -ne 1) {
+            throw 'D Raw must remain verified-manifest per-file deletion only.'
+          }
+          if (@($removeTexts | Where-Object { $_ -match 'legacyRaw.*-Recurse|LegacyRawRoot.*-Recurse' }).Count -ne 0) {
+            throw 'Recursive legacy D Raw deletion is forbidden.'
+          }
+
+          $helperNames = @(
+            'Normalize-HostPath','Test-PathContains','Get-ResidualDeficitBytes',
+            'Compare-RawMetadataManifests','Assert-NoReparsePoints','Assert-ComposeRawBindings'
+          )
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) guarded helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          if (-not (Test-PathContains 'D:\raw' 'D:\raw\archive\a.zip')) {
+            throw 'Path containment helper failed positive fixture.'
+          }
+          if (Test-PathContains 'D:\raw' 'D:\raw-other\a.zip') {
+            throw 'Path containment helper failed sibling-prefix fixture.'
+          }
+          if ((Get-ResidualDeficitBytes -RequiredFreeBytes 100 -ObservedFreeBytes 70) -ne 30) {
+            throw 'Residual-deficit helper failed positive fixture.'
+          }
+          if ((Get-ResidualDeficitBytes -RequiredFreeBytes 100 -ObservedFreeBytes 120) -ne 0) {
+            throw 'Residual-deficit helper failed zero-floor fixture.'
+          }
+
+          $left = @(
+            [pscustomobject]@{relative_path='archive\a.zip'; length=[int64]10; last_write_utc_ticks=[int64]100},
+            [pscustomobject]@{relative_path='incoming\b.zip'; length=[int64]20; last_write_utc_ticks=[int64]200}
+          )
+          $same = @(
+            [pscustomobject]@{relative_path='ARCHIVE\A.ZIP'; length=[int64]10; last_write_utc_ticks=[int64]100},
+            [pscustomobject]@{relative_path='incoming\b.zip'; length=[int64]20; last_write_utc_ticks=[int64]200}
+          )
+          if (-not (Compare-RawMetadataManifests $left $same)) {
+            throw 'Metadata stability helper rejected equal fixture.'
+          }
+          $changed = @(
+            [pscustomobject]@{relative_path='archive\a.zip'; length=[int64]11; last_write_utc_ticks=[int64]100},
+            [pscustomobject]@{relative_path='incoming\b.zip'; length=[int64]20; last_write_utc_ticks=[int64]200}
+          )
+          if (Compare-RawMetadataManifests $left $changed) {
+            throw 'Metadata stability helper accepted changed-size fixture.'
+          }
+
+          $tempRoot = Join-Path $env:RUNNER_TEMP 'markorbit-rebalance-reparse-fixture'
+          if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path (Join-Path $tempRoot 'nested') | Out-Null
+          Set-Content -LiteralPath (Join-Path $tempRoot 'nested\file.txt') -Value 'fixture' -Encoding UTF8
+          Assert-NoReparsePoints $tempRoot
+          Remove-Item -LiteralPath $tempRoot -Recurse -Force
+
+          $script:RawTargetRoot = 'F:\MarkOrbitData\raw'
+          $script:LegacyRawRoot = 'D:\yoomarks\markorbit-data-engine\raw_data'
+          $composeFixture = @(
+            [pscustomobject]@{service='api'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='mark-image-worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='qcc-acquisition'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/raw'},
+            [pscustomobject]@{service='api'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/visual-raw'},
+            [pscustomobject]@{service='worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/visual-raw'},
+            [pscustomobject]@{service='mark-image-worker'; source='F:\MarkOrbitData\raw'; normalized_source='F:\MarkOrbitData\raw'; target='/data/visual-raw'},
+            [pscustomobject]@{service='api'; source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; normalized_source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; target='/data/visual-processed'},
+            [pscustomobject]@{service='worker'; source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; normalized_source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; target='/data/visual-processed'},
+            [pscustomobject]@{service='mark-image-worker'; source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; normalized_source='D:\yoomarks\markorbit-data-engine\raw_data\visual_processed'; target='/data/visual-processed'}
+          )
+          Assert-ComposeRawBindings $composeFixture
+
+          Write-Host 'PRODUCTION_STORAGE_REBALANCE_GUARDED_APPLY_PS51_CONTRACT_PASS'
