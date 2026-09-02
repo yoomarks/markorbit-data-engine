@@ -1,0 +1,44 @@
+name: Production Storage Reserve Exception Review Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-storage-reserve-exception-review.ps1'
+      - 'tests/test_production_storage_reserve_exception_review_contract.py'
+      - '.github/workflows/production-storage-reserve-exception-review-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and exercise reserve exception review contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\preflight-production-storage-reserve-exception-review.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'Reserve exception review script failed Windows PowerShell 5.1 parse.'
+          }
+
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          if ($paramNames -contains 'Apply') { throw 'Reserve exception review must not expose Apply.' }
+          if ($paramNames -contains 'Resume') { throw 'Reserve exception review must not expose Resume.' }
+
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -AcceptedPostDRefreshReceiptPath 'C:\fixture\unused.json' `
+            -ContractOnly
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+
+          Write-Host 'PRODUCTION_STORAGE_RESERVE_EXCEPTION_REVIEW_CONTRACT_DIRECT_INVOCATION_OK'
