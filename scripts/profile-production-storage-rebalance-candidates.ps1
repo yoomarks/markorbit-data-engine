@@ -82,6 +82,19 @@ function Normalize-HostPath([string]$Path) {
     return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
 }
 
+function Get-OptionalPropertyValue([object]$Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-OptionalArrayProperty([object]$Object, [string]$Name) {
+    $value = Get-OptionalPropertyValue $Object $Name
+    if ($null -eq $value) { return @() }
+    return @($value)
+}
+
 function Get-DriveSnapshot([string]$Letter) {
     $root = "${Letter}:\"
     if (-not (Test-Path -LiteralPath $root)) { throw "Required drive missing: $root" }
@@ -181,23 +194,35 @@ function Get-AllContainerMounts {
     if ($idsProbe['exit_code'] -ne 0) { throw 'Unable to enumerate Docker containers.' }
     $entries = @()
     foreach ($containerId in @($idsProbe['lines'] | Where-Object { $_.Trim() })) {
-        $inspectProbe = Invoke-NativeText 'docker' @('inspect',$containerId.Trim()) -AllowFailure
-        if ($inspectProbe['exit_code'] -ne 0) { throw "Unable to inspect container $containerId." }
-        $objects = @((@($inspectProbe['lines']) -join "`n") | ConvertFrom-Json)
-        if ($objects.Count -ne 1) { throw "Unexpected Docker inspect shape for $containerId." }
-        $container = $objects[0]
-        foreach ($mount in @($container.Mounts)) {
-            $source = [string]$mount.Source
+        $trimmedId = $containerId.Trim()
+        $inspectProbe = Invoke-NativeText 'docker' @('inspect','--format','{{json .}}',$trimmedId) -AllowFailure
+        if ($inspectProbe['exit_code'] -ne 0) { throw "Unable to inspect container $trimmedId." }
+        $inspectJson = (@($inspectProbe['lines']) -join "`n").Trim()
+        if (-not $inspectJson) { throw "Docker inspect produced no JSON for $trimmedId." }
+        try { $container = $inspectJson | ConvertFrom-Json }
+        catch { throw "Docker inspect produced invalid JSON for $trimmedId`: $($_.Exception.Message)" }
+        if ($null -eq $container) { throw "Docker inspect produced an empty object for $trimmedId." }
+
+        $containerIdentity = [string](Get-OptionalPropertyValue $container 'Id')
+        if (-not $containerIdentity) { throw "Docker inspect omitted Id for $trimmedId." }
+        $containerName = [string](Get-OptionalPropertyValue $container 'Name')
+        $state = Get-OptionalPropertyValue $container 'State'
+        if ($null -eq $state) { throw "Docker inspect omitted State for $trimmedId." }
+        $runningValue = Get-OptionalPropertyValue $state 'Running'
+        if ($null -eq $runningValue) { throw "Docker inspect omitted State.Running for $trimmedId." }
+
+        foreach ($mount in @(Get-OptionalArrayProperty $container 'Mounts')) {
+            $source = [string](Get-OptionalPropertyValue $mount 'Source')
             $normalizedSource = Normalize-HostPath $source
             $entries += [ordered]@{
-                container_id=[string]$container.Id
-                container_name=([string]$container.Name).TrimStart('/')
-                running=[bool]$container.State.Running
-                mount_type=[string]$mount.Type
+                container_id=$containerIdentity
+                container_name=$containerName.TrimStart('/')
+                running=[bool]$runningValue
+                mount_type=[string](Get-OptionalPropertyValue $mount 'Type')
                 source=$source
                 normalized_source=$normalizedSource
-                destination=[string]$mount.Destination
-                volume_name=[string]$mount.Name
+                destination=[string](Get-OptionalPropertyValue $mount 'Destination')
+                volume_name=[string](Get-OptionalPropertyValue $mount 'Name')
             }
         }
     }
@@ -207,17 +232,24 @@ function Get-AllContainerMounts {
 function Get-ComposeBindMounts {
     $probe = Invoke-NativeText 'docker' @('compose','--profile','mark-image','--profile','qcc','config','--format','json') -AllowFailure
     if ($probe['exit_code'] -ne 0) { throw 'Unable to resolve current Docker Compose model.' }
-    $config = ((@($probe['lines']) -join "`n") | ConvertFrom-Json)
+    try { $config = ((@($probe['lines']) -join "`n") | ConvertFrom-Json) }
+    catch { throw "Current Docker Compose model is invalid JSON: $($_.Exception.Message)" }
+    $services = Get-OptionalPropertyValue $config 'services'
+    if ($null -eq $services) { throw 'Current Docker Compose model omitted services.' }
     $entries = @()
-    foreach ($serviceProperty in @($config.services.PSObject.Properties)) {
-        foreach ($mount in @($serviceProperty.Value.volumes)) {
-            if ([string]$mount.type -ne 'bind') { continue }
-            $source = [string]$mount.source
+    foreach ($serviceProperty in @($services.PSObject.Properties)) {
+        foreach ($mount in @(Get-OptionalArrayProperty $serviceProperty.Value 'volumes')) {
+            if ([string](Get-OptionalPropertyValue $mount 'type') -ne 'bind') { continue }
+            $source = [string](Get-OptionalPropertyValue $mount 'source')
+            $target = [string](Get-OptionalPropertyValue $mount 'target')
+            if (-not $source -or -not $target) {
+                throw "Compose bind for service $($serviceProperty.Name) omitted source or target."
+            }
             $entries += [ordered]@{
                 service=[string]$serviceProperty.Name
                 source=$source
                 normalized_source=(Normalize-HostPath $source)
-                target=[string]$mount.target
+                target=$target
             }
         }
     }
@@ -232,10 +264,14 @@ function Test-PathContains([string]$ParentPath, [string]$ChildPath) {
     return $child.StartsWith($parent + '\', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Test-PathsOverlap([string]$LeftPath, [string]$RightPath) {
+    return [bool]((Test-PathContains $LeftPath $RightPath) -or (Test-PathContains $RightPath $LeftPath))
+}
+
 function Get-PathReferences([string]$CandidatePath, [object[]]$ContainerMounts, [object[]]$ComposeBinds) {
-    $allContainer = @($ContainerMounts | Where-Object { $_.normalized_source -and (Test-PathContains $CandidatePath $_.normalized_source) })
+    $allContainer = @($ContainerMounts | Where-Object { $_.normalized_source -and (Test-PathsOverlap $CandidatePath $_.normalized_source) })
     $runningContainer = @($allContainer | Where-Object { [bool]$_.running })
-    $compose = @($ComposeBinds | Where-Object { $_.normalized_source -and (Test-PathContains $CandidatePath $_.normalized_source) })
+    $compose = @($ComposeBinds | Where-Object { $_.normalized_source -and (Test-PathsOverlap $CandidatePath $_.normalized_source) })
     return [ordered]@{
         all_container_reference_count=$allContainer.Count
         running_container_reference_count=$runningContainer.Count

@@ -1,0 +1,144 @@
+name: Rebalance Optional Mount Shape Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile-production-storage-rebalance-candidates.ps1'
+      - 'tests/test_rebalance_optional_mount_shape_contract.py'
+      - '.github/workflows/rebalance-optional-mount-shape-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exercise optional Docker and Compose mount shapes under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Optional mount shape contract must execute under Windows PowerShell 5.1.'
+          }
+
+          $path = Resolve-Path 'scripts\profile-production-storage-rebalance-candidates.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'PowerShell 5.1 parser errors detected in rebalance inventory.'
+          }
+
+          $helperNames = @(
+            'Normalize-HostPath',
+            'Get-OptionalPropertyValue',
+            'Get-OptionalArrayProperty',
+            'Get-AllContainerMounts',
+            'Get-ComposeBindMounts',
+            'Test-PathContains',
+            'Test-PathsOverlap',
+            'Get-PathReferences'
+          )
+          $functionAsts = $ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $helperNames -contains $node.Name
+          }, $true)
+          if ($functionAsts.Count -ne $helperNames.Count) {
+            throw "Expected $($helperNames.Count) helper functions; found $($functionAsts.Count)."
+          }
+          foreach ($functionAst in $functionAsts) { Invoke-Expression $functionAst.Extent.Text }
+
+          function Invoke-NativeText {
+            param(
+              [string]$Command,
+              [string[]]$Arguments,
+              [switch]$AllowFailure
+            )
+            if ($Command -ne 'docker') { throw "Unexpected command: $Command" }
+            if ($Arguments[0] -eq 'ps') {
+              return [ordered]@{ exit_code=0; lines=@('container-empty','container-bind') }
+            }
+            if ($Arguments[0] -eq 'inspect') {
+              $id = $Arguments[$Arguments.Count - 1]
+              if ($id -eq 'container-empty') {
+                return [ordered]@{
+                  exit_code=0
+                  lines=@('{"Id":"container-empty","Name":"/empty","State":{"Running":false}}')
+                }
+              }
+              if ($id -eq 'container-bind') {
+                return [ordered]@{
+                  exit_code=0
+                  lines=@('{"Id":"container-bind","Name":"/bind","State":{"Running":false},"Mounts":[{"Type":"bind","Source":"D:\\legacy","Destination":"/legacy"}]}')
+                }
+              }
+            }
+            throw "Unexpected docker arguments: $($Arguments -join ' ')"
+          }
+
+          $containerMounts = @(Get-AllContainerMounts)
+          if ($containerMounts.Count -ne 1) {
+            throw "Expected exactly one mount from mixed optional-shape fixture; observed $($containerMounts.Count)."
+          }
+          if ($containerMounts[0].source -ne 'D:\legacy') {
+            throw "Unexpected bind source: $($containerMounts[0].source)"
+          }
+          if ($containerMounts[0].volume_name -ne '') {
+            throw 'Bind mount with no Name property must normalize to an empty volume name.'
+          }
+
+          function Invoke-NativeText {
+            param(
+              [string]$Command,
+              [string[]]$Arguments,
+              [switch]$AllowFailure
+            )
+            if ($Command -ne 'docker' -or $Arguments[0] -ne 'compose') {
+              throw "Unexpected command for Compose fixture: $Command $($Arguments -join ' ')"
+            }
+            return [ordered]@{
+              exit_code=0
+              lines=@('{"services":{"no-volumes":{"image":"fixture"},"with-bind":{"volumes":[{"type":"bind","source":"D:\\legacy","target":"/data"}]}}}')
+            }
+          }
+
+          $composeBinds = @(Get-ComposeBindMounts)
+          if ($composeBinds.Count -ne 1) {
+            throw "Expected exactly one Compose bind with a service missing volumes; observed $($composeBinds.Count)."
+          }
+          if ($composeBinds[0].source -ne 'D:\legacy' -or $composeBinds[0].target -ne '/data') {
+            throw 'Compose optional-volumes fixture returned the wrong bind.'
+          }
+
+          if (-not (Test-PathsOverlap 'D:\legacy\child' 'D:\legacy')) {
+            throw 'Parent-source overlap fixture failed.'
+          }
+          if (-not (Test-PathsOverlap 'D:\legacy' 'D:\legacy\child')) {
+            throw 'Child-source overlap fixture failed.'
+          }
+          if (Test-PathsOverlap 'D:\legacy' 'E:\legacy') {
+            throw 'Cross-drive non-overlap fixture failed.'
+          }
+
+          $refs = Get-PathReferences 'D:\legacy\child' @(
+            [pscustomobject]@{
+              normalized_source='D:\legacy'
+              running=$false
+              container_id='fixture'
+            }
+          ) @()
+          if ($refs.all_container_reference_count -ne 1) {
+            throw 'Parent bind must count as a reference to a child candidate.'
+          }
+
+          Write-Host 'REBALANCE_OPTIONAL_MOUNT_SHAPE_PS51_PASS'
