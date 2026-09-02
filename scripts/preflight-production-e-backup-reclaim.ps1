@@ -58,7 +58,7 @@ function Import-AcceptedHelpers {
         (Join-Path $PSScriptRoot 'preflight-production-rebalance-phase2-d-full-sha256.ps1') `
         @(
             'Invoke-NativeText','Assert-ExactMain','Normalize-HostPath','Test-PathContains','Test-PathsOverlap',
-            'Get-OptionalPropertyValue','Get-DotEnvValues','Get-DriveSnapshot','Get-ProductionClickHouseHealth',
+            'Get-OptionalPropertyValue','Get-OptionalArrayProperty','Get-DotEnvValues','Get-DriveSnapshot','Get-ProductionClickHouseHealth',
             'Assert-AcceptedProductionMount','Assert-RawConsumersStopped','Get-AllContainerMounts','Get-ComposeBindMounts'
         ) `
         'Phase2D'
@@ -334,10 +334,25 @@ function Assert-ProductionBoundary([string]$Label) {
 }
 
 function Invoke-ContractFixture {
-    foreach ($name in @('Assert-ExactMain','Normalize-HostPath','Get-ProductionClickHouseHealth','Get-DirectoryInventoryNoFollowAllocated','Get-Sha256WithProgress')) {
+    foreach ($name in @(
+        'Assert-ExactMain','Normalize-HostPath','Get-OptionalPropertyValue','Get-OptionalArrayProperty',
+        'Get-ProductionClickHouseHealth','Get-AllContainerMounts','Get-ComposeBindMounts','Get-BackupReferenceInventory',
+        'Get-DirectoryInventoryNoFollowAllocated','Get-Sha256WithProgress'
+    )) {
         if ($null -eq (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Required helper missing: $name" }
     }
     if ($script:AllowedToolingFiles.Count -ne 3) { throw 'E backup preflight tooling boundary count changed.' }
+
+    $optionalFixture = [pscustomobject]@{
+        Mounts=@([pscustomobject]@{ Source='C:\fixture\mount'; Destination='/fixture' })
+    }
+    $optionalMounts = @(Get-OptionalArrayProperty $optionalFixture 'Mounts')
+    if ($optionalMounts.Count -ne 1 -or [string]$optionalMounts[0].Source -ne 'C:\fixture\mount') {
+        throw 'Imported optional-array helper fixture failed.'
+    }
+    if (@(Get-OptionalArrayProperty $optionalFixture 'Missing').Count -ne 0) {
+        throw 'Imported optional-array missing-property fixture failed.'
+    }
 
     $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('markorbit_e_backup_preflight_' + [Guid]::NewGuid().ToString('N'))
     $fixtureE = Join-Path $fixtureRoot 'e'
