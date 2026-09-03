@@ -1,0 +1,75 @@
+name: Production CN Warm Migration Design Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/build-production-cn-warm-migration-design.ps1'
+      - 'tests/test_production_cn_warm_migration_design_contract.py'
+      - '.github/workflows/production-cn-warm-migration-design-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise CN Warm migration design under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\build-production-cn-warm-migration-design.ps1'
+          $source = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'CN Warm migration design failed Windows PowerShell 5.1 parse.'
+          }
+
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          foreach ($required in @('ExpectedMainSha','AcceptedProvisioningPreflightReceiptPath','ContractOnly')) {
+            if ($paramNames -notcontains $required) { throw "CN Warm migration design missing required parameter: $required" }
+          }
+          if ($paramNames -contains 'Apply' -or $paramNames -contains 'Resume') {
+            throw 'CN Warm migration design must not expose Apply or Resume.'
+          }
+
+          $commandNames = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst]
+          }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
+          foreach ($forbidden in @('New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD','Optimize-VHD')) {
+            if ($commandNames -contains $forbidden) { throw "Forbidden VHDX mutation command present: $forbidden" }
+          }
+          foreach ($forbiddenText in @('--mount','--unmount','--shutdown','--unregister','docker system prune','docker volume rm')) {
+            if ($source.IndexOf($forbiddenText, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+              throw "Forbidden destructive surface present: $forbiddenText"
+            }
+          }
+
+          $output = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -AcceptedProvisioningPreflightReceiptPath 'C:\fixture\unused.json' `
+            -ContractOnly
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+          $output | ForEach-Object { Write-Host $_ }
+          if (($output -join "`n") -notmatch 'PRODUCTION_CN_WARM_MIGRATION_DESIGN_CONTRACT_DIRECT_INVOCATION_OK') {
+            throw 'ContractOnly success marker missing.'
+          }
+
+          Write-Host 'PRODUCTION_CN_WARM_MIGRATION_DESIGN_CONTRACT_DIRECT_INVOCATION_OK'
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run design contract test
+        run: python -m pytest tests/test_production_cn_warm_migration_design_contract.py -q
