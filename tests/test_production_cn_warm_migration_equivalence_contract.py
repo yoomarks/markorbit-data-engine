@@ -80,11 +80,11 @@ def test_only_clickhouse_system_metadata_is_queried() -> None:
     assert "system metadata only" in source
     assert "SELECT\n    name AS table" in source
     assert "SELECT\n    table," in source
+    assert "' MOVE PART '" in source  # The metadata-query guard rejects MOVE syntax.
     for forbidden in (
         "[switch]$Apply",
         "OPTIMIZE TABLE",
         "MOVE PARTITION",
-        "MOVE PART '",
         "DROP TABLE",
         "TRUNCATE TABLE",
         "docker system prune",
