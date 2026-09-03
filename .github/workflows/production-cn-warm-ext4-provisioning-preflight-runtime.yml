@@ -1,0 +1,78 @@
+name: Production CN Warm ext4 Provisioning Preflight Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-cn-warm-ext4-provisioning.ps1'
+      - 'tests/test_production_cn_warm_ext4_provisioning_preflight_contract.py'
+      - '.github/workflows/production-cn-warm-ext4-provisioning-preflight-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise CN Warm ext4 provisioning preflight under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\preflight-production-cn-warm-ext4-provisioning.ps1'
+          $helperPath = Join-Path $PWD 'scripts\preflight-production-rebalance-phase2-d-full-sha256.ps1'
+          $source = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'CN Warm ext4 provisioning preflight failed Windows PowerShell 5.1 parse.'
+          }
+
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          foreach ($required in @('ExpectedMainSha','AcceptedCnWarmEquivalenceReceiptPath','ContractOnly')) {
+            if ($paramNames -notcontains $required) { throw "CN Warm ext4 provisioning preflight missing required parameter: $required" }
+          }
+          if ($paramNames -contains 'Apply' -or $paramNames -contains 'Resume') {
+            throw 'CN Warm ext4 provisioning preflight must not expose Apply or Resume.'
+          }
+
+          $commandNames = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst]
+          }, $true) | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
+          foreach ($forbidden in @('New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD','Optimize-VHD')) {
+            if ($commandNames -contains $forbidden) { throw "Forbidden VHDX mutation command present: $forbidden" }
+          }
+          foreach ($forbiddenText in @('--unmount','--shutdown','--unregister','docker system prune','docker volume rm')) {
+            if ($source.IndexOf($forbiddenText, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+              throw "Forbidden destructive surface present: $forbiddenText"
+            }
+          }
+
+          $helperTokens = $null
+          $helperErrors = $null
+          $helperAst = [System.Management.Automation.Language.Parser]::ParseFile($helperPath, [ref]$helperTokens, [ref]$helperErrors)
+          if ($helperErrors.Count -ne 0) { throw 'Accepted Phase2D helper source no longer parses.' }
+          $helperNames = @($helperAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+          }, $true) | ForEach-Object { $_.Name })
+          foreach ($requiredHelper in @('Invoke-NativeText','Assert-ExactMain','Get-ProductionClickHouseHealth','Assert-AcceptedProductionMount','Assert-RawConsumersStopped')) {
+            if ($helperNames -notcontains $requiredHelper) { throw "Accepted helper closure missing: $requiredHelper" }
+          }
+
+          $output = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -AcceptedCnWarmEquivalenceReceiptPath 'C:\fixture\unused.json' `
+            -ContractOnly
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+          $output | ForEach-Object { Write-Host $_ }
+          if (($output -join "`n") -notmatch 'PRODUCTION_CN_WARM_EXT4_PROVISIONING_CONTRACT_DIRECT_INVOCATION_OK') {
+            throw 'ContractOnly success marker missing.'
+          }
+
+          Write-Host 'PRODUCTION_CN_WARM_EXT4_PROVISIONING_CONTRACT_DIRECT_INVOCATION_OK'
