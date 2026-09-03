@@ -21,7 +21,7 @@ def test_remediation_binds_exact_incident_and_go() -> None:
         "Production runtime cannot see named Warm ext4 mount.",
         "PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_JOURNAL_V1",
         "PHASE_A_CN_WARM_PROVISIONING_GO_ISSUE_506_COMMENT_5521853975",
-        "$script:RemediationIssue=508",
+        "$script:RemediationIssue = 508",
         "runtime_import_started",
         "runtime_imported",
         "Incident journal is not exact mount-visibility failure",
@@ -32,7 +32,7 @@ def test_remediation_binds_exact_incident_and_go() -> None:
 def test_remediation_is_exact_three_file_descendant_boundary() -> None:
     source = text()
     for marker in (
-        "$script:AllowedRemediationFiles=@(",
+        "$script:AllowedRemediationFiles = @(",
         "scripts/resume-production-cn-warm-phase-a-mount-remediation.ps1",
         "tests/test_production_cn_warm_phase_a_mount_remediation_contract.py",
         ".github/workflows/production-cn-warm-phase-a-mount-remediation-runtime.yml",
@@ -124,7 +124,7 @@ def test_remediation_revalidates_authority_source_capacity_and_protected_state()
     ):
         assert marker in source
     assert source.count("Assert-RawConsumersStopped") >= 3
-    assert source.count("Assert-LiveSource$authority") >= 2
+    assert source.count("Assert-LiveSource $authority") >= 2
 
 
 def test_remediation_preserves_source_and_transfer_safety_boundaries() -> None:
