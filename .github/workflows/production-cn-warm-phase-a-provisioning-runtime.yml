@@ -1,0 +1,49 @@
+name: Production CN Warm Phase A Provisioning Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-production-cn-warm-phase-a-provisioning.ps1'
+      - 'tests/test_production_cn_warm_phase_a_provisioning_contract.py'
+      - '.github/workflows/production-cn-warm-phase-a-provisioning-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: production-cn-warm-phase-a-provisioning-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise Phase A operator under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = '.\scripts\run-production-cn-warm-phase-a-provisioning.ps1'
+          [void][scriptblock]::Create((Get-Content -LiteralPath $path -Raw -Encoding UTF8))
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path `
+            -ExpectedMainSha '0000000000000000000000000000000000000000' `
+            -AuthorityReviewReceiptPath 'C:\contract-only.json' `
+            -ExpectedAuthorityReviewReceiptSha256 '0000000000000000000000000000000000000000000000000000000000000000' `
+            -OperatorGoToken 'PHASE_A_CN_WARM_PROVISIONING_GO_ISSUE_506_COMMENT_5521853975' `
+            -ContractOnly 2>&1
+          $out | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE" }
+          if (($out -join "`n") -notmatch 'PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_CONTRACT_OK') { throw 'Contract marker missing.' }
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install pytest
+      - name: Run Phase A provisioning contract
+        run: python -m pytest -q tests/test_production_cn_warm_phase_a_provisioning_contract.py
