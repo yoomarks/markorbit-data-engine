@@ -119,6 +119,18 @@ function Get-CandidateManifestHash([object[]]$Candidates) {
     return Get-StringSha256 ($lines -join "`n")
 }
 
+function Get-LiveSchemaFingerprint([object]$TableRow) {
+    $canonical = @(
+        [string]$TableRow.table,
+        [string]$TableRow.engine,
+        [string]$TableRow.sorting_key,
+        [string]$TableRow.primary_key,
+        [string]$TableRow.partition_key,
+        [string]$TableRow.create_table_query
+    ) -join "`n"
+    return Get-StringSha256 $canonical
+}
+
 function Get-ProductionClickHouseHealth {
     $idProbe = Invoke-NativeText 'docker' @('compose','ps','--status','running','-q','clickhouse') -AllowFailure
     $ids = @($idProbe.lines | Where-Object { $_.Trim() })
@@ -243,7 +255,7 @@ function Invoke-ClickHouseMetadataRows([string]$Sql, [string]$Label) {
 function Get-LiveCandidateSnapshot([object[]]$Candidates) {
     $quoted = @($Candidates | ForEach-Object { "'$(Escape-SqlLiteral ([string]$_.table))'" }) -join ','
     $tableSql = @"
-SELECT name AS table, engine, sorting_key, primary_key, partition_key
+SELECT name AS table, engine, sorting_key, primary_key, partition_key, create_table_query
 FROM system.tables
 WHERE database = 'markorbit_facts' AND name IN ($quoted)
 ORDER BY name
@@ -302,6 +314,10 @@ function Invoke-ContractFixture {
     $a = Get-PartContentFingerprint $parts
     $b = Get-PartContentFingerprint @($parts[1],$parts[0])
     if ($a -ne $b) { throw 'Part-content fingerprint must be order-independent after canonical sort.' }
+    $schemaFixture = [pscustomobject]@{ table='cn_observed_event'; engine='MergeTree'; sorting_key='id'; primary_key='id'; partition_key='toYYYYMM(observed_at)'; create_table_query='CREATE TABLE markorbit_facts.cn_observed_event (...) ENGINE = MergeTree ORDER BY id' }
+    $schemaA = Get-LiveSchemaFingerprint $schemaFixture
+    $schemaB = Get-LiveSchemaFingerprint $schemaFixture
+    if ($schemaA -ne $schemaB) { throw 'Live schema fingerprint canonicalization is unstable.' }
     $sql = Get-LogicalChecksumSql 'cn_observed_event' '202601'
     if ($sql -notmatch 'sum\(cityHash64\(tuple\(\*\)\)\)' -or $sql -notmatch 'groupBitXor') { throw 'Logical checksum SQL contract failed.' }
     if ((Get-MigrationOrderRank 'WARM_EVENT_HISTORY') -ge (Get-MigrationOrderRank 'WARM_GOODS_CATEGORY')) { throw 'History-first migration order contract failed.' }
@@ -354,7 +370,6 @@ try {
     $live = Get-LiveCandidateSnapshot $acceptedEquivalence.candidates
     if (@($live.tables).Count -ne $script:ExpectedWarmCandidateCount) { throw 'Live candidate table metadata count changed.' }
 
-    $equivalenceTables = @($acceptedEquivalence.receipt.cn_tables)
     $consumerReports = @($acceptedEquivalence.receipt.consumer_equivalence.reports)
     $tablePlans = @()
     $blockers = @()
@@ -362,11 +377,12 @@ try {
     foreach ($candidate in $acceptedEquivalence.candidates) {
         $tableName = [string]$candidate.table
         $tableMeta = @($live.tables | Where-Object { [string]$_.table -eq $tableName })
-        $equivMeta = @($equivalenceTables | Where-Object { [string]$_.table -eq $tableName })
         $consumer = @($consumerReports | Where-Object { [string]$_.table -eq $tableName })
         if ($tableMeta.Count -ne 1) { $blockers += "LIVE_TABLE_METADATA_COUNT:$tableName"; continue }
-        if ($equivMeta.Count -ne 1) { $blockers += "EQUIVALENCE_TABLE_METADATA_COUNT:$tableName"; continue }
         if ($consumer.Count -ne 1) { $blockers += "CONSUMER_REPORT_COUNT:$tableName"; continue }
+
+        $liveSchemaFingerprint = Get-LiveSchemaFingerprint $tableMeta[0]
+        if ($liveSchemaFingerprint -ne [string]$candidate.schema_fingerprint_sha256) { $blockers += "SCHEMA_FINGERPRINT_DRIFT:$tableName" }
 
         $parts = @($live.parts | Where-Object { [string]$_.table -eq $tableName })
         $liveRows = [int64](($parts | Measure-Object -Property rows -Sum).Sum)
@@ -376,7 +392,6 @@ try {
         if ($liveBytes -ne [int64]$candidate.bytes_on_disk) { $blockers += "BYTE_COUNT_DRIFT:$tableName" }
         $diskNames = @($parts | ForEach-Object { [string]$_.disk_name } | Sort-Object -Unique)
         if ($diskNames.Count -ne 1 -or $diskNames[0] -ne [string]$candidate.source_disk) { $blockers += "SOURCE_DISK_DRIFT:$tableName" }
-        if ([string]$equivMeta[0].schema_fingerprint_sha256 -ne [string]$candidate.schema_fingerprint_sha256) { $blockers += "SCHEMA_FINGERPRINT_DRIFT:$tableName" }
 
         $partitionPlans = @()
         foreach ($partitionGroup in @($parts | Group-Object partition_id | Sort-Object Name)) {
@@ -410,7 +425,7 @@ try {
             rollback_target_source_disk=[string]$candidate.rollback_target_source_disk
             target_disk=$script:WarmClickHouseDiskName
             target_storage_policy=$script:WarmStoragePolicyName
-            schema_fingerprint_sha256=[string]$candidate.schema_fingerprint_sha256
+            schema_fingerprint_sha256=$liveSchemaFingerprint
             engine=[string]$tableMeta[0].engine
             sorting_key=[string]$tableMeta[0].sorting_key
             primary_key=[string]$tableMeta[0].primary_key
@@ -575,7 +590,7 @@ try {
     Write-Host "warm_candidate_manifest_sha256=$script:ExpectedWarmManifestSha256"
     Write-Host "candidate_count=$($orderedPlans.Count)"
     foreach ($plan in $orderedPlans) {
-        Write-Host "candidate=$($plan.migration_order)|$($plan.table)|tier=$($plan.proposed_tier)|rows=$($plan.rows)|bytes=$($plan.bytes_on_disk)|parts=$($plan.active_parts)|source=$($plan.source_disk)|part_content_sha256=$($plan.source_part_content_manifest_sha256)"
+        Write-Host "candidate=$($plan.migration_order)|$($plan.table)|tier=$($plan.proposed_tier)|rows=$($plan.rows)|bytes=$($plan.bytes_on_disk)|parts=$($plan.active_parts)|source=$($plan.source_disk)|schema_sha256=$($plan.schema_fingerprint_sha256)|part_content_sha256=$($plan.source_part_content_manifest_sha256)"
         foreach ($partition in @($plan.partitions)) {
             Write-Host "migration_unit=$($plan.table)|partition=$($partition.partition_id)|rows=$($partition.rows)|bytes=$($partition.bytes_on_disk)|parts=$($partition.active_parts)|part_content_sha256=$($partition.source_part_content_manifest_sha256)"
         }
