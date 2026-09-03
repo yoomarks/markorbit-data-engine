@@ -8,6 +8,10 @@ on:
       - '.github/workflows/production-cn-warm-wsl-attachment-diagnostic-runtime.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows-powershell51:
     runs-on: windows-latest
