@@ -1,0 +1,39 @@
+name: Docker Desktop Elevated WSL Attach Recovery Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-docker-desktop-elevated-wsl-attach-recovery.ps1'
+      - 'tests/test_docker_desktop_elevated_wsl_attach_recovery_contract.py'
+      - '.github/workflows/docker-desktop-elevated-wsl-attach-recovery-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and execute recovery ContractOnly under Windows PowerShell 5.1
+        shell: cmd
+        run: >-
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+          .\scripts\run-docker-desktop-elevated-wsl-attach-recovery.ps1
+          -ExpectedMainSha 0123456789abcdef0123456789abcdef01234567
+          -OperatorGoToken DOCKER_WSL_ATTACH_ELEVATED_RECOVERY_GO_ISSUE_517_COMMENT_5533302373
+          -ContractOnly
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Run recovery static contract
+        run: python -m pytest -q tests/test_docker_desktop_elevated_wsl_attach_recovery_contract.py
