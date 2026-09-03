@@ -144,7 +144,8 @@ function Get-ProductionClickHouseHealth {
 function Assert-AcceptedProductionMount([string]$ContainerId) {
     $probe = Invoke-NativeText 'docker' @('inspect','--format','{{json .Mounts}}',$ContainerId) -AllowFailure
     if ($probe.exit_code -ne 0) { throw 'Unable to inspect production ClickHouse mounts.' }
-    $mounts = ((@($probe.lines) -join "`n") | ConvertFrom-Json)
+    try { $mounts = ((@($probe.lines) -join "`n") | ConvertFrom-Json) }
+    catch { throw "Production ClickHouse mount JSON invalid: $($_.Exception.Message)" }
     $matches = @($mounts | Where-Object { [string]$_.Destination -eq '/var/lib/clickhouse' })
     $ready = [bool]($matches.Count -eq 1 -and [string]$matches[0].Type -eq 'volume' -and [string]$matches[0].Name -eq $AcceptedVolume)
     Write-Host "accepted_production_mount_ready=$ready"
@@ -196,7 +197,8 @@ function Resolve-AcceptedDesignReceipt {
         [ordered]@{ label='provisioning'; path=[string]$receipt.accepted_provisioning.receipt_path; sha=[string]$receipt.accepted_provisioning.receipt_sha256 },
         [ordered]@{ label='equivalence'; path=[string]$receipt.accepted_equivalence.receipt_path; sha=[string]$receipt.accepted_equivalence.receipt_sha256 }
     )) {
-        if ((Get-FileSha256 ([System.IO.Path]::GetFullPath($embedded.path))) -ne $embedded.sha) { throw "Embedded $($embedded.label) receipt SHA drifted." }
+        $embeddedPath = [System.IO.Path]::GetFullPath([string]$embedded.path)
+        if ((Get-FileSha256 $embeddedPath) -ne [string]$embedded.sha) { throw "Embedded $($embedded.label) receipt SHA drifted." }
     }
     $plans = @($receipt.candidates | Sort-Object migration_order)
     if ($plans.Count -ne $script:ExpectedWarmCandidateCount) { throw 'Design candidate plan count changed.' }
@@ -226,49 +228,46 @@ function Get-LiveUnitSnapshot([object]$Plan, [object]$Unit) {
     $partition = [string]$Unit.partition_id
     Assert-SafeTableName $table
     $tableLiteral = Escape-SqlLiteral $table
-    $partitionLiteral = Escape-SqlLiteral $partition
     $tableRows = @(Invoke-ClickHouseJsonRows "SELECT name AS table, engine, sorting_key, primary_key, partition_key, create_table_query FROM system.tables WHERE database = 'markorbit_facts' AND name = '$tableLiteral'" "Live schema $table")
     if ($tableRows.Count -ne 1) { throw "Expected one live system.tables row for $table." }
     $parts = @(Invoke-ClickHouseJsonRows "SELECT table, partition_id, name, rows, bytes_on_disk, disk_name, hash_of_all_files, hash_of_uncompressed_files, uncompressed_hash_of_compressed_files FROM system.parts WHERE database = 'markorbit_facts' AND active AND table = '$tableLiteral' ORDER BY partition_id, name" "Live parts $table")
     $unitParts = @($parts | Where-Object { [string]$_.partition_id -eq $partition })
     if ($unitParts.Count -lt 1) { throw "No active parts found for $table partition $partition." }
-    $tableRowsFromParts = [int64](($parts | Measure-Object -Property rows -Sum).Sum)
-    $tableBytes = [int64](($parts | Measure-Object -Property bytes_on_disk -Sum).Sum)
-    $unitRows = [int64](($unitParts | Measure-Object -Property rows -Sum).Sum)
-    $unitBytes = [int64](($unitParts | Measure-Object -Property bytes_on_disk -Sum).Sum)
-    $tableDisks = @($parts | ForEach-Object { [string]$_.disk_name } | Sort-Object -Unique)
-    $unitDisks = @($unitParts | ForEach-Object { [string]$_.disk_name } | Sort-Object -Unique)
     return [ordered]@{
         schema_fingerprint_sha256=(Get-LiveSchemaFingerprint $tableRows[0])
-        table_rows=$tableRowsFromParts
-        table_bytes=$tableBytes
+        table_rows=[int64](($parts | Measure-Object -Property rows -Sum).Sum)
+        table_bytes=[int64](($parts | Measure-Object -Property bytes_on_disk -Sum).Sum)
         table_active_parts=[int64]$parts.Count
         table_part_content_sha256=(Get-PartContentFingerprint $parts)
         table_residency_sha256=(Get-ResidencyFingerprint $parts)
-        table_disks=@($tableDisks)
-        unit_rows=$unitRows
-        unit_bytes=$unitBytes
+        table_disks=@($parts | ForEach-Object { [string]$_.disk_name } | Sort-Object -Unique)
+        unit_rows=[int64](($unitParts | Measure-Object -Property rows -Sum).Sum)
+        unit_bytes=[int64](($unitParts | Measure-Object -Property bytes_on_disk -Sum).Sum)
         unit_active_parts=[int64]$unitParts.Count
         unit_part_content_sha256=(Get-PartContentFingerprint $unitParts)
         unit_residency_sha256=(Get-ResidencyFingerprint $unitParts)
-        unit_disks=@($unitDisks)
+        unit_disks=@($unitParts | ForEach-Object { [string]$_.disk_name } | Sort-Object -Unique)
     }
 }
 
+function New-DriftMessage([string]$Kind, [object]$Plan, [object]$Unit, [string]$Phase) {
+    return "$Kind|table=$([string]$Plan.table)|partition=$([string]$Unit.partition_id)|phase=$Phase"
+}
+
 function Assert-SnapshotMatchesDesign([object]$Snapshot, [object]$Plan, [object]$Unit, [string]$Phase) {
-    $table = [string]$Plan.table
-    $partition = [string]$Unit.partition_id
-    if ([string]$Snapshot.schema_fingerprint_sha256 -ne [string]$Plan.schema_fingerprint_sha256) { throw "SCHEMA_FINGERPRINT_DRIFT:$table:$partition:$Phase" }
-    if ([int64]$Snapshot.table_rows -ne [int64]$Plan.rows) { throw "TABLE_ROW_COUNT_DRIFT:$table:$partition:$Phase" }
-    if ([int64]$Snapshot.table_bytes -ne [int64]$Plan.bytes_on_disk) { throw "TABLE_BYTE_COUNT_DRIFT:$table:$partition:$Phase" }
-    if ([int64]$Snapshot.table_active_parts -ne [int64]$Plan.active_parts) { throw "TABLE_ACTIVE_PART_COUNT_DRIFT:$table:$partition:$Phase" }
-    if ([string]$Snapshot.table_part_content_sha256 -ne [string]$Plan.source_part_content_manifest_sha256) { throw "TABLE_PART_CONTENT_DRIFT:$table:$partition:$Phase" }
-    if (@($Snapshot.table_disks).Count -ne 1 -or [string]$Snapshot.table_disks[0] -ne [string]$Plan.source_disk) { throw "TABLE_SOURCE_DISK_DRIFT:$table:$partition:$Phase" }
-    if ([int64]$Snapshot.unit_rows -ne [int64]$Unit.rows) { throw "UNIT_ROW_COUNT_DRIFT:$table:$partition:$Phase" }
-    if ([int64]$Snapshot.unit_bytes -ne [int64]$Unit.bytes_on_disk) { throw "UNIT_BYTE_COUNT_DRIFT:$table:$partition:$Phase" }
-    if ([int64]$Snapshot.unit_active_parts -ne [int64]$Unit.active_parts) { throw "UNIT_ACTIVE_PART_COUNT_DRIFT:$table:$partition:$Phase" }
-    if ([string]$Snapshot.unit_part_content_sha256 -ne [string]$Unit.source_part_content_manifest_sha256) { throw "UNIT_PART_CONTENT_DRIFT:$table:$partition:$Phase" }
-    if (@($Snapshot.unit_disks).Count -ne 1 -or [string]$Snapshot.unit_disks[0] -ne [string]$Unit.source_disk) { throw "UNIT_SOURCE_DISK_DRIFT:$table:$partition:$Phase" }
+    if ([string]$Snapshot.schema_fingerprint_sha256 -ne [string]$Plan.schema_fingerprint_sha256) { throw (New-DriftMessage 'SCHEMA_FINGERPRINT_DRIFT' $Plan $Unit $Phase) }
+    if ([int64]$Snapshot.table_rows -ne [int64]$Plan.rows) { throw (New-DriftMessage 'TABLE_ROW_COUNT_DRIFT' $Plan $Unit $Phase) }
+    if ([int64]$Snapshot.table_bytes -ne [int64]$Plan.bytes_on_disk) { throw (New-DriftMessage 'TABLE_BYTE_COUNT_DRIFT' $Plan $Unit $Phase) }
+    if ([int64]$Snapshot.table_active_parts -ne [int64]$Plan.active_parts) { throw (New-DriftMessage 'TABLE_ACTIVE_PART_COUNT_DRIFT' $Plan $Unit $Phase) }
+    if ([string]$Snapshot.table_part_content_sha256 -ne [string]$Plan.source_part_content_manifest_sha256) { throw (New-DriftMessage 'TABLE_PART_CONTENT_DRIFT' $Plan $Unit $Phase) }
+    if ([string]$Snapshot.table_residency_sha256 -ne [string]$Plan.source_residency_manifest_sha256) { throw (New-DriftMessage 'TABLE_RESIDENCY_DRIFT' $Plan $Unit $Phase) }
+    if (@($Snapshot.table_disks).Count -ne 1 -or [string]$Snapshot.table_disks[0] -ne [string]$Plan.source_disk) { throw (New-DriftMessage 'TABLE_SOURCE_DISK_DRIFT' $Plan $Unit $Phase) }
+    if ([int64]$Snapshot.unit_rows -ne [int64]$Unit.rows) { throw (New-DriftMessage 'UNIT_ROW_COUNT_DRIFT' $Plan $Unit $Phase) }
+    if ([int64]$Snapshot.unit_bytes -ne [int64]$Unit.bytes_on_disk) { throw (New-DriftMessage 'UNIT_BYTE_COUNT_DRIFT' $Plan $Unit $Phase) }
+    if ([int64]$Snapshot.unit_active_parts -ne [int64]$Unit.active_parts) { throw (New-DriftMessage 'UNIT_ACTIVE_PART_COUNT_DRIFT' $Plan $Unit $Phase) }
+    if ([string]$Snapshot.unit_part_content_sha256 -ne [string]$Unit.source_part_content_manifest_sha256) { throw (New-DriftMessage 'UNIT_PART_CONTENT_DRIFT' $Plan $Unit $Phase) }
+    if ([string]$Snapshot.unit_residency_sha256 -ne [string]$Unit.source_residency_manifest_sha256) { throw (New-DriftMessage 'UNIT_RESIDENCY_DRIFT' $Plan $Unit $Phase) }
+    if (@($Snapshot.unit_disks).Count -ne 1 -or [string]$Snapshot.unit_disks[0] -ne [string]$Unit.source_disk) { throw (New-DriftMessage 'UNIT_SOURCE_DISK_DRIFT' $Plan $Unit $Phase) }
 }
 
 function Get-SourceIdentitySha([object]$Snapshot, [object]$Plan, [object]$Unit) {
@@ -291,9 +290,9 @@ function Get-SourceIdentitySha([object]$Snapshot, [object]$Plan, [object]$Unit) 
 }
 
 function Assert-FrozenLogicalSql([string]$Sql, [object]$Plan, [object]$Unit) {
-    $table = [regex]::Escape([string]$Plan.table)
-    $partition = [regex]::Escape((Escape-SqlLiteral ([string]$Unit.partition_id)))
-    $pattern = "^SELECT count\(\) AS rows, sum\(cityHash64\(tuple\(\*\)\)\) AS checksum_sum, groupBitXor\(cityHash64\(tuple\(\*\)\)\) AS checksum_xor FROM markorbit_facts\.$table WHERE _partition_id = '$partition'$"
+    $tableRegex = [regex]::Escape([string]$Plan.table)
+    $partitionRegex = [regex]::Escape((Escape-SqlLiteral ([string]$Unit.partition_id)))
+    $pattern = "^SELECT count\(\) AS rows, sum\(cityHash64\(tuple\(\*\)\)\) AS checksum_sum, groupBitXor\(cityHash64\(tuple\(\*\)\)\) AS checksum_xor FROM markorbit_facts\.$tableRegex WHERE _partition_id = '$partitionRegex'$"
     if ($Sql -notmatch $pattern) { throw "Frozen logical checksum SQL shape changed for $($Plan.table)/$($Unit.partition_id)." }
 }
 
@@ -480,6 +479,7 @@ try {
                 finished_at_utc=$finished.ToString('o')
                 duration_seconds=[math]::Round(($finished - $started).TotalSeconds, 3)
                 reused_from_journal=$false
+                result_sha256=$null
             }
             $record.result_sha256 = Get-UnitResultSha $record
             $results += [pscustomobject]$record
@@ -504,7 +504,8 @@ try {
     if ((Get-FileSha256 $envPath) -ne $envShaBefore) { throw '.env changed during logical checksum gate.' }
     if (Test-Path -LiteralPath $script:EBackupRoot) { throw 'Superseded E backup root reappeared.' }
     if (-not (Test-Path -LiteralPath $script:ExpectedFRecoveryVhdx -PathType Leaf)) { throw 'Retained F recovery VHDX disappeared.' }
-    if ([int64](New-Object System.IO.FileInfo($script:ExpectedFRecoveryVhdx)).Length -ne $script:ExpectedFRecoveryBytes) { throw 'Retained F recovery VHDX length changed.' }
+    $finalFInfo = New-Object System.IO.FileInfo($script:ExpectedFRecoveryVhdx)
+    if ([int64]$finalFInfo.Length -ne $script:ExpectedFRecoveryBytes) { throw 'Retained F recovery VHDX length changed.' }
     if (Test-Path -LiteralPath $script:ExpectedWarmVhdxPath) { throw 'Production Warm VHDX was created during read-only checksum gate.' }
 
     $receipt = [ordered]@{
