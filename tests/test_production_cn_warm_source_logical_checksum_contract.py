@@ -67,7 +67,7 @@ def test_v1_design_sql_is_preserved_but_execution_is_deterministically_upgraded_
     assert ".Replace($script:V1RowHashExpression, $script:V2RowHashExpression)" in source
     assert "Accepted V1 design must contain exactly two frozen row-hash expressions" in source
     assert "V2 checksum derivation did not produce exactly two NULL-safe row-hash expressions" in source
-    assert "sum(cityHash64\\(tuple" in source
+    assert "sum\\(cityHash64\\(tuple" in source
     assert "toJSONString(tuple(*))" in source
 
 
