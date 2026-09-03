@@ -112,7 +112,6 @@ def test_fresh_e_capacity_enforces_30_percent_reserve_against_exact_vhdx_max() -
     for marker in (
         "842887331840",
         "Get-DriveCapacity 'E:\\'",
-        "* 0.30",
         "marginAfterMax",
         "recommended_30_percent_admission",
         "E_30_PERCENT_RESERVE_ADMISSION_FAILED",
@@ -121,6 +120,7 @@ def test_fresh_e_capacity_enforces_30_percent_reserve_against_exact_vhdx_max() -
         "e_margin_after_proposed_max_bytes=",
     ):
         assert marker in source
+    assert "*0.30" in source.replace(" ", "")
 
 
 def test_target_collision_review_covers_vhdx_distro_root_and_mount_name() -> None:
