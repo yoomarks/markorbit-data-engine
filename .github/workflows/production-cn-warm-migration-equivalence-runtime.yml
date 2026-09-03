@@ -1,0 +1,49 @@
+name: Production CN Warm Migration Equivalence Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-production-cn-warm-migration-equivalence.ps1'
+      - 'tests/test_production_cn_warm_migration_equivalence_contract.py'
+      - '.github/workflows/production-cn-warm-migration-equivalence-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise CN Warm equivalence gate under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\preflight-production-cn-warm-migration-equivalence.ps1'
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'CN Warm equivalence gate failed Windows PowerShell 5.1 parse.'
+          }
+
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          foreach ($required in @('ExpectedMainSha','AcceptedEReclaimReceiptPath','ContractOnly')) {
+            if ($paramNames -notcontains $required) { throw "CN Warm equivalence gate missing required parameter: $required" }
+          }
+          if ($paramNames -contains 'Apply') { throw 'CN Warm equivalence gate must not expose Apply.' }
+
+          $output = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -AcceptedEReclaimReceiptPath 'C:\fixture\unused.json' `
+            -ContractOnly
+          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+          $output | ForEach-Object { Write-Host $_ }
+          if (($output -join "`n") -notmatch 'PRODUCTION_CN_WARM_MIGRATION_EQUIVALENCE_CONTRACT_DIRECT_INVOCATION_OK') {
+            throw 'ContractOnly success marker missing.'
+          }
+
+          Write-Host 'PRODUCTION_CN_WARM_MIGRATION_EQUIVALENCE_CONTRACT_DIRECT_INVOCATION_OK'
