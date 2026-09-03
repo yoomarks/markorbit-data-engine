@@ -1,0 +1,39 @@
+name: Production CN Warm WSL Attachment Diagnostic Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/diagnose-production-cn-warm-wsl-attachment.ps1'
+      - 'tests/test_production_cn_warm_wsl_attachment_diagnostic_contract.py'
+      - '.github/workflows/production-cn-warm-wsl-attachment-diagnostic-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and execute diagnostic ContractOnly under Windows PowerShell 5.1
+        shell: cmd
+        run: >-
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+          .\scripts\diagnose-production-cn-warm-wsl-attachment.ps1
+          -ExpectedMainSha 0123456789abcdef0123456789abcdef01234567
+          -IncidentEvidenceDirectory D:\dummy
+          -ContractOnly
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Run diagnostic static contract
+        run: python -m pytest -q tests/test_production_cn_warm_wsl_attachment_diagnostic_contract.py
