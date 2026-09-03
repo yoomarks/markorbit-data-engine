@@ -284,8 +284,8 @@ function Get-ResidencyFingerprint([object[]]$Parts) {
 
 function Get-LogicalChecksumSql([string]$TableName, [string]$PartitionId) {
     Assert-SafeTableName $TableName
-    $pid = Escape-SqlLiteral $PartitionId
-    return "SELECT count() AS rows, sum(cityHash64(tuple(*))) AS checksum_sum, groupBitXor(cityHash64(tuple(*))) AS checksum_xor FROM markorbit_facts.$TableName WHERE _partition_id = '$pid'"
+    $partitionLiteral = Escape-SqlLiteral $PartitionId
+    return "SELECT count() AS rows, sum(cityHash64(tuple(*))) AS checksum_sum, groupBitXor(cityHash64(tuple(*))) AS checksum_xor FROM markorbit_facts.$TableName WHERE _partition_id = '$partitionLiteral'"
 }
 
 function Get-MigrationOrderRank([string]$Tier) {
