@@ -95,12 +95,30 @@ def test_live_metadata_uses_system_tables_and_parts_only() -> None:
     for marker in (
         "FROM system.tables",
         "FROM system.parts",
+        "create_table_query",
         "hash_of_all_files",
         "hash_of_uncompressed_files",
         "uncompressed_hash_of_compressed_files",
         "partition_id",
         "disk_name",
         "system.tables/system.parts only",
+    ):
+        assert marker in source
+
+
+def test_live_schema_fingerprint_is_recomputed_from_current_system_tables() -> None:
+    source = text()
+    for marker in (
+        "function Get-LiveSchemaFingerprint",
+        "[string]$TableRow.table",
+        "[string]$TableRow.engine",
+        "[string]$TableRow.sorting_key",
+        "[string]$TableRow.primary_key",
+        "[string]$TableRow.partition_key",
+        "[string]$TableRow.create_table_query",
+        "$liveSchemaFingerprint = Get-LiveSchemaFingerprint $tableMeta[0]",
+        "$liveSchemaFingerprint -ne [string]$candidate.schema_fingerprint_sha256",
+        "SCHEMA_FINGERPRINT_DRIFT:",
     ):
         assert marker in source
 
@@ -126,7 +144,8 @@ def test_logical_checksum_strategy_is_order_independent_and_null_safe_by_contrac
     source = text()
     assert "sum(cityHash64(tuple(*))) AS checksum_sum" in source
     assert "groupBitXor(cityHash64(tuple(*))) AS checksum_xor" in source
-    assert "WHERE _partition_id = '$pid'" in source
+    assert "WHERE _partition_id = '$partitionLiteral'" in source
+    assert "$pid" not in source.lower()
     assert "logical_checksum_execution_required_before_future_transfer=$true" in source
     assert "logical_checksum_execution_required_after_future_transfer=$true" in source
     assert "logical_checksum_execution_performed=$false" in source
@@ -258,10 +277,11 @@ def test_no_destructive_storage_or_runtime_command_surface() -> None:
         assert forbidden not in source
 
 
-def test_contract_fixture_is_metadata_only_and_exercises_checksum_and_order_helpers() -> None:
+def test_contract_fixture_is_metadata_only_and_exercises_checksum_schema_and_order_helpers() -> None:
     source = text()
     fixture = source.split("function Invoke-ContractFixture", 1)[1].split("try {", 1)[0]
     assert "Get-PartContentFingerprint" in fixture
+    assert "Get-LiveSchemaFingerprint" in fixture
     assert "Get-LogicalChecksumSql" in fixture
     assert "Get-MigrationOrderRank" in fixture
     assert "PRODUCTION_CN_WARM_MIGRATION_DESIGN_CONTRACT_DIRECT_INVOCATION_OK" in fixture
