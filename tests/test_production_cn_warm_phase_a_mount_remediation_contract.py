@@ -20,8 +20,9 @@ def test_remediation_binds_exact_incident_and_go() -> None:
         "production_cn_warm_phase_a_provisioning_20260903_072812",
         "Production runtime cannot see named Warm ext4 mount.",
         "PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_JOURNAL_V1",
+        "PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_JOURNAL_V2",
         "PHASE_A_CN_WARM_PROVISIONING_GO_ISSUE_506_COMMENT_5521853975",
-        "$script:RemediationIssue = 508",
+        "$script:RemediationIssue = 510",
         "runtime_import_started",
         "runtime_imported",
         "Incident journal is not exact mount-visibility failure",
@@ -55,6 +56,7 @@ def test_only_exact_path_specific_unmount_and_remount_are_allowed() -> None:
         "@('--unmount',$script:ExpectedWarmVhdxPath)",
         "@('--mount','--vhd',$script:ExpectedWarmVhdxPath,'--name',$script:ExpectedWarmMountName)",
         "exact_path_unmount_performed",
+        "exact_path_unmount_skipped_already_detached",
         "named_remount_performed",
     ):
         assert marker in source or marker in normalized
@@ -68,6 +70,38 @@ def test_only_exact_path_specific_unmount_and_remount_are_allowed() -> None:
         "Remove-Item",
     ):
         assert forbidden not in source
+
+
+def test_remediation_accepts_only_two_incident_mount_states() -> None:
+    source = text()
+    for marker in (
+        "TOOLING_ONLY_MOUNT_VISIBLE",
+        "MOUNT_ALREADY_DETACHED",
+        "Get-IncidentPhysicalState",
+        "incident_mount_state=",
+        "Incident runtime mount name is present but not ext4",
+        "Incident tooling mount name is present but not ext4",
+        "Incident mount visibility failure is no longer present",
+        "initial_mount_state",
+    ):
+        assert marker in source
+    assert "Incident tooling mount is not ready." not in source
+
+
+def test_already_detached_state_skips_unmount_but_still_requires_exact_named_remount() -> None:
+    source = text()
+    normalized = compact()
+    for marker in (
+        "exact_path_unmount_skipped_already_detached=$detached",
+        "Detached remediation journal must record skipped exact-path unmount",
+        "Remediation journal cannot both perform and skip exact-path unmount",
+        "Exact-path unmount is allowed only from tooling-only incident mount state",
+        "Warm mount name unexpectedly present before recorded remount",
+        "Existing production runtime is not startable before remount",
+    ):
+        assert marker in source
+    assert "if(-not[bool]$remediationJournal.exact_path_unmount_performed-and-not[bool]$remediationJournal.exact_path_unmount_skipped_already_detached)" in normalized
+    assert "if($toolingBefore.exit_code-eq0-or$runtimeBefore.exit_code-eq0)" in normalized
 
 
 def test_remediation_refuses_fresh_provisioning_and_recreation() -> None:
@@ -89,19 +123,30 @@ def test_remediation_refuses_fresh_provisioning_and_recreation() -> None:
     assert "--export" not in source
 
 
-def test_incident_physical_state_requires_exact_existing_runtime_uuid_and_empty_disk() -> None:
+def test_tooling_only_state_verifies_existing_uuid_and_empty_disk_before_unmount() -> None:
     source = text()
     for marker in (
         "MarkOrbit-ClickHouse",
         "D:\\MarkOrbitData\\wsl-runtime\\MarkOrbit-ClickHouse",
         "Incident runtime identity mismatch",
-        "Incident tooling mount is not ready",
-        "Incident mount visibility failure is no longer present",
         "Get-MountUuid",
         "Incident ext4 UUID mismatch",
         "Assert-WarmEmpty",
         "Warm clickhouse-data is not empty",
         "incident_partial_state_ready=True",
+    ):
+        assert marker in source
+
+
+def test_both_paths_verify_uuid_and_empty_disk_after_remount() -> None:
+    source = text()
+    for marker in (
+        "Assert-RemountedState",
+        "Warm ext4 not visible in both distros",
+        "Remounted ext4 UUID mismatch",
+        "Assert-WarmEmpty $script:ExpectedRuntimeDistro",
+        "ext4_uuid_verified = $true",
+        "warm_empty_verified = $true",
     ):
         assert marker in source
 
@@ -179,6 +224,19 @@ def test_target_clickhouse_remains_exact_version_isolated_and_empty() -> None:
         "empty_for_cn_migration=$true",
     ):
         assert marker in source
+
+
+def test_receipts_and_console_report_real_unmount_path_not_hardcoded_true() -> None:
+    source = text()
+    for marker in (
+        "initial_mount_state=[string]$remediationJournal.initial_mount_state",
+        "exact_path_unmount_performed=[bool]$remediationJournal.exact_path_unmount_performed",
+        "exact_path_unmount_skipped_already_detached=[bool]$remediationJournal.exact_path_unmount_skipped_already_detached",
+        'Write-Host "exact_path_unmount_performed=$([bool]$remediationJournal.exact_path_unmount_performed)"',
+        'Write-Host "exact_path_unmount_skipped_already_detached=$([bool]$remediationJournal.exact_path_unmount_skipped_already_detached)"',
+    ):
+        assert marker in source
+    assert "Write-Host 'exact_path_unmount_performed=True'" not in source
 
 
 def test_success_stops_at_phase_b_acceptance_gate() -> None:
