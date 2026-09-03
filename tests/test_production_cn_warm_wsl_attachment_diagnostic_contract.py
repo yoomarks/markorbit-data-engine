@@ -13,19 +13,32 @@ def compact() -> str:
     return "".join(text().split())
 
 
-def test_diagnostic_binds_exact_incident_and_latest_remediation_failure() -> None:
+def test_diagnostic_binds_exact_incident_and_structured_remediation_failure() -> None:
     source = text()
     for marker in (
-        "$script:DiagnosticIssue = 512",
+        "$script:DiagnosticIssue = 514",
         "cf9a2489f057b70b96c28cf35835f796eb6d4c74",
         "111908335714292ae4d42e54b3664156d19d64ca",
         "PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_JOURNAL_V1",
         "PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_JOURNAL_V2",
         "MOUNT_ALREADY_DETACHED",
-        "WSL_E_DISK_ALREADY_MOUNTED",
+        "exact_path_unmount_skipped_already_detached",
+        "named_remount_performed",
+        "Remediation journal blocked without last_error evidence.",
+        "remediation_last_error_sha256=",
+        "remediation_structured_blocked_state_bound=True",
         "production_cn_warm_phase_a_mount_remediation_journal.json",
     ):
         assert marker in source
+
+
+def test_localized_last_error_is_evidence_not_authorization_predicate() -> None:
+    source = text()
+    assert "WSL_E_DISK_ALREADY_MOUNTED" in source
+    assert "remediation_known_already_mounted_marker_present=" in source
+    assert "last_error -notmatch 'WSL_E_DISK_ALREADY_MOUNTED'" not in source
+    assert "last_error -match 'WSL_E_DISK_ALREADY_MOUNTED'" not in source
+    assert "$lastError -match 'WSL_E_DISK_ALREADY_MOUNTED'" in source
 
 
 def test_diagnostic_has_no_apply_or_wsl_disk_mutation_primitives() -> None:
@@ -124,9 +137,12 @@ def test_diagnostic_preserves_exact_three_file_boundary() -> None:
 def test_receipt_is_diagnostic_only_and_stops_at_operator_review() -> None:
     source = text()
     for marker in (
-        "PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_V1",
+        "PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_V2",
         "PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_COMPLETE",
         "production_cn_warm_wsl_attachment_diagnostic.json",
+        "remediation_last_error_sha256=$state.remediation_last_error_sha256",
+        "remediation_known_already_mounted_marker_present=[bool]$state.remediation_known_already_mounted_marker_present",
+        "remediation_structured_blocked_state_bound=$true",
         "wsl_mount_performed=$false",
         "wsl_unmount_performed=$false",
         "vhdx_mutation_performed=$false",

@@ -17,12 +17,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repoRoot
 
-$script:DiagnosticIssue = 512
+$script:DiagnosticIssue = 514
 $script:BaseMainSha = 'cf9a2489f057b70b96c28cf35835f796eb6d4c74'
 $script:IncidentEngineSha = '111908335714292ae4d42e54b3664156d19d64ca'
 $script:IncidentJournalVersion = 'PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_JOURNAL_V1'
 $script:RemediationJournalVersion = 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_JOURNAL_V2'
-$script:DiagnosticReceiptVersion = 'PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_V1'
+$script:DiagnosticReceiptVersion = 'PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_V2'
 $script:ExpectedIncidentEvidenceDirectory = 'D:\yoomarks\markorbit-data-engine\reports\production_cn_warm_phase_a_provisioning_20260903_072812'
 $script:ExpectedWarmVhdxPath = 'E:\MarkOrbitData\production\clickhouse\warm_cn.vhdx'
 $script:ExpectedWarmMountName = 'markorbit_prod_warm_cn'
@@ -67,6 +67,15 @@ function Invoke-NativeText {
         throw "$Command failed with exit code ${exitCode}: $($lines -join [Environment]::NewLine)"
     }
     return [ordered]@{ exit_code=$exitCode; lines=@($lines) }
+}
+
+function Get-StringSha256([string]$Text) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()
+    }
+    finally { $sha.Dispose() }
 }
 
 function Read-Json([string]$Path,[string]$Label) {
@@ -214,14 +223,26 @@ function Resolve-IncidentState {
     if ([string]$remediation.receipt_version -ne $script:RemediationJournalVersion -or [string]$remediation.engine_sha -ne $script:BaseMainSha) { throw 'Remediation journal identity drift.' }
     if ([string]$remediation.stage -ne 'blocked') { throw 'Remediation journal is not blocked.' }
     if ([string]$remediation.initial_mount_state -ne 'MOUNT_ALREADY_DETACHED') { throw 'Remediation journal did not record already-detached state.' }
-    if ([bool]$remediation.exact_path_unmount_performed -or [bool]$remediation.named_remount_performed) { throw 'Unexpected remediation mutation flag true.' }
-    if ([string]$remediation.last_error -notmatch 'WSL_E_DISK_ALREADY_MOUNTED') { throw 'Remediation journal does not contain exact already-mounted failure.' }
+    if ([bool]$remediation.exact_path_unmount_performed -or -not [bool]$remediation.exact_path_unmount_skipped_already_detached -or [bool]$remediation.named_remount_performed) { throw 'Unexpected remediation mount mutation state.' }
+    $lastError = [string]$remediation.last_error
+    if ([string]::IsNullOrWhiteSpace($lastError)) { throw 'Remediation journal blocked without last_error evidence.' }
+    $lastErrorSha = Get-StringSha256 $lastError
+    $knownMarkerPresent = [bool]($lastError -match 'WSL_E_DISK_ALREADY_MOUNTED')
     foreach ($name in @('no_arg_wsl_unmount_performed','wsl_shutdown_performed','runtime_distro_unregister_performed','target_vhdx_delete_performed','vhdx_create_performed','vhdx_format_performed','runtime_import_performed','docker_mutation_performed','accepted_volume_mutation_performed','source_clickhouse_mutation_performed','cn_data_transfer_performed','cross_runtime_transfer_performed','cn_warm_move_performed','source_cleanup_performed','cn_replay_performed','us_bulk_performed')) {
         if ([bool]($remediation.$name)) { throw "Forbidden remediation flag true: $name" }
     }
     Write-Host "incident_ext4_uuid=$uuid"
-    Write-Host 'remediation_already_mounted_failure_bound=True'
-    return [ordered]@{ dir=$directory; uuid=$uuid; incident_path=$incidentPath; remediation_path=$remediationPath }
+    Write-Host "remediation_last_error_sha256=$lastErrorSha"
+    Write-Host "remediation_known_already_mounted_marker_present=$knownMarkerPresent"
+    Write-Host 'remediation_structured_blocked_state_bound=True'
+    return [ordered]@{
+        dir=$directory
+        uuid=$uuid
+        incident_path=$incidentPath
+        remediation_path=$remediationPath
+        remediation_last_error_sha256=$lastErrorSha
+        remediation_known_already_mounted_marker_present=$knownMarkerPresent
+    }
 }
 
 function Get-UuidNamespaceProbe([string]$Distro,[string]$Uuid) {
@@ -294,8 +315,9 @@ function Classify-Attachment([object]$Tooling,[object]$Runtime) {
 }
 
 function Invoke-ContractFixture {
-    if ($script:DiagnosticIssue -ne 512) { throw 'Diagnostic issue drift.' }
+    if ($script:DiagnosticIssue -ne 514) { throw 'Diagnostic issue drift.' }
     if ($script:BaseMainSha -ne 'cf9a2489f057b70b96c28cf35835f796eb6d4c74') { throw 'Diagnostic base drift.' }
+    if ($script:DiagnosticReceiptVersion -ne 'PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_V2') { throw 'Diagnostic receipt version drift.' }
     if ($script:AllowedDiagnosticFiles.Count -ne 3) { throw 'Diagnostic file boundary drift.' }
     Write-Host 'PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_CONTRACT_OK'
 }
@@ -356,6 +378,9 @@ try {
         runtime=$runtime
         incident_journal_path=$state.incident_path
         remediation_journal_path=$state.remediation_path
+        remediation_last_error_sha256=$state.remediation_last_error_sha256
+        remediation_known_already_mounted_marker_present=[bool]$state.remediation_known_already_mounted_marker_present
+        remediation_structured_blocked_state_bound=$true
         wsl_mount_performed=$false
         wsl_unmount_performed=$false
         wsl_shutdown_performed=$false
@@ -380,6 +405,9 @@ try {
     Write-Host 'decision=PRODUCTION_CN_WARM_WSL_ATTACHMENT_DIAGNOSTIC_COMPLETE'
     Write-Host 'next_gate=OPERATOR_REVIEW_OF_WSL_ATTACHMENT_DIAGNOSTIC'
     Write-Host "attachment_classification=$classification"
+    Write-Host "remediation_last_error_sha256=$($state.remediation_last_error_sha256)"
+    Write-Host "remediation_known_already_mounted_marker_present=$([bool]$state.remediation_known_already_mounted_marker_present)"
+    Write-Host 'remediation_structured_blocked_state_bound=True'
     Write-Host "receipt_path=$receiptPath"
     Write-Host "Evidence directory: $evidenceDirectory"
     Write-Host 'read_only=True'
