@@ -85,6 +85,16 @@ def test_checksum_receipt_is_canonically_revalidated_not_just_trusted() -> None:
         assert marker in source
 
 
+def test_v2_unit_result_hash_matches_accepted_producer_canonicalization() -> None:
+    source = text()
+    unit_hash = source.split("function Get-UnitResultSha", 1)[1].split(
+        "function Resolve-AcceptedDesignReceipt", 1
+    )[0]
+    assert "[string]$Result.source_identity_sha256,$script:ChecksumDefinition" in unit_hash
+    assert "e7b8b109e96c28a383be99acbaadc39ccf7a12242e019d020d333cc1135773fb" in source
+    assert "V2 checksum result canonical hash contract drifted from accepted producer." in source
+
+
 def test_live_source_identity_is_revalidated_without_full_logical_scan() -> None:
     source = text()
     for marker in (
