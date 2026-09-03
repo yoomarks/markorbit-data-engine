@@ -30,15 +30,17 @@ Push-Location $repoRoot
 
 $script:IncidentEngineSha = '111908335714292ae4d42e54b3664156d19d64ca'
 $script:IncidentJournalVersion = 'PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_JOURNAL_V1'
-$script:RemediationJournalVersion = 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_JOURNAL_V1'
-$script:RemediationReceiptVersion = 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_V1'
-$script:PhaseAReceiptVersion = 'PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_APPLY_V2_REMEDIATED'
+$script:RemediationJournalVersion = 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_JOURNAL_V2'
+$script:RemediationReceiptVersion = 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_V2'
+$script:PhaseAReceiptVersion = 'PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_APPLY_V3_REMEDIATED'
 $script:OperatorGoIssue = 506
 $script:OperatorGoCommentId = '5521853975'
-$script:RemediationIssue = 508
+$script:RemediationIssue = 510
 $script:ExpectedOperatorGoToken = 'PHASE_A_CN_WARM_PROVISIONING_GO_ISSUE_506_COMMENT_5521853975'
 $script:ExpectedIncidentError = 'Production runtime cannot see named Warm ext4 mount.'
 $script:ExpectedIncidentEvidenceDirectory = 'D:\yoomarks\markorbit-data-engine\reports\production_cn_warm_phase_a_provisioning_20260903_072812'
+$script:ToolingOnlyMountState = 'TOOLING_ONLY_MOUNT_VISIBLE'
+$script:AlreadyDetachedMountState = 'MOUNT_ALREADY_DETACHED'
 
 $script:ExpectedReviewEngineSha = '4be4ef8615ed16ff8e3aafb962b476fe2605f5ef'
 $script:ExpectedReviewVersion = 'PRODUCTION_CN_WARM_PROVISIONING_AUTHORITY_REVIEW_V1'
@@ -457,26 +459,49 @@ function Resolve-Incident([object]$Authority) {
     return [ordered]@{ dir=$directory; journal_path=$journalPath; journal_sha256=$journalSha; journal=$journal }
 }
 
-function Assert-IncidentPhysical([object]$Incident) {
+function Get-IncidentPhysicalState([object]$Incident) {
     if (-not (Test-Path -LiteralPath $script:ExpectedWarmVhdxPath -PathType Leaf)) { throw 'Incident Warm VHDX missing.' }
     $distros = @(Get-WslDistros)
     $runtime = @($distros | Where-Object { $_.name -eq $script:ExpectedRuntimeDistro })
     if ($runtime.Count -ne 1 -or $runtime[0].version -ne 2 -or -not (Test-SameWindowsPath $runtime[0].base_path $script:ExpectedRuntimeRoot)) { throw 'Incident runtime identity mismatch.' }
     $runtimeProbe = Invoke-RuntimeShell 'printf RUNTIME_OK' -AllowFailure
     if ($runtimeProbe.exit_code -ne 0 -or ((@($runtimeProbe.lines) -join '').Trim() -ne 'RUNTIME_OK')) { throw 'Incident runtime cannot start.' }
+
     $toolingMount = Get-MountProbe $ToolingDistro $script:ExpectedWarmMountName
     $runtimeMount = Get-MountProbe $script:ExpectedRuntimeDistro $script:ExpectedWarmMountName
-    if (-not $toolingMount.ready) { throw 'Incident tooling mount is not ready.' }
-    if ($runtimeMount.ready) { throw 'Incident mount visibility failure is no longer present; refusing blind remediation.' }
-    $uuid = Get-MountUuid $ToolingDistro
-    if ($uuid -ne [string]$Incident.journal.ext4_uuid) { throw 'Incident ext4 UUID mismatch.' }
-    Assert-WarmEmpty $ToolingDistro
+
+    if ($runtimeMount.exit_code -eq 0) {
+        if (-not $runtimeMount.ready) { throw "Incident runtime mount name is present but not ext4: $($runtimeMount.output)" }
+        throw 'Incident mount visibility failure is no longer present; refusing blind remediation.'
+    }
+    if ($toolingMount.exit_code -eq 0 -and -not $toolingMount.ready) { throw "Incident tooling mount name is present but not ext4: $($toolingMount.output)" }
+
+    $state = $null
+    $uuid = ''
+    if ($toolingMount.ready) {
+        $state = $script:ToolingOnlyMountState
+        $uuid = Get-MountUuid $ToolingDistro
+        if ($uuid -ne [string]$Incident.journal.ext4_uuid) { throw 'Incident ext4 UUID mismatch.' }
+        Assert-WarmEmpty $ToolingDistro
+    }
+    else {
+        $state = $script:AlreadyDetachedMountState
+    }
+
     if ((Test-PortListening $script:TargetHttpPort) -or (Test-PortListening $script:TargetNativePort)) { throw 'Target port collision before remediation.' }
-    Write-Host "incident_ext4_uuid=$uuid"
+    Write-Host "incident_mount_state=$state"
+    if ($uuid) { Write-Host "incident_ext4_uuid=$uuid" }
     Write-Host 'incident_partial_state_ready=True'
+    return [ordered]@{
+        state=$state
+        tooling_mount_ready=[bool]$toolingMount.ready
+        runtime_mount_ready=[bool]$runtimeMount.ready
+        ext4_uuid=$uuid
+    }
 }
 
-function New-RemediationJournal([object]$Incident,[object]$Authority) {
+function New-RemediationJournal([object]$Incident,[object]$Authority,[object]$PhysicalState) {
+    $detached = [bool]([string]$PhysicalState.state -eq $script:AlreadyDetachedMountState)
     return [ordered]@{
         receipt_version=$script:RemediationJournalVersion
         engine_sha=$ExpectedMainSha.Trim().ToLowerInvariant()
@@ -484,8 +509,10 @@ function New-RemediationJournal([object]$Incident,[object]$Authority) {
         incident_journal_path=$Incident.journal_path
         incident_journal_sha256=$Incident.journal_sha256
         authority_review_sha256=$Authority.sha
+        initial_mount_state=[string]$PhysicalState.state
         stage='ready'
         exact_path_unmount_performed=$false
+        exact_path_unmount_skipped_already_detached=$detached
         named_remount_performed=$false
         tooling_mount_ready=$false
         runtime_mount_ready=$false
@@ -525,6 +552,11 @@ function Assert-RemediationJournal([object]$Journal,[object]$Incident,[object]$A
         [string]$Journal.authority_review_sha256 -ne $Authority.sha) {
         throw 'Remediation journal provenance drift.'
     }
+    $initialState = [string]$Journal.initial_mount_state
+    if ($initialState -notin @($script:ToolingOnlyMountState,$script:AlreadyDetachedMountState)) { throw 'Remediation journal initial mount state invalid.' }
+    if ($initialState -eq $script:AlreadyDetachedMountState -and -not [bool]$Journal.exact_path_unmount_skipped_already_detached) { throw 'Detached remediation journal must record skipped exact-path unmount.' }
+    if ($initialState -eq $script:ToolingOnlyMountState -and [bool]$Journal.exact_path_unmount_skipped_already_detached) { throw 'Tooling-only remediation journal cannot skip exact-path unmount.' }
+    if ([bool]$Journal.exact_path_unmount_performed -and [bool]$Journal.exact_path_unmount_skipped_already_detached) { throw 'Remediation journal cannot both perform and skip exact-path unmount.' }
     foreach ($name in @('no_arg_wsl_unmount_performed','wsl_shutdown_performed','runtime_distro_unregister_performed','target_vhdx_delete_performed','vhdx_create_performed','vhdx_format_performed','runtime_import_performed','docker_mutation_performed','accepted_volume_mutation_performed','source_clickhouse_mutation_performed','cn_data_transfer_performed','cross_runtime_transfer_performed','cn_warm_move_performed','source_cleanup_performed','cn_replay_performed','us_bulk_performed')) {
         if ([bool]($Journal.$name)) { throw "Remediation journal forbidden flag true: $name" }
     }
@@ -543,6 +575,8 @@ function Assert-RemountedState([object]$Incident) {
 function Invoke-ContractFixture {
     if ($script:IncidentEngineSha -ne '111908335714292ae4d42e54b3664156d19d64ca') { throw 'Incident engine contract drift.' }
     if ($script:ExpectedIncidentError -ne 'Production runtime cannot see named Warm ext4 mount.') { throw 'Incident error contract drift.' }
+    if ($script:RemediationIssue -ne 510) { throw 'Remediation issue contract drift.' }
+    if ($script:ToolingOnlyMountState -ne 'TOOLING_ONLY_MOUNT_VISIBLE' -or $script:AlreadyDetachedMountState -ne 'MOUNT_ALREADY_DETACHED') { throw 'Remediation mount-state contract drift.' }
     if ($script:AllowedRemediationFiles.Count -ne 3) { throw 'Remediation file boundary drift.' }
     Write-Host 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_CONTRACT_OK'
 }
@@ -550,6 +584,7 @@ function Invoke-ContractFixture {
 $remediationJournal = $null
 $remediationJournalPath = $null
 $incident = $null
+$physicalState = $null
 try {
     Write-Host '===== PRODUCTION CN WARM PHASE A MOUNT REMEDIATION ====='
     Write-Host "remediation_issue=$script:RemediationIssue"
@@ -599,9 +634,10 @@ try {
         $remediationJournal = Read-Json $remediationJournalPath 'Remediation journal'
         Assert-RemediationJournal $remediationJournal $incident $authority
         Write-Host "remediation_resume_stage=$($remediationJournal.stage)"
+        Write-Host "initial_mount_state=$($remediationJournal.initial_mount_state)"
     }
     else {
-        Assert-IncidentPhysical $incident
+        $physicalState = Get-IncidentPhysicalState $incident
         if (-not $Apply) {
             Write-Host "Incident evidence directory: $($incident.dir)"
             Write-Host "incident_journal_sha256=$($incident.journal_sha256)"
@@ -610,7 +646,7 @@ try {
             Write-Host 'PRODUCTION_CN_WARM_PHASE_A_MOUNT_REMEDIATION_DONE'
             exit 0
         }
-        $remediationJournal = New-RemediationJournal $incident $authority
+        $remediationJournal = New-RemediationJournal $incident $authority $physicalState
         Write-Json $remediationJournal $remediationJournalPath
     }
 
@@ -622,8 +658,9 @@ try {
     $admin = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $admin.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Remediation Apply requires Administrator PowerShell.' }
 
-    if (-not [bool]$remediationJournal.exact_path_unmount_performed) {
-        Assert-IncidentPhysical $incident
+    if (-not [bool]$remediationJournal.exact_path_unmount_performed -and -not [bool]$remediationJournal.exact_path_unmount_skipped_already_detached) {
+        $physicalState = Get-IncidentPhysicalState $incident
+        if ([string]$physicalState.state -ne $script:ToolingOnlyMountState) { throw 'Exact-path unmount is allowed only from tooling-only incident mount state.' }
         $remediationJournal.stage = 'exact_path_unmount'
         Write-Json $remediationJournal $remediationJournalPath
         if (-not (Dismount-ExactWarmVhdx)) { throw 'Exact-path Warm VHDX unmount failed.' }
@@ -635,7 +672,7 @@ try {
     if (-not [bool]$remediationJournal.named_remount_performed) {
         $toolingBefore = Get-MountProbe $ToolingDistro $script:ExpectedWarmMountName
         $runtimeBefore = Get-MountProbe $script:ExpectedRuntimeDistro $script:ExpectedWarmMountName
-        if ($toolingBefore.ready -or $runtimeBefore.ready) { throw 'Warm mount unexpectedly visible before recorded remount.' }
+        if ($toolingBefore.exit_code -eq 0 -or $runtimeBefore.exit_code -eq 0) { throw "Warm mount name unexpectedly present before recorded remount. tooling=$($toolingBefore.output) runtime=$($runtimeBefore.output)" }
         $runtimeProbe = Invoke-RuntimeShell 'printf RUNTIME_OK' -AllowFailure
         if ($runtimeProbe.exit_code -ne 0 -or ((@($runtimeProbe.lines) -join '').Trim() -ne 'RUNTIME_OK')) { throw 'Existing production runtime is not startable before remount.' }
         $remediationJournal.stage = 'named_remount_after_runtime_start'
@@ -794,6 +831,7 @@ try {
             journal_path=$incident.journal_path
             journal_sha256=$incident.journal_sha256
             failure=$script:ExpectedIncidentError
+            initial_mount_state=[string]$remediationJournal.initial_mount_state
         }
         authority_review_sha256=$authority.sha
         topology=[ordered]@{
@@ -816,6 +854,7 @@ try {
             empty_for_cn_migration=$true
         }
         exact_path_unmount_performed=[bool]$remediationJournal.exact_path_unmount_performed
+        exact_path_unmount_skipped_already_detached=[bool]$remediationJournal.exact_path_unmount_skipped_already_detached
         named_remount_performed=[bool]$remediationJournal.named_remount_performed
         no_arg_wsl_unmount_performed=$false
         wsl_shutdown_performed=$false
@@ -844,6 +883,7 @@ try {
         decision='PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_APPLY_COMPLETE'
         next_gate='PRODUCTION_CN_WARM_EMPTY_DISK_STORAGE_POLICY_ACCEPTANCE'
         incident_journal_sha256=$incident.journal_sha256
+        initial_mount_state=[string]$remediationJournal.initial_mount_state
         remediation_receipt_path=$receiptPath
         remediation_receipt_sha256=(Get-FileSha256 $receiptPath)
         warm_vhdx_path=$script:ExpectedWarmVhdxPath
@@ -854,6 +894,9 @@ try {
         target_http_port=$script:TargetHttpPort
         target_native_port=$script:TargetNativePort
         warm_part_count=$warmParts
+        exact_path_unmount_performed=[bool]$remediationJournal.exact_path_unmount_performed
+        exact_path_unmount_skipped_already_detached=[bool]$remediationJournal.exact_path_unmount_skipped_already_detached
+        named_remount_performed=[bool]$remediationJournal.named_remount_performed
         cn_data_transfer_performed=$false
         cross_runtime_transfer_performed=$false
         cn_warm_move_performed=$false
@@ -869,8 +912,10 @@ try {
     Write-Host 'decision=PRODUCTION_CN_WARM_PHASE_A_PROVISIONING_APPLY_COMPLETE'
     Write-Host 'next_gate=PRODUCTION_CN_WARM_EMPTY_DISK_STORAGE_POLICY_ACCEPTANCE'
     Write-Host 'mount_remediation_performed=True'
-    Write-Host 'exact_path_unmount_performed=True'
-    Write-Host 'named_remount_performed=True'
+    Write-Host "initial_mount_state=$($remediationJournal.initial_mount_state)"
+    Write-Host "exact_path_unmount_performed=$([bool]$remediationJournal.exact_path_unmount_performed)"
+    Write-Host "exact_path_unmount_skipped_already_detached=$([bool]$remediationJournal.exact_path_unmount_skipped_already_detached)"
+    Write-Host "named_remount_performed=$([bool]$remediationJournal.named_remount_performed)"
     Write-Host "ext4_uuid=$uuid"
     Write-Host "target_clickhouse_version=$targetVersion"
     Write-Host "warm_part_count=$warmParts"
