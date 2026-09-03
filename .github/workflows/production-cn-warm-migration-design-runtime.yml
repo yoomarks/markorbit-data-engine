@@ -56,8 +56,9 @@ jobs:
             -ExpectedMainSha $env:GITHUB_SHA `
             -AcceptedProvisioningPreflightReceiptPath 'C:\fixture\unused.json' `
             -ContractOnly
-          if ($LASTEXITCODE -ne 0) { throw "ContractOnly exited $LASTEXITCODE." }
+          $contractExit = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }
+          if ($contractExit -ne 0) { throw "ContractOnly exited $contractExit." }
           if (($output -join "`n") -notmatch 'PRODUCTION_CN_WARM_MIGRATION_DESIGN_CONTRACT_DIRECT_INVOCATION_OK') {
             throw 'ContractOnly success marker missing.'
           }
