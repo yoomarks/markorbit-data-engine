@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from app.us.target_canary import APPLICATION_CANARY_TABLES, QueryRows, freeze_package, stage_table_map
+from app.us.target_canary import (
+    APPLICATION_CANARY_TABLES,
+    QueryRows,
+    freeze_package,
+    stage_table_map,
+)
 from app.us.target_canary_journal import (
     commit_staged_tables,
     initialize_canary_journal,
@@ -194,6 +199,24 @@ def test_transport_loss_after_server_commit_recovers_without_duplicate_insert(tm
     assert client.commands.count(result["commits"][first]["statement"]) == 1
 
 
+def test_preexisting_package_rows_before_insert_boundary_fail_closed(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    counts = {table: 2 for table in APPLICATION_CANARY_TABLES}
+    client = FakeClient(package, counts)
+    journal = _ready_journal(tmp_path, package, client, counts)
+    first = APPLICATION_CANARY_TABLES[0]
+    client.final_count[first] = counts[first]
+
+    with pytest.raises(RuntimeError, match="pre-existing package rows"):
+        commit_staged_tables(
+            client,
+            journal,
+            package=package,
+            schema_manifest_sha256=SCHEMA_SHA,
+        )
+    assert client.commands == []
+
+
 def test_partial_final_count_fails_closed_and_is_not_retried(tmp_path: Path) -> None:
     package = _package(tmp_path)
     counts = {table: 3 for table in APPLICATION_CANARY_TABLES}
@@ -226,7 +249,7 @@ def test_source_change_after_checkpoint_blocks_final_commit(tmp_path: Path) -> N
     counts = {table: 1 for table in APPLICATION_CANARY_TABLES}
     client = FakeClient(package, counts)
     journal = _ready_journal(tmp_path, package, client, counts)
-    package.path.write_bytes(b"changed-after-stage")
+    package.path.write_bytes(b"x" * package.size_bytes)
 
     with pytest.raises(RuntimeError, match="source SHA-256 changed"):
         commit_staged_tables(
