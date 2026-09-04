@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import importlib
 from typing import Iterator
 
 
@@ -17,6 +18,15 @@ _CLICKHOUSE_EXECUTION_OVERRIDES: ContextVar[dict[str, int | str]] = ContextVar(
     "markorbit_clickhouse_execution_overrides",
     default={},
 )
+
+
+def __getattr__(name: str):
+    """Lazily preserve historical module seams without eager driver imports."""
+    if name in {"psycopg", "clickhouse_connect"}:
+        module = importlib.import_module(name)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def get_settings():
