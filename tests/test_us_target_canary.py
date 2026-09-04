@@ -25,10 +25,15 @@ from app.us.target_canary import (
 )
 
 
+def _full_table(short_name: str) -> str:
+    return f"{TARGET_DATABASE}.{short_name}"
+
+
 def _show_create(table: str, *, settings: str = "") -> str:
+    full_table = table if table.startswith(f"{TARGET_DATABASE}.") else _full_table(table)
     suffix = f" SETTINGS {settings}" if settings else ""
     return (
-        f"CREATE TABLE {TARGET_DATABASE}.{table} "
+        f"CREATE TABLE {full_table} "
         "(id String, source_package_id UUID) "
         "ENGINE = MergeTree ORDER BY id"
         f"{suffix}"
@@ -56,14 +61,13 @@ def _frozen_package(tmp_path: Path):
 
 
 def test_show_create_is_normalized_to_hot_us_only_without_alter() -> None:
+    table = _full_table("us_case_current")
     sql = normalize_show_create_for_hot_us(
-        _show_create("us_case_current", settings="index_granularity = 8192"),
-        expected_table="us_case_current",
+        _show_create(table, settings="index_granularity = 8192"),
+        expected_table=table,
     )
 
-    assert sql.startswith(
-        "CREATE TABLE IF NOT EXISTS markorbit_facts.us_case_current"
-    )
+    assert sql.startswith("CREATE TABLE IF NOT EXISTS markorbit_facts.us_case_current")
     assert "ALTER TABLE" not in sql.upper()
     assert "DROP TABLE" not in sql.upper()
     assert "DELETE WHERE" not in sql.upper()
@@ -72,9 +76,10 @@ def test_show_create_is_normalized_to_hot_us_only_without_alter() -> None:
 
 
 def test_existing_storage_policy_is_replaced_not_duplicated() -> None:
+    table = _full_table("us_case_current")
     sql = normalize_show_create_for_hot_us(
-        _show_create("us_case_current", settings="storage_policy = 'default'"),
-        expected_table="us_case_current",
+        _show_create(table, settings="storage_policy = 'default'"),
+        expected_table=table,
     )
 
     assert sql.count("storage_policy") == 1
@@ -83,16 +88,17 @@ def test_existing_storage_policy_is_replaced_not_duplicated() -> None:
 
 
 def test_forbidden_or_wrong_show_create_fails_closed() -> None:
+    table = _full_table("us_case_current")
     with pytest.raises(ValueError, match="forbidden mutation"):
         normalize_show_create_for_hot_us(
             "ALTER TABLE markorbit_facts.us_case_current DELETE WHERE 1",
-            expected_table="us_case_current",
+            expected_table=table,
         )
 
     with pytest.raises(ValueError, match="mismatch"):
         normalize_show_create_for_hot_us(
-            _show_create("us_owner_current"),
-            expected_table="us_case_current",
+            _show_create(_full_table("us_owner_current")),
+            expected_table=table,
         )
 
 
@@ -182,7 +188,7 @@ def test_native_client_rejects_destructive_commands_before_runner() -> None:
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     client = WslNativeClickHouseClient(runner=runner)
-    with pytest.raises(RuntimeError, match="permits only CREATE/INSERT"):
+    with pytest.raises(RuntimeError, match="forbidden mutation"):
         client.command("ALTER TABLE markorbit_facts.us_case_current DELETE WHERE 1")
     assert called is False
 
