@@ -11,9 +11,14 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $TargetDistro = 'MarkOrbit-ClickHouse'
+$KeeperPid = 27700
 $TargetHost = '127.0.0.1'
 $TargetPort = 29000
 $TargetVersion = '24.8.14.39'
+$TargetConfigPath = '/opt/markorbit-clickhouse-production/config.xml'
+$TargetUsersPath = '/opt/markorbit-clickhouse-production/users.xml'
+$ExpectedTargetConfigSha = 'c7240b6c05a96dff2dc4c9e5a801cd524065bd101b5d006f2e8610b63ca56a59'
+$ExpectedTargetUsersSha = '16b281607c47f9ee1f1bd8e3d09c4fc556320e833f17d05b597dec78aa2eb233'
 $TargetHotDisk = 'hot_us'
 $TargetHotPolicy = 'hot_us_only'
 $TargetHotMount = '/mnt/wsl/markorbit_prod_hot_us'
@@ -24,12 +29,14 @@ $TargetHotVhdx = 'D:\MarkOrbitData\production\clickhouse\hot_us.vhdx'
 $WarmDisk = 'warm_cn'
 $WarmPolicy = 'warm_cn_only'
 $WarmMount = '/mnt/wsl/markorbit_prod_warm_cn'
+$WarmPath = '/mnt/wsl/markorbit_prod_warm_cn/clickhouse-data/'
 $WarmUuid = '2ee74d16-f0bd-461b-ab6a-279603e6c570'
 [long]$WarmBytes = 842887331840
 $SourceContainerId = '619df97d2be192c1236ab2269f71daad09a828aa5c1169ea4a9ab07670f0d8f5'
 $SourceContainerName = '/markorbit-data-engine-clickhouse-1'
 $SourceVolume = 'markorbit-data-engine_clickhouse_data'
 $SourceVolumeDestination = '/var/lib/clickhouse'
+$ExpectedSourceConfigSha = 'baa0b2ff85869e066fa1f27087339c6d0648c87e64cae6ce49915bf345ab9b1f'
 $ReadyDecision = 'BOUNDED_US_APPLICATION_CANARY_REVIEW_READY_FOR_OPERATOR_GO'
 
 function Require-True {
@@ -83,6 +90,15 @@ function Invoke-TargetQuery {
     }
 }
 
+function Get-TargetFileSha {
+    param([string]$Path, [string]$Label)
+    $line = Get-ExactSingleLine -Label $Label -Lines @(Invoke-NativeCapture -Label $Label -Command {
+        & wsl.exe -d $TargetDistro -u root -- sha256sum $Path
+    })
+    Require-True ($line -match '^([0-9a-fA-F]{64})\s+') "$Label returned an unparseable SHA-256 line."
+    return $Matches[1].ToLowerInvariant()
+}
+
 function Get-MountFact {
     param([string]$MountPoint)
     $shell = @'
@@ -106,6 +122,22 @@ printf '%s\t%s\t%s\t%s\n' "$dev" "$fstype" "$uuid" "$size"
         fstype = $parts[1]
         uuid = $parts[2]
         size_bytes = [long]$parts[3]
+    }
+}
+
+function Get-DDriveFact {
+    $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" -ErrorAction Stop
+    Require-True ($null -ne $drive) 'D: logical disk is unavailable.'
+    [long]$total = $drive.Size
+    [long]$free = $drive.FreeSpace
+    [long]$floor = [math]::Ceiling([double]$total * 0.30)
+    Require-True ($total -gt 0) 'D: total size is invalid.'
+    return [ordered]@{
+        total_bytes = $total
+        free_bytes = $free
+        free_percent = [math]::Round(($free / [double]$total) * 100.0, 6)
+        floor_30pct_bytes = $floor
+        floor_satisfied = ($free -ge $floor)
     }
 }
 
@@ -136,24 +168,25 @@ try {
     $running = Normalize-WslNames $runningRaw
     Require-True ($running -contains $TargetDistro) 'Target distro is not already running; refusing any command that could start it.'
 
-    $keeper = @(
-        Get-CimInstance Win32_Process -Filter "Name='wsl.exe'" |
-            Where-Object {
-                $_.CommandLine -and
-                $_.CommandLine -match [regex]::Escape($TargetDistro) -and
-                $_.CommandLine -match 'tail\s+-f\s+/dev/null'
-            }
-    )
-    Require-True ($keeper.Count -ge 1) 'Persistent target keeper is not present; refusing to issue target WSL commands.'
+    $keeper = Get-CimInstance Win32_Process -Filter "ProcessId=$KeeperPid" -ErrorAction SilentlyContinue
+    Require-True ($null -ne $keeper) "Accepted target keeper PID $KeeperPid is missing."
+    Require-True ([string]$keeper.Name -eq 'wsl.exe') "Accepted target keeper PID $KeeperPid is no longer wsl.exe."
+    Require-True ([string]$keeper.CommandLine -match [regex]::Escape($TargetDistro)) 'Accepted target keeper distro binding drifted.'
+    Require-True ([string]$keeper.CommandLine -match 'tail\s+-f\s+/dev/null') 'Accepted target keeper command drifted.'
 
     $serverPids = @(Invoke-NativeCapture -Label 'target server process inspection' -Command {
-        & wsl.exe -d $TargetDistro -u root -- sh -lc "pgrep -f '[c]lickhouse-server' || true"
+        & wsl.exe -d $TargetDistro -u root -- sh -lc "pgrep -f '[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml' || true"
     })
     $serverPids = @($serverPids | Where-Object { ([string]$_).Trim() -match '^\d+$' })
-    Require-True ($serverPids.Count -eq 1) "Expected exactly one target clickhouse-server process; observed=$($serverPids.Count)"
+    Require-True ($serverPids.Count -eq 1) "Expected exactly one accepted target clickhouse server process; observed=$($serverPids.Count)"
 
     $targetVersionObserved = Get-ExactSingleLine -Label 'target ClickHouse version' -Lines @(Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')
     Require-True ($targetVersionObserved -eq $TargetVersion) "Target ClickHouse version mismatch: $targetVersionObserved"
+
+    $targetConfigSha = Get-TargetFileSha -Path $TargetConfigPath -Label 'target config SHA-256'
+    $targetUsersSha = Get-TargetFileSha -Path $TargetUsersPath -Label 'target users SHA-256'
+    Require-True ($targetConfigSha -eq $ExpectedTargetConfigSha) "Target config SHA-256 drifted: $targetConfigSha"
+    Require-True ($targetUsersSha -eq $ExpectedTargetUsersSha) "Target users SHA-256 drifted: $targetUsersSha"
 
     Require-True (Test-Path -LiteralPath $TargetHotVhdx -PathType Leaf) "Accepted production hot_us VHDX is missing: $TargetHotVhdx"
     $hotVhdxItem = Get-Item -LiteralPath $TargetHotVhdx
@@ -176,6 +209,7 @@ try {
     Require-True ($hotDiskRow.Count -eq 1) 'hot_us disk row is not exact-one.'
     Require-True ($warmDiskRow.Count -eq 1) 'warm_cn disk row is not exact-one.'
     Require-True ([string]$hotDiskRow[0].path -eq $TargetHotPath) "hot_us ClickHouse path mismatch: $($hotDiskRow[0].path)"
+    Require-True ([string]$warmDiskRow[0].path -eq $WarmPath) "warm_cn ClickHouse path mismatch: $($warmDiskRow[0].path)"
 
     $policyLines = @(Invoke-TargetQuery "SELECT policy_name,volume_name,disks FROM system.storage_policies WHERE policy_name IN ('$TargetHotPolicy','$WarmPolicy') ORDER BY policy_name,volume_priority FORMAT JSONEachRow")
     $policies = @($policyLines | Where-Object { ([string]$_).Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
@@ -189,6 +223,12 @@ try {
     $hotPartCountText = Get-ExactSingleLine -Label 'hot_us active part count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$TargetHotDisk' FORMAT TabSeparatedRaw")
     $hotPartCount = [long]$hotPartCountText
     Require-True ($hotPartCount -eq 0) "hot_us already contains active parts: $hotPartCount"
+    $warmPartCountText = Get-ExactSingleLine -Label 'warm_cn active part count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$WarmDisk' FORMAT TabSeparatedRaw")
+    $warmPartCount = [long]$warmPartCountText
+    Require-True ($warmPartCount -eq 0) "warm_cn unexpectedly contains active parts: $warmPartCount"
+
+    $dBefore = Get-DDriveFact
+    Require-True ([bool]$dBefore.floor_satisfied) "D: free space is below the accepted 30% floor: $($dBefore.free_bytes)"
 
     $sourceInspectRaw = (@(Invoke-NativeCapture -Label 'source container inspect' -Command { & docker inspect $SourceContainerId })) -join "`n"
     $sourceInspectArray = @($sourceInspectRaw | ConvertFrom-Json)
@@ -210,6 +250,12 @@ try {
         & docker exec $SourceContainerId clickhouse-client --query 'SELECT version() FORMAT TabSeparatedRaw'
     })
     Require-True ($sourceVersion -eq $TargetVersion) "Source ClickHouse version mismatch: $sourceVersion"
+    $sourceConfigShaLine = Get-ExactSingleLine -Label 'source config SHA-256' -Lines @(Invoke-NativeCapture -Label 'source config SHA-256' -Command {
+        & docker exec $SourceContainerId sha256sum /etc/clickhouse-server/config.xml
+    })
+    Require-True ($sourceConfigShaLine -match '^([0-9a-fA-F]{64})\s+') 'Source config SHA-256 line is unparseable.'
+    $sourceConfigSha = $Matches[1].ToLowerInvariant()
+    Require-True ($sourceConfigSha -eq $ExpectedSourceConfigSha) "Source config SHA-256 drifted: $sourceConfigSha"
 
     New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
     $planPath = Join-Path $EvidenceDir 'us_replay_plan_dry_run.json'
@@ -263,11 +309,32 @@ try {
         & docker exec $SourceContainerId clickhouse-client --query 'SELECT version() FORMAT TabSeparatedRaw'
     })
     Require-True ($sourceVersionAfter -eq $TargetVersion) 'Source ClickHouse version changed during read-only review.'
+    $sourceConfigShaAfterLine = Get-ExactSingleLine -Label 'source config post-review SHA-256' -Lines @(Invoke-NativeCapture -Label 'source config post-review SHA-256' -Command {
+        & docker exec $SourceContainerId sha256sum /etc/clickhouse-server/config.xml
+    })
+    Require-True ($sourceConfigShaAfterLine -match '^([0-9a-fA-F]{64})\s+') 'Source post-review config SHA-256 line is unparseable.'
+    $sourceConfigShaAfter = $Matches[1].ToLowerInvariant()
+    Require-True ($sourceConfigShaAfter -eq $ExpectedSourceConfigSha) 'Source ClickHouse config changed during read-only review.'
+
     $targetVersionAfter = Get-ExactSingleLine -Label 'target ClickHouse post-review version' -Lines @(Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')
     Require-True ($targetVersionAfter -eq $TargetVersion) 'Target ClickHouse version changed during read-only review.'
+    $targetConfigShaAfter = Get-TargetFileSha -Path $TargetConfigPath -Label 'target post-review config SHA-256'
+    Require-True ($targetConfigShaAfter -eq $ExpectedTargetConfigSha) 'Target config changed during read-only review.'
+
     $hotPartCountAfterText = Get-ExactSingleLine -Label 'hot_us post-review active part count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$TargetHotDisk' FORMAT TabSeparatedRaw")
     $hotPartCountAfter = [long]$hotPartCountAfterText
     Require-True ($hotPartCountAfter -eq 0) "hot_us active parts appeared during Stage 1: $hotPartCountAfter"
+    $warmPartCountAfterText = Get-ExactSingleLine -Label 'warm_cn post-review active part count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$WarmDisk' FORMAT TabSeparatedRaw")
+    $warmPartCountAfter = [long]$warmPartCountAfterText
+    Require-True ($warmPartCountAfter -eq 0) "warm_cn active parts appeared during Stage 1: $warmPartCountAfter"
+
+    $hotMountFactAfter = Get-MountFact $TargetHotMount
+    $warmMountFactAfter = Get-MountFact $WarmMount
+    Require-True ($hotMountFactAfter.uuid -eq $TargetHotUuid -and $hotMountFactAfter.fstype -eq 'ext4' -and $hotMountFactAfter.size_bytes -eq $TargetHotBytes) 'hot_us identity changed during Stage 1.'
+    Require-True ($warmMountFactAfter.uuid -eq $WarmUuid -and $warmMountFactAfter.fstype -eq 'ext4' -and $warmMountFactAfter.size_bytes -eq $WarmBytes) 'warm_cn identity changed during Stage 1.'
+
+    $dAfter = Get-DDriveFact
+    Require-True ([bool]$dAfter.floor_satisfied) 'D: fell below the accepted 30% floor during Stage 1.'
 
     $report = [ordered]@{
         report_version = 'PRODUCTION_US_APPLICATION_CANARY_STAGE1_V1'
@@ -281,19 +348,26 @@ try {
         }
         target = [ordered]@{
             distro_already_running = $true
-            keeper_count = $keeper.Count
-            keeper_pids = @($keeper | ForEach-Object { [int]$_.ProcessId })
+            keeper_pid = $KeeperPid
             server_process_count = $serverPids.Count
+            server_linux_pids = @($serverPids | ForEach-Object { [int]([string]$_).Trim() })
             version_before = $targetVersionObserved
             version_after = $targetVersionAfter
+            config_sha256_before = $targetConfigSha
+            config_sha256_after = $targetConfigShaAfter
+            users_sha256 = $targetUsersSha
             hot_us_vhdx = $TargetHotVhdx
             hot_us_vhdx_physical_length = [long]$hotVhdxItem.Length
-            hot_us_mount = $hotMountFact
-            warm_mount = $warmMountFact
+            hot_us_mount_before = $hotMountFact
+            hot_us_mount_after = $hotMountFactAfter
+            warm_mount_before = $warmMountFact
+            warm_mount_after = $warmMountFactAfter
             disks = $disks
             policies = $policies
             hot_us_active_parts_before = $hotPartCount
             hot_us_active_parts_after = $hotPartCountAfter
+            warm_cn_active_parts_before = $warmPartCount
+            warm_cn_active_parts_after = $warmPartCountAfter
             required_application_tables_existing = $targetRequiredTableCount
         }
         source = [ordered]@{
@@ -301,9 +375,15 @@ try {
             container_name = $SourceContainerName
             version_before = $sourceVersion
             version_after = $sourceVersionAfter
+            config_sha256_before = $sourceConfigSha
+            config_sha256_after = $sourceConfigShaAfter
             accepted_volume = $SourceVolume
             accepted_volume_mount_count = $sourceMounts.Count
             accepted_volume_consumer_names = $sourceConsumers
+        }
+        capacity = [ordered]@{
+            d_before = $dBefore
+            d_after = $dAfter
         }
         canary = [ordered]@{
             package_sequence = [int]$summary.package_sequence
@@ -345,12 +425,19 @@ try {
     Write-Host "package_sha256=$($summary.package_sha256)"
     Write-Host "package_id=$($summary.package_id)"
     Write-Host "schema_manifest_sha256=$($summary.schema_manifest_sha256)"
-    Write-Host "hot_us_uuid=$($hotMountFact.uuid)"
-    Write-Host "hot_us_size_bytes=$($hotMountFact.size_bytes)"
+    Write-Host "target_config_sha256=$targetConfigShaAfter"
+    Write-Host "source_config_sha256=$sourceConfigShaAfter"
+    Write-Host "hot_us_uuid=$($hotMountFactAfter.uuid)"
+    Write-Host "hot_us_size_bytes=$($hotMountFactAfter.size_bytes)"
     Write-Host "hot_us_active_parts_before=$hotPartCount"
     Write-Host "hot_us_active_parts_after=$hotPartCountAfter"
+    Write-Host "warm_cn_active_parts_before=$warmPartCount"
+    Write-Host "warm_cn_active_parts_after=$warmPartCountAfter"
     Write-Host "target_required_application_tables_existing=$targetRequiredTableCount"
     Write-Host "source_volume_consumer_count=$($sourceConsumers.Count)"
+    Write-Host "d_free_bytes_before=$($dBefore.free_bytes)"
+    Write-Host "d_free_bytes_after=$($dAfter.free_bytes)"
+    Write-Host "d_30pct_floor_satisfied=$($dAfter.floor_satisfied)"
     Write-Host "decision=$ReadyDecision"
     Write-Host 'read_only=True'
     Write-Host 'package_2_executed=False'
