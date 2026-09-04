@@ -34,7 +34,7 @@ def test_stdlib_settings_fallback_exposes_only_raw_root() -> None:
     code = """
 import os
 os.environ['RAW_DATA_ROOT'] = 'operator-raw-root'
-from app.config import get_settings
+from app.config import Settings, get_settings
 settings = get_settings()
 assert str(settings.raw_data_root) == 'operator-raw-root'
 try:
@@ -43,6 +43,12 @@ except ModuleNotFoundError:
     pass
 else:
     raise AssertionError('stdlib fallback unexpectedly exposed application runtime settings')
+try:
+    Settings()
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError('full Settings unexpectedly instantiated without pydantic-settings')
 """
     completed = subprocess.run(
         [sys.executable, "-S", "-c", code],
