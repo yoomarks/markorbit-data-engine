@@ -86,7 +86,7 @@ function Normalize-WslNames {
 function Invoke-TargetQuery {
     param([string]$Query)
     return Invoke-NativeCapture -Label 'target ClickHouse read-only query' -Command {
-        & wsl.exe -d $TargetDistro -u root -- clickhouse-client --host $TargetHost --port $TargetPort --query $Query
+        & wsl.exe -d $TargetDistro -u root -- clickhouse client --host $TargetHost --port $TargetPort --query $Query
     }
 }
 
