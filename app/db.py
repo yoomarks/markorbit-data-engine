@@ -1,12 +1,9 @@
+from __future__ import annotations
+
 from contextlib import contextmanager
 from contextvars import ContextVar
+import importlib
 from typing import Iterator
-
-import clickhouse_connect
-import psycopg
-from psycopg.rows import dict_row
-
-from app.config import get_settings
 
 
 POSTGRES_SESSION_OPTIONS = (
@@ -23,6 +20,34 @@ _CLICKHOUSE_EXECUTION_OVERRIDES: ContextVar[dict[str, int | str]] = ContextVar(
 )
 
 
+def __getattr__(name: str):
+    """Lazily preserve historical module seams without eager driver imports."""
+    if name in {"psycopg", "clickhouse_connect"}:
+        module = importlib.import_module(name)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def get_settings():
+    """Resolve full application settings lazily.
+
+    Keep this module-level seam for existing callers/tests that monkeypatch
+    ``app.db.get_settings`` while avoiding an eager pydantic-settings import on
+    stdlib-only Stage 1 operator hosts.
+    """
+    from app.config import get_settings as load_settings
+
+    return load_settings()
+
+
+def _runtime_settings():
+    # Database drivers and pydantic-settings are runtime dependencies. Importing
+    # this module must remain safe for stdlib-only read-only operators that only
+    # need constants/contracts from modules which reference app.db transitively.
+    return get_settings()
+
+
 def _postgres_session_options() -> str:
     lock_timeout = _POSTGRES_LOCK_TIMEOUT_OVERRIDE.get()
     if lock_timeout is None:
@@ -35,7 +60,10 @@ def _postgres_session_options() -> str:
 
 @contextmanager
 def postgres_conn():
-    settings = get_settings()
+    import psycopg
+    from psycopg.rows import dict_row
+
+    settings = _runtime_settings()
     with psycopg.connect(
         settings.postgres_dsn,
         row_factory=dict_row,
@@ -96,7 +124,9 @@ def clickhouse_execution_settings(
 
 
 def clickhouse_client():
-    settings = get_settings()
+    import clickhouse_connect
+
+    settings = _runtime_settings()
     query_settings = {
         # These are execution-resource controls only. They do not change
         # query semantics, identity, lifecycle, FINAL behavior, or lineage.

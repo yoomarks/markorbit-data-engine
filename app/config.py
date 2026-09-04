@@ -1,7 +1,41 @@
+from __future__ import annotations
+
 from functools import lru_cache
+import os
 from pathlib import Path
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except ModuleNotFoundError:
+    class BaseSettings:
+        def __init__(self, *args, **kwargs) -> None:
+            raise ModuleNotFoundError(
+                "pydantic-settings is required for full application Settings"
+            )
+
+    SettingsConfigDict = dict
+    _PYDANTIC_SETTINGS_AVAILABLE = False
+else:
+    _PYDANTIC_SETTINGS_AVAILABLE = True
+
+
+def _fallback_raw_data_root() -> Path:
+    value = os.environ.get("RAW_DATA_ROOT", "").strip()
+    if not value:
+        env_path = Path(".env")
+        if env_path.is_file():
+            for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, raw_value = line.split("=", 1)
+                if key.strip() != "RAW_DATA_ROOT":
+                    continue
+                value = raw_value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                    value = value[1:-1]
+                break
+    return Path(value or "./raw_data")
 
 
 class Settings(BaseSettings):
@@ -102,6 +136,21 @@ class Settings(BaseSettings):
         )
 
 
+class _StdlibReadOnlySettings:
+    """Minimal settings view for Stage 1 hosts without pydantic-settings."""
+
+    def __init__(self) -> None:
+        self.raw_data_root = _fallback_raw_data_root()
+
+    def __getattr__(self, name: str):
+        raise ModuleNotFoundError(
+            "pydantic-settings is required for application runtime setting "
+            f"{name!r}; stdlib-only fallback permits only raw_data_root"
+        )
+
+
 @lru_cache
-def get_settings() -> Settings:
+def get_settings() -> Settings | _StdlibReadOnlySettings:
+    if not _PYDANTIC_SETTINGS_AVAILABLE:
+        return _StdlibReadOnlySettings()
     return Settings()
