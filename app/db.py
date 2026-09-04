@@ -19,12 +19,22 @@ _CLICKHOUSE_EXECUTION_OVERRIDES: ContextVar[dict[str, int | str]] = ContextVar(
 )
 
 
+def get_settings():
+    """Resolve full application settings lazily.
+
+    Keep this module-level seam for existing callers/tests that monkeypatch
+    ``app.db.get_settings`` while avoiding an eager pydantic-settings import on
+    stdlib-only Stage 1 operator hosts.
+    """
+    from app.config import get_settings as load_settings
+
+    return load_settings()
+
+
 def _runtime_settings():
     # Database drivers and pydantic-settings are runtime dependencies. Importing
     # this module must remain safe for stdlib-only read-only operators that only
     # need constants/contracts from modules which reference app.db transitively.
-    from app.config import get_settings
-
     return get_settings()
 
 
