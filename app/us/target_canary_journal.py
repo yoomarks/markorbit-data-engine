@@ -152,8 +152,8 @@ def validate_canary_journal_binding(
     commits = payload.get("commits")
     if not isinstance(commits, dict):
         raise RuntimeError("US target canary journal commits block is invalid")
-    if list(commits) != list(APPLICATION_CANARY_TABLES):
-        raise RuntimeError("US target canary journal commit table order/set mismatch")
+    if set(commits) != set(APPLICATION_CANARY_TABLES):
+        raise RuntimeError("US target canary journal commit table set mismatch")
 
     expected_plan = _expected_commit_plan(package)
     for table in APPLICATION_CANARY_TABLES:
