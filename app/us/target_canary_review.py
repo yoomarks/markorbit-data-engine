@@ -21,6 +21,7 @@ from app.us.target_canary import (
 
 
 STAGE1_REVIEW_VERSION = "US_TARGET_CANARY_STAGE1_REVIEW_V1"
+STAGE1_SUMMARY_VERSION = "US_TARGET_CANARY_STAGE1_SUMMARY_V1"
 STAGE1_SOURCE_DECISION = "US_APPLICATION_CANARY_SOURCE_AND_SCHEMA_FROZEN"
 FINAL_READY_DECISION = "BOUNDED_US_APPLICATION_CANARY_REVIEW_READY_FOR_OPERATOR_GO"
 EXPECTED_HISTORY_PARTS = 91
@@ -250,6 +251,38 @@ def build_stage1_source_review(
     }
 
 
+def stage1_flat_summary(review: dict[str, Any]) -> dict[str, object]:
+    package = _object(review.get("package"), "package")
+    target = _object(review.get("target"), "target")
+    manifest = _object(review.get("schema_manifest"), "schema_manifest")
+    return {
+        "summary_version": STAGE1_SUMMARY_VERSION,
+        "decision": str(review.get("decision") or ""),
+        "final_ready_decision_if_host_gates_pass": str(
+            review.get("final_ready_decision_if_host_gates_pass") or ""
+        ),
+        "package_sequence": int(package.get("sequence") or 0),
+        "package_file_name": str(package.get("file_name") or ""),
+        "package_path": str(package.get("path") or ""),
+        "package_size_bytes": int(package.get("size_bytes") or 0),
+        "package_sha256": str(package.get("sha256") or ""),
+        "package_id": str(package.get("package_id") or ""),
+        "package_kind": str(package.get("package_kind") or ""),
+        "source_rank": int(package.get("source_rank") or 0),
+        "schema_manifest_sha256": str(manifest.get("sha256") or ""),
+        "required_table_count": len(_list(target.get("required_tables"), "target.required_tables")),
+        "target_distro": str(target.get("distro") or ""),
+        "target_native_host": str(target.get("native_host") or ""),
+        "target_native_port": int(target.get("native_port") or 0),
+        "target_database": str(target.get("database") or ""),
+        "target_storage_policy": str(target.get("storage_policy") or ""),
+        "first_canary_requires_all_required_tables_absent": bool(
+            target.get("first_canary_requires_all_required_tables_absent")
+        ),
+        "read_only_review": str(review.get("mode") or "") == "READ_ONLY_REVIEW",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Freeze the read-only source/package/schema portion of #526 Stage 1 review"
@@ -257,6 +290,7 @@ def main() -> None:
     parser.add_argument("--plan-json", type=Path, required=True)
     parser.add_argument("--source-schema-jsonl", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--summary-json", type=Path, required=True)
     args = parser.parse_args()
 
     plan = json.loads(args.plan_json.read_text(encoding="utf-8-sig"))
@@ -264,12 +298,17 @@ def main() -> None:
         raise RuntimeError("US replay plan JSON root must be an object")
     with args.source_schema_jsonl.open("r", encoding="utf-8-sig") as stream:
         review = build_stage1_source_review(plan, stream)
+    summary = stage1_flat_summary(review)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(
         json.dumps(review, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps(review, ensure_ascii=False, sort_keys=True))
+    args.summary_json.write_text(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":
