@@ -36,6 +36,7 @@ def test_stdlib_settings_fallback_exposes_only_raw_root() -> None:
     code = """
 import os
 os.environ['RAW_DATA_ROOT'] = 'operator-raw-root'
+os.environ['RAW_DATA_PATH'] = 'host-raw-path'
 from app.config import Settings, get_settings
 settings = get_settings()
 assert str(settings.raw_data_root) == 'operator-raw-root'
@@ -54,6 +55,34 @@ else:
 """
     completed = subprocess.run(
         [sys.executable, "-S", "-c", code],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_stdlib_settings_fallback_reads_host_raw_data_path_from_dotenv() -> None:
+    code = """
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+repo_root = Path(sys.argv[1])
+with tempfile.TemporaryDirectory() as temp_dir:
+    os.chdir(temp_dir)
+    os.environ.pop('RAW_DATA_ROOT', None)
+    os.environ.pop('RAW_DATA_PATH', None)
+    Path('.env').write_text('RAW_DATA_PATH=D:/accepted/us-raw\\n', encoding='utf-8')
+    sys.path.insert(0, str(repo_root))
+    from app.config import get_settings
+    observed = str(get_settings().raw_data_root).replace('\\\\', '/')
+    assert observed == 'D:/accepted/us-raw', observed
+"""
+    completed = subprocess.run(
+        [sys.executable, "-S", "-c", code, str(ROOT)],
         cwd=ROOT,
         text=True,
         capture_output=True,
