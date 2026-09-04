@@ -22,19 +22,24 @@ else:
 def _fallback_raw_data_root() -> Path:
     value = os.environ.get("RAW_DATA_ROOT", "").strip()
     if not value:
+        value = os.environ.get("RAW_DATA_PATH", "").strip()
+    if not value:
         env_path = Path(".env")
         if env_path.is_file():
+            env_values: dict[str, str] = {}
             for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, raw_value = line.split("=", 1)
-                if key.strip() != "RAW_DATA_ROOT":
+                key = key.strip()
+                if key not in {"RAW_DATA_ROOT", "RAW_DATA_PATH"}:
                     continue
-                value = raw_value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-                    value = value[1:-1]
-                break
+                parsed = raw_value.strip()
+                if len(parsed) >= 2 and parsed[0] == parsed[-1] and parsed[0] in {"'", '"'}:
+                    parsed = parsed[1:-1]
+                env_values[key] = parsed
+            value = env_values.get("RAW_DATA_ROOT", "") or env_values.get("RAW_DATA_PATH", "")
     return Path(value or "./raw_data")
 
 
