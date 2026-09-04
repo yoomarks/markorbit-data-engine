@@ -110,6 +110,7 @@ uuid="$(blkid -s UUID -o value "$dev")"
 size="$(blockdev --getsize64 "$dev")"
 printf '%s\t%s\t%s\t%s\n' "$dev" "$fstype" "$uuid" "$size"
 '@
+    $shell = $shell -replace "`r", ""
     $lines = @(Invoke-NativeCapture -Label "mount fact $MountPoint" -Command {
         & wsl.exe -d $TargetDistro -u root -- sh -lc $shell sh $MountPoint
     })
