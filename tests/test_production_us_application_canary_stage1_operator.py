@@ -75,3 +75,11 @@ def test_stage1_operator_requires_zero_target_application_tables_and_zero_hot_pa
     assert "first target canary requires all application final tables absent" in text
     assert "system.parts" in text
     assert "hot_us already contains active parts" in text
+
+
+def test_stage1_operator_materializes_single_line_native_output_before_indexing() -> None:
+    text = _text()
+    assert "function get-exactsingleline" in text
+    assert "$lines = @(invoke-nativecapture" in text
+    assert ")[0].trim()" not in text
+    assert "([string]$lines[0]).split" in text
