@@ -78,7 +78,7 @@ function Normalize-WslNames {
     param([string[]]$Lines)
     return @(
         $Lines |
-            ForEach-Object { ([string]$_).Replace([char]0, '').Trim() } |
+            ForEach-Object { ([string]$_).Replace("$([char]0)", '').Trim() } |
             Where-Object { $_ }
     )
 }
