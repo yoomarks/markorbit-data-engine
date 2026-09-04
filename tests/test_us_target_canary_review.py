@@ -7,10 +7,13 @@ import pytest
 
 from app.us.target_canary import APPLICATION_CANARY_TABLES, TARGET_STORAGE_POLICY
 from app.us.target_canary_review import (
+    ACCEPTED_PILOT_EVIDENCE_REF,
+    ACCEPTED_PILOT_REGISTRY_ID,
     EXPECTED_HISTORY_PARTS,
     FINAL_READY_DECISION,
     PILOT_FILE_NAME,
     PILOT_SHA256,
+    STAGE1_REGISTRY_BASIS,
     STAGE1_SOURCE_DECISION,
     build_stage1_source_review,
 )
@@ -34,6 +37,7 @@ def _plan(tmp_path: Path) -> tuple[dict[str, object], Path]:
     package = tmp_path / "apc18840407-20251231-02.zip"
     package.write_bytes(b"bounded-second-package")
     digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    pilot_path = tmp_path / PILOT_FILE_NAME
     source = {
         "file_name": package.name,
         "path": str(package),
@@ -53,10 +57,10 @@ def _plan(tmp_path: Path) -> tuple[dict[str, object], Path]:
         "package_kind": "HISTORICAL_APPLICATIONS",
         "partition_value": "1884-04-07/2025-12-31#001",
         "file_name": PILOT_FILE_NAME,
-        "path": str(tmp_path / PILOT_FILE_NAME),
+        "path": str(pilot_path),
         "location": "archive",
         "sha256": PILOT_SHA256,
-        "registry_package_id": "11111111-1111-1111-1111-111111111111",
+        "registry_package_id": ACCEPTED_PILOT_REGISTRY_ID,
         "registry_status": "SUCCESS",
         "source_rank": 1,
         "action": "SKIP_SUCCESS",
@@ -97,6 +101,16 @@ def _plan(tmp_path: Path) -> tuple[dict[str, object], Path]:
         "expected_history_parts": EXPECTED_HISTORY_PARTS,
         "success_prefix_count": 1,
         "remaining_count": 309,
+        "registry_package_count": 1,
+        "registry_basis": STAGE1_REGISTRY_BASIS,
+        "live_registry_read": False,
+        "accepted_pilot_evidence": {
+            "reference": ACCEPTED_PILOT_EVIDENCE_REF,
+            "sequence": 1,
+            "file_name": PILOT_FILE_NAME,
+            "sha256": PILOT_SHA256,
+            "current_path": str(pilot_path),
+        },
         "next_step": second,
         "steps": [first, second, *filler],
         "preflight": {
@@ -115,6 +129,8 @@ def test_stage1_review_freezes_exact_second_package_and_hot_us_schema(tmp_path: 
     assert review["decision"] == STAGE1_SOURCE_DECISION
     assert review["final_ready_decision_if_host_gates_pass"] == FINAL_READY_DECISION
     assert review["mode"] == "READ_ONLY_REVIEW"
+    assert review["continuity"]["registry_basis"] == STAGE1_REGISTRY_BASIS
+    assert review["continuity"]["live_registry_read"] is False
     assert review["package"]["sequence"] == 2
     assert review["package"]["file_name"] == package.name
     assert review["package"]["size_bytes"] == package.stat().st_size
