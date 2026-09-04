@@ -101,31 +101,42 @@ function Get-TargetFileSha {
 
 function Get-MountFact {
     param([string]$MountPoint)
-    $shell = @'
-set -eu
-mountpoint="$1"
-dev="$(findmnt -n -o SOURCE --target "$mountpoint")"
-fstype="$(findmnt -n -o FSTYPE --target "$mountpoint")"
-uuid="$(blkid -s UUID -o value "$dev")"
-size="$(blockdev --getsize64 "$dev")"
-printf '%s\t%s\t%s\t%s\n' "$dev" "$fstype" "$uuid" "$size"
-'@
-    $shell = $shell -replace "`r", ""
-    $lines = @(Invoke-NativeCapture -Label "mount fact $MountPoint" -Command {
-        & wsl.exe -d $TargetDistro -u root -- sh -lc $shell sh $MountPoint
-    })
-    Require-True ($lines.Count -eq 1) "mount fact returned unexpected line count for $MountPoint"
-    $parts = ([string]$lines[0]).Split("`t")
-    Require-True ($parts.Count -eq 4) "mount fact returned unexpected shape for $MountPoint"
+
+    $device = Get-ExactSingleLine -Label "mount source $MountPoint" -Lines @(
+        Invoke-NativeCapture -Label "mount source $MountPoint" -Command {
+            & wsl.exe -d $TargetDistro -u root -- findmnt -n -o SOURCE --target $MountPoint
+        }
+    )
+    Require-True (-not [string]::IsNullOrWhiteSpace($device)) "mount source is empty for $MountPoint"
+
+    $fstype = Get-ExactSingleLine -Label "mount filesystem $MountPoint" -Lines @(
+        Invoke-NativeCapture -Label "mount filesystem $MountPoint" -Command {
+            & wsl.exe -d $TargetDistro -u root -- findmnt -n -o FSTYPE --target $MountPoint
+        }
+    )
+
+    $uuid = Get-ExactSingleLine -Label "mount UUID $MountPoint" -Lines @(
+        Invoke-NativeCapture -Label "mount UUID $MountPoint" -Command {
+            & wsl.exe -d $TargetDistro -u root -- blkid -s UUID -o value $device
+        }
+    )
+
+    $sizeText = Get-ExactSingleLine -Label "mount size $MountPoint" -Lines @(
+        Invoke-NativeCapture -Label "mount size $MountPoint" -Command {
+            & wsl.exe -d $TargetDistro -u root -- blockdev --getsize64 $device
+        }
+    )
+
+    [long]$sizeBytes = $sizeText
+
     return [ordered]@{
         mountpoint = $MountPoint
-        device = $parts[0]
-        fstype = $parts[1]
-        uuid = $parts[2]
-        size_bytes = [long]$parts[3]
+        device = $device
+        fstype = $fstype
+        uuid = $uuid
+        size_bytes = $sizeBytes
     }
 }
-
 function Get-DDriveFact {
     $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" -ErrorAction Stop
     Require-True ($null -ne $drive) 'D: logical disk is unavailable.'
@@ -176,7 +187,7 @@ try {
     Require-True ([string]$keeper.CommandLine -match 'tail\s+-f\s+/dev/null') 'Accepted target keeper command drifted.'
 
     $serverPids = @(Invoke-NativeCapture -Label 'target server process inspection' -Command {
-        & wsl.exe -d $TargetDistro -u root -- sh -lc "pgrep -f '[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml' || true"
+        & wsl.exe -d $TargetDistro -u root -- pgrep -f '[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml'
     })
     $serverPids = @($serverPids | Where-Object { ([string]$_).Trim() -match '^\d+$' })
     Require-True ($serverPids.Count -eq 1) "Expected exactly one accepted target clickhouse server process; observed=$($serverPids.Count)"

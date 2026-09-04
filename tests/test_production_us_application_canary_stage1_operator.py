@@ -105,9 +105,17 @@ def test_stage1_operator_reproves_source_config_and_capacity_floor() -> None:
     assert "d_30pct_floor_satisfied" in text
 
 
-def test_stage1_operator_materializes_single_line_native_output_before_indexing() -> None:
+def test_stage1_operator_materializes_direct_wsl_native_output_without_shell_wrapper() -> None:
     text = _text()
     assert "function get-exactsingleline" in text
-    assert "$lines = @(invoke-nativecapture" in text
+    assert "$device = get-exactsingleline" in text
+    assert "$fstype = get-exactsingleline" in text
+    assert "$uuid = get-exactsingleline" in text
+    assert "$sizetext = get-exactsingleline" in text
+    assert "findmnt -n -o source --target $mountpoint" in text
+    assert "findmnt -n -o fstype --target $mountpoint" in text
+    assert "blkid -s uuid -o value $device" in text
+    assert "blockdev --getsize64 $device" in text
+    assert "pgrep -f '[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml'" in text
+    assert "sh -lc" not in text
     assert ")[0].trim()" not in text
-    assert "([string]$lines[0]).split" in text
