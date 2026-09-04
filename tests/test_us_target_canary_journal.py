@@ -48,6 +48,7 @@ class FakeClient:
         self.stage_matching = dict(self.stage_total)
         self.final_count = {table: 0 for table in APPLICATION_CANARY_TABLES}
         self.commands: list[str] = []
+        self.raise_before_commit_for: str | None = None
         self.raise_after_commit_for: str | None = None
         self.partial_after_commit_for: str | None = None
 
@@ -64,6 +65,9 @@ class FakeClient:
         self.commands.append(sql)
         table = sql.split("INSERT INTO ", 1)[1].split(" SELECT ", 1)[0].strip()
         expected = self.counts[table]
+        if self.raise_before_commit_for == table:
+            self.raise_before_commit_for = None
+            raise RuntimeError("simulated transport loss before server commit")
         if self.partial_after_commit_for == table:
             self.final_count[table] = max(expected - 1, 1)
             return ""
@@ -197,6 +201,43 @@ def test_transport_loss_after_server_commit_recovers_without_duplicate_insert(tm
     assert result["state"] == "COMPLETE"
     assert result["commits"][first]["recovered_after_uncertain_insert"] is True
     assert client.commands.count(result["commits"][first]["statement"]) == 1
+
+
+def test_zero_visible_rows_after_uncertain_insert_requires_explicit_reconciliation(
+    tmp_path: Path,
+) -> None:
+    package = _package(tmp_path)
+    counts = {table: 2 for table in APPLICATION_CANARY_TABLES}
+    client = FakeClient(package, counts)
+    journal = _ready_journal(tmp_path, package, client, counts)
+    first = APPLICATION_CANARY_TABLES[0]
+    client.raise_before_commit_for = first
+
+    with pytest.raises(RuntimeError, match="before server commit"):
+        commit_staged_tables(
+            client,
+            journal,
+            package=package,
+            schema_manifest_sha256=SCHEMA_SHA,
+        )
+    command_count = len(client.commands)
+
+    after_failure = load_canary_journal(
+        journal,
+        package=package,
+        schema_manifest_sha256=SCHEMA_SHA,
+    )
+    assert after_failure["commits"][first]["status"] == "INSERT_STARTED"
+    assert client.final_count[first] == 0
+
+    with pytest.raises(RuntimeError, match="in-flight reconciliation"):
+        commit_staged_tables(
+            client,
+            journal,
+            package=package,
+            schema_manifest_sha256=SCHEMA_SHA,
+        )
+    assert len(client.commands) == command_count
 
 
 def test_preexisting_package_rows_before_insert_boundary_fail_closed(tmp_path: Path) -> None:
