@@ -50,6 +50,23 @@ function Invoke-NativeCapture {
     return @($lines | ForEach-Object { [string]$_ })
 }
 
+function Get-ExactSingleLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$Lines,
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $materialized = @(
+        $Lines |
+            ForEach-Object { [string]$_ }
+    )
+    Require-True ($materialized.Count -eq 1) "$Label returned unexpected line count: $($materialized.Count)"
+    return $materialized[0].Trim()
+}
+
 function Normalize-WslNames {
     param([string[]]$Lines)
     return @(
@@ -77,11 +94,11 @@ uuid="$(blkid -s UUID -o value "$dev")"
 size="$(blockdev --getsize64 "$dev")"
 printf '%s\t%s\t%s\t%s\n' "$dev" "$fstype" "$uuid" "$size"
 '@
-    $lines = Invoke-NativeCapture -Label "mount fact $MountPoint" -Command {
+    $lines = @(Invoke-NativeCapture -Label "mount fact $MountPoint" -Command {
         & wsl.exe -d $TargetDistro -u root -- sh -lc $shell sh $MountPoint
-    }
+    })
     Require-True ($lines.Count -eq 1) "mount fact returned unexpected line count for $MountPoint"
-    $parts = $lines[0].Split("`t")
+    $parts = ([string]$lines[0]).Split("`t")
     Require-True ($parts.Count -eq 4) "mount fact returned unexpected shape for $MountPoint"
     return [ordered]@{
         mountpoint = $MountPoint
@@ -102,8 +119,10 @@ try {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     Require-True ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) 'Run this Stage 1 operator from an elevated Administrator PowerShell.'
 
-    $head = (Invoke-NativeCapture -Label 'git HEAD' -Command { & git rev-parse HEAD })[0].Trim().ToLowerInvariant()
-    $originMain = (Invoke-NativeCapture -Label 'git origin/main' -Command { & git rev-parse origin/main })[0].Trim().ToLowerInvariant()
+    $head = Get-ExactSingleLine -Label 'git HEAD' -Lines @(Invoke-NativeCapture -Label 'git HEAD' -Command { & git rev-parse HEAD })
+    $head = $head.ToLowerInvariant()
+    $originMain = Get-ExactSingleLine -Label 'git origin/main' -Lines @(Invoke-NativeCapture -Label 'git origin/main' -Command { & git rev-parse origin/main })
+    $originMain = $originMain.ToLowerInvariant()
     $expected = $ExpectedMain.ToLowerInvariant()
     Require-True ($head -eq $expected) "HEAD mismatch: expected=$expected actual=$head"
     Require-True ($originMain -eq $expected) "origin/main mismatch: expected=$expected actual=$originMain"
@@ -113,7 +132,7 @@ try {
     $pythonCommand = Get-Command $PythonExe -ErrorAction Stop
     Require-True ([bool]$pythonCommand) "Python executable not found: $PythonExe"
 
-    $runningRaw = Invoke-NativeCapture -Label 'WSL running-list inspection' -Command { & wsl.exe --list --running --quiet }
+    $runningRaw = @(Invoke-NativeCapture -Label 'WSL running-list inspection' -Command { & wsl.exe --list --running --quiet })
     $running = Normalize-WslNames $runningRaw
     Require-True ($running -contains $TargetDistro) 'Target distro is not already running; refusing any command that could start it.'
 
@@ -127,13 +146,13 @@ try {
     )
     Require-True ($keeper.Count -ge 1) 'Persistent target keeper is not present; refusing to issue target WSL commands.'
 
-    $serverPids = Invoke-NativeCapture -Label 'target server process inspection' -Command {
+    $serverPids = @(Invoke-NativeCapture -Label 'target server process inspection' -Command {
         & wsl.exe -d $TargetDistro -u root -- sh -lc "pgrep -f '[c]lickhouse-server' || true"
-    }
-    $serverPids = @($serverPids | Where-Object { $_.Trim() -match '^\d+$' })
+    })
+    $serverPids = @($serverPids | Where-Object { ([string]$_).Trim() -match '^\d+$' })
     Require-True ($serverPids.Count -eq 1) "Expected exactly one target clickhouse-server process; observed=$($serverPids.Count)"
 
-    $targetVersionObserved = (Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')[0].Trim()
+    $targetVersionObserved = Get-ExactSingleLine -Label 'target ClickHouse version' -Lines @(Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')
     Require-True ($targetVersionObserved -eq $TargetVersion) "Target ClickHouse version mismatch: $targetVersionObserved"
 
     Require-True (Test-Path -LiteralPath $TargetHotVhdx -PathType Leaf) "Accepted production hot_us VHDX is missing: $TargetHotVhdx"
@@ -149,8 +168,8 @@ try {
     Require-True ($warmMountFact.uuid -eq $WarmUuid) "Warm UUID mismatch: $($warmMountFact.uuid)"
     Require-True ($warmMountFact.size_bytes -eq $WarmBytes) "Warm block size mismatch: $($warmMountFact.size_bytes)"
 
-    $diskLines = Invoke-TargetQuery "SELECT name,path,total_space,free_space,keep_free_space FROM system.disks WHERE name IN ('$TargetHotDisk','$WarmDisk') ORDER BY name FORMAT JSONEachRow"
-    $disks = @($diskLines | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+    $diskLines = @(Invoke-TargetQuery "SELECT name,path,total_space,free_space,keep_free_space FROM system.disks WHERE name IN ('$TargetHotDisk','$WarmDisk') ORDER BY name FORMAT JSONEachRow")
+    $disks = @($diskLines | Where-Object { ([string]$_).Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
     Require-True ($disks.Count -eq 2) "Expected exact hot_us + warm_cn system.disks rows; observed=$($disks.Count)"
     $hotDiskRow = @($disks | Where-Object { $_.name -eq $TargetHotDisk })
     $warmDiskRow = @($disks | Where-Object { $_.name -eq $WarmDisk })
@@ -158,8 +177,8 @@ try {
     Require-True ($warmDiskRow.Count -eq 1) 'warm_cn disk row is not exact-one.'
     Require-True ([string]$hotDiskRow[0].path -eq $TargetHotPath) "hot_us ClickHouse path mismatch: $($hotDiskRow[0].path)"
 
-    $policyLines = Invoke-TargetQuery "SELECT policy_name,volume_name,disks FROM system.storage_policies WHERE policy_name IN ('$TargetHotPolicy','$WarmPolicy') ORDER BY policy_name,volume_priority FORMAT JSONEachRow"
-    $policies = @($policyLines | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+    $policyLines = @(Invoke-TargetQuery "SELECT policy_name,volume_name,disks FROM system.storage_policies WHERE policy_name IN ('$TargetHotPolicy','$WarmPolicy') ORDER BY policy_name,volume_priority FORMAT JSONEachRow")
+    $policies = @($policyLines | Where-Object { ([string]$_).Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
     $hotPolicyRows = @($policies | Where-Object { $_.policy_name -eq $TargetHotPolicy })
     $warmPolicyRows = @($policies | Where-Object { $_.policy_name -eq $WarmPolicy })
     Require-True ($hotPolicyRows.Count -eq 1) 'hot_us_only policy must have exactly one volume row.'
@@ -167,10 +186,11 @@ try {
     Require-True (@($hotPolicyRows[0].disks).Count -eq 1 -and [string]$hotPolicyRows[0].disks[0] -eq $TargetHotDisk) 'hot_us_only policy no longer maps only to hot_us.'
     Require-True (@($warmPolicyRows[0].disks).Count -eq 1 -and [string]$warmPolicyRows[0].disks[0] -eq $WarmDisk) 'warm_cn_only policy no longer maps only to warm_cn.'
 
-    $hotPartCount = [long](Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$TargetHotDisk' FORMAT TabSeparatedRaw")[0].Trim()
+    $hotPartCountText = Get-ExactSingleLine -Label 'hot_us active part count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$TargetHotDisk' FORMAT TabSeparatedRaw")
+    $hotPartCount = [long]$hotPartCountText
     Require-True ($hotPartCount -eq 0) "hot_us already contains active parts: $hotPartCount"
 
-    $sourceInspectRaw = (Invoke-NativeCapture -Label 'source container inspect' -Command { & docker inspect $SourceContainerId }) -join "`n"
+    $sourceInspectRaw = (@(Invoke-NativeCapture -Label 'source container inspect' -Command { & docker inspect $SourceContainerId })) -join "`n"
     $sourceInspectArray = @($sourceInspectRaw | ConvertFrom-Json)
     Require-True ($sourceInspectArray.Count -eq 1) 'Source Docker inspect did not return exactly one container.'
     $sourceInspect = $sourceInspectArray[0]
@@ -184,11 +204,11 @@ try {
     )
     Require-True ($sourceMounts.Count -eq 1) 'Accepted source volume mount is not exact-one.'
     $sourceConsumers = @(Invoke-NativeCapture -Label 'source volume consumer inspection' -Command { & docker ps -a --filter "volume=$SourceVolume" --format '{{.Names}}' })
-    $sourceConsumers = @($sourceConsumers | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $sourceConsumers = @($sourceConsumers | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
     Require-True ($sourceConsumers.Count -eq 1 -and $sourceConsumers[0] -eq $SourceContainerName.TrimStart('/')) 'Accepted source volume has an unexpected consumer set.'
-    $sourceVersion = (Invoke-NativeCapture -Label 'source ClickHouse version query' -Command {
+    $sourceVersion = Get-ExactSingleLine -Label 'source ClickHouse version' -Lines @(Invoke-NativeCapture -Label 'source ClickHouse version query' -Command {
         & docker exec $SourceContainerId clickhouse-client --query 'SELECT version() FORMAT TabSeparatedRaw'
-    })[0].Trim()
+    })
     Require-True ($sourceVersion -eq $TargetVersion) "Source ClickHouse version mismatch: $sourceVersion"
 
     New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
@@ -200,24 +220,24 @@ try {
     $tableNames = @(Invoke-NativeCapture -Label 'Application table contract load' -Command {
         & $PythonExe -c "from app.us.target_canary import APPLICATION_CANARY_TABLES; print(chr(10).join(t.split('.',1)[1] for t in APPLICATION_CANARY_TABLES))"
     })
-    $tableNames = @($tableNames | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $tableNames = @($tableNames | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
     Require-True ($tableNames.Count -gt 0) 'Application table contract is empty.'
     $quotedNames = ($tableNames | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ','
 
     $sourceSchemaQuery = "SELECT name,create_table_query FROM system.tables WHERE database='markorbit_facts' AND name IN ($quotedNames) ORDER BY name FORMAT JSONEachRow"
-    $sourceSchemaLines = Invoke-NativeCapture -Label 'source Application SHOW CREATE freeze query' -Command {
+    $sourceSchemaLines = @(Invoke-NativeCapture -Label 'source Application SHOW CREATE freeze query' -Command {
         & docker exec $SourceContainerId clickhouse-client --query $sourceSchemaQuery
-    }
+    })
     $sourceSchemaLines | Set-Content -LiteralPath $sourceSchemaPath -Encoding UTF8
 
-    $planLines = Invoke-NativeCapture -Label 'deterministic US replay DRY_RUN' -Command {
+    $planLines = @(Invoke-NativeCapture -Label 'deterministic US replay DRY_RUN' -Command {
         & $PythonExe -m app.us.replay_executor --expected-history-parts 91 --max-packages 1
-    }
+    })
     ($planLines -join "`n") | Set-Content -LiteralPath $planPath -Encoding UTF8
 
-    $helperLines = Invoke-NativeCapture -Label 'Stage 1 source/schema freeze helper' -Command {
+    $helperLines = @(Invoke-NativeCapture -Label 'Stage 1 source/schema freeze helper' -Command {
         & $PythonExe -m app.us.target_canary_review --plan-json $planPath --source-schema-jsonl $sourceSchemaPath --output-json $reviewPath --summary-json $summaryPath
-    }
+    })
     Require-True (Test-Path -LiteralPath $reviewPath -PathType Leaf) 'Stage 1 full review evidence was not written.'
     Require-True (Test-Path -LiteralPath $summaryPath -PathType Leaf) 'Stage 1 flat summary evidence was not written.'
     $summary = (Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8) | ConvertFrom-Json
@@ -228,7 +248,8 @@ try {
     Require-True ([int]$summary.required_table_count -eq $tableNames.Count) 'Frozen required-table count differs from runtime contract.'
     Require-True ([bool]$summary.first_canary_requires_all_required_tables_absent) 'First-canary table-absence contract is not active.'
 
-    $targetRequiredTableCount = [long](Invoke-TargetQuery "SELECT count() FROM system.tables WHERE database='markorbit_facts' AND name IN ($quotedNames) FORMAT TabSeparatedRaw")[0].Trim()
+    $targetRequiredTableCountText = Get-ExactSingleLine -Label 'target required Application table count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.tables WHERE database='markorbit_facts' AND name IN ($quotedNames) FORMAT TabSeparatedRaw")
+    $targetRequiredTableCount = [long]$targetRequiredTableCountText
     Require-True ($targetRequiredTableCount -eq 0) "First target canary requires all Application final tables absent; observed=$targetRequiredTableCount"
 
     $packagePath = [string]$summary.package_path
@@ -238,13 +259,14 @@ try {
     $packageShaAfter = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
     Require-True ($packageShaAfter -eq [string]$summary.package_sha256) 'Frozen package SHA-256 changed after helper review.'
 
-    $sourceVersionAfter = (Invoke-NativeCapture -Label 'source ClickHouse post-review version query' -Command {
+    $sourceVersionAfter = Get-ExactSingleLine -Label 'source ClickHouse post-review version' -Lines @(Invoke-NativeCapture -Label 'source ClickHouse post-review version query' -Command {
         & docker exec $SourceContainerId clickhouse-client --query 'SELECT version() FORMAT TabSeparatedRaw'
-    })[0].Trim()
+    })
     Require-True ($sourceVersionAfter -eq $TargetVersion) 'Source ClickHouse version changed during read-only review.'
-    $targetVersionAfter = (Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')[0].Trim()
+    $targetVersionAfter = Get-ExactSingleLine -Label 'target ClickHouse post-review version' -Lines @(Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')
     Require-True ($targetVersionAfter -eq $TargetVersion) 'Target ClickHouse version changed during read-only review.'
-    $hotPartCountAfter = [long](Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$TargetHotDisk' FORMAT TabSeparatedRaw")[0].Trim()
+    $hotPartCountAfterText = Get-ExactSingleLine -Label 'hot_us post-review active part count' -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$TargetHotDisk' FORMAT TabSeparatedRaw")
+    $hotPartCountAfter = [long]$hotPartCountAfterText
     Require-True ($hotPartCountAfter -eq 0) "hot_us active parts appeared during Stage 1: $hotPartCountAfter"
 
     $report = [ordered]@{
