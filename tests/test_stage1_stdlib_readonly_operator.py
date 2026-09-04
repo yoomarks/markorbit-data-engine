@@ -16,8 +16,10 @@ def test_stage1_contract_modules_import_without_site_packages() -> None:
 from app.us.target_canary import APPLICATION_CANARY_TABLES
 from app.us.replay_executor import build_replay_plan
 from app.us.target_canary_review import FINAL_READY_DECISION
+from app.us.target_canary_stage1_plan import build_stage1_replay_plan
 assert len(APPLICATION_CANARY_TABLES) == 12
 assert callable(build_replay_plan)
+assert callable(build_stage1_replay_plan)
 assert FINAL_READY_DECISION == 'BOUNDED_US_APPLICATION_CANARY_REVIEW_READY_FOR_OPERATOR_GO'
 """
     completed = subprocess.run(
@@ -144,3 +146,11 @@ def test_stage1_operator_never_installs_python_runtime_packages() -> None:
     ).lower()
     assert "pip install" not in text
     assert "python -m pip" not in text
+
+
+def test_stage1_operator_uses_accepted_pilot_planner_not_generic_registry_dry_run() -> None:
+    text = (ROOT / "scripts" / "freeze-production-us-application-canary-stage1.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "app.us.target_canary_stage1_plan" in text
+    assert "app.us.replay_executor --expected-history-parts 91 --max-packages 1" not in text
