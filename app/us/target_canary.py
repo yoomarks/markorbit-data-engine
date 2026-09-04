@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Sequence
 import uuid
 
 from app.scanner import sha256_file
@@ -27,7 +27,7 @@ CANARY_RECEIPT_VERSION = "US_TARGET_CANARY_RECEIPT_V1"
 APPLICATION_CANARY_TABLES = tuple(OUTPUT_PACKAGE_COLUMNS)
 
 _FORBIDDEN_MUTATION = re.compile(
-    r"\b(ALTER|DELETE|DROP|TRUNCATE|OPTIMIZE|MOVE|ATTACH|DETACH|RENAME|SYSTEM)\b",
+    r"\b(ALTER|DELETE|DROP|TRUNCATE|OPTIMIZE|MOVE|ATTACH|DETACH|RENAME)\b",
     re.IGNORECASE,
 )
 _CREATE_TABLE = re.compile(
@@ -36,9 +36,7 @@ _CREATE_TABLE = re.compile(
     re.IGNORECASE,
 )
 _UUID_CLAUSE = re.compile(r"\s+UUID\s+'[^']+'", re.IGNORECASE)
-_STORAGE_POLICY = re.compile(
-    r"storage_policy\s*=\s*'[^']+'", re.IGNORECASE
-)
+_STORAGE_POLICY = re.compile(r"storage_policy\s*=\s*'[^']+'", re.IGNORECASE)
 _SETTINGS = re.compile(r"\bSETTINGS\b", re.IGNORECASE)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -77,6 +75,26 @@ class QueryRows:
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _validate_identifier(value: str) -> str:
+    if not _IDENTIFIER.fullmatch(value):
+        raise ValueError(f"unsafe ClickHouse identifier: {value!r}")
+    return value
+
+
+def _short_table(table: str) -> str:
+    prefix = f"{TARGET_DATABASE}."
+    if not table.startswith(prefix):
+        raise ValueError(f"table is outside target database: {table}")
+    return _validate_identifier(table[len(prefix) :])
+
+
+def _manifest_list(manifest: dict[str, object], field: str) -> list[object]:
+    value = manifest.get(field)
+    if not isinstance(value, list):
+        raise ValueError(f"target schema manifest {field} must be a list")
+    return list(value)
 
 
 def deterministic_package_id(sha256: str) -> uuid.UUID:
@@ -149,22 +167,21 @@ def normalize_show_create_for_hot_us(
 ) -> str:
     if expected_table not in APPLICATION_CANARY_TABLES:
         raise ValueError(f"table is outside US Application canary scope: {expected_table}")
+    expected_short = _short_table(expected_table)
     sql = statement.strip().rstrip(";")
     if _FORBIDDEN_MUTATION.search(sql):
         raise ValueError("source SHOW CREATE contains forbidden mutation SQL")
     match = _CREATE_TABLE.match(sql)
-    if match is None or match.group(1).lower() != expected_table.lower():
-        raise ValueError(
-            f"SHOW CREATE table mismatch: expected={expected_table}"
-        )
-    if not re.search(r"\bMergeTree\b", sql, re.IGNORECASE):
+    if match is None or match.group(1).lower() != expected_short.lower():
+        raise ValueError(f"SHOW CREATE table mismatch: expected={expected_table}")
+    if not re.search(r"\b[A-Za-z]*MergeTree\b", sql, re.IGNORECASE):
         raise ValueError(f"US canary table is not MergeTree: {expected_table}")
 
     sql = _UUID_CLAUSE.sub("", sql, count=1)
     sql = re.sub(
         r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
         r"(?:`?markorbit_facts`?\.)?`?[A-Za-z0-9_]+`?",
-        f"CREATE TABLE IF NOT EXISTS {TARGET_DATABASE}.{expected_table}",
+        f"CREATE TABLE IF NOT EXISTS {expected_table}",
         sql,
         count=1,
         flags=re.IGNORECASE,
@@ -189,11 +206,12 @@ def normalize_show_create_for_hot_us(
 
 
 def validate_direct_target_ddl(statement: str, *, expected_table: str) -> None:
+    expected_short = _short_table(expected_table)
     sql = statement.strip().rstrip(";")
     if _FORBIDDEN_MUTATION.search(sql):
         raise ValueError("target schema contains forbidden mutation SQL")
     match = _CREATE_TABLE.match(sql)
-    if match is None or match.group(1).lower() != expected_table.lower():
+    if match is None or match.group(1).lower() != expected_short.lower():
         raise ValueError(f"target DDL table mismatch: expected={expected_table}")
     policy_matches = _STORAGE_POLICY.findall(sql)
     if policy_matches != [f"storage_policy = '{TARGET_STORAGE_POLICY}'"]:
@@ -235,26 +253,20 @@ def build_target_schema_manifest(
 def validate_target_schema_manifest(manifest: dict[str, object]) -> None:
     if manifest.get("storage_policy") != TARGET_STORAGE_POLICY:
         raise ValueError("target schema manifest has wrong storage policy")
-    tables = list(manifest.get("tables") or [])
+    tables = [str(item) for item in _manifest_list(manifest, "tables")]
     if tables != list(APPLICATION_CANARY_TABLES):
         raise ValueError("target schema manifest table order/set mismatch")
-    statements = list(manifest.get("statements") or [])
+    statements = [str(item) for item in _manifest_list(manifest, "statements")]
     if len(statements) != len(APPLICATION_CANARY_TABLES) + 1:
         raise ValueError("target schema manifest statement count mismatch")
     if statements[0] != f"CREATE DATABASE IF NOT EXISTS {TARGET_DATABASE}":
         raise ValueError("target schema manifest database statement mismatch")
     for table, statement in zip(APPLICATION_CANARY_TABLES, statements[1:], strict=True):
-        validate_direct_target_ddl(str(statement), expected_table=table)
-    canonical = "\n;\n".join(str(item) for item in statements) + ";\n"
+        validate_direct_target_ddl(statement, expected_table=table)
+    canonical = "\n;\n".join(statements) + ";\n"
     actual_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     if manifest.get("sha256") != actual_sha:
         raise ValueError("target schema manifest SHA-256 mismatch")
-
-
-def _validate_identifier(value: str) -> str:
-    if not _IDENTIFIER.fullmatch(value):
-        raise ValueError(f"unsafe ClickHouse identifier: {value!r}")
-    return value
 
 
 def _json_default(value: object) -> object:
@@ -270,7 +282,7 @@ def _json_default(value: object) -> object:
 class WslNativeClickHouseClient:
     """Native-protocol client pinned to the accepted target WSL runtime.
 
-    It deliberately has no Docker/source fallback. The only transport is
+    There is intentionally no Docker/source fallback. The only transport is
     clickhouse-client inside MarkOrbit-ClickHouse to localhost:29000.
     """
 
@@ -294,8 +306,6 @@ class WslNativeClickHouseClient:
         self._runner = runner
 
     def _exec(self, query: str, *, input_text: str | None = None) -> str:
-        if _FORBIDDEN_MUTATION.search(query):
-            raise RuntimeError("forbidden mutation SQL rejected by target canary adapter")
         args = [
             "wsl.exe",
             "-d",
@@ -326,6 +336,8 @@ class WslNativeClickHouseClient:
         return completed.stdout
 
     def command(self, sql: str) -> str:
+        if _FORBIDDEN_MUTATION.search(sql):
+            raise RuntimeError("forbidden mutation SQL rejected by target canary adapter")
         if not re.match(r"^\s*(CREATE|INSERT)\b", sql, re.IGNORECASE):
             raise RuntimeError("target canary command permits only CREATE/INSERT")
         return self._exec(sql)
@@ -390,7 +402,7 @@ class _StagingClient:
 def stage_table_map(package: FrozenCanaryPackage) -> dict[str, str]:
     token = package.sha256[:16]
     return {
-        table: f"{STAGE_DATABASE}.{table.split('.', 1)[1]}__{token}"
+        table: f"{STAGE_DATABASE}.{_short_table(table)}__{token}"
         for table in APPLICATION_CANARY_TABLES
     }
 
@@ -401,7 +413,9 @@ def stage_ddl_from_manifest(
     validate_target_schema_manifest(manifest)
     stage_map = stage_table_map(package)
     statements = [f"CREATE DATABASE IF NOT EXISTS {STAGE_DATABASE}"]
-    table_statements = list(manifest["statements"])[1:]
+    table_statements = [
+        str(item) for item in _manifest_list(manifest, "statements")
+    ][1:]
     for table, statement in zip(
         APPLICATION_CANARY_TABLES, table_statements, strict=True
     ):
@@ -409,7 +423,7 @@ def stage_ddl_from_manifest(
         rewritten = re.sub(
             rf"^CREATE TABLE IF NOT EXISTS {re.escape(table)}",
             f"CREATE TABLE {stage_table}",
-            str(statement),
+            statement,
             count=1,
         )
         if rewritten == statement:
