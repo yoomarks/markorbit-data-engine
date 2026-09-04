@@ -400,6 +400,13 @@ def commit_staged_tables(
             payload = _persist_revision(path, payload, expected_revision=revision)
             continue
 
+        if status == "INSERT_STARTED" and observed == 0:
+            raise RuntimeError(
+                "US target canary INSERT_STARTED has zero visible rows; "
+                "explicit read-only in-flight reconciliation is required before retry: "
+                f"table={table} expected={expected}"
+            )
+
         if observed != 0:
             if status == "PENDING":
                 raise RuntimeError(
@@ -415,7 +422,7 @@ def commit_staged_tables(
             revision = int(payload["revision"])
             commit["status"] = "COMMITTED"
             commit["observed_rows"] = 0
-            commit["recovered_after_uncertain_insert"] = status == "INSERT_STARTED"
+            commit["recovered_after_uncertain_insert"] = False
             payload["state"] = "COMMITTING"
             payload = _persist_revision(path, payload, expected_revision=revision)
             continue
