@@ -10,12 +10,14 @@ from app.us.migrations import US_SCHEMA_VERSION
 from app.us.package_meta import infer_us_package_descriptor
 from app.us.replay_executor import build_replay_plan
 from app.us.source_preflight import build_preflight
-from app.us.target_canary_review import PILOT_FILE_NAME, PILOT_SEQUENCE, PILOT_SHA256
-
-
-STAGE1_REGISTRY_BASIS = "ACCEPTED_PILOT_EVIDENCE_ONLY"
-ACCEPTED_PILOT_EVIDENCE_REF = "issue#340:5482170174"
-ACCEPTED_PILOT_REGISTRY_ID = "accepted-evidence:issue-340:sequence-1"
+from app.us.target_canary_review import (
+    ACCEPTED_PILOT_EVIDENCE_REF,
+    ACCEPTED_PILOT_REGISTRY_ID,
+    PILOT_FILE_NAME,
+    PILOT_SEQUENCE,
+    PILOT_SHA256,
+    STAGE1_REGISTRY_BASIS,
+)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -41,21 +43,42 @@ def build_stage1_replay_plan(
         expected_history_parts=expected_history_parts,
         deep_source_test=deep_source_test,
     )
-    _require(bool(preflight.get("safe_to_replay")), "Stage 1 source preflight is not safe to replay")
+    _require(
+        bool(preflight.get("safe_to_replay")),
+        "Stage 1 source preflight is not safe to replay",
+    )
 
     source_plan = preflight.get("replay_plan") or []
-    _require(isinstance(source_plan, list) and len(source_plan) >= 2, "Stage 1 source plan must contain pilot and package 2")
+    _require(
+        isinstance(source_plan, list) and len(source_plan) >= 2,
+        "Stage 1 source plan must contain pilot and package 2",
+    )
     pilot = source_plan[0]
     _require(isinstance(pilot, dict), "Stage 1 pilot source row is not an object")
-    _require(int(pilot.get("sequence") or 0) == PILOT_SEQUENCE, "Accepted pilot sequence drifted from 1")
-    _require(str(pilot.get("file_name") or "") == PILOT_FILE_NAME, "Accepted pilot file identity drifted")
-    _require(str(pilot.get("sha256") or "").lower() == PILOT_SHA256, "Accepted pilot SHA-256 identity drifted")
+    _require(
+        int(pilot.get("sequence") or 0) == PILOT_SEQUENCE,
+        "Accepted pilot sequence drifted from 1",
+    )
+    _require(
+        str(pilot.get("file_name") or "") == PILOT_FILE_NAME,
+        "Accepted pilot file identity drifted",
+    )
+    _require(
+        str(pilot.get("sha256") or "").lower() == PILOT_SHA256,
+        "Accepted pilot SHA-256 identity drifted",
+    )
 
     pilot_path = Path(str(pilot.get("path") or ""))
     descriptor = infer_us_package_descriptor(pilot_path)
     _require(descriptor.package_kind != "UNKNOWN", "Accepted pilot descriptor is UNKNOWN")
-    _require(descriptor.package_kind == str(pilot.get("package_kind") or ""), "Accepted pilot package kind drifted")
-    _require(descriptor.partition_value == str(pilot.get("partition_value") or ""), "Accepted pilot partition identity drifted")
+    _require(
+        descriptor.package_kind == str(pilot.get("package_kind") or ""),
+        "Accepted pilot package kind drifted",
+    )
+    _require(
+        descriptor.partition_value == str(pilot.get("partition_value") or ""),
+        "Accepted pilot partition identity drifted",
+    )
 
     accepted_pilot_row = {
         "package_id": ACCEPTED_PILOT_REGISTRY_ID,
