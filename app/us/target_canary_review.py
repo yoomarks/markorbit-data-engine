@@ -31,6 +31,9 @@ EXPECTED_NEXT_SEQUENCE = 2
 PILOT_SEQUENCE = 1
 PILOT_FILE_NAME = "apc18840407-20251231-01.zip"
 PILOT_SHA256 = "9b65bdcb80c2bdd6efa6869432771c30613bed6dc8efd3d4589e2fd8b334b062"
+STAGE1_REGISTRY_BASIS = "ACCEPTED_PILOT_EVIDENCE_ONLY"
+ACCEPTED_PILOT_EVIDENCE_REF = "issue#340:5482170174"
+ACCEPTED_PILOT_REGISTRY_ID = "accepted-evidence:issue-340:sequence-1"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -70,6 +73,34 @@ def _source_inventory_row(plan: dict[str, Any], next_step: dict[str, Any]) -> di
     return dict(matches[0])
 
 
+def _validate_accepted_pilot_evidence(plan: dict[str, Any]) -> dict[str, Any]:
+    _require(
+        str(plan.get("registry_basis") or "") == STAGE1_REGISTRY_BASIS,
+        "US Stage 1 plan must use accepted-pilot evidence rather than live registry state",
+    )
+    _require(
+        plan.get("live_registry_read") is False,
+        "US Stage 1 plan must explicitly report live_registry_read=false",
+    )
+    _require(
+        int(plan.get("registry_package_count") or 0) == EXPECTED_SUCCESS_PREFIX_COUNT,
+        "US Stage 1 accepted-evidence registry must contain exactly the pilot success prefix",
+    )
+    evidence = _object(plan.get("accepted_pilot_evidence"), "accepted_pilot_evidence")
+    _require(
+        str(evidence.get("reference") or "") == ACCEPTED_PILOT_EVIDENCE_REF,
+        "US Stage 1 accepted pilot evidence reference drifted",
+    )
+    _require(int(evidence.get("sequence") or 0) == PILOT_SEQUENCE, "US accepted pilot evidence sequence drifted")
+    _require(str(evidence.get("file_name") or "") == PILOT_FILE_NAME, "US accepted pilot evidence file drifted")
+    _require(
+        str(evidence.get("sha256") or "").lower() == PILOT_SHA256,
+        "US accepted pilot evidence SHA-256 drifted",
+    )
+    _require(bool(str(evidence.get("current_path") or "")), "US accepted pilot evidence current path is empty")
+    return dict(evidence)
+
+
 def _validate_plan_continuity(plan: dict[str, Any]) -> dict[str, Any]:
     _require(str(plan.get("mode") or "") == "DRY_RUN", "US replay plan must be DRY_RUN")
     _require(str(plan.get("status") or "") == "READY", "US replay plan must be READY")
@@ -98,6 +129,10 @@ def _validate_plan_continuity(plan: dict[str, Any]) -> dict[str, Any]:
     )
     _require(str(first.get("registry_status") or "") == "SUCCESS", "US pilot is no longer SUCCESS")
     _require(str(first.get("action") or "") == "SKIP_SUCCESS", "US pilot is no longer a skipped success")
+    _require(
+        str(first.get("registry_package_id") or "") == ACCEPTED_PILOT_REGISTRY_ID,
+        "US pilot success did not come from the accepted-evidence Stage 1 marker",
+    )
 
     next_step = _object(plan.get("next_step"), "next_step")
     _require(
@@ -156,6 +191,7 @@ def build_stage1_source_review(
     plan: dict[str, Any],
     source_schema_rows: Iterable[str],
 ) -> dict[str, Any]:
+    accepted_pilot_evidence = _validate_accepted_pilot_evidence(plan)
     next_step = _validate_plan_continuity(plan)
     source = _source_inventory_row(plan, next_step)
     path = Path(str(next_step["path"]))
@@ -198,6 +234,9 @@ def build_stage1_source_review(
             "expected_history_parts": EXPECTED_HISTORY_PARTS,
             "success_prefix_count": EXPECTED_SUCCESS_PREFIX_COUNT,
             "remaining_count": EXPECTED_REMAINING_COUNT,
+            "registry_basis": STAGE1_REGISTRY_BASIS,
+            "live_registry_read": False,
+            "accepted_pilot_evidence": accepted_pilot_evidence,
             "pilot": {
                 "sequence": PILOT_SEQUENCE,
                 "file_name": PILOT_FILE_NAME,
@@ -252,6 +291,10 @@ def build_stage1_source_review(
 
 
 def stage1_flat_summary(review: dict[str, Any]) -> dict[str, object]:
+    continuity = _object(review.get("continuity"), "continuity")
+    accepted_pilot_evidence = _object(
+        continuity.get("accepted_pilot_evidence"), "continuity.accepted_pilot_evidence"
+    )
     package = _object(review.get("package"), "package")
     target = _object(review.get("target"), "target")
     manifest = _object(review.get("schema_manifest"), "schema_manifest")
@@ -260,6 +303,11 @@ def stage1_flat_summary(review: dict[str, Any]) -> dict[str, object]:
         "decision": str(review.get("decision") or ""),
         "final_ready_decision_if_host_gates_pass": str(
             review.get("final_ready_decision_if_host_gates_pass") or ""
+        ),
+        "registry_basis": str(continuity.get("registry_basis") or ""),
+        "live_registry_read": bool(continuity.get("live_registry_read")),
+        "accepted_pilot_evidence_reference": str(
+            accepted_pilot_evidence.get("reference") or ""
         ),
         "package_sequence": int(package.get("sequence") or 0),
         "package_file_name": str(package.get("file_name") or ""),

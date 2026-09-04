@@ -38,6 +38,8 @@ $SourceVolume = 'markorbit-data-engine_clickhouse_data'
 $SourceVolumeDestination = '/var/lib/clickhouse'
 $ExpectedSourceConfigSha = 'baa0b2ff85869e066fa1f27087339c6d0648c87e64cae6ce49915bf345ab9b1f'
 $ReadyDecision = 'BOUNDED_US_APPLICATION_CANARY_REVIEW_READY_FOR_OPERATOR_GO'
+$Stage1RegistryBasis = 'ACCEPTED_PILOT_EVIDENCE_ONLY'
+$AcceptedPilotEvidenceRef = 'issue#340:5482170174'
 
 function Require-True {
     param([bool]$Condition, [string]$Message)
@@ -288,8 +290,8 @@ try {
     })
     $sourceSchemaLines | Set-Content -LiteralPath $sourceSchemaPath -Encoding UTF8
 
-    $planLines = @(Invoke-NativeCapture -Label 'deterministic US replay DRY_RUN' -Command {
-        & $PythonExe -m app.us.replay_executor --expected-history-parts 91 --max-packages 1
+    $planLines = @(Invoke-NativeCapture -Label 'accepted-pilot US replay DRY_RUN' -Command {
+        & $PythonExe -m app.us.target_canary_stage1_plan --expected-history-parts 91
     })
     ($planLines -join "`n") | Set-Content -LiteralPath $planPath -Encoding UTF8
 
@@ -301,6 +303,9 @@ try {
     $summary = (Get-Content -LiteralPath $summaryPath -Raw -Encoding UTF8) | ConvertFrom-Json
     Require-True ([string]$summary.decision -eq 'US_APPLICATION_CANARY_SOURCE_AND_SCHEMA_FROZEN') "Unexpected source/schema freeze decision: $($summary.decision)"
     Require-True ([bool]$summary.read_only_review) 'Source/schema helper did not report read_only_review=true.'
+    Require-True ([string]$summary.registry_basis -eq $Stage1RegistryBasis) "Unexpected Stage 1 registry basis: $($summary.registry_basis)"
+    Require-True (-not [bool]$summary.live_registry_read) 'Stage 1 unexpectedly reported live_registry_read=true.'
+    Require-True ([string]$summary.accepted_pilot_evidence_reference -eq $AcceptedPilotEvidenceRef) "Accepted pilot evidence reference drifted: $($summary.accepted_pilot_evidence_reference)"
     Require-True ([int]$summary.package_sequence -eq 2) "Frozen package sequence is not 2: $($summary.package_sequence)"
     Require-True ([string]$summary.target_storage_policy -eq $TargetHotPolicy) 'Frozen target storage policy is not hot_us_only.'
     Require-True ([int]$summary.required_table_count -eq $tableNames.Count) 'Frozen required-table count differs from runtime contract.'
@@ -398,6 +403,9 @@ try {
             d_after = $dAfter
         }
         canary = [ordered]@{
+            registry_basis = [string]$summary.registry_basis
+            live_registry_read = [bool]$summary.live_registry_read
+            accepted_pilot_evidence_reference = [string]$summary.accepted_pilot_evidence_reference
             package_sequence = [int]$summary.package_sequence
             package_file_name = [string]$summary.package_file_name
             package_path = [string]$summary.package_path
@@ -431,6 +439,9 @@ try {
     $reportPath = Join-Path $EvidenceDir 'production_us_application_canary_stage1.json'
     $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     Write-Host "evidence_dir=$EvidenceDir"
+    Write-Host "registry_basis=$($summary.registry_basis)"
+    Write-Host "live_registry_read=$($summary.live_registry_read)"
+    Write-Host "accepted_pilot_evidence_reference=$($summary.accepted_pilot_evidence_reference)"
     Write-Host "package_sequence=$($summary.package_sequence)"
     Write-Host "package_file_name=$($summary.package_file_name)"
     Write-Host "package_size_bytes=$($summary.package_size_bytes)"
