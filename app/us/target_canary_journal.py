@@ -12,7 +12,6 @@ from app.us.target_canary import (
     WslNativeClickHouseClient,
     assert_package_unchanged,
     commit_statements,
-    package_column_for_table,
     stage_table_map,
 )
 
@@ -392,16 +391,21 @@ def commit_staged_tables(
                 )
             continue
 
-        if observed == expected:
+        if status == "INSERT_STARTED" and observed == expected:
             revision = int(payload["revision"])
             commit["status"] = "COMMITTED"
             commit["observed_rows"] = observed
-            commit["recovered_after_uncertain_insert"] = status == "INSERT_STARTED"
+            commit["recovered_after_uncertain_insert"] = True
             payload["state"] = "COMMITTING"
             payload = _persist_revision(path, payload, expected_revision=revision)
             continue
 
         if observed != 0:
+            if status == "PENDING":
+                raise RuntimeError(
+                    "US target canary found pre-existing package rows before INSERT boundary; "
+                    f"refusing adoption: table={table} expected={expected} observed={observed}"
+                )
             raise RuntimeError(
                 "US target canary partial final-table state detected; refusing replay: "
                 f"table={table} expected={expected} observed={observed} status={status}"
@@ -411,6 +415,7 @@ def commit_staged_tables(
             revision = int(payload["revision"])
             commit["status"] = "COMMITTED"
             commit["observed_rows"] = 0
+            commit["recovered_after_uncertain_insert"] = status == "INSERT_STARTED"
             payload["state"] = "COMMITTING"
             payload = _persist_revision(path, payload, expected_revision=revision)
             continue
