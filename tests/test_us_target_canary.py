@@ -71,6 +71,7 @@ def test_show_create_is_normalized_to_hot_us_only_without_alter() -> None:
     assert "ALTER TABLE" not in sql.upper()
     assert "DROP TABLE" not in sql.upper()
     assert "DELETE WHERE" not in sql.upper()
+    assert " TTL " not in f" {sql.upper()} "
     assert f"storage_policy = '{TARGET_STORAGE_POLICY}'" in sql
     assert "index_granularity = 8192" in sql
 
@@ -102,6 +103,15 @@ def test_forbidden_or_wrong_show_create_fails_closed() -> None:
         )
 
 
+def test_ttl_show_create_fails_closed() -> None:
+    table = _full_table("us_case_current")
+    with pytest.raises(ValueError, match="forbidden mutation"):
+        normalize_show_create_for_hot_us(
+            _show_create(table) + " TTL now() + INTERVAL 7 DAY",
+            expected_table=table,
+        )
+
+
 def test_schema_manifest_requires_exact_application_table_set() -> None:
     show_create = {table: _show_create(table) for table in APPLICATION_CANARY_TABLES}
     show_create.pop(next(iter(show_create)))
@@ -120,6 +130,7 @@ def test_schema_manifest_is_sha_bound_and_all_tables_are_hot_us_only() -> None:
     for statement in list(manifest["statements"])[1:]:
         assert f"storage_policy = '{TARGET_STORAGE_POLICY}'" in statement
         assert "ALTER TABLE" not in statement.upper()
+        assert " TTL " not in f" {statement.upper()} "
 
     tampered = dict(manifest)
     tampered["sha256"] = "0" * 64
@@ -209,6 +220,7 @@ def test_stage_tables_are_package_scoped_hot_us_and_not_idempotent_create(
         assert "CREATE TABLE IF NOT EXISTS markorbit_canary_stage" not in statement
         assert f"storage_policy = '{TARGET_STORAGE_POLICY}'" in statement
         assert "ALTER TABLE" not in statement.upper()
+        assert " TTL " not in f" {statement.upper()} "
 
 
 def test_commit_plan_is_exact_one_package_and_insert_only(tmp_path: Path) -> None:
@@ -226,3 +238,4 @@ def test_commit_plan_is_exact_one_package_and_insert_only(tmp_path: Path) -> Non
         assert "DELETE " not in upper
         assert "DROP " not in upper
         assert "TRUNCATE " not in upper
+        assert " TTL " not in f" {upper} "
