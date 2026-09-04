@@ -7,7 +7,12 @@ from pathlib import Path
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 except ModuleNotFoundError:
-    BaseSettings = object
+    class BaseSettings:
+        def __init__(self, *args, **kwargs) -> None:
+            raise ModuleNotFoundError(
+                "pydantic-settings is required for full application Settings"
+            )
+
     SettingsConfigDict = dict
     _PYDANTIC_SETTINGS_AVAILABLE = False
 else:
