@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from app import integration_owner_summary as subject
 from app.integration_g0_contract import g0_contract_descriptor
 
+# Regression guards keep the owner projection bounded and contract-synchronized.
+
 
 def test_owner_summary_projects_only_bounded_aggregates(monkeypatch):
     generated_at = datetime(2026, 9, 5, 8, 30, tzinfo=timezone.utc)
