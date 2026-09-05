@@ -106,6 +106,7 @@ def test_us_continue_defaults_to_full_frozen_suffix_prepare(monkeypatch) -> None
         captured.update(kwargs)
         return {"accepted": True}
 
+    monkeypatch.setattr(admin_task_api, "resumable_target_bulk_task", lambda: None)
     monkeypatch.setattr(admin_task_api, "queue_target_bulk_prepare", fake_prepare)
     result = admin_task_api._queue_us_application_target_task(
         action="CONTINUE",
@@ -124,6 +125,7 @@ def test_us_run_prepares_exactly_one_suffix_package(monkeypatch) -> None:
         captured.update(kwargs)
         return {"accepted": True}
 
+    monkeypatch.setattr(admin_task_api, "resumable_target_bulk_task", lambda: None)
     monkeypatch.setattr(admin_task_api, "queue_target_bulk_prepare", fake_prepare)
     admin_task_api._queue_us_application_target_task(
         action="RUN",
@@ -132,6 +134,24 @@ def test_us_run_prepares_exactly_one_suffix_package(monkeypatch) -> None:
         bulk_max_packages=None,
     )
     assert captured == {"max_packages": 1}
+
+
+def test_us_continue_refuses_to_supersede_resumable_frozen_plan(monkeypatch) -> None:
+    existing = {
+        "run_id": "00000000-0000-0000-0000-000000000545",
+        "status": "BLOCKED",
+        "payload": {"approved_plan_sha256": "a" * 64},
+    }
+    monkeypatch.setattr(admin_task_api, "resumable_target_bulk_task", lambda: existing)
+    result = admin_task_api._queue_us_application_target_task(
+        action="CONTINUE",
+        expected_history_parts=91,
+        bulk_end_sequence=None,
+        bulk_max_packages=None,
+    )
+    assert result["accepted"] is False
+    assert result["resume_required"] is True
+    assert result["task"] is existing
 
 
 def test_us_retry_resumes_existing_frozen_target_plan(monkeypatch) -> None:
@@ -149,7 +169,8 @@ def test_us_retry_resumes_existing_frozen_target_plan(monkeypatch) -> None:
     assert result["task"]["status"] == "HOST_RUN_QUEUED"
 
 
-def test_us_target_task_rejects_history_count_or_conflicting_bounds() -> None:
+def test_us_target_task_rejects_history_count_or_conflicting_bounds(monkeypatch) -> None:
+    monkeypatch.setattr(admin_task_api, "resumable_target_bulk_task", lambda: None)
     with pytest.raises(ValueError, match="frozen at"):
         admin_task_api._queue_us_application_target_task(
             action="CONTINUE",
