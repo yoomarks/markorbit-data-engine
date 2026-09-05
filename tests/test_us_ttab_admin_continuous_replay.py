@@ -252,6 +252,6 @@ def test_task_center_exposes_ttab_continuous_replay() -> None:
     assert "queueTask('US_TTAB','CONTINUE')" in markup
     assert "queueTask('US_TTAB','STOP')" in markup
     assert "manifests/us_ttab/corpus.json" in markup
-    assert "deadline validity" in markup
-    assert "legal outcome" in markup
-    assert "substantive rights" in markup
+    assert "不推断期限有效性" in markup
+    assert "案件结果" in markup
+    assert "实体权利" in markup
