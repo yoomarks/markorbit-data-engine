@@ -16,6 +16,7 @@ from app.db import clickhouse_client
 from app.discovery_contract import DiscoveryContractError, DiscoveryCursorError
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
 from app.integration_g0_contract import g0_contract_descriptor
+from app.integration_owner_summary import owner_summary
 from app.integration_runtime import enforce_integration_rate_limit
 from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, health, us_case
@@ -85,6 +86,11 @@ def integration_health() -> dict[str, Any]:
         "status": "ok" if dependencies_ok else "degraded",
         "dependencies": dependency_health,
     }
+
+
+@router.get("/owner-summary")
+def integration_owner_summary() -> dict[str, Any]:
+    return owner_summary()
 
 
 @router.get("/contract")
