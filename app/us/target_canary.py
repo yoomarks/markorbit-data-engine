@@ -283,7 +283,7 @@ class WslNativeClickHouseClient:
     """Native-protocol client pinned to the accepted target WSL runtime.
 
     There is intentionally no Docker/source fallback. The only transport is
-    clickhouse-client inside MarkOrbit-ClickHouse to localhost:29000.
+    clickhouse client inside MarkOrbit-ClickHouse to localhost:29000.
     """
 
     def __init__(
@@ -313,7 +313,8 @@ class WslNativeClickHouseClient:
             "-u",
             "root",
             "--",
-            "clickhouse-client",
+            "clickhouse",
+            "client",
             "--host",
             self.host,
             "--port",
@@ -330,7 +331,7 @@ class WslNativeClickHouseClient:
         )
         if completed.returncode != 0:
             raise RuntimeError(
-                "target clickhouse-client failed: "
+                "target clickhouse client failed: "
                 f"exit={completed.returncode} stderr={completed.stderr.strip()}"
             )
         return completed.stdout
