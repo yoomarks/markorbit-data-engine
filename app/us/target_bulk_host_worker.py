@@ -16,6 +16,7 @@ from app.us.target_bulk_batch import (
 )
 from app.us.target_bulk_journal import load_bulk_journal
 from app.us.target_bulk_plan import validate_bulk_plan
+from app.us.target_bulk_task_control import fail_closed_recover_target_bulk_tasks
 from app.us.target_bulk_tasks import (
     STATUS_BLOCKED,
     STATUS_FAILED,
@@ -25,7 +26,6 @@ from app.us.target_bulk_tasks import (
     STATUS_RUN_QUEUED,
     STATUS_SUCCESS,
     claim_next_target_bulk_task,
-    recover_interrupted_target_bulk_tasks,
     target_bulk_stop_requested,
     update_target_bulk_task,
 )
@@ -454,9 +454,9 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("markorbit.us.target_bulk_host_worker")
-    recovered = recover_interrupted_target_bulk_tasks()
-    if recovered:
-        logger.warning("Recovered %s interrupted US target bulk host task(s)", recovered)
+    recovery = fail_closed_recover_target_bulk_tasks()
+    if any(recovery.values()):
+        logger.warning("US target bulk host recovery: %s", recovery)
 
     if args.once:
         return 0 if run_once() else 1
