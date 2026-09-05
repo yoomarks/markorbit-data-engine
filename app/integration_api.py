@@ -10,10 +10,9 @@ from app.cn.discovery_preliminary_publication import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     PreliminaryPublicationDiscoveryRequest,
-    execute_page,
 )
+from app.cn.discovery_preliminary_publication_owner import execute_live_page
 from app.component_versions import component_versions
-from app.db import clickhouse_client
 from app.discovery_contract import DiscoveryContractError, DiscoveryCursorError
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
 from app.integration_g0_contract import g0_contract_descriptor
@@ -239,7 +238,7 @@ def integration_cn_preliminary_publication_discovery(
             page_size=page_size,
             cursor=cursor,
         )
-        page = execute_page(request, client=clickhouse_client())
+        page = execute_live_page(request)
     except DiscoveryContractError as exc:
         raise _discovery_http_error(exc) from exc
     return _envelope(
