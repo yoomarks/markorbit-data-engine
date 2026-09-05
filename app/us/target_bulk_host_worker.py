@@ -9,7 +9,6 @@ import subprocess
 import time
 from typing import Any
 
-from app.admin_domain_tasks import engine_mutation_guard
 from app.us.target_bulk_batch import (
     derive_batch_manifest,
     validate_batch_manifest,
@@ -234,6 +233,7 @@ def _run_child_operator(
         str(child["required_authority_token"]),
     ]
 
+    monitor_error: str | None = None
     with log_path.open("w", encoding="utf-8") as log_stream:
         process = subprocess.Popen(
             command,
@@ -243,29 +243,36 @@ def _run_child_operator(
             text=True,
         )
         while process.poll() is None:
-            progress = _child_progress(
-                repo_root=repo_root,
-                child=child,
-                child_plan=child_plan,
-            )
-            stop_pending = target_bulk_stop_requested(run_id)
-            update_target_bulk_task(
-                run_id,
-                metrics={
-                    "phase": "STOP_PENDING" if stop_pending else "EXECUTING",
-                    "current_sequence": int(child["sequence"]),
-                    "current_file": child_plan["packages"][1]["file_name"],
-                    "completed_suffix_count": len(completed_sequences),
-                    "completed_sequences": completed_sequences,
-                    "stop_requested": stop_pending,
-                    **progress,
-                },
-                error_message=(
-                    "Stop requested; current package is allowed to reach its durable boundary."
-                    if stop_pending
-                    else None
-                ),
-            )
+            try:
+                progress = _child_progress(
+                    repo_root=repo_root,
+                    child=child,
+                    child_plan=child_plan,
+                )
+                stop_pending = target_bulk_stop_requested(run_id)
+                update_target_bulk_task(
+                    run_id,
+                    metrics={
+                        "phase": "STOP_PENDING" if stop_pending else "EXECUTING",
+                        "current_sequence": int(child["sequence"]),
+                        "current_file": child_plan["packages"][1]["file_name"],
+                        "completed_suffix_count": len(completed_sequences),
+                        "completed_sequences": completed_sequences,
+                        "stop_requested": stop_pending,
+                        **progress,
+                    },
+                    error_message=(
+                        "Stop requested; current package is allowed to reach its durable boundary."
+                        if stop_pending
+                        else None
+                    ),
+                )
+                monitor_error = None
+            except Exception as exc:
+                # Never abandon a production child merely because progress telemetry or
+                # the control database is temporarily unavailable. The guarded child
+                # owns the mutation lock and must be allowed to reach its durable exit.
+                monitor_error = f"{type(exc).__name__}: {exc}"
             time.sleep(POLL_SECONDS)
         return_code = int(process.returncode or 0)
 
@@ -277,6 +284,16 @@ def _run_child_operator(
         raise RuntimeError(
             f"guarded child operator failed: sequence={child['sequence']} "
             f"exit={return_code} log_tail={log_tail}"
+        )
+    if monitor_error:
+        update_target_bulk_task(
+            run_id,
+            metrics={
+                "phase": "CHILD_COMPLETE_TELEMETRY_RECOVERED",
+                "current_sequence": int(child["sequence"]),
+                "monitor_error": monitor_error,
+            },
+            error_message=None,
         )
 
 
@@ -399,15 +416,10 @@ def execute_claimed_target_bulk_task(task: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"unexpected target bulk host claim status: {claimed_from}")
 
     try:
-        with engine_mutation_guard() as acquired:
-            if not acquired:
-                return update_target_bulk_task(
-                    str(task["run_id"]),
-                    status=STATUS_RUN_QUEUED,
-                    metrics={"phase": "WAITING_FOR_ENGINE_MUTATION_LOCK"},
-                    error_message="Global engine mutation lock is busy; host task requeued safely.",
-                )
-            return _run_execution(task, repo_root=repo_root)
+        # The actual `target_bulk_cli execute` child owns the global mutation lock.
+        # Keeping the lock in the mutating process prevents an orchestrator crash
+        # from releasing the lock while a PowerShell/Python child is still writing.
+        return _run_execution(task, repo_root=repo_root)
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
         status = STATUS_BLOCKED if "guarded child operator failed" in str(exc) else STATUS_FAILED
