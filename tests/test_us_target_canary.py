@@ -185,7 +185,7 @@ def test_native_client_executes_only_wsl_target_clickhouse_client() -> None:
     args, payload = calls[0]
     assert args[:5] == ["wsl.exe", "-d", TARGET_DISTRO, "-u", "root"]
     assert "docker" not in " ".join(args).lower()
-    assert args[5:8] == ["--", "clickhouse", "client"]
+    assert args[5:8] == ["--exec", "clickhouse", "client"]
     assert "clickhouse-client" not in args
     assert str(TARGET_NATIVE_PORT) in args
     assert payload is None
