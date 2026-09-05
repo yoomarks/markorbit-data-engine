@@ -488,7 +488,10 @@ def execute_bulk_plan(
     if capacity_guard is not None:
         capacity_fn: CapacityGuard | None = capacity_guard
     elif commit_package is None and cleanup_package is None:
-        capacity_fn = lambda: _verify_hot_us_headroom(target)
+        def default_capacity_guard() -> object:
+            return _verify_hot_us_headroom(target)
+
+        capacity_fn = default_capacity_guard
     else:
         # Tests/custom orchestration that replaces both mutation callbacks must
         # inject its own guard if target capacity behavior is part of the test.
