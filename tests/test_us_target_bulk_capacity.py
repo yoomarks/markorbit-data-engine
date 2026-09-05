@@ -6,6 +6,7 @@ import pytest
 
 import app.us.target_bulk_journal as bulk_journal
 import app.us.target_bulk_replay as bulk_replay
+from app.us.target_bulk_plan import ACCEPTED_SCHEMA_MANIFEST_SHA256
 from app.us.target_canary import APPLICATION_CANARY_TABLES
 
 
@@ -31,6 +32,8 @@ def _minimal_plan() -> dict:
         "plan_sha256": "1" * 64,
         "inventory_sha256": "2" * 64,
         "execution_main": "a" * 40,
+        "raw_root": "F:/MarkOrbitData/raw",
+        "accepted_schema_manifest_sha256": ACCEPTED_SCHEMA_MANIFEST_SHA256,
         "start_sequence": 3,
         "end_sequence": 4,
         "package_count": 3,
