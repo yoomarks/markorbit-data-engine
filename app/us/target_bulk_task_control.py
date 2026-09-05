@@ -7,6 +7,7 @@ from app.us.target_bulk_tasks import (
     STATUS_BLOCKED,
     STATUS_FAILED,
     STATUS_INTERRUPTED,
+    STATUS_NEEDS_OPERATOR,
     STATUS_PREPARE_QUEUED,
     STATUS_RUNNING,
     STATUS_RUN_QUEUED,
@@ -169,10 +170,8 @@ def resume_target_bulk_task(*, run_id: str | None = None) -> dict[str, Any]:
                 next_status = STATUS_RUN_QUEUED
                 host_phase = "EXECUTE"
             elif prepared:
-                raise ValueError(
-                    "prepared US target bulk plan still requires explicit operator approval; "
-                    "resume cannot substitute for approval"
-                )
+                next_status = STATUS_NEEDS_OPERATOR
+                host_phase = "AWAITING_APPROVAL"
             else:
                 next_status = STATUS_PREPARE_QUEUED
                 host_phase = "PREPARE"
