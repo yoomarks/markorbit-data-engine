@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.admin_progress import domain_progress_snapshot
 from app.cn.discovery_preliminary_publication import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -19,6 +20,7 @@ from app.integration_g0_contract import g0_contract_descriptor
 from app.integration_runtime import enforce_integration_rate_limit
 from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, health, us_case
+from app.operations_v2 import operations_snapshot
 from app.platform_contract import platform_contract
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
@@ -32,6 +34,24 @@ router = APIRouter(
     tags=["MarkOrbit integration V1"],
     dependencies=[Depends(require_integration_auth), Depends(enforce_integration_rate_limit)],
 )
+
+_CONTROL_PLANE_OPERATION_COUNTERS = (
+    "active_human_actions",
+    "failed_human_actions",
+    "active_admin_tasks",
+    "admin_domains_with_errors",
+    "failed_operational_jobs",
+    "domain_runs_with_readiness_failures",
+    "replay_lanes_with_readiness_failures",
+)
+_CONTROL_PLANE_FAILURE_COUNTERS = (
+    "failed_human_actions",
+    "admin_domains_with_errors",
+    "failed_operational_jobs",
+    "domain_runs_with_readiness_failures",
+    "replay_lanes_with_readiness_failures",
+)
+_CONTROL_PLANE_UNAVAILABLE_DETAIL = "Data Engine owner summary is unavailable"
 
 
 def _envelope(
@@ -71,6 +91,20 @@ def _discovery_http_error(exc: DiscoveryContractError) -> HTTPException:
     )
 
 
+def _control_plane_counter(summary: dict[str, Any], name: str) -> int:
+    value = summary.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid owner counter: {name}")
+    return value
+
+
+def _control_plane_text(payload: dict[str, Any], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"invalid owner field: {name}")
+    return value
+
+
 @router.get("/health")
 def integration_health() -> dict[str, Any]:
     dependency_health = health()
@@ -84,6 +118,58 @@ def integration_health() -> dict[str, Any]:
         "service_role": SERVICE_ROLE,
         "status": "ok" if dependencies_ok else "degraded",
         "dependencies": dependency_health,
+    }
+
+
+@router.get("/data-engine/control-plane")
+def integration_data_engine_control_plane() -> dict[str, Any]:
+    """Expose the bounded owner-local Data Engine control-plane read model."""
+    try:
+        dependency_health = health()
+        operations = operations_snapshot()
+        admin_progress = domain_progress_snapshot()
+        if not isinstance(dependency_health, dict):
+            raise ValueError("owner health payload is malformed")
+        if not isinstance(operations, dict):
+            raise ValueError("operations payload is malformed")
+        if not isinstance(admin_progress, dict):
+            raise ValueError("admin progress payload is malformed")
+
+        raw_summary = operations.get("summary")
+        if not isinstance(raw_summary, dict):
+            raise ValueError("operations summary is malformed")
+        summary = {
+            name: _control_plane_counter(raw_summary, name)
+            for name in _CONTROL_PLANE_OPERATION_COUNTERS
+        }
+        operations_version = _control_plane_text(operations, "version")
+        action_authority = _control_plane_text(operations, "action_authority")
+        admin_version = _control_plane_text(admin_progress, "version")
+        admin_active_count = _control_plane_counter(admin_progress, "active_count")
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_CONTROL_PLANE_UNAVAILABLE_DETAIL,
+        ) from None
+
+    dependencies_ok = all(
+        dependency_health.get(name) == "ok" for name in ("api", "postgres", "clickhouse")
+    )
+    failures_clear = all(summary[name] == 0 for name in _CONTROL_PLANE_FAILURE_COUNTERS)
+    return {
+        "authority": "DATA_ENGINE_FACT_READ_MODEL",
+        "read_only": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "health": "ok" if dependencies_ok and failures_clear else "degraded",
+        "operations": {
+            "version": operations_version,
+            "action_authority": action_authority,
+            "summary": summary,
+        },
+        "admin_progress": {
+            "version": admin_version,
+            "active_count": admin_active_count,
+        },
     }
 
 
