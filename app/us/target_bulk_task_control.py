@@ -89,6 +89,33 @@ def fail_closed_recover_target_bulk_tasks() -> dict[str, int]:
     return report
 
 
+def resumable_target_bulk_task() -> dict[str, Any] | None:
+    """Return the newest frozen target task that must be resumed instead of superseded."""
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT run_id, job_type, trigger_type, status, started_at, finished_at,
+                       payload, metrics, COALESCE(error_message, '') AS error_message
+                FROM control.job_run
+                WHERE trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
+                  AND payload->>'execution_lane' = %s
+                  AND payload->>'domain' = 'US_APPLICATION'
+                  AND status = ANY(%s)
+                ORDER BY started_at DESC, run_id DESC
+                LIMIT 1
+                """,
+                (
+                    TARGET_BULK_TASK_KIND,
+                    TARGET_BULK_EXECUTION_LANE,
+                    list(sorted(_RESUMABLE)),
+                ),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def resume_target_bulk_task(*, run_id: str | None = None) -> dict[str, Any]:
     """Resume only from durable host-task state; never clear target journals or rows."""
     with postgres_conn() as conn:
