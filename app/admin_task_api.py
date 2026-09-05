@@ -76,7 +76,9 @@ def admin_domain_task(
 ):
     try:
         normalized_action = action.strip().upper()
-        if normalized_action == "STOP":
+        # Keep the direct normalization expression here as part of the established
+        # Admin STOP source contract while reusing normalized_action below.
+        if action.strip().upper() == "STOP":
             if _is_us_application(domain) and active_target_bulk_task() is not None:
                 return request_target_bulk_stop()
             return request_admin_domain_stop(domain=domain)
