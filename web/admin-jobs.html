@@ -36,7 +36,7 @@
 
       <div class="domain-card">
         <div class="domain-top"><span class="domain-name">US Application</span><span class="badge blue">US · hot_us</span></div>
-        <div class="cell-sub section-gap">批量导入使用已验收的 <span class="mono">hot_us</span> 写链。第一步只读冻结 Package 1 bridge + seq3+ master plan；只有核对 plan SHA 并点击“批准并开始”后，Windows host worker 才会逐包执行。STOP 只在 durable 包边界生效。</div>
+        <div class="cell-sub section-gap">批量导入使用已验收的 <span class="mono">hot_us</span> 写链。第一步只读冻结 Package 1 bridge + seq3+ master plan；只有核对 plan SHA 并点击“批准并开始”后，Windows host worker 才会按 deterministic replay 顺序逐包执行。STOP 只在 durable 包边界生效。</div>
         <div id="us-bulk-state" class="section-gap"><span class="cell-sub">正在读取 US bulk task…</span></div>
         <div class="toolbar section-gap">
           <button class="btn btn-primary" onclick="queueTask('US_APPLICATION','CONTINUE')">准备批量导入</button>
@@ -59,7 +59,7 @@
 
       <div class="domain-card">
         <div class="domain-top"><span class="domain-name">US TTAB</span><span class="badge blue">TB</span></div>
-        <div class="cell-sub section-gap">必须先通过 Assignment acceptance。连续推进读取固定的 <span class="mono">manifests/us_ttab/corpus.json</span>，按 manifest 顺序处理全部剩余 TTAB bulk snapshots；每包前检查存储空间与停止请求，完成后重新验证 US、Assignment 与 TTAB 源文件。不推断期限有效性、案件结果或实体权利。</div>
+        <div class="cell-sub section-gap">必须先通过 Assignment acceptance。连续推进读取固定的 <span class="mono">manifests/us_ttab/corpus.json</span>，按 manifest 顺序处理全部剩余 TTAB bulk snapshots；每包前检查存储空间与停止请求，完成后重新验证 US、Assignment 与 TTAB 源文件。不推断 deadline validity、legal outcome 或 substantive rights。</div>
         <div class="toolbar section-gap">
           <button class="btn btn-primary" onclick="queueTask('US_TTAB','CONTINUE')">连续推进</button>
           <button class="btn btn-soft" onclick="queueTask('US_TTAB','STOP')">停止连续推进</button>
@@ -170,7 +170,12 @@ async function loadUsBulkState(){
 
 async function approveUsBulk(runId,planSha){
   const task=currentUsBulk||{},m=usBulkMetrics(task),p=usBulkPayload(task),start=m.start_sequence||p.start_sequence||3,end=m.end_sequence||p.end_sequence||'—';
-  const message=`确认批准 US Application 批量生产写入？\n\n范围：seq ${start}–${end}\nPlan SHA：${planSha}\n\n批准后 Windows host worker 只会执行该 frozen master plan 封存的 child plans；任一包不确定都会 BLOCKED，不会 blind retry。`;
+  const message=`确认批准 US Application 批量生产写入？\
+\
+范围：seq ${start}–${end}\
+Plan SHA：${planSha}\
+\
+批准后 Windows host worker 只会执行该 frozen master plan 封存的 child plans；任一包不确定都会 BLOCKED，不会 blind retry。`;
   if(!confirm(message))return;
   const url=new URL(`/api/admin/v2/domain-tasks/US_APPLICATION/BULK/${encodeURIComponent(runId)}/APPROVE`,location.origin);
   url.searchParams.set('plan_sha256',planSha);
@@ -183,7 +188,11 @@ async function approveUsBulk(runId,planSha){
 
 async function resumeUsBulk(runId){
   const task=currentUsBulk||{},planSha=usBulkPlanSha(task);
-  const message=`确认按原 frozen plan 恢复？\n\nPlan SHA：${planSha||'尚未批准的 prepared plan'}\n\n不会创建新计划，也不会清理目标数据；prepared-but-unapproved 任务只会回到 NEEDS_OPERATOR。`;
+  const message=`确认按原 frozen plan 恢复？\
+\
+Plan SHA：${planSha||'尚未批准的 prepared plan'}\
+\
+不会创建新计划，也不会清理目标数据；prepared-but-unapproved 任务只会回到 NEEDS_OPERATOR。`;
   if(!confirm(message))return;
   try{
     const d=await MOAdmin.api(`/api/admin/v2/domain-tasks/US_APPLICATION/BULK/${encodeURIComponent(runId)}/RESUME`,{method:'POST'}),t=d.task||{};
