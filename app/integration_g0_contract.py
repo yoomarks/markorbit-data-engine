@@ -28,6 +28,14 @@ def g0_contract_descriptor() -> dict[str, Any]:
             "resources": [
                 {"path": "/api/v1/contract", "query": {}, "pagination": "none"},
                 {"path": "/api/v1/health", "query": {}, "pagination": "none"},
+                {
+                    "path": "/api/v1/owner-summary",
+                    "query": {},
+                    "pagination": "none",
+                    "semantics": "bounded_owner_local_aggregate_projection",
+                    "read_only": True,
+                    "admin_detail_exposed": False,
+                },
                 {"path": "/api/v1/cn/cases/{application_number}", "query": {}, "pagination": "none"},
                 {
                     "path": "/api/v1/cn/discovery/preliminary-publications",
