@@ -22,10 +22,12 @@ def test_host_restart_blocks_approved_mutation_instead_of_blind_requeue() -> Non
     assert "STATUS_PREPARE_QUEUED" in control
 
 
-def test_resume_surface_remains_explicit_after_fail_closed_restart() -> None:
+def test_resume_surface_preserves_approval_boundary() -> None:
     control = (ROOT / "app" / "us" / "target_bulk_task_control.py").read_text(
         encoding="utf-8"
     )
     assert "_RESUMABLE = {STATUS_BLOCKED, STATUS_FAILED, STATUS_INTERRUPTED}" in control
     assert "resume_requested_at" in control
-    assert "prepared US target bulk plan still requires explicit operator approval" in control
+    assert "next_status = STATUS_NEEDS_OPERATOR" in control
+    assert 'host_phase = "AWAITING_APPROVAL"' in control
+    assert "next_status = STATUS_RUN_QUEUED" in control
