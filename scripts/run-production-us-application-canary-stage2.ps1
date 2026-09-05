@@ -149,8 +149,8 @@ function Assert-ExactExecutionMain {
     $head = Get-ExactSingleLine -Label "git HEAD ($Phase)" -Lines @(Invoke-NativeCapture -Label "git HEAD ($Phase)" -Command { & git rev-parse HEAD })
     $originMain = Get-ExactSingleLine -Label "git origin/main ($Phase)" -Lines @(Invoke-NativeCapture -Label "git origin/main ($Phase)" -Command { & git rev-parse origin/main })
     $expected = $ExpectedMain.ToLowerInvariant()
-    Require-True ($head.ToLowerInvariant() -eq $expected) "HEAD mismatch during $Phase: expected=$expected actual=$head"
-    Require-True ($originMain.ToLowerInvariant() -eq $expected) "origin/main mismatch during $Phase: expected=$expected actual=$originMain"
+    Require-True ($head.ToLowerInvariant() -eq $expected) "HEAD mismatch during ${Phase}: expected=$expected actual=$head"
+    Require-True ($originMain.ToLowerInvariant() -eq $expected) "origin/main mismatch during ${Phase}: expected=$expected actual=$originMain"
     $dirty = @(Invoke-NativeCapture -Label "git status ($Phase)" -Command { & git status --porcelain=v1 --untracked-files=normal })
     Require-True ($dirty.Count -eq 0) "Working tree is not exactly clean during $Phase."
 }
@@ -174,11 +174,11 @@ function Assert-TargetRuntime {
     Require-True ($serverPids.Count -eq 1) "Expected exactly one target ClickHouse server during $Phase; observed=$($serverPids.Count)"
 
     $version = Get-ExactSingleLine -Label "target ClickHouse version ($Phase)" -Lines @(Invoke-TargetQuery 'SELECT version() FORMAT TabSeparatedRaw')
-    Require-True ($version -eq $TargetVersion) "Target ClickHouse version mismatch during $Phase: $version"
+    Require-True ($version -eq $TargetVersion) "Target ClickHouse version mismatch during ${Phase}: $version"
     $configSha = Get-TargetFileSha -Path $TargetConfigPath -Label "target config SHA-256 ($Phase)"
     $usersSha = Get-TargetFileSha -Path $TargetUsersPath -Label "target users SHA-256 ($Phase)"
-    Require-True ($configSha -eq $ExpectedTargetConfigSha) "Target config SHA-256 drifted during $Phase: $configSha"
-    Require-True ($usersSha -eq $ExpectedTargetUsersSha) "Target users SHA-256 drifted during $Phase: $usersSha"
+    Require-True ($configSha -eq $ExpectedTargetConfigSha) "Target config SHA-256 drifted during ${Phase}: $configSha"
+    Require-True ($usersSha -eq $ExpectedTargetUsersSha) "Target users SHA-256 drifted during ${Phase}: $usersSha"
 }
 
 function Assert-StorageTopology {
@@ -205,7 +205,7 @@ function Assert-StorageTopology {
     Require-True ($warmPolicies.Count -eq 1 -and @($warmPolicies[0].disks).Count -eq 1 -and [string]$warmPolicies[0].disks[0] -eq $WarmDisk) "warm_cn_only policy drifted during $Phase."
 
     $warmParts = [long](Get-ExactSingleLine -Label "warm_cn active parts ($Phase)" -Lines @(Invoke-TargetQuery "SELECT count() FROM system.parts WHERE active AND disk_name='$WarmDisk' FORMAT TabSeparatedRaw"))
-    Require-True ($warmParts -eq 0) "warm_cn unexpectedly contains active parts during $Phase: $warmParts"
+    Require-True ($warmParts -eq 0) "warm_cn unexpectedly contains active parts during ${Phase}: $warmParts"
     return [ordered]@{ hot = $hot; warm = $warm; warm_cn_active_parts = $warmParts }
 }
 
@@ -278,6 +278,7 @@ try {
             --receipt-json $ReceiptPath `
             --authority-token $Authority
     })
+    Require-True ($pythonLines.Count -gt 0) 'Stage 2 Python executor returned no receipt output.'
     Require-True (Test-Path -LiteralPath $ReceiptPath -PathType Leaf) 'Stage 2 Python receipt was not written.'
     $receipt = Get-Content -LiteralPath $ReceiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Require-True ([string]$receipt.decision -eq $Stage2Decision) "Unexpected Stage 2 receipt decision: $($receipt.decision)"
@@ -351,17 +352,17 @@ try {
 
     Write-Host "evidence_dir=$EvidenceDir"
     Write-Host "execution_main=$($ExpectedMain.ToLowerInvariant())"
-    Write-Host "package_sequence=2"
+    Write-Host 'package_sequence=2'
     Write-Host "package_file_name=$ExpectedPackageFile"
     Write-Host "package_sha256=$ExpectedPackageSha"
     Write-Host "package_id=$ExpectedPackageId"
     Write-Host "schema_manifest_sha256=$ExpectedSchemaManifestSha"
     Write-Host "journal_state=$($receipt.journal.state)"
-    Write-Host "stage2_go_consumed=True"
-    Write-Host "package_2_executed=True"
-    Write-Host "package_3_executed=False"
-    Write-Host "full_corpus_executed=False"
-    Write-Host "automatic_next_package=False"
+    Write-Host 'stage2_go_consumed=True'
+    Write-Host 'package_2_executed=True'
+    Write-Host 'package_3_executed=False'
+    Write-Host 'full_corpus_executed=False'
+    Write-Host 'automatic_next_package=False'
     Write-Host "decision=$Stage2Decision"
     exit 0
 }
