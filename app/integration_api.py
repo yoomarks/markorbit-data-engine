@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -104,6 +104,13 @@ def _control_plane_text(payload: dict[str, Any], name: str) -> str:
     return value
 
 
+def _control_plane_generated_at(payload: dict[str, Any]) -> str:
+    value = payload.get("generated_at")
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise ValueError("invalid owner field: generated_at")
+    return value.isoformat()
+
+
 @router.get("/health")
 def integration_health() -> dict[str, Any]:
     dependency_health = health()
@@ -145,6 +152,7 @@ def integration_data_engine_control_plane() -> dict[str, Any]:
         action_authority = _control_plane_text(operations, "action_authority")
         admin_version = _control_plane_text(admin_progress, "version")
         admin_active_count = _control_plane_counter(admin_progress, "active_count")
+        generated_at = _control_plane_generated_at(admin_progress)
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -156,9 +164,12 @@ def integration_data_engine_control_plane() -> dict[str, Any]:
     )
     failures_clear = all(summary[name] == 0 for name in _CONTROL_PLANE_FAILURE_COUNTERS)
     return {
+        "contract_version": CONTRACT_VERSION,
+        "engine_version": engine_version(),
+        "source_owner": SOURCE_OWNER,
         "authority": "DATA_ENGINE_FACT_READ_MODEL",
         "read_only": True,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
         "health": "ok" if dependencies_ok and failures_clear else "degraded",
         "operations": {
             "version": operations_version,
