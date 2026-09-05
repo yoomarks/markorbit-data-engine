@@ -278,6 +278,8 @@ def test_task_center_exposes_us_application_continuous_replay() -> None:
     markup = (ROOT / "web" / "admin-jobs.html").read_text(encoding="utf-8")
     assert "queueTask('US_APPLICATION','CONTINUE')" in markup
     assert "queueTask('US_APPLICATION','STOP')" in markup
-    assert "deterministic replay" in markup
-    assert "source-backed acceptance" in markup
-    assert "每包前重新检查存储空间" in markup
+    assert "准备批量导入" in markup
+    assert "read-only bulk PREPARE" in markup
+    assert "exact plan SHA" in markup
+    assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/ACTIVE" in markup
+    assert "durable 安全边界" in markup
