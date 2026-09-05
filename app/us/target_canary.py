@@ -312,7 +312,7 @@ class WslNativeClickHouseClient:
             self.distro,
             "-u",
             "root",
-            "--",
+            "--exec",
             "clickhouse",
             "client",
             "--host",
