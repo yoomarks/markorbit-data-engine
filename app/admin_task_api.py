@@ -3,7 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.admin_domain_tasks import queue_admin_domain_task, request_admin_domain_stop
-from app.us.target_bulk_task_control import resume_target_bulk_task
+from app.us.target_bulk_task_control import (
+    resumable_target_bulk_task,
+    resume_target_bulk_task,
+)
 from app.us.target_bulk_tasks import (
     active_target_bulk_task,
     approve_target_bulk_task,
@@ -31,6 +34,18 @@ def _queue_us_application_target_task(
         raise ValueError(
             "US Application target bulk corpus is frozen at expected_history_parts=91"
         )
+    if action in {"RUN", "CONTINUE"}:
+        resumable = resumable_target_bulk_task()
+        if resumable is not None:
+            return {
+                "accepted": False,
+                "task": resumable,
+                "resume_required": True,
+                "message": (
+                    "A frozen US Application target bulk task already has durable state; "
+                    "use RETRY/RESUME instead of creating a new plan."
+                ),
+            }
     if action == "RUN":
         if bulk_end_sequence is not None or bulk_max_packages is not None:
             raise ValueError("US Application RUN is fixed to exactly one suffix package")
@@ -83,7 +98,10 @@ def admin_domain_task(
 
 @router.get("/US_APPLICATION/BULK/ACTIVE")
 def us_application_target_bulk_active():
-    return {"task": active_target_bulk_task()}
+    return {
+        "task": active_target_bulk_task(),
+        "resumable_task": resumable_target_bulk_task(),
+    }
 
 
 @router.post("/US_APPLICATION/BULK/{run_id}/APPROVE", status_code=202)
