@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ import app.integration_security as integration_security
 API_KEY = "control-plane-test-key-000000000000000000000000"
 AUTH_HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 CONTROL_PATH = "/api/v1/data-engine/control-plane"
+OWNER_GENERATED_AT = datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc)
 
 
 def _client(monkeypatch) -> TestClient:
@@ -79,6 +81,8 @@ def _install_owner_snapshots(
         "domain_progress_snapshot",
         lambda: {
             "version": "MARKORBIT_ADMIN_PROGRESS_V2",
+            "read_only": True,
+            "generated_at": OWNER_GENERATED_AT,
             "active_count": 0,
             "items": [
                 {
@@ -97,8 +101,12 @@ def test_control_plane_authenticated_success_is_explicitly_bounded(monkeypatch) 
     response = _client(monkeypatch).get(CONTROL_PATH, headers=AUTH_HEADERS)
     assert response.status_code == 200
     payload = response.json()
+    assert payload["contract_version"] == integration_api.CONTRACT_VERSION
+    assert payload["engine_version"] == integration_api.engine_version()
+    assert payload["source_owner"] == integration_api.SOURCE_OWNER
     assert payload["authority"] == "DATA_ENGINE_FACT_READ_MODEL"
     assert payload["read_only"] is True
+    assert payload["generated_at"] == OWNER_GENERATED_AT.isoformat()
     assert payload["health"] == "ok"
     assert payload["operations"] == {
         "version": "MARKORBIT_OPERATIONS_V2",
@@ -190,7 +198,11 @@ def test_control_plane_malformed_owner_payload_returns_coarse_503(monkeypatch) -
     monkeypatch.setattr(
         integration_api,
         "domain_progress_snapshot",
-        lambda: {"version": "MARKORBIT_ADMIN_PROGRESS_V2", "active_count": -1},
+        lambda: {
+            "version": "MARKORBIT_ADMIN_PROGRESS_V2",
+            "generated_at": OWNER_GENERATED_AT,
+            "active_count": -1,
+        },
     )
     response = _client(monkeypatch).get(CONTROL_PATH, headers=AUTH_HEADERS)
     assert response.status_code == 503
