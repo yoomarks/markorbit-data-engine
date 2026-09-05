@@ -175,14 +175,24 @@ def test_target_bulk_task_kind_is_not_claimable_by_generic_container_worker() ->
     assert "US_APPLICATION_TARGET_BULK_CONTROL" in target_source
 
 
-def test_host_worker_keeps_guarded_powershell_and_global_mutation_lock() -> None:
+def test_bulk_execute_process_owns_global_mutation_lock() -> None:
+    host_source = (ROOT / "app" / "us" / "target_bulk_host_worker.py").read_text(
+        encoding="utf-8"
+    )
+    cli_source = (ROOT / "app" / "us" / "target_bulk_cli.py").read_text(encoding="utf-8")
+    assert "with engine_mutation_guard() as acquired" in cli_source
+    assert "global engine mutation lock is busy" in cli_source
+    assert "with engine_mutation_guard() as acquired" not in host_source
+    assert "must be allowed to reach its durable exit" in host_source
+
+
+def test_host_worker_keeps_guarded_powershell_and_safe_stop_contract() -> None:
     source = (ROOT / "app" / "us" / "target_bulk_host_worker.py").read_text(encoding="utf-8")
     launcher = (ROOT / "scripts" / "run-us-application-target-bulk-host-worker.ps1").read_text(
         encoding="utf-8"
     )
     assert "run-production-us-application-bulk-replay.ps1" in source
     assert "plan-production-us-application-bulk-replay.ps1" in source
-    assert "with engine_mutation_guard() as acquired" in source
     assert "target_bulk_stop_requested(run_id)" in source
     assert "completed_sequences" in source
     assert "execute_bulk_plan(" not in source
