@@ -1,43 +1,313 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>任务中心 · MarkOrbit</title><link rel="stylesheet" href="/admin/assets/admin.css"></head><body>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>任务中心 · MarkOrbit</title>
+  <link rel="stylesheet" href="/admin/assets/admin.css">
+</head>
+<body>
 <div id="page-content">
   <section class="card" style="margin-bottom:15px">
-    <div class="card-head"><div><div class="card-title">商标数据引擎任务控制</div><div class="card-note">CN → US Application → US Assignment → US TTAB 按冻结顺序连续推进；每个来源包开始前重新检查安全边界，任一安全门、来源完整性或验收条件不通过都会停止。</div></div><div class="toolbar"><label class="cell-sub">US Expected History Parts</label><input id="history-parts" class="field" type="number" min="1" max="9999" placeholder="例如 91"><button id="save-parts" class="btn btn-ghost">记住</button></div></div>
+    <div class="card-head">
+      <div>
+        <div class="card-title">商标数据引擎任务控制</div>
+        <div class="card-note">CN → US Application → US Assignment → US TTAB 按冻结顺序推进。US Application 批量导入先只读冻结计划，再由操作员核对 exact plan SHA 后一次批准；任一安全门或 durable 状态不确定都会停止。</div>
+      </div>
+      <div class="toolbar">
+        <label class="cell-sub">US Expected History Parts</label>
+        <input id="history-parts" class="field" type="number" min="1" max="9999" placeholder="例如 91">
+        <button id="save-parts" class="btn btn-ghost">记住</button>
+      </div>
+    </div>
     <div id="task-message" class="card-pad" style="padding-bottom:0"></div>
     <div class="domain-grid card-pad" style="margin-bottom:0">
-      <div class="domain-card"><div class="domain-top"><span class="domain-name">中国 CN</span><span class="badge blue">CN</span></div><div class="cell-sub section-gap">连续推进仅处理已注册的 M1.6 replay continuation，并会自动先恢复最早失败包；首次 clean replay 仍必须走安全脚本。</div><div id="cn-recovery-state" class="cell-sub section-gap">正在检查失败包与 Stage 断点…</div><div class="toolbar section-gap"><button class="btn btn-primary" onclick="queueTask('CN','CONTINUE')">连续推进</button><button class="btn btn-soft" onclick="queueTask('CN','STOP')">停止连续推进</button><button class="btn btn-ghost" onclick="queueTask('CN','RUN')">执行下一包</button><button class="btn btn-ghost" onclick="queueTask('CN','RETRY')">仅恢复失败</button></div></div>
-      <div class="domain-card"><div class="domain-top"><span class="domain-name">US Application</span><span class="badge blue">US</span></div><div class="cell-sub section-gap">必须先通过 CN Final Checkpoint。连续推进使用 deterministic replay 严格按权威 source plan 处理全部剩余包；每包前重新检查存储空间与停止请求，完成后自动执行 source-backed acceptance。</div><div class="toolbar section-gap"><button class="btn btn-primary" onclick="queueTask('US_APPLICATION','CONTINUE')">连续推进</button><button class="btn btn-soft" onclick="queueTask('US_APPLICATION','STOP')">停止连续推进</button><button class="btn btn-ghost" onclick="queueTask('US_APPLICATION','RUN')">执行下一包</button><button class="btn btn-soft" onclick="queueTask('US_APPLICATION','RETRY')">恢复失败</button></div></div>
-      <div class="domain-card"><div class="domain-top"><span class="domain-name">US Assignment</span><span class="badge blue">AS</span></div><div class="cell-sub section-gap">必须先通过 Application acceptance。连续推进读取固定的 <span class="mono">manifests/us_assignment/corpus.json</span>，按 manifest 顺序处理全部剩余 recorded assignment facts；每包前检查存储空间与停止请求，完成后重新验证 US source + Assignment source。仅表达 USPTO recorded assignment facts，不做 legal title / ownership conclusion。</div><div class="toolbar section-gap"><button class="btn btn-primary" onclick="queueTask('US_ASSIGNMENT','CONTINUE')">连续推进</button><button class="btn btn-soft" onclick="queueTask('US_ASSIGNMENT','STOP')">停止连续推进</button><button class="btn btn-ghost" onclick="queueTask('US_ASSIGNMENT','RUN')">执行下一包</button><button class="btn btn-soft" onclick="queueTask('US_ASSIGNMENT','RETRY')">恢复失败</button></div></div>
-      <div class="domain-card"><div class="domain-top"><span class="domain-name">US TTAB</span><span class="badge blue">TB</span></div><div class="cell-sub section-gap">必须先通过 Assignment acceptance。连续推进读取固定的 <span class="mono">manifests/us_ttab/corpus.json</span>，按 manifest 顺序处理全部剩余 TTAB bulk snapshots；每包前检查存储空间与停止请求，完成后重新验证 US + Assignment + TTAB sources。仅保留可溯源 TTAB facts，不推断 deadline validity、legal outcome 或 substantive rights。</div><div class="toolbar section-gap"><button class="btn btn-primary" onclick="queueTask('US_TTAB','CONTINUE')">连续推进</button><button class="btn btn-soft" onclick="queueTask('US_TTAB','STOP')">停止连续推进</button><button class="btn btn-ghost" onclick="queueTask('US_TTAB','RUN')">执行下一包</button><button class="btn btn-soft" onclick="queueTask('US_TTAB','RETRY')">恢复失败</button></div></div>
+      <div class="domain-card">
+        <div class="domain-top"><span class="domain-name">中国 CN</span><span class="badge blue">CN</span></div>
+        <div class="cell-sub section-gap">连续推进仅处理已注册的 M1.6 replay continuation，并会自动先恢复最早失败包；首次 clean replay 仍必须走安全脚本。</div>
+        <div id="cn-recovery-state" class="cell-sub section-gap">正在检查失败包与 Stage 断点…</div>
+        <div class="toolbar section-gap">
+          <button class="btn btn-primary" onclick="queueTask('CN','CONTINUE')">连续推进</button>
+          <button class="btn btn-soft" onclick="queueTask('CN','STOP')">停止连续推进</button>
+          <button class="btn btn-ghost" onclick="queueTask('CN','RUN')">执行下一包</button>
+          <button class="btn btn-ghost" onclick="queueTask('CN','RETRY')">仅恢复失败</button>
+        </div>
+      </div>
+
+      <div class="domain-card">
+        <div class="domain-top"><span class="domain-name">US Application</span><span class="badge blue">US · hot_us</span></div>
+        <div class="cell-sub section-gap">批量导入使用已验收的 <span class="mono">hot_us</span> 写链。第一步只读冻结 Package 1 bridge + seq3+ master plan；只有核对 plan SHA 并点击“批准并开始”后，Windows host worker 才会按 deterministic replay 顺序逐包执行。STOP 只在 durable 包边界生效。</div>
+        <div id="us-bulk-state" class="section-gap"><span class="cell-sub">正在读取 US bulk task…</span></div>
+        <div class="toolbar section-gap">
+          <button class="btn btn-primary" onclick="queueTask('US_APPLICATION','CONTINUE')">准备批量导入</button>
+          <button class="btn btn-soft" onclick="queueTask('US_APPLICATION','STOP')">停止批量任务</button>
+          <button class="btn btn-ghost" onclick="queueTask('US_APPLICATION','RUN')">准备单包</button>
+          <button class="btn btn-ghost" onclick="queueTask('US_APPLICATION','RETRY')">恢复原计划</button>
+        </div>
+      </div>
+
+      <div class="domain-card">
+        <div class="domain-top"><span class="domain-name">US Assignment</span><span class="badge blue">AS</span></div>
+        <div class="cell-sub section-gap">必须先通过 Application acceptance。连续推进读取固定的 <span class="mono">manifests/us_assignment/corpus.json</span>，按 manifest 顺序处理全部剩余 recorded assignment facts；每包前检查存储空间与停止请求，完成后重新验证 US source + Assignment source。仅表达 USPTO recorded assignment facts，不做 legal title / ownership conclusion。</div>
+        <div class="toolbar section-gap">
+          <button class="btn btn-primary" onclick="queueTask('US_ASSIGNMENT','CONTINUE')">连续推进</button>
+          <button class="btn btn-soft" onclick="queueTask('US_ASSIGNMENT','STOP')">停止连续推进</button>
+          <button class="btn btn-ghost" onclick="queueTask('US_ASSIGNMENT','RUN')">执行下一包</button>
+          <button class="btn btn-soft" onclick="queueTask('US_ASSIGNMENT','RETRY')">恢复失败</button>
+        </div>
+      </div>
+
+      <div class="domain-card">
+        <div class="domain-top"><span class="domain-name">US TTAB</span><span class="badge blue">TB</span></div>
+        <div class="cell-sub section-gap">必须先通过 Assignment acceptance。连续推进读取固定的 <span class="mono">manifests/us_ttab/corpus.json</span>，按 manifest 顺序处理全部剩余 TTAB bulk snapshots；每包前检查存储空间与停止请求，完成后重新验证 US、Assignment 与 TTAB 源文件。不推断 deadline validity、legal outcome 或 substantive rights。</div>
+        <div class="toolbar section-gap">
+          <button class="btn btn-primary" onclick="queueTask('US_TTAB','CONTINUE')">连续推进</button>
+          <button class="btn btn-soft" onclick="queueTask('US_TTAB','STOP')">停止连续推进</button>
+          <button class="btn btn-ghost" onclick="queueTask('US_TTAB','RUN')">执行下一包</button>
+          <button class="btn btn-soft" onclick="queueTask('US_TTAB','RETRY')">恢复失败</button>
+        </div>
+      </div>
     </div>
   </section>
 
   <section class="card" style="margin-bottom:15px">
-    <div class="card-head"><div><div class="card-title">实时执行进度</div><div class="card-note">每 3 秒读取 durable job/package/checkpoint/subtask 状态。速度与 ETA 只使用已持久化完成记录；证据不足时明确不估算，不制造假进度。</div></div><div class="toolbar"><span id="progress-updated" class="cell-sub">正在读取…</span><button class="btn btn-ghost" onclick="loadProgress()">立即刷新</button></div></div>
+    <div class="card-head">
+      <div>
+        <div class="card-title">实时执行进度</div>
+        <div class="card-note">每 3 秒读取 durable job/package/checkpoint/subtask 状态。US bulk 进度只使用 frozen task metrics 与 durable package journal；不根据文件扫描猜测完成度。</div>
+      </div>
+      <div class="toolbar"><span id="progress-updated" class="cell-sub">正在读取…</span><button class="btn btn-ghost" onclick="loadProgress()">立即刷新</button></div>
+    </div>
     <div id="live-progress" class="card-pad"><div class="text-muted">正在读取执行状态…</div></div>
   </section>
 
   <section class="card">
-    <div class="card-head"><div><div class="card-title">任务记录</div><div class="card-note">后台控制任务与实际 ingestion job 都进入统一 Job history。失败项可直接查看完整数据库异常。</div></div><div class="toolbar"><input id="q" class="field search" placeholder="任务类型 / 触发方式 / 错误"><select id="domain" class="field"><option value="">全部数据域</option><option value="CN">中国 CN</option><option value="US_APPLICATION">US Application</option><option value="US_ASSIGNMENT">Assignment</option><option value="US_TTAB">TTAB</option><option value="SYSTEM">System</option></select><select id="status" class="field"><option value="">全部状态</option><option>QUEUED</option><option>RUNNING</option><option>SUCCESS</option><option>FAILED</option><option>BLOCKED</option><option>INTERRUPTED</option></select><select id="page-size" class="field"><option>25</option><option selected>50</option><option>100</option></select><button id="filter-btn" class="btn btn-primary">筛选</button></div></div>
+    <div class="card-head">
+      <div><div class="card-title">任务记录</div><div class="card-note">后台控制任务与实际 ingestion job 都进入统一 Job history。失败项可直接查看完整数据库异常。</div></div>
+      <div class="toolbar">
+        <input id="q" class="field search" placeholder="任务类型 / 触发方式 / 错误">
+        <select id="domain" class="field"><option value="">全部数据域</option><option value="CN">中国 CN</option><option value="US_APPLICATION">US Application</option><option value="US_ASSIGNMENT">Assignment</option><option value="US_TTAB">TTAB</option><option value="SYSTEM">System</option></select>
+        <select id="status" class="field"><option value="">全部状态</option><option>HOST_PREPARE_QUEUED</option><option>NEEDS_OPERATOR</option><option>HOST_RUN_QUEUED</option><option>QUEUED</option><option>RUNNING</option><option>SUCCESS</option><option>FAILED</option><option>BLOCKED</option><option>INTERRUPTED</option></select>
+        <select id="page-size" class="field"><option>25</option><option selected>50</option><option>100</option></select>
+        <button id="filter-btn" class="btn btn-primary">筛选</button>
+      </div>
+    </div>
     <div class="table-wrap"><table class="data-table"><thead><tr><th>数据域</th><th>任务</th><th>触发方式</th><th>状态</th><th>开始</th><th>耗时</th><th>指标 / 错误</th></tr></thead><tbody id="rows"></tbody></table></div><div id="pager"></div>
   </section>
 </div>
-<script src="/admin/assets/admin.js"></script><script>
-MOAdmin.shell({active:'jobs',title:'任务中心',subtitle:'后台执行 · 实时进度 · 连续推进 · 安全停止 · 失败恢复 · Job history'});
-const P=MOAdmin.query();['q','domain','status'].forEach(id=>document.getElementById(id).value=P.get(id)||'');document.getElementById('page-size').value=P.get('page_size')||'50';
-const parts=document.getElementById('history-parts');parts.value=localStorage.getItem('moExpectedHistoryParts')||'';document.getElementById('save-parts').onclick=()=>{if(Number(parts.value)>0)localStorage.setItem('moExpectedHistoryParts',parts.value)};
+
+<script src="/admin/assets/admin.js"></script>
+<script>
+MOAdmin.shell({active:'jobs',title:'任务中心',subtitle:'后台执行 · Frozen plan · 一次批准 · 实时进度 · 安全停止 · Durable Resume'});
+
+const P=MOAdmin.query();
+['q','domain','status'].forEach(id=>document.getElementById(id).value=P.get(id)||'');
+document.getElementById('page-size').value=P.get('page_size')||'50';
+const parts=document.getElementById('history-parts');
+parts.value=localStorage.getItem('moExpectedHistoryParts')||'91';
+document.getElementById('save-parts').onclick=()=>{if(Number(parts.value)>0)localStorage.setItem('moExpectedHistoryParts',parts.value)};
 let currentJobs=[];
-function applyFilters(page=1){MOAdmin.setQuery({q:document.getElementById('q').value,domain:document.getElementById('domain').value,status:document.getElementById('status').value,page,page_size:document.getElementById('page-size').value},{replace:true});load()}
-document.getElementById('filter-btn').onclick=()=>applyFilters(1);document.getElementById('q').onkeydown=e=>{if(e.key==='Enter')applyFilters(1)};document.getElementById('page-size').onchange=()=>applyFilters(1);
-async function loadCnRecovery(){const el=document.getElementById('cn-recovery-state');try{const d=await MOAdmin.api('/api/admin/v2/cn-recovery'),x=d.next_recovery;if(!x){el.innerHTML='<span class="text-muted">当前没有待恢复的 CN 失败包。</span>';return}const pending=Number(d.pending_recovery||0),name=MOAdmin.esc(x.file_name||'未知来源包'),status=MOAdmin.esc(x.status||'');if(x.cn_stage_resume_candidate){el.innerHTML=`<span class="badge blue">Stage 断点候选</span> <b>${name}</b> · ${status} · 共 ${pending} 个待恢复包。连续推进会先恢复它；重试时仍会精确校验 7 张 Stage 表，校验通过才跳过原始 ZIP 重放。`}else if(status==='MISSING_FILE'){el.innerHTML=`<span class="text-danger">下一待恢复包 ${name} 缺少源文件；连续推进会在这里安全停止。</span>`}else{el.innerHTML=`<b>${name}</b> · ${status} · 共 ${pending} 个待恢复包。当前没有可用的 Stage 断点候选，连续推进会先按安全路径完整重放该包。`}}catch(e){el.innerHTML=`<span class="text-danger">断点状态读取失败：${MOAdmin.esc(e.message||String(e))}</span>`}}
-async function queueTask(domain,action){let n=0;if(domain!=='CN'&&action!=='STOP'){n=Number(parts.value||0);if(!Number.isInteger(n)||n<1){alert('US 数据域必须填写 Expected History Parts。');parts.focus();return}localStorage.setItem('moExpectedHistoryParts',String(n))}const labels={RUN:'执行下一包',RETRY:'恢复失败',CONTINUE:'连续推进',STOP:'停止连续推进'};const label=labels[action]||action;let warning='任务会进入 worker 后台队列，并继续执行现有安全门。';if(action==='CONTINUE'&&domain==='CN')warning='将自动恢复最早失败包并持续推进已注册 CN 语料；每包前都会重新检查存储空间，遇到失败、BUSY 或安全门会停止。首次 clean replay 不会从这里启动。';if(action==='CONTINUE'&&domain==='US_APPLICATION')warning='将先验证 CN Final Checkpoint 与 US source/replay transition gate，再按 deterministic source plan 连续处理全部剩余 Application 包；每包前重新检查存储空间，遇到失败或阻塞即停止，全部完成后自动执行 source-backed acceptance。';if(action==='CONTINUE'&&domain==='US_ASSIGNMENT')warning='将先验证 US Application 已完成 source-backed acceptance，再严格按 Assignment corpus manifest 连续处理全部剩余 recorded assignment facts；每包前重新检查存储空间，失败即停止，完成后重新验证 US 与 Assignment 源文件。不会把 recorded assignment 推断为法律所有权。';if(action==='CONTINUE'&&domain==='US_TTAB')warning='将先验证 Assignment 已完成 source-backed acceptance，再严格按 TTAB corpus manifest 连续处理全部剩余 bulk snapshots；每包前重新检查存储空间，失败即停止，完成后重新验证 US、Assignment 与 TTAB 源文件。不推断期限有效性、案件结果或实体权利。';if(action==='STOP')warning='不会强行中断当前包；如已有包正在处理，会在该包完整结束后的安全边界停止。';if(!confirm(`确认提交 ${domain} · ${label}？${warning}`))return;const url=new URL(`/api/admin/v2/domain-tasks/${domain}/${action}`,location.origin);if(n)url.searchParams.set('expected_history_parts',String(n));try{const d=await MOAdmin.api(url,{method:'POST'}),t=d.task||{};if(action==='STOP'){if(!d.accepted){document.getElementById('task-message').innerHTML='<div class="notice-box">当前没有等待或运行中的连续推进任务。</div>'}else if(t.status==='INTERRUPTED'){document.getElementById('task-message').innerHTML='<div class="ok-box">连续推进尚未开始，已直接停止。</div>'}else{document.getElementById('task-message').innerHTML='<div class="notice-box">已请求停止。当前包会完整处理，随后在包边界安全停止。</div>'}}else{document.getElementById('task-message').innerHTML=d.accepted?`<div class="ok-box">已加入后台队列：${MOAdmin.esc(t.job_type||domain)} · ${MOAdmin.esc(t.status||'QUEUED')}</div>`:`<div class="notice-box">该数据域已有等待/运行中的任务：${MOAdmin.esc(t.job_type||domain)} · ${MOAdmin.esc(t.status||'')}</div>`}document.getElementById('domain').value=domain;document.getElementById('status').value='';applyFilters(1);loadProgress();if(domain==='CN')loadCnRecovery()}catch(e){MOAdmin.error('#task-message',e,'任务提交失败')}}
-function progressBar(pct){if(pct===null||pct===undefined)return '';const n=Math.max(0,Math.min(100,Number(pct)||0));return `<div style="height:8px;border-radius:999px;background:rgba(127,127,127,.16);overflow:hidden;margin-top:8px"><div style="height:100%;width:${n}%;background:currentColor"></div></div><div class="cell-sub" style="margin-top:5px">${n.toFixed(2)}%</div>`}
+let currentUsBulk=null;
+
+function applyFilters(page=1){
+  MOAdmin.setQuery({q:document.getElementById('q').value,domain:document.getElementById('domain').value,status:document.getElementById('status').value,page,page_size:document.getElementById('page-size').value},{replace:true});
+  load();
+}
+document.getElementById('filter-btn').onclick=()=>applyFilters(1);
+document.getElementById('q').onkeydown=e=>{if(e.key==='Enter')applyFilters(1)};
+document.getElementById('page-size').onchange=()=>applyFilters(1);
+
+async function loadCnRecovery(){
+  const el=document.getElementById('cn-recovery-state');
+  try{
+    const d=await MOAdmin.api('/api/admin/v2/cn-recovery'),x=d.next_recovery;
+    if(!x){el.innerHTML='<span class="text-muted">当前没有待恢复的 CN 失败包。</span>';return}
+    const pending=Number(d.pending_recovery||0),name=MOAdmin.esc(x.file_name||'未知来源包'),status=MOAdmin.esc(x.status||'');
+    if(x.cn_stage_resume_candidate){
+      el.innerHTML=`<span class="badge blue">Stage 断点候选</span> <b>${name}</b> · ${status} · 共 ${pending} 个待恢复包。连续推进会先恢复它；重试时仍会精确校验 7 张 Stage 表，校验通过才跳过原始 ZIP 重放。`;
+    }else if(status==='MISSING_FILE'){
+      el.innerHTML=`<span class="text-danger">下一待恢复包 ${name} 缺少源文件；连续推进会在这里安全停止。</span>`;
+    }else{
+      el.innerHTML=`<b>${name}</b> · ${status} · 共 ${pending} 个待恢复包。当前没有可用的 Stage 断点候选，连续推进会先按安全路径完整重放该包。`;
+    }
+  }catch(e){el.innerHTML=`<span class="text-danger">断点状态读取失败：${MOAdmin.esc(e.message||String(e))}</span>`}
+}
+
+function usBulkTaskFromResponse(d){return (d&&d.task)||(d&&d.resumable_task)||null}
+function shortSha(value){const v=String(value||'');return v?`${v.slice(0,12)}…${v.slice(-8)}`:'—'}
+function usBulkMetrics(task){return task&&task.metrics&&typeof task.metrics==='object'?task.metrics:{}}
+function usBulkPayload(task){return task&&task.payload&&typeof task.payload==='object'?task.payload:{}}
+function usBulkPlanSha(task){const m=usBulkMetrics(task),p=usBulkPayload(task);return String(m.plan_sha256||p.plan_sha256||p.approved_plan_sha256||'')}
+function usBulkProgressPct(task){const m=usBulkMetrics(task),total=Number(m.child_count||m.suffix_package_count||0),done=Number(m.completed_suffix_count||0);return total>0?Math.max(0,Math.min(100,done/total*100)):null}
+
+function renderUsBulkState(task){
+  if(!task)return '<div class="ok-box">当前没有 US Application bulk task。点击“准备批量导入”只会先生成只读 frozen plan，不会写入生产。</div>';
+  const p=usBulkPayload(task),m=usBulkMetrics(task),status=String(task.status||'UNKNOWN'),planSha=usBulkPlanSha(task),runId=String(task.run_id||'');
+  const start=m.start_sequence||p.start_sequence||3,end=m.end_sequence||p.end_sequence||'—',done=Number(m.completed_suffix_count||0),total=Number(m.child_count||m.suffix_package_count||0),current=m.current_sequence||'—',file=m.current_file||'—',remaining=m.remaining_to_accepted_corpus;
+  let action='';
+  if(status==='NEEDS_OPERATOR'&&planSha){
+    action=`<button class="btn btn-primary" onclick="approveUsBulk('${MOAdmin.esc(runId)}','${MOAdmin.esc(planSha)}')">批准并开始</button>`;
+  }else if(['BLOCKED','FAILED','INTERRUPTED'].includes(status)){
+    action=`<button class="btn btn-primary" onclick="resumeUsBulk('${MOAdmin.esc(runId)}')">按原计划恢复</button>`;
+  }
+  const warning=status==='NEEDS_OPERATOR'?'<div class="notice-box section-gap"><b>需要操作员批准。</b> 核对下面的 exact plan SHA 与范围后再开始生产写入；此状态本身不写 hot_us。</div>':'';
+  const error=task.error_message?`<div class="text-danger section-gap">${MOAdmin.esc(task.error_message)}</div>`:'';
+  return `${warning}<div class="cell-sub"><b>状态：</b>${MOAdmin.status(status)} · run <span class="mono">${MOAdmin.esc(runId.slice(0,12))}…</span></div><div class="cell-sub section-gap"><b>范围：</b>seq ${MOAdmin.esc(start)}–${MOAdmin.esc(end)} · 完成 ${MOAdmin.num(done)}${total?` / ${MOAdmin.num(total)}`:''} · 当前 seq ${MOAdmin.esc(current)}</div><div class="cell-sub section-gap"><b>当前文件：</b><span class="mono">${MOAdmin.esc(file)}</span></div><div class="cell-sub section-gap"><b>Plan SHA：</b><span class="mono" title="${MOAdmin.esc(planSha)}">${MOAdmin.esc(shortSha(planSha))}</span> · inventory <span class="mono">${MOAdmin.esc(shortSha(m.inventory_sha256))}</span></div><div class="cell-sub section-gap"><b>Durable：</b>bulk ${MOAdmin.esc(m.child_journal_state||m.phase||'—')} · package ${MOAdmin.esc(m.current_package_state||'—')} · canary ${MOAdmin.esc(m.current_canary_state||'—')} · last safe seq ${MOAdmin.esc(m.last_safe_checkpoint_sequence||'—')}${remaining!==undefined?` · corpus remaining ${MOAdmin.num(remaining)}`:''}</div>${progressBar(usBulkProgressPct(task))}${error}${action?`<div class="toolbar section-gap">${action}</div>`:''}`;
+}
+
+async function loadUsBulkState(){
+  const el=document.getElementById('us-bulk-state');
+  try{
+    const d=await MOAdmin.api('/api/admin/v2/domain-tasks/US_APPLICATION/BULK/ACTIVE');
+    currentUsBulk=usBulkTaskFromResponse(d);
+    el.innerHTML=renderUsBulkState(currentUsBulk);
+    return currentUsBulk;
+  }catch(e){
+    el.innerHTML=`<div class="text-danger">US bulk 状态读取失败：${MOAdmin.esc(e.message||String(e))}</div>`;
+    return null;
+  }
+}
+
+async function approveUsBulk(runId,planSha){
+  const task=currentUsBulk||{},m=usBulkMetrics(task),p=usBulkPayload(task),start=m.start_sequence||p.start_sequence||3,end=m.end_sequence||p.end_sequence||'—';
+  const message=`确认批准 US Application 批量生产写入？\
+\
+范围：seq ${start}–${end}\
+Plan SHA：${planSha}\
+\
+批准后 Windows host worker 只会执行该 frozen master plan 封存的 child plans；任一包不确定都会 BLOCKED，不会 blind retry。`;
+  if(!confirm(message))return;
+  const url=new URL(`/api/admin/v2/domain-tasks/US_APPLICATION/BULK/${encodeURIComponent(runId)}/APPROVE`,location.origin);
+  url.searchParams.set('plan_sha256',planSha);
+  try{
+    const d=await MOAdmin.api(url,{method:'POST'}),t=d.task||{};
+    document.getElementById('task-message').innerHTML=`<div class="ok-box">已批准 exact frozen plan：<span class="mono">${MOAdmin.esc(shortSha(planSha))}</span> · ${MOAdmin.esc(t.status||'HOST_RUN_QUEUED')}</div>`;
+    await loadUsBulkState();loadProgress();load();
+  }catch(e){MOAdmin.error('#task-message',e,'US bulk 批准失败')}
+}
+
+async function resumeUsBulk(runId){
+  const task=currentUsBulk||{},planSha=usBulkPlanSha(task);
+  const message=`确认按原 frozen plan 恢复？\
+\
+Plan SHA：${planSha||'尚未批准的 prepared plan'}\
+\
+不会创建新计划，也不会清理目标数据；prepared-but-unapproved 任务只会回到 NEEDS_OPERATOR。`;
+  if(!confirm(message))return;
+  try{
+    const d=await MOAdmin.api(`/api/admin/v2/domain-tasks/US_APPLICATION/BULK/${encodeURIComponent(runId)}/RESUME`,{method:'POST'}),t=d.task||{};
+    document.getElementById('task-message').innerHTML=`<div class="ok-box">已按 durable 状态恢复原任务：${MOAdmin.esc(t.status||'')}</div>`;
+    await loadUsBulkState();loadProgress();load();
+  }catch(e){MOAdmin.error('#task-message',e,'US bulk 恢复失败')}
+}
+
+async function queueTask(domain,action){
+  let n=0;
+  if(domain==='US_APPLICATION'&&action!=='STOP'){
+    n=91;
+  }else if(domain!=='CN'&&action!=='STOP'){
+    n=Number(parts.value||0);
+    if(!Number.isInteger(n)||n<1){alert('US 数据域必须填写 Expected History Parts。');parts.focus();return}
+    localStorage.setItem('moExpectedHistoryParts',String(n));
+  }
+  const labels={RUN:'执行下一包',RETRY:'恢复失败',CONTINUE:'连续推进',STOP:'停止连续推进'};
+  const label=labels[action]||action;
+  let warning='任务会进入 worker 后台队列，并继续执行现有安全门。';
+  if(action==='CONTINUE'&&domain==='CN')warning='将自动恢复最早失败包并持续推进已注册 CN 语料；每包前都会重新检查存储空间，遇到失败、BUSY 或安全门会停止。首次 clean replay 不会从这里启动。';
+  if(action==='CONTINUE'&&domain==='US_APPLICATION')warning='这一步只提交 read-only bulk PREPARE：冻结 Package 1 bridge + seq3–310 source inventory、execution main、plan SHA 和 child manifest。不会写 hot_us。计划准备完成后必须在任务卡中核对 exact plan SHA，再点击“批准并开始”。';
+  if(action==='RUN'&&domain==='US_APPLICATION')warning='这一步只准备一个 suffix package 的 frozen plan，不写 hot_us；仍需核对 exact plan SHA 后批准。';
+  if(action==='RETRY'&&domain==='US_APPLICATION')warning='只恢复已有 frozen plan/durable journal；不会创建新计划，不会删除或重置目标数据。';
+  if(action==='CONTINUE'&&domain==='US_ASSIGNMENT')warning='将先验证 US Application 已完成 source-backed acceptance，再严格按 Assignment corpus manifest 连续处理全部剩余 recorded assignment facts；每包前重新检查存储空间，失败即停止，完成后重新验证 US 与 Assignment 源文件。不会把 recorded assignment 推断为法律所有权。';
+  if(action==='CONTINUE'&&domain==='US_TTAB')warning='将先验证 Assignment 已完成 source-backed acceptance，再严格按 TTAB corpus manifest 连续处理全部剩余 bulk snapshots；每包前重新检查存储空间，失败即停止，完成后重新验证 US、Assignment 与 TTAB 源文件。不推断期限有效性、案件结果或实体权利。';
+  if(action==='STOP')warning='不会强行中断当前包；如已有包正在处理，会在该包完整结束后的 durable 安全边界停止。';
+  if(!confirm(`确认提交 ${domain} · ${label}？${warning}`))return;
+  const url=new URL(`/api/admin/v2/domain-tasks/${domain}/${action}`,location.origin);
+  if(n)url.searchParams.set('expected_history_parts',String(n));
+  try{
+    const d=await MOAdmin.api(url,{method:'POST'}),t=d.task||{};
+    if(action==='STOP'){
+      if(!d.accepted){document.getElementById('task-message').innerHTML='<div class="notice-box">当前没有等待或运行中的连续推进任务。</div>'}
+      else if(t.status==='INTERRUPTED'){document.getElementById('task-message').innerHTML='<div class="ok-box">任务尚未开始下一包，已在安全边界停止。</div>'}
+      else{document.getElementById('task-message').innerHTML='<div class="notice-box">已请求停止。当前包会到 durable 退出点，随后不再启动下一包。</div>'}
+    }else if(d.resume_required){
+      document.getElementById('task-message').innerHTML=`<div class="notice-box">已有 frozen US Application 任务需要恢复：${MOAdmin.esc(t.status||'')}。系统不会用新计划覆盖 durable 状态，请使用“恢复原计划”。</div>`;
+    }else if(domain==='US_APPLICATION'&&d.accepted){
+      document.getElementById('task-message').innerHTML=`<div class="ok-box">已提交 US Application 只读计划准备：${MOAdmin.esc(t.status||'HOST_PREPARE_QUEUED')}。计划生成后将在下方显示 exact plan SHA；未批准前不会写 hot_us。</div>`;
+    }else{
+      document.getElementById('task-message').innerHTML=d.accepted?`<div class="ok-box">已加入后台队列：${MOAdmin.esc(t.job_type||domain)} · ${MOAdmin.esc(t.status||'QUEUED')}</div>`:`<div class="notice-box">该数据域已有等待/运行中的任务：${MOAdmin.esc(t.job_type||domain)} · ${MOAdmin.esc(t.status||'')}</div>`;
+    }
+    document.getElementById('domain').value=domain;document.getElementById('status').value='';applyFilters(1);loadProgress();
+    if(domain==='CN')loadCnRecovery();
+    if(domain==='US_APPLICATION')loadUsBulkState();
+  }catch(e){MOAdmin.error('#task-message',e,'任务提交失败')}
+}
+
+function progressBar(pct){
+  if(pct===null||pct===undefined)return '';
+  const n=Math.max(0,Math.min(100,Number(pct)||0));
+  return `<div style="height:8px;border-radius:999px;background:rgba(127,127,127,.16);overflow:hidden;margin-top:8px"><div style="height:100%;width:${n}%;background:currentColor"></div></div><div class="cell-sub" style="margin-top:5px">${n.toFixed(2)}%</div>`;
+}
 function liveDuration(start){if(!start)return '—';const seconds=Math.max(0,(Date.now()-new Date(start).getTime())/1000);return MOAdmin.duration(seconds)}
 function healthText(health){const labels={ACTIVE:'正常推进',QUIET_LONG_TASK:'当前子任务运行较久',NO_RECENT_DURABLE_PROGRESS:'长时间无新的 durable 完成',FAILED_SUBTASK_PRESENT:'存在失败子任务',WARMING_UP:'等待首个 durable 完成',IDLE_OR_AUDIT:'节点审计 / 收尾'};return labels[health]||health||'—'}
 function etaText(group){if(group.eta_seconds===0)return '本节点已完成';if(group.eta_seconds===null||group.eta_seconds===undefined)return 'ETA：暂无法估算（durable 完成样本不足）';return `本节点 ETA：约 ${MOAdmin.duration(group.eta_seconds)} · ${MOAdmin.esc(group.eta_basis||'')}`}
-function renderProgressItem(x){const c=x.corpus||{},p=x.current_package||{},d=x.detail||{},raw=d.raw_parse||{},fp=d.final_publish||{},s=fp.current_subtask||{},g=fp.current_group||{},dag=fp.dag||{};let detail='';if(x.domain==='CN'){if(x.phase==='RAW_PARSE_STAGE')detail=`<div class="cell-sub section-gap">已完成内部文件 <b>${MOAdmin.num(raw.internal_files_completed||0)}</b> · 累计逻辑行 <b>${MOAdmin.num(raw.logical_rows||0)}</b> · 失败行 ${MOAdmin.num(raw.failed_rows||0)}</div>`;if(x.phase==='POST_STAGE')detail=`<div class="cell-sub section-gap"><span class="badge blue">Stage checkpoint</span> ${MOAdmin.esc(d.stage_checkpoint_version||'')} · 原始 ZIP 无需重复解析</div>`;if(x.phase==='FINAL_PUBLISH'){const range=(s.range_lower||s.range_upper)?` · range [${MOAdmin.esc(s.range_lower||'-∞')}, ${MOAdmin.esc(s.range_upper||'+∞')})`:'';const rates=g.tasks_per_hour||{};const next=(dag.remaining_nodes||[]).slice(0,4);detail=`<div class="cell-sub section-gap"><span class="badge blue">${MOAdmin.esc(s.task_group||'FINAL_PUBLISH')}</span> ${s.task_index?`task <b>${MOAdmin.num(s.task_index)}/${MOAdmin.num(s.task_total)}</b>`:'审计 / 收尾'}${range}${s.attempts?` · attempt ${MOAdmin.num(s.attempts)}`:''}</div><div class="cell-sub section-gap">Ledger：成功 ${MOAdmin.num(fp.success_tasks||0)} · 运行 ${MOAdmin.num(fp.running_tasks||0)} · 失败 ${MOAdmin.num(fp.failed_tasks||0)}</div><div class="cell-sub section-gap">本节点 durable：成功 <b>${MOAdmin.num(g.success_tasks||0)}</b>${s.task_total?` / ${MOAdmin.num(s.task_total)}`:''} · 近 15/30/60 分钟完成 ${MOAdmin.num(g.completed_15m||0)} / ${MOAdmin.num(g.completed_30m||0)} / ${MOAdmin.num(g.completed_60m||0)} · 速度 ${MOAdmin.num(rates['15m']||0)} / ${MOAdmin.num(rates['30m']||0)} / ${MOAdmin.num(rates['60m']||0)} tasks/h</div><div class="cell-sub section-gap">状态：<b>${MOAdmin.esc(healthText(g.health))}</b> · 当前 task 已运行 ${MOAdmin.duration(g.current_task_elapsed_seconds)} · 最近 durable 完成 ${g.last_durable_progress_at?MOAdmin.time(g.last_durable_progress_at):'—'}${g.last_durable_progress_age_seconds!==null&&g.last_durable_progress_age_seconds!==undefined?`（${MOAdmin.duration(g.last_durable_progress_age_seconds)} 前）`:''}</div><div class="cell-sub section-gap">${etaText(g)}</div>${dag.current_node_index?`<div class="cell-sub section-gap">DAG：当前节点 ${MOAdmin.num(dag.current_node_index)}/${MOAdmin.num(dag.node_total)} · 后续 ${MOAdmin.num(dag.remaining_node_count||0)} 个${next.length?` · 下一节点 ${next.map(MOAdmin.esc).join(' → ')}`:''}</div>`:''}`}}
-const corpusText=x.domain==='CN'?`语料包：成功 ${MOAdmin.num(c.success||0)} / 已登记 ${MOAdmin.num(c.registered_total||0)} · 处理中 ${MOAdmin.num(c.processing||0)} · 待处理 ${MOAdmin.num(c.registered_pending||0)}`:`已登记活动：成功 ${MOAdmin.num(c.success||0)} · 处理中 ${MOAdmin.num(c.processing||0)} · 待处理 ${MOAdmin.num(c.registered_pending||0)}（该域分母可能随 source plan 注册推进，不显示伪百分比）`;
-return `<div class="domain-card" style="margin-bottom:12px"><div class="domain-top"><div><span class="domain-name">${MOAdmin.esc(x.domain)}</span> <span class="badge blue">${MOAdmin.esc(x.action||'')}</span></div>${MOAdmin.status(x.stop_requested?'STOPPING':x.status)}</div><div class="section-gap"><b>${MOAdmin.esc(x.phase_label||x.phase||'')}</b></div><div class="cell-sub section-gap">运行 ${liveDuration(x.started_at)} · 当前包：<span class="mono">${MOAdmin.esc(p.file_name||'等待下一包')}</span>${p.partition_value?` · ${MOAdmin.esc(p.partition_value)}`:''}</div><div class="cell-sub section-gap">${corpusText}</div>${progressBar(c.progress_pct)}${detail}</div>`}
-async function loadProgress(){const el=document.getElementById('live-progress');try{const d=await MOAdmin.api('/api/admin/v2/system/domain-progress'),items=d.items||[];el.innerHTML=items.length?items.map(renderProgressItem).join(''):'<div class="ok-box">当前没有排队或运行中的数据域任务。</div>';document.getElementById('progress-updated').textContent=`最近刷新 ${new Date().toLocaleTimeString()} · ${items.length} 个活动任务`}catch(e){el.innerHTML=`<div class="text-danger">实时进度读取失败：${MOAdmin.esc(e.message||String(e))}</div>`;document.getElementById('progress-updated').textContent='读取失败'}}
-function showFullError(index){const x=currentJobs[index];if(!x||!x.error_message)return;MOAdmin.openDrawer(`<div class="card-head"><div><div class="card-title">完整失败信息</div><div class="cell-sub mono">${MOAdmin.esc(x.job_type||'')} · ${MOAdmin.esc(x.run_id||'')}</div></div><button class="btn btn-ghost" onclick="MOAdmin.closeDrawer()">关闭</button></div><div class="card-pad"><pre class="mono" style="white-space:pre-wrap;word-break:break-word">${MOAdmin.esc(x.error_message)}</pre></div>`)}
-async function load(){const p=MOAdmin.query(),url=new URL('/api/admin/v2/jobs',location.origin);['q','domain','status'].forEach(k=>{if(p.get(k))url.searchParams.set(k,p.get(k))});url.searchParams.set('page',p.get('page')||'1');url.searchParams.set('page_size',p.get('page_size')||'50');try{const d=await MOAdmin.api(url);currentJobs=d.items||[];document.getElementById('rows').innerHTML=currentJobs.length?currentJobs.map((x,i)=>`<tr><td><span class="badge blue">${MOAdmin.esc(x.domain)}</span></td><td><div class="cell-title">${MOAdmin.esc(x.job_type)}</div><div class="cell-sub mono">${MOAdmin.esc(String(x.run_id||'').slice(0,12))}…</div></td><td>${MOAdmin.esc(x.trigger_type||'—')}</td><td>${MOAdmin.status(x.status)}</td><td class="nowrap">${MOAdmin.time(x.started_at)}</td><td class="nowrap">${MOAdmin.duration(x.duration_seconds)}</td><td>${x.error_message?`<div class="text-danger truncate">${MOAdmin.esc(x.error_message)}</div><button class="btn btn-ghost" style="margin-top:6px" onclick="showFullError(${i})">查看完整错误</button>`:`<span class="mono text-muted">${MOAdmin.esc(JSON.stringify(x.metrics||{})).slice(0,180)}</span>`}</td></tr>`).join(''):`<tr><td colspan="7">${MOAdmin.empty('没有符合条件的任务')}</td></tr>`;document.getElementById('pager').innerHTML=MOAdmin.pageButtons(d,pn=>applyFilters(pn))}catch(e){MOAdmin.error('#rows',e)}}load();loadProgress();loadCnRecovery();setInterval(load,5000);setInterval(loadProgress,3000);setInterval(loadCnRecovery,15000);
-</script></body></html>
+
+function renderProgressItem(x){
+  const c=x.corpus||{},p=x.current_package||{},d=x.detail||{},raw=d.raw_parse||{},fp=d.final_publish||{},s=fp.current_subtask||{},g=fp.current_group||{},dag=fp.dag||{};
+  let detail='';
+  if(x.domain==='CN'){
+    if(x.phase==='RAW_PARSE_STAGE')detail=`<div class="cell-sub section-gap">已完成内部文件 <b>${MOAdmin.num(raw.internal_files_completed||0)}</b> · 累计逻辑行 <b>${MOAdmin.num(raw.logical_rows||0)}</b> · 失败行 ${MOAdmin.num(raw.failed_rows||0)}</div>`;
+    if(x.phase==='POST_STAGE')detail=`<div class="cell-sub section-gap"><span class="badge blue">Stage checkpoint</span> ${MOAdmin.esc(d.stage_checkpoint_version||'')} · 原始 ZIP 无需重复解析</div>`;
+    if(x.phase==='FINAL_PUBLISH'){
+      const range=(s.range_lower||s.range_upper)?` · range [${MOAdmin.esc(s.range_lower||'-∞')}, ${MOAdmin.esc(s.range_upper||'+∞')})`:'';
+      const rates=g.tasks_per_hour||{},next=(dag.remaining_nodes||[]).slice(0,4);
+      detail=`<div class="cell-sub section-gap"><span class="badge blue">${MOAdmin.esc(s.task_group||'FINAL_PUBLISH')}</span> ${s.task_index?`task <b>${MOAdmin.num(s.task_index)}/${MOAdmin.num(s.task_total)}</b>`:'审计 / 收尾'}${range}${s.attempts?` · attempt ${MOAdmin.num(s.attempts)}`:''}</div><div class="cell-sub section-gap">Ledger：成功 ${MOAdmin.num(fp.success_tasks||0)} · 运行 ${MOAdmin.num(fp.running_tasks||0)} · 失败 ${MOAdmin.num(fp.failed_tasks||0)}</div><div class="cell-sub section-gap">本节点 durable：成功 <b>${MOAdmin.num(g.success_tasks||0)}</b>${s.task_total?` / ${MOAdmin.num(s.task_total)}`:''} · 近 15/30/60 分钟完成 ${MOAdmin.num(g.completed_15m||0)} / ${MOAdmin.num(g.completed_30m||0)} / ${MOAdmin.num(g.completed_60m||0)} · 速度 ${MOAdmin.num(rates['15m']||0)} / ${MOAdmin.num(rates['30m']||0)} / ${MOAdmin.num(rates['60m']||0)} tasks/h</div><div class="cell-sub section-gap">状态：<b>${MOAdmin.esc(healthText(g.health))}</b> · 当前 task 已运行 ${MOAdmin.duration(g.current_task_elapsed_seconds)} · 最近 durable 完成 ${g.last_durable_progress_at?MOAdmin.time(g.last_durable_progress_at):'—'}${g.last_durable_progress_age_seconds!==null&&g.last_durable_progress_age_seconds!==undefined?`（${MOAdmin.duration(g.last_durable_progress_age_seconds)} 前）`:''}</div><div class="cell-sub section-gap">${etaText(g)}</div>${dag.current_node_index?`<div class="cell-sub section-gap">DAG：当前节点 ${MOAdmin.num(dag.current_node_index)}/${MOAdmin.num(dag.node_total)} · 后续 ${MOAdmin.num(dag.remaining_node_count||0)} 个${next.length?` · 下一节点 ${next.map(MOAdmin.esc).join(' → ')}`:''}</div>`:''}`;
+    }
+  }
+  const corpusText=x.domain==='CN'?`语料包：成功 ${MOAdmin.num(c.success||0)} / 已登记 ${MOAdmin.num(c.registered_total||0)} · 处理中 ${MOAdmin.num(c.processing||0)} · 待处理 ${MOAdmin.num(c.registered_pending||0)}`:`已登记活动：成功 ${MOAdmin.num(c.success||0)} · 处理中 ${MOAdmin.num(c.processing||0)} · 待处理 ${MOAdmin.num(c.registered_pending||0)}（该域分母可能随 source plan 注册推进，不显示伪百分比）`;
+  return `<div class="domain-card" style="margin-bottom:12px"><div class="domain-top"><div><span class="domain-name">${MOAdmin.esc(x.domain)}</span> <span class="badge blue">${MOAdmin.esc(x.action||'')}</span></div>${MOAdmin.status(x.stop_requested?'STOPPING':x.status)}</div><div class="section-gap"><b>${MOAdmin.esc(x.phase_label||x.phase||'')}</b></div><div class="cell-sub section-gap">运行 ${liveDuration(x.started_at)} · 当前包：<span class="mono">${MOAdmin.esc(p.file_name||'等待下一包')}</span>${p.partition_value?` · ${MOAdmin.esc(p.partition_value)}`:''}</div><div class="cell-sub section-gap">${corpusText}</div>${progressBar(c.progress_pct)}${detail}</div>`;
+}
+
+function renderUsBulkProgress(task){
+  const p=usBulkPayload(task),m=usBulkMetrics(task),status=String(task.status||'UNKNOWN'),planSha=usBulkPlanSha(task),start=m.start_sequence||p.start_sequence||3,end=m.end_sequence||p.end_sequence||'—',done=Number(m.completed_suffix_count||0),total=Number(m.child_count||m.suffix_package_count||0),phase=m.phase||p.host_phase||status;
+  return `<div class="domain-card" style="margin-bottom:12px"><div class="domain-top"><div><span class="domain-name">US_APPLICATION · hot_us bulk</span> <span class="badge blue">${MOAdmin.esc(phase)}</span></div>${MOAdmin.status(status)}</div><div class="cell-sub section-gap">Frozen range seq ${MOAdmin.esc(start)}–${MOAdmin.esc(end)} · durable 完成 <b>${MOAdmin.num(done)}</b>${total?` / ${MOAdmin.num(total)}`:''} · current seq ${MOAdmin.esc(m.current_sequence||'—')}</div><div class="cell-sub section-gap">当前文件 <span class="mono">${MOAdmin.esc(m.current_file||'—')}</span></div><div class="cell-sub section-gap">Plan SHA <span class="mono" title="${MOAdmin.esc(planSha)}">${MOAdmin.esc(shortSha(planSha))}</span> · bulk ${MOAdmin.esc(m.child_journal_state||'—')} · package ${MOAdmin.esc(m.current_package_state||'—')} · canary ${MOAdmin.esc(m.current_canary_state||'—')} · last safe seq ${MOAdmin.esc(m.last_safe_checkpoint_sequence||'—')}</div>${progressBar(usBulkProgressPct(task))}${task.error_message?`<div class="text-danger section-gap">${MOAdmin.esc(task.error_message)}</div>`:''}</div>`;
+}
+
+async function loadProgress(){
+  const el=document.getElementById('live-progress');
+  try{
+    const [d,b]=await Promise.all([
+      MOAdmin.api('/api/admin/v2/system/domain-progress'),
+      MOAdmin.api('/api/admin/v2/domain-tasks/US_APPLICATION/BULK/ACTIVE')
+    ]);
+    const items=d.items||[],bulk=usBulkTaskFromResponse(b),blocks=[];
+    if(bulk)blocks.push(renderUsBulkProgress(bulk));
+    if(items.length)blocks.push(items.map(renderProgressItem).join(''));
+    el.innerHTML=blocks.length?blocks.join(''):'<div class="ok-box">当前没有排队、运行或待批准的数据域任务。</div>';
+    document.getElementById('progress-updated').textContent=`最近刷新 ${new Date().toLocaleTimeString()} · ${items.length+(bulk?1:0)} 个活动/待处理任务`;
+  }catch(e){
+    el.innerHTML=`<div class="text-danger">实时进度读取失败：${MOAdmin.esc(e.message||String(e))}</div>`;
+    document.getElementById('progress-updated').textContent='读取失败';
+  }
+}
+
+function showFullError(index){
+  const x=currentJobs[index];if(!x||!x.error_message)return;
+  MOAdmin.openDrawer(`<div class="card-head"><div><div class="card-title">完整失败信息</div><div class="cell-sub mono">${MOAdmin.esc(x.job_type||'')} · ${MOAdmin.esc(x.run_id||'')}</div></div><button class="btn btn-ghost" onclick="MOAdmin.closeDrawer()">关闭</button></div><div class="card-pad"><pre class="mono" style="white-space:pre-wrap;word-break:break-word">${MOAdmin.esc(x.error_message)}</pre></div>`);
+}
+
+async function load(){
+  const p=MOAdmin.query(),url=new URL('/api/admin/v2/jobs',location.origin);
+  ['q','domain','status'].forEach(k=>{if(p.get(k))url.searchParams.set(k,p.get(k))});
+  url.searchParams.set('page',p.get('page')||'1');url.searchParams.set('page_size',p.get('page_size')||'50');
+  try{
+    const d=await MOAdmin.api(url);currentJobs=d.items||[];
+    document.getElementById('rows').innerHTML=currentJobs.length?currentJobs.map((x,i)=>`<tr><td><span class="badge blue">${MOAdmin.esc(x.domain)}</span></td><td><div class="cell-title">${MOAdmin.esc(x.job_type)}</div><div class="cell-sub mono">${MOAdmin.esc(String(x.run_id||'').slice(0,12))}…</div></td><td>${MOAdmin.esc(x.trigger_type||'—')}</td><td>${MOAdmin.status(x.status)}</td><td class="nowrap">${MOAdmin.time(x.started_at)}</td><td class="nowrap">${MOAdmin.duration(x.duration_seconds)}</td><td>${x.error_message?`<div class="text-danger truncate">${MOAdmin.esc(x.error_message)}</div><button class="btn btn-ghost" style="margin-top:6px" onclick="showFullError(${i})">查看完整错误</button>`:`<span class="mono text-muted">${MOAdmin.esc(JSON.stringify(x.metrics||{})).slice(0,180)}</span>`}</td></tr>`).join(''):`<tr><td colspan="7">${MOAdmin.empty('没有符合条件的任务')}</td></tr>`;
+    document.getElementById('pager').innerHTML=MOAdmin.pageButtons(d,pn=>applyFilters(pn));
+  }catch(e){MOAdmin.error('#rows',e)}
+}
+
+load();loadProgress();loadCnRecovery();loadUsBulkState();
+setInterval(load,5000);setInterval(loadProgress,3000);setInterval(loadUsBulkState,3000);setInterval(loadCnRecovery,15000);
+</script>
+</body>
+</html>
