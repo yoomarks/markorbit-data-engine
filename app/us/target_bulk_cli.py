@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.admin_domain_tasks import engine_mutation_guard
 from app.us.target_bulk_plan import build_bulk_plan, validate_bulk_plan
 from app.us.target_bulk_replay import audit_bulk_plan, execute_bulk_plan
 from app.us.target_canary import write_receipt
@@ -58,13 +59,18 @@ def _execute(args: argparse.Namespace) -> int:
     plan = _read_json(args.plan, "US target bulk plan")
     validate_bulk_plan(plan)
     stage2 = _read_json(args.stage2_receipt, "accepted Package 2 receipt")
-    receipt = execute_bulk_plan(
-        plan=plan,
-        stage2_receipt=stage2,
-        journal_path=args.journal,
-        state_dir=args.state_dir,
-        authority_token=args.authority_token,
-    )
+    with engine_mutation_guard() as acquired:
+        if not acquired:
+            raise RuntimeError(
+                "global engine mutation lock is busy; US target bulk execute did not start"
+            )
+        receipt = execute_bulk_plan(
+            plan=plan,
+            stage2_receipt=stage2,
+            journal_path=args.journal,
+            state_dir=args.state_dir,
+            authority_token=args.authority_token,
+        )
     write_receipt(args.receipt, receipt)
     _emit(receipt)
     return 0
