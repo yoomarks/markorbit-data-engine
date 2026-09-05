@@ -54,8 +54,9 @@ def fail_closed_recover_target_bulk_tasks() -> dict[str, int]:
                 elif payload.get("approved_plan_sha256"):
                     status = STATUS_BLOCKED
                     message = (
-                        "Host worker restarted during an approved target mutation. Automatic replay "
-                        "is forbidden; inspect the durable child journal and RESUME explicitly."
+                        "Host worker restarted during an approved target mutation. "
+                        "Automatic replay is forbidden; inspect the durable child journal and "
+                        "RESUME explicitly."
                     )
                     report["mutation_blocked"] += 1
                 else:
