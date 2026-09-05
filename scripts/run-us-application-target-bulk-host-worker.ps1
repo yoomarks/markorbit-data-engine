@@ -27,11 +27,15 @@ $branch = (& git branch --show-current).Trim()
 Require-True ($LASTEXITCODE -eq 0) 'Unable to inspect the current git branch.'
 Require-True ($branch -eq 'main') 'US target bulk host worker must run from local main.'
 
-$argsList = @('-m', 'app.us.target_bulk_host_worker_v2', '--poll-seconds', [string]$PollSeconds)
-if ($Once) { $argsList += '--once' }
+if ($Once) {
+    $argsList = @('-m', 'app.us.target_bulk_host_worker_once', '--poll-seconds', [string]$PollSeconds)
+} else {
+    $argsList = @('-m', 'app.us.target_bulk_host_worker_v2', '--poll-seconds', [string]$PollSeconds)
+}
 
 Write-Host 'worker=US_APPLICATION_TARGET_BULK_HOST_WORKER_V2'
 Write-Host "mode=$(if ($Once) { 'ONCE' } else { 'CONTINUOUS' })"
+Write-Host "one_claim_idle_is_success=$(if ($Once) { 'True' } else { 'N/A' })"
 Write-Host 'execution_lane=WINDOWS_HOST_TARGET'
 Write-Host 'container_worker_claimable=False'
 Write-Host 'production_mutation_requires_prepared_plan_and_explicit_approval=True'
