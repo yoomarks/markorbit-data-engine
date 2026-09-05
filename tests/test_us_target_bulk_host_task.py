@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app import admin_task_api
+from app.admin_domain_tasks import ADMIN_TASK_KIND
 from app.us.target_bulk_batch import derive_batch_manifest, validate_batch_manifest
 from app.us.target_bulk_plan import (
     ACCEPTED_PACKAGE2_SHA256,
@@ -14,6 +15,7 @@ from app.us.target_bulk_plan import (
     _canonical_sha256,
     validate_bulk_plan,
 )
+from app.us.target_bulk_tasks import TARGET_BULK_TASK_KIND
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -162,6 +164,15 @@ def test_us_target_task_rejects_history_count_or_conflicting_bounds() -> None:
             bulk_end_sequence=20,
             bulk_max_packages=10,
         )
+
+
+def test_target_bulk_task_kind_is_not_claimable_by_generic_container_worker() -> None:
+    assert TARGET_BULK_TASK_KIND == "US_APPLICATION_TARGET_BULK_CONTROL"
+    assert TARGET_BULK_TASK_KIND != ADMIN_TASK_KIND
+    generic_source = (ROOT / "app" / "admin_domain_tasks.py").read_text(encoding="utf-8")
+    target_source = (ROOT / "app" / "us" / "target_bulk_tasks.py").read_text(encoding="utf-8")
+    assert "payload->>'task_kind' = %s" in generic_source
+    assert "US_APPLICATION_TARGET_BULK_CONTROL" in target_source
 
 
 def test_host_worker_keeps_guarded_powershell_and_global_mutation_lock() -> None:
