@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.us.target_bulk_journal as bulk_journal
 import app.us.target_bulk_replay as bulk_replay
-from app.us.target_bulk_journal import load_bulk_journal
 from app.us.target_canary import APPLICATION_CANARY_TABLES
 
 
@@ -97,6 +97,7 @@ def test_capacity_guard_failure_blocks_before_next_package(tmp_path, monkeypatch
     guard_calls = 0
 
     monkeypatch.setattr(bulk_replay, "validate_bulk_plan", lambda plan: None)
+    monkeypatch.setattr(bulk_journal, "validate_bulk_plan", lambda plan: None)
     monkeypatch.setattr(
         bulk_replay,
         "_verify_package2_target",
@@ -141,7 +142,7 @@ def test_capacity_guard_failure_blocks_before_next_package(tmp_path, monkeypatch
         ("commit", 3),
         ("cleanup", 3),
     ]
-    journal = load_bulk_journal(journal_path, plan=plan)
+    journal = bulk_journal.load_bulk_journal(journal_path, plan=plan)
     assert journal["state"] == "BLOCKED"
     assert journal["blocked"]["sequence"] == 3
     assert journal["packages"]["1"]["status"] == "COMPLETE"
