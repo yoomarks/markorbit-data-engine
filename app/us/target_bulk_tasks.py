@@ -7,6 +7,7 @@ from app.db import postgres_conn
 
 
 TARGET_BULK_TASK_VERSION = "US_APPLICATION_TARGET_BULK_TASK_V1"
+TARGET_BULK_TASK_KIND = "US_APPLICATION_TARGET_BULK_CONTROL"
 TARGET_BULK_EXECUTION_LANE = "WINDOWS_HOST_TARGET"
 TARGET_BULK_DOMAIN = "US_APPLICATION"
 TARGET_BULK_ACTION = "CONTINUE"
@@ -75,7 +76,7 @@ def queue_target_bulk_prepare(
         max_packages=max_packages,
     )
     payload: dict[str, Any] = {
-        "task_kind": "DOMAIN_CONTROL",
+        "task_kind": TARGET_BULK_TASK_KIND,
         "task_version": TARGET_BULK_TASK_VERSION,
         "domain": TARGET_BULK_DOMAIN,
         "action": TARGET_BULK_ACTION,
@@ -96,13 +97,13 @@ def queue_target_bulk_prepare(
                 SELECT run_id, job_type, status, started_at, payload, metrics
                 FROM control.job_run
                 WHERE trigger_type = 'ADMIN_UI'
-                  AND payload->>'task_kind' = 'DOMAIN_CONTROL'
+                  AND payload->>'task_kind' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                   AND status = ANY(%s)
                 ORDER BY started_at, run_id
                 LIMIT 1
                 """,
-                (list(sorted(_ACTIVE_STATUSES | {"QUEUED"})),),
+                (TARGET_BULK_TASK_KIND, list(sorted(_ACTIVE_STATUSES))),
             )
             existing = cur.fetchone()
             if existing:
@@ -140,14 +141,18 @@ def active_target_bulk_task() -> dict[str, Any] | None:
                        payload, metrics, COALESCE(error_message, '') AS error_message
                 FROM control.job_run
                 WHERE trigger_type = 'ADMIN_UI'
-                  AND payload->>'task_kind' = 'DOMAIN_CONTROL'
+                  AND payload->>'task_kind' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                   AND payload->>'execution_lane' = %s
                   AND status = ANY(%s)
                 ORDER BY started_at DESC, run_id DESC
                 LIMIT 1
                 """,
-                (TARGET_BULK_EXECUTION_LANE, list(sorted(_ACTIVE_STATUSES))),
+                (
+                    TARGET_BULK_TASK_KIND,
+                    TARGET_BULK_EXECUTION_LANE,
+                    list(sorted(_ACTIVE_STATUSES)),
+                ),
             )
             row = cur.fetchone()
     return dict(row) if row else None
@@ -171,11 +176,12 @@ def approve_target_bulk_task(*, run_id: str, plan_sha256: str) -> dict[str, Any]
                 FROM control.job_run
                 WHERE run_id = %s
                   AND trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
                   AND payload->>'execution_lane' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                 FOR UPDATE
                 """,
-                (run_id, TARGET_BULK_EXECUTION_LANE),
+                (run_id, TARGET_BULK_TASK_KIND, TARGET_BULK_EXECUTION_LANE),
             )
             row = cur.fetchone()
             if not row:
@@ -223,6 +229,7 @@ def request_target_bulk_stop() -> dict[str, Any]:
                 SELECT run_id, status, payload
                 FROM control.job_run
                 WHERE trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
                   AND payload->>'execution_lane' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                   AND status = ANY(%s)
@@ -230,7 +237,11 @@ def request_target_bulk_stop() -> dict[str, Any]:
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (TARGET_BULK_EXECUTION_LANE, list(sorted(_ACTIVE_STATUSES))),
+                (
+                    TARGET_BULK_TASK_KIND,
+                    TARGET_BULK_EXECUTION_LANE,
+                    list(sorted(_ACTIVE_STATUSES)),
+                ),
             )
             row = cur.fetchone()
             if not row:
@@ -284,6 +295,7 @@ def claim_next_target_bulk_task() -> dict[str, Any] | None:
                 SELECT run_id, job_type, trigger_type, status, started_at, payload, metrics
                 FROM control.job_run
                 WHERE trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
                   AND payload->>'execution_lane' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                   AND status = ANY(%s)
@@ -291,7 +303,11 @@ def claim_next_target_bulk_task() -> dict[str, Any] | None:
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """,
-                (TARGET_BULK_EXECUTION_LANE, list(sorted(_CLAIMABLE_STATUSES))),
+                (
+                    TARGET_BULK_TASK_KIND,
+                    TARGET_BULK_EXECUTION_LANE,
+                    list(sorted(_CLAIMABLE_STATUSES)),
+                ),
             )
             row = cur.fetchone()
             if not row:
@@ -330,12 +346,13 @@ def recover_interrupted_target_bulk_tasks() -> int:
                 SELECT run_id, payload
                 FROM control.job_run
                 WHERE trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
                   AND payload->>'execution_lane' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                   AND status = %s
                 FOR UPDATE
                 """,
-                (TARGET_BULK_EXECUTION_LANE, STATUS_RUNNING),
+                (TARGET_BULK_TASK_KIND, TARGET_BULK_EXECUTION_LANE, STATUS_RUNNING),
             )
             rows = [dict(row) for row in cur.fetchall()]
             for row in rows:
@@ -399,6 +416,7 @@ def update_target_bulk_task(
                     error_message = %s,
                     finished_at = CASE WHEN %s THEN now() ELSE finished_at END
                 WHERE run_id = %s
+                  AND payload->>'task_kind' = %s
                   AND payload->>'execution_lane' = %s
                 RETURNING run_id, job_type, trigger_type, status, started_at,
                           finished_at, payload, metrics, error_message
@@ -410,6 +428,7 @@ def update_target_bulk_task(
                     error_message,
                     bool(finish),
                     run_id,
+                    TARGET_BULK_TASK_KIND,
                     TARGET_BULK_EXECUTION_LANE,
                 ),
             )
