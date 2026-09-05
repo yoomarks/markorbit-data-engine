@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
-import re
+import math
 from pathlib import Path
+import re
 from typing import Any, Callable
 import uuid
 
@@ -46,6 +47,7 @@ from app.us.target_canary_journal import (
 
 BULK_EXECUTOR_VERSION = "US_APPLICATION_TARGET_BULK_EXECUTOR_V1"
 BULK_ACCEPTED_DECISION = "BOUNDED_US_APPLICATION_BULK_REPLAY_RANGE_COMPLETE"
+HOT_US_MIN_FREE_RATIO = 0.30
 _STAGE_NAME = re.compile(r"^[A-Za-z0-9_]+__[0-9a-f]{16}$")
 
 
@@ -97,6 +99,18 @@ def _final_package_counts(
     return result
 
 
+def _validated_final_counts(value: object) -> dict[str, int]:
+    if not isinstance(value, dict) or set(value) != set(APPLICATION_CANARY_TABLES):
+        raise RuntimeError("US target bulk package count table set mismatch")
+    counts: dict[str, int] = {}
+    for table in APPLICATION_CANARY_TABLES:
+        count = value.get(table)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise RuntimeError(f"US target bulk package count is invalid: {table}")
+        counts[table] = count
+    return counts
+
+
 def _verify_storage(client: WslNativeClickHouseClient) -> dict[str, int]:
     final_non_hot = _query_single(
         client,
@@ -122,6 +136,37 @@ def _verify_storage(client: WslNativeClickHouseClient) -> dict[str, int]:
         "final_non_hot_active_parts": final_non_hot,
         "stage_non_hot_active_parts": stage_non_hot,
         "warm_cn_active_parts": warm_cn,
+    }
+
+
+def _verify_hot_us_headroom(
+    client: WslNativeClickHouseClient,
+    *,
+    minimum_free_ratio: float = HOT_US_MIN_FREE_RATIO,
+) -> dict[str, int | float | bool]:
+    if not 0 < minimum_free_ratio < 1:
+        raise ValueError("minimum hot_us free ratio must be between 0 and 1")
+    rows = client.query(
+        "SELECT total_space,free_space FROM system.disks WHERE name='hot_us'"
+    ).result_rows
+    if len(rows) != 1 or len(rows[0]) != 2:
+        raise RuntimeError("US target bulk hot_us capacity query returned unexpected shape")
+    total = int(rows[0][0])
+    free = int(rows[0][1])
+    if total <= 0 or free < 0 or free > total:
+        raise RuntimeError("US target bulk hot_us capacity values are invalid")
+    floor = math.ceil(total * minimum_free_ratio)
+    if free < floor:
+        raise RuntimeError(
+            "US target bulk hot_us free space is below the accepted floor: "
+            f"free={free} required={floor} total={total}"
+        )
+    return {
+        "total_bytes": total,
+        "free_bytes": free,
+        "minimum_free_ratio": minimum_free_ratio,
+        "minimum_free_bytes": floor,
+        "floor_satisfied": True,
     }
 
 
@@ -270,9 +315,7 @@ def _verify_package2_target(
     plan_anchor = plan.get("accepted_package2_anchor")
     if validated != plan_anchor:
         raise RuntimeError("accepted Package 2 receipt no longer matches frozen bulk plan")
-    expected = validated["expected_row_counts"]
-    if set(expected) != set(APPLICATION_CANARY_TABLES):
-        raise RuntimeError("accepted Package 2 row-count table set drifted")
+    expected = _validated_final_counts(validated["expected_row_counts"])
     observed = _final_package_counts(client, uuid.UUID(validated["package_id"]))
     if observed != expected:
         raise RuntimeError(
@@ -391,6 +434,7 @@ def cleanup_one_package(
 
 CommitPackage = Callable[[dict[str, Any], dict[str, Any]], dict[str, int]]
 CleanupPackage = Callable[[dict[str, Any], dict[str, Any], dict[str, int]], None]
+CapacityGuard = Callable[[], object]
 
 
 def execute_bulk_plan(
@@ -403,6 +447,7 @@ def execute_bulk_plan(
     client: BulkTargetClient | None = None,
     commit_package: CommitPackage | None = None,
     cleanup_package: CleanupPackage | None = None,
+    capacity_guard: CapacityGuard | None = None,
 ) -> dict[str, Any]:
     """Execute exactly the frozen Package1 bridge + bounded sequence-3+ range."""
     validate_bulk_plan(plan)
@@ -421,15 +466,33 @@ def execute_bulk_plan(
     mark_bulk_running(journal_path, plan=plan)
 
     if commit_package is None:
-        def commit_package(item: dict[str, Any], state: dict[str, Any]) -> dict[str, int]:
+        def default_commit(item: dict[str, Any], state: dict[str, Any]) -> dict[str, int]:
             return commit_one_package(item, state, client=target)
+
+        commit_fn: CommitPackage = default_commit
+    else:
+        commit_fn = commit_package
+
     if cleanup_package is None:
-        def cleanup_package(
+        def default_cleanup(
             item: dict[str, Any],
             state: dict[str, Any],
             counts: dict[str, int],
         ) -> None:
             cleanup_one_package(item, state, client=target, expected_counts=counts)
+
+        cleanup_fn: CleanupPackage = default_cleanup
+    else:
+        cleanup_fn = cleanup_package
+
+    if capacity_guard is not None:
+        capacity_fn: CapacityGuard | None = capacity_guard
+    elif commit_package is None and cleanup_package is None:
+        capacity_fn = lambda: _verify_hot_us_headroom(target)
+    else:
+        # Tests/custom orchestration that replaces both mutation callbacks must
+        # inject its own guard if target capacity behavior is part of the test.
+        capacity_fn = None
 
     for item in plan["packages"]:
         sequence = int(item["sequence"])
@@ -438,8 +501,10 @@ def execute_bulk_plan(
         if state["status"] == "COMPLETE":
             continue
         try:
+            if capacity_fn is not None:
+                capacity_fn()
             if state["status"] == "PENDING":
-                counts = commit_package(item, state)
+                counts = _validated_final_counts(commit_fn(item, state))
                 bulk = mark_package_final_verified(
                     journal_path,
                     plan=plan,
@@ -448,12 +513,11 @@ def execute_bulk_plan(
                 )
                 state = bulk["packages"][str(sequence)]
             else:
-                counts = {
-                    str(table): int(count)
-                    for table, count in dict(state["final_row_counts"]).items()
-                }
+                counts = _validated_final_counts(state.get("final_row_counts"))
 
-            cleanup_package(item, state, counts)
+            cleanup_fn(item, state, counts)
+            if capacity_fn is not None:
+                capacity_fn()
             receipt = {
                 "receipt_version": "US_APPLICATION_TARGET_BULK_PACKAGE_RECEIPT_V1",
                 "executor_version": BULK_EXECUTOR_VERSION,
@@ -541,10 +605,7 @@ def audit_bulk_plan(
             journal_path=Path(str(state["canary_journal_path"])),
             package=package,
         )
-        expected = {
-            str(table): int(count)
-            for table, count in dict(state["final_row_counts"]).items()
-        }
+        expected = _validated_final_counts(state.get("final_row_counts"))
         if counts != expected:
             raise RuntimeError(f"US target bulk audit count drift: {sequence}")
         if _stage_table_count(target, package) != 0:
@@ -555,6 +616,7 @@ def audit_bulk_plan(
 
     storage = _verify_storage(target)
     _read_target_manifest(target)
+    headroom = _verify_hot_us_headroom(target)
     return {
         "audit_version": "US_APPLICATION_TARGET_BULK_AUDIT_V1",
         "journal_state": "COMPLETE",
@@ -565,6 +627,7 @@ def audit_bulk_plan(
         "package_total_rows": package_rows,
         "selected_total_rows": total_rows,
         "storage": storage,
+        "hot_us_headroom": headroom,
         "source_files_preserved": True,
         "automatic_next_package": False,
     }
