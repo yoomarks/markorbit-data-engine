@@ -256,6 +256,7 @@ def build_bulk_plan(
         "accepted_source_count": EXPECTED_SOURCE_COUNT,
         "accepted_schema_manifest_sha256": ACCEPTED_SCHEMA_MANIFEST_SHA256,
         "accepted_package2_anchor": anchor,
+        "accepted_package2_source": dict(entries[1]),
         "inventory_sha256": inventory_sha,
         "bridge_sequence": 1,
         "accepted_existing_target_sequence": 2,
@@ -290,6 +291,11 @@ def validate_bulk_plan(plan: dict[str, Any]) -> None:
         raise RuntimeError("US target bulk plan execution order drifted")
     if str(packages[0].get("role") or "") != "PACKAGE1_TARGET_BRIDGE_REQUIRE_OR_ADOPT":
         raise RuntimeError("US target bulk plan Package 1 bridge role drifted")
+    package2_source = plan.get("accepted_package2_source")
+    if not isinstance(package2_source, dict) or int(package2_source.get("sequence") or 0) != 2:
+        raise RuntimeError("US target bulk plan Package 2 source binding is missing")
+    if str(package2_source.get("sha256") or "").lower() != ACCEPTED_PACKAGE2_SHA256:
+        raise RuntimeError("US target bulk plan Package 2 source SHA-256 drifted")
     if str(plan.get("accepted_schema_manifest_sha256") or "").lower() != ACCEPTED_SCHEMA_MANIFEST_SHA256:
         raise RuntimeError("US target bulk plan schema manifest drifted")
     contract = {
