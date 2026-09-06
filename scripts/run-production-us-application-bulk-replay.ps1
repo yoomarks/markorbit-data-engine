@@ -111,7 +111,7 @@ function Get-MountFact {
     )
     $sizeText = Get-ExactSingleLine -Label "mount size $MountPoint" -Lines @(
         Invoke-NativeCapture -Label "mount size $MountPoint" -Command {
-            & wsl.exe -d $TargetDistro -u root --exec blockdev --getsize64 $device
+            & wsl.exe -d $TargetDistro -u root --exec lsblk -bno SIZE $device
         }
     )
     return [ordered]@{
