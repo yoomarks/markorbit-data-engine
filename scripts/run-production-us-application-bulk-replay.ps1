@@ -106,7 +106,7 @@ function Get-MountFact {
     )
     $uuid = Get-ExactSingleLine -Label "mount UUID $MountPoint" -Lines @(
         Invoke-NativeCapture -Label "mount UUID $MountPoint" -Command {
-            & wsl.exe -d $TargetDistro -u root --exec blkid -s UUID -o value $device
+            & wsl.exe -d $TargetDistro -u root --exec findmnt -n -o UUID --target $MountPoint
         }
     )
     $sizeText = Get-ExactSingleLine -Label "mount size $MountPoint" -Lines @(

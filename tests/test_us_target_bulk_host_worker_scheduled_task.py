@@ -88,3 +88,11 @@ def test_bulk_execute_accepts_repo_local_absolute_plan_paths() -> None:
     assert "[System.IO.Path]::IsPathRooted($PlanPath)" in source
     assert "$ResolvedPlanPath = [System.IO.Path]::GetFullPath($PlanPath)" in source
     assert "Bulk PlanPath must be a repo-local reports artifact." in source
+
+
+def test_bulk_execute_mount_uuid_uses_available_findmnt_without_blkid() -> None:
+    source = (
+        ROOT / "scripts" / "run-production-us-application-bulk-replay.ps1"
+    ).read_text(encoding="utf-8")
+    assert "findmnt -n -o UUID --target $MountPoint" in source
+    assert " --exec blkid " not in source
