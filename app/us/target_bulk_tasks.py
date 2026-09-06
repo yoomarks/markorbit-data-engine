@@ -202,7 +202,7 @@ def approve_target_bulk_task(*, run_id: str, plan_sha256: str) -> dict[str, Any]
                     finished_at = NULL,
                     payload = payload || jsonb_build_object(
                         'host_phase', 'EXECUTE',
-                        'approved_plan_sha256', %s,
+                        'approved_plan_sha256', %s::text,
                         'production_mutation_authorized', true,
                         'approved_at', now(),
                         'stop_requested', false
@@ -321,7 +321,7 @@ def claim_next_target_bulk_task() -> dict[str, Any] | None:
                 SET status = %s,
                     finished_at = NULL,
                     payload = payload || jsonb_build_object(
-                        'host_claimed_from_status', %s,
+                        'host_claimed_from_status', %s::text,
                         'host_claimed_at', now()
                     ),
                     error_message = NULL

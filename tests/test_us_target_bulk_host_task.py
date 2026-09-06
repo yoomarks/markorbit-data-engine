@@ -232,3 +232,16 @@ def test_admin_api_exposes_prepare_approve_resume_status_surface() -> None:
     assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/ACTIVE" in methods_by_path
     assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/{run_id}/APPROVE" in methods_by_path
     assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/{run_id}/RESUME" in methods_by_path
+
+
+def test_target_bulk_jsonb_string_parameters_are_explicitly_typed() -> None:
+    task_source = (ROOT / "app" / "us" / "target_bulk_tasks.py").read_text(
+        encoding="utf-8"
+    )
+    control_source = (ROOT / "app" / "us" / "target_bulk_task_control.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "'approved_plan_sha256', %s::text" in task_source
+    assert "'host_claimed_from_status', %s::text" in task_source
+    assert "'host_phase', %s::text" in control_source

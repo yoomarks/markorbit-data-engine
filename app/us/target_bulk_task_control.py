@@ -183,7 +183,7 @@ def resume_target_bulk_task(*, run_id: str | None = None) -> dict[str, Any]:
                 SET status = %s,
                     finished_at = NULL,
                     payload = payload || jsonb_build_object(
-                        'host_phase', %s,
+                        'host_phase', %s::text,
                         'stop_requested', false,
                         'resume_requested_at', now()
                     ),
