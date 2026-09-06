@@ -142,7 +142,7 @@ function Get-DDriveFact {
 function Assert-ExactExecutionMain {
     param([string]$Phase, [bool]$FetchOrigin)
     if ($FetchOrigin) {
-        Invoke-NativeCapture -Label "git fetch origin main ($Phase)" -Command { & git fetch origin main } | Out-Null
+        Invoke-NativeCapture -Label "git fetch origin main ($Phase)" -Command { & git fetch origin main --quiet } | Out-Null
     }
     $branch = Get-ExactSingleLine -Label "git branch ($Phase)" -Lines @(Invoke-NativeCapture -Label "git branch ($Phase)" -Command { & git branch --show-current })
     Require-True ($branch -eq 'main') "Bulk replay must run from local main during $Phase."

@@ -53,7 +53,7 @@ function Get-ExactSingleLine {
 
 function Assert-ExactMain {
     param([string]$Phase)
-    Invoke-NativeCapture -Label "git fetch origin main ($Phase)" -Command { & git fetch origin main } | Out-Null
+    Invoke-NativeCapture -Label "git fetch origin main ($Phase)" -Command { & git fetch origin main --quiet } | Out-Null
     $branch = Get-ExactSingleLine -Label "git branch ($Phase)" -Lines @(Invoke-NativeCapture -Label "git branch ($Phase)" -Command { & git branch --show-current })
     Require-True ($branch -eq 'main') "Bulk plan must run from local main during $Phase."
     $head = Get-ExactSingleLine -Label "git HEAD ($Phase)" -Lines @(Invoke-NativeCapture -Label "git HEAD ($Phase)" -Command { & git rev-parse HEAD })
