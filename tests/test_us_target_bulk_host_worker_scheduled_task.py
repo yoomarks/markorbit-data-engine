@@ -70,3 +70,12 @@ def test_manager_exposes_idempotent_lifecycle_actions() -> None:
         assert f"'{action}'" in source
     assert "Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force" in source
     assert "Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false" in source
+
+
+def test_bulk_plan_and_execute_fetch_main_quietly_for_powershell_51() -> None:
+    for script_name in (
+        "plan-production-us-application-bulk-replay.ps1",
+        "run-production-us-application-bulk-replay.ps1",
+    ):
+        source = (ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+        assert "git fetch origin main --quiet" in source
