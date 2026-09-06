@@ -79,3 +79,12 @@ def test_bulk_plan_and_execute_fetch_main_quietly_for_powershell_51() -> None:
     ):
         source = (ROOT / "scripts" / script_name).read_text(encoding="utf-8")
         assert "git fetch origin main --quiet" in source
+
+
+def test_bulk_execute_accepts_repo_local_absolute_plan_paths() -> None:
+    source = (ROOT / "scripts" / "run-production-us-application-bulk-replay.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert "[System.IO.Path]::IsPathRooted($PlanPath)" in source
+    assert "$ResolvedPlanPath = [System.IO.Path]::GetFullPath($PlanPath)" in source
+    assert "Bulk PlanPath must be a repo-local reports artifact." in source
