@@ -42,6 +42,7 @@ from app.us.target_canary_journal import (
     load_canary_journal,
     mark_stage_complete,
     mark_stage_started,
+    reset_interrupted_staging_after_verified_zero_final,
 )
 
 
@@ -305,6 +306,67 @@ def _reconcile_prepared(
     assert_package_unchanged(package)
 
 
+def _recover_interrupted_staging(
+    client: WslNativeClickHouseClient,
+    *,
+    journal_path: Path,
+    package: FrozenCanaryPackage,
+) -> None:
+    journal = load_canary_journal(
+        journal_path,
+        package=package,
+        schema_manifest_sha256=ACCEPTED_SCHEMA_MANIFEST_SHA256,
+    )
+    stage = journal.get("stage")
+    commits = journal.get("commits")
+    if (
+        journal.get("state") != "STAGING"
+        or not isinstance(stage, dict)
+        or stage.get("status") != "STARTED"
+        or stage.get("row_counts") is not None
+    ):
+        raise RuntimeError("US target bulk interrupted staging reconciliation state mismatch")
+    if not isinstance(commits, dict):
+        raise RuntimeError("US target bulk interrupted staging commits are missing")
+    for table in APPLICATION_CANARY_TABLES:
+        commit = commits.get(table)
+        if (
+            not isinstance(commit, dict)
+            or commit.get("status") != "PENDING"
+            or commit.get("expected_rows") is not None
+            or commit.get("observed_rows") is not None
+        ):
+            raise RuntimeError(
+                f"US target bulk interrupted staging crossed a final INSERT boundary: {table}"
+            )
+
+    _read_target_manifest(client)
+    assert_package_unchanged(package)
+    final_counts = _final_package_counts(client, package.package_id)
+    if any(final_counts.values()):
+        raise RuntimeError(
+            "US target bulk interrupted staging has visible final rows; refusing restage: "
+            f"{final_counts}"
+        )
+    stage_table_count = _stage_table_count(client, package)
+    drop_stage = getattr(client, "drop_bulk_stage_table", None)
+    if not callable(drop_stage):
+        raise RuntimeError("US target bulk interrupted staging requires package-scoped stage cleanup")
+    for stage_table in stage_table_map(package).values():
+        drop_stage(stage_table)
+    if _stage_table_count(client, package) != 0:
+        raise RuntimeError("US target bulk interrupted staging cleanup is incomplete")
+    _verify_storage(client)
+    assert_package_unchanged(package)
+    reset_interrupted_staging_after_verified_zero_final(
+        journal_path,
+        package=package,
+        schema_manifest_sha256=ACCEPTED_SCHEMA_MANIFEST_SHA256,
+        verified_final_row_counts=final_counts,
+        removed_stage_table_count=stage_table_count,
+    )
+
+
 def _verify_package2_target(
     client: WslNativeClickHouseClient,
     *,
@@ -367,10 +429,17 @@ def commit_one_package(
             package=package,
         )
     if state == "STAGING":
-        raise RuntimeError(
-            "US target bulk package stopped in STAGING; explicit read-only staging "
-            "reconciliation is required before any retry"
+        _recover_interrupted_staging(
+            client,
+            journal_path=journal_path,
+            package=package,
         )
+        journal = load_canary_journal(
+            journal_path,
+            package=package,
+            schema_manifest_sha256=ACCEPTED_SCHEMA_MANIFEST_SHA256,
+        )
+        state = str(journal.get("state") or "")
     if state == "PREPARED":
         _reconcile_prepared(
             client,

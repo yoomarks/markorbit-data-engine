@@ -220,6 +220,60 @@ def mark_stage_started(
     return _persist_revision(path, payload, expected_revision=revision)
 
 
+def reset_interrupted_staging_after_verified_zero_final(
+    path: Path,
+    *,
+    package: FrozenCanaryPackage,
+    schema_manifest_sha256: str,
+    verified_final_row_counts: dict[str, int],
+    removed_stage_table_count: int,
+) -> dict[str, Any]:
+    """Reset only an interrupted STARTED stage after exact zero-final verification."""
+    payload = load_canary_journal(
+        path,
+        package=package,
+        schema_manifest_sha256=schema_manifest_sha256,
+    )
+    stage = payload["stage"]
+    if (
+        payload.get("state") != "STAGING"
+        or stage.get("status") != "STARTED"
+        or stage.get("row_counts") is not None
+    ):
+        raise RuntimeError("US target canary interrupted-stage recovery state mismatch")
+    if set(verified_final_row_counts) != set(APPLICATION_CANARY_TABLES):
+        raise RuntimeError("US target canary interrupted-stage recovery count table set mismatch")
+    normalized = {table: int(verified_final_row_counts[table]) for table in APPLICATION_CANARY_TABLES}
+    if any(normalized.values()):
+        raise RuntimeError("US target canary interrupted-stage recovery requires zero final rows")
+    if not 0 <= int(removed_stage_table_count) <= len(APPLICATION_CANARY_TABLES):
+        raise RuntimeError("US target canary interrupted-stage recovery stage-table count is invalid")
+    for table in APPLICATION_CANARY_TABLES:
+        commit = payload["commits"][table]
+        if (
+            commit.get("status") != "PENDING"
+            or commit.get("expected_rows") is not None
+            or commit.get("observed_rows") is not None
+        ):
+            raise RuntimeError(
+                f"US target canary interrupted-stage recovery found non-pristine commit: {table}"
+            )
+    revision = int(payload["revision"])
+    recoveries = list(payload.get("staging_recoveries") or [])
+    recoveries.append(
+        {
+            "reason": "VERIFIED_ZERO_FINAL_ROWS_AFTER_INTERRUPTED_STAGING",
+            "verified_final_row_counts": normalized,
+            "removed_stage_table_count": int(removed_stage_table_count),
+        }
+    )
+    payload["staging_recoveries"] = recoveries
+    payload["state"] = "PREPARED"
+    stage["status"] = "NOT_STARTED"
+    stage["row_counts"] = None
+    return _persist_revision(path, payload, expected_revision=revision)
+
+
 def _query_pair(client: WslNativeClickHouseClient, sql: str) -> tuple[int, int]:
     rows = client.query(sql).result_rows
     if len(rows) != 1 or len(rows[0]) != 2:
