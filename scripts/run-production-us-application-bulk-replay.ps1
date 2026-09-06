@@ -235,7 +235,12 @@ function Find-AcceptedStage2Receipt {
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 $ReportsRoot = Join-Path $RepoRoot 'reports'
-$ResolvedPlanPath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $PlanPath))
+if ([System.IO.Path]::IsPathRooted($PlanPath)) {
+    $ResolvedPlanPath = [System.IO.Path]::GetFullPath($PlanPath)
+}
+else {
+    $ResolvedPlanPath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $PlanPath))
+}
 $ReportsPrefix = [System.IO.Path]::GetFullPath($ReportsRoot).TrimEnd('\') + '\'
 Require-True ($ResolvedPlanPath.StartsWith($ReportsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) 'Bulk PlanPath must be a repo-local reports artifact.'
 Require-True (Test-Path -LiteralPath $ResolvedPlanPath -PathType Leaf) "Bulk PlanPath does not exist: $ResolvedPlanPath"
