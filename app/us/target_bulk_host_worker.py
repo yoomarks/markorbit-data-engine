@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -231,6 +232,8 @@ def _run_child_operator(
         str(child["plan_path"]),
         "-Authority",
         str(child["required_authority_token"]),
+        "-PythonExe",
+        sys.executable,
     ]
 
     monitor_error: str | None = None

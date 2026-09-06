@@ -245,3 +245,12 @@ def test_target_bulk_jsonb_string_parameters_are_explicitly_typed() -> None:
     assert "'approved_plan_sha256', %s::text" in task_source
     assert "'host_claimed_from_status', %s::text" in task_source
     assert "'host_phase', %s::text" in control_source
+
+
+def test_host_worker_forwards_its_exact_python_to_guarded_child() -> None:
+    source = (ROOT / "app" / "us" / "target_bulk_host_worker.py").read_text(
+        encoding="utf-8"
+    )
+    assert "import sys" in source
+    assert '"-PythonExe"' in source
+    assert "sys.executable" in source
