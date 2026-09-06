@@ -471,26 +471,77 @@ def test_selected_package_is_rehashed_immediately_before_mutation(corpus) -> Non
         bulk_replay._frozen_from_plan(item)
 
 
-def test_staging_state_is_fail_closed_without_blind_restage(
-    corpus, tmp_path, monkeypatch
-) -> None:
-    plan = _plan(corpus, max_packages=1)
-    item = plan["packages"][1]
-    journal_path = tmp_path / "package.canary.json"
-    journal_path.write_text("{}", encoding="utf-8")
-    fake_package = SimpleNamespace(package_id="00000000-0000-0000-0000-000000000000")
 
-    monkeypatch.setattr(bulk_replay, "_frozen_from_plan", lambda item: fake_package)
+def test_interrupted_staging_recovery_drops_only_package_stage_and_resets(monkeypatch) -> None:
+    package = SimpleNamespace(
+        package_id="00000000-0000-0000-0000-000000000005",
+        sha256="a" * 64,
+    )
+    journal = {
+        "state": "STAGING",
+        "stage": {"status": "STARTED", "row_counts": None},
+        "commits": {
+            table: {"status": "PENDING", "expected_rows": None, "observed_rows": None}
+            for table in APPLICATION_CANARY_TABLES
+        },
+    }
+    dropped: list[str] = []
+    reset_calls: list[dict] = []
+    client = SimpleNamespace(drop_bulk_stage_table=lambda table: dropped.append(table))
+    monkeypatch.setattr(bulk_replay, "load_canary_journal", lambda *a, **k: journal)
     monkeypatch.setattr(bulk_replay, "_read_target_manifest", lambda client: {})
     monkeypatch.setattr(
         bulk_replay,
-        "load_canary_journal",
-        lambda *args, **kwargs: {"state": "STAGING"},
+        "_final_package_counts",
+        lambda client, package_id: {table: 0 for table in APPLICATION_CANARY_TABLES},
     )
+    monkeypatch.setattr(
+        bulk_replay,
+        "_stage_table_count",
+        lambda client, package: 0 if len(dropped) == len(APPLICATION_CANARY_TABLES) else len(APPLICATION_CANARY_TABLES),
+    )
+    monkeypatch.setattr(bulk_replay, "_verify_storage", lambda client: {})
+    monkeypatch.setattr(bulk_replay, "assert_package_unchanged", lambda package: None)
+    monkeypatch.setattr(
+        bulk_replay,
+        "reset_interrupted_staging_after_verified_zero_final",
+        lambda *a, **k: reset_calls.append(k),
+    )
+    bulk_replay._recover_interrupted_staging(
+        client,
+        journal_path=Path("package.canary.json"),
+        package=package,
+    )
+    assert dropped == list(bulk_replay.stage_table_map(package).values())
+    assert reset_calls[0]["removed_stage_table_count"] == len(APPLICATION_CANARY_TABLES)
+    assert all(value == 0 for value in reset_calls[0]["verified_final_row_counts"].values())
 
-    with pytest.raises(RuntimeError, match="explicit read-only staging reconciliation"):
-        bulk_replay.commit_one_package(
-            item,
-            {"canary_journal_path": str(journal_path)},
-            client=SimpleNamespace(),
+
+def test_interrupted_staging_recovery_refuses_visible_final_rows(monkeypatch) -> None:
+    package = SimpleNamespace(
+        package_id="00000000-0000-0000-0000-000000000005",
+        sha256="a" * 64,
+    )
+    journal = {
+        "state": "STAGING",
+        "stage": {"status": "STARTED", "row_counts": None},
+        "commits": {
+            table: {"status": "PENDING", "expected_rows": None, "observed_rows": None}
+            for table in APPLICATION_CANARY_TABLES
+        },
+    }
+    dropped: list[str] = []
+    client = SimpleNamespace(drop_bulk_stage_table=lambda table: dropped.append(table))
+    counts = {table: 0 for table in APPLICATION_CANARY_TABLES}
+    counts[APPLICATION_CANARY_TABLES[0]] = 1
+    monkeypatch.setattr(bulk_replay, "load_canary_journal", lambda *a, **k: journal)
+    monkeypatch.setattr(bulk_replay, "_read_target_manifest", lambda client: {})
+    monkeypatch.setattr(bulk_replay, "_final_package_counts", lambda client, package_id: counts)
+    monkeypatch.setattr(bulk_replay, "assert_package_unchanged", lambda package: None)
+    with pytest.raises(RuntimeError, match="visible final rows"):
+        bulk_replay._recover_interrupted_staging(
+            client,
+            journal_path=Path("package.canary.json"),
+            package=package,
         )
+    assert dropped == []

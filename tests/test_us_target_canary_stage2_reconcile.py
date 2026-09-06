@@ -56,7 +56,9 @@ class FakeClient:
 def test_wsl_native_client_uses_explicit_exec_for_backtick_ddl() -> None:
     calls: list[list[str]] = []
 
-    def runner(args, *, input, text, capture_output, check):
+    def runner(args, *, input, text, encoding, errors, capture_output, check):
+        assert encoding == "utf-8"
+        assert errors == "strict"
         calls.append(list(args))
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 

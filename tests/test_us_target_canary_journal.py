@@ -19,6 +19,7 @@ from app.us.target_canary_journal import (
     load_canary_journal,
     mark_stage_complete,
     mark_stage_started,
+    reset_interrupted_staging_after_verified_zero_final,
 )
 
 
@@ -300,3 +301,40 @@ def test_source_change_after_checkpoint_blocks_final_commit(tmp_path: Path) -> N
             schema_manifest_sha256=SCHEMA_SHA,
         )
     assert client.commands == []
+
+
+def test_interrupted_staging_can_reset_only_after_verified_zero_final(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    journal = tmp_path / "canary-journal.json"
+    initialize_canary_journal(journal, package=package, schema_manifest_sha256=SCHEMA_SHA)
+    mark_stage_started(journal, package=package, schema_manifest_sha256=SCHEMA_SHA)
+    zeros = {table: 0 for table in APPLICATION_CANARY_TABLES}
+    recovered = reset_interrupted_staging_after_verified_zero_final(
+        journal,
+        package=package,
+        schema_manifest_sha256=SCHEMA_SHA,
+        verified_final_row_counts=zeros,
+        removed_stage_table_count=len(APPLICATION_CANARY_TABLES),
+    )
+    assert recovered["state"] == "PREPARED"
+    assert recovered["stage"]["status"] == "NOT_STARTED"
+    assert recovered["staging_recoveries"][-1]["reason"] == (
+        "VERIFIED_ZERO_FINAL_ROWS_AFTER_INTERRUPTED_STAGING"
+    )
+
+
+def test_interrupted_staging_reset_rejects_visible_final_rows(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    journal = tmp_path / "canary-journal.json"
+    initialize_canary_journal(journal, package=package, schema_manifest_sha256=SCHEMA_SHA)
+    mark_stage_started(journal, package=package, schema_manifest_sha256=SCHEMA_SHA)
+    counts = {table: 0 for table in APPLICATION_CANARY_TABLES}
+    counts[APPLICATION_CANARY_TABLES[0]] = 1
+    with pytest.raises(RuntimeError, match="requires zero final rows"):
+        reset_interrupted_staging_after_verified_zero_final(
+            journal,
+            package=package,
+            schema_manifest_sha256=SCHEMA_SHA,
+            verified_final_row_counts=counts,
+            removed_stage_table_count=1,
+        )
