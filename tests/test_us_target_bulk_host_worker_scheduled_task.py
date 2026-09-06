@@ -96,3 +96,11 @@ def test_bulk_execute_mount_uuid_uses_available_findmnt_without_blkid() -> None:
     ).read_text(encoding="utf-8")
     assert "findmnt -n -o UUID --target $MountPoint" in source
     assert " --exec blkid " not in source
+
+
+def test_bulk_execute_mount_size_uses_available_lsblk_without_blockdev() -> None:
+    source = (
+        ROOT / "scripts" / "run-production-us-application-bulk-replay.ps1"
+    ).read_text(encoding="utf-8")
+    assert "lsblk -bno SIZE $device" in source
+    assert " --exec blockdev " not in source
