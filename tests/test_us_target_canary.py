@@ -244,6 +244,21 @@ def test_stage_tables_are_package_scoped_hot_us_and_not_idempotent_create(
         assert " TTL " not in f" {statement.upper()} "
 
 
+def test_stage_tables_neutralize_replacing_merge_engine_for_lossless_counts(tmp_path: Path) -> None:
+    package = _frozen_package(tmp_path)
+    show_create = {table: _show_create(table) for table in APPLICATION_CANARY_TABLES}
+    show_create[_full_table("us_owner_current")] = show_create[_full_table("us_owner_current")].replace(
+        "ENGINE = MergeTree", "ENGINE = ReplacingMergeTree(source_rank, is_deleted)"
+    )
+    show_create[_full_table("us_event_history")] = show_create[_full_table("us_event_history")].replace(
+        "ENGINE = MergeTree", "ENGINE = ReplacingMergeTree(source_rank)"
+    )
+    statements = stage_ddl_from_manifest(build_target_schema_manifest(show_create), package)
+    stage_sql = "\n".join(statements[1:])
+    assert "ReplacingMergeTree" not in stage_sql
+    assert stage_sql.count("ENGINE = MergeTree") == len(APPLICATION_CANARY_TABLES)
+
+
 def test_commit_plan_is_exact_one_package_and_insert_only(tmp_path: Path) -> None:
     package = _frozen_package(tmp_path)
     plan = commit_statements(package)

@@ -431,6 +431,19 @@ def stage_ddl_from_manifest(
         )
         if rewritten == statement:
             raise ValueError(f"could not rewrite stage DDL for {table}")
+        # Staging is a cardinality gate, not a materialized current-state view.
+        # ReplacingMergeTree may collapse duplicate source rows in background merges
+        # before mark_stage_complete can verify the exact rows that were submitted.
+        # Keep the accepted ORDER BY/storage layout, but make package staging lossless.
+        rewritten = re.sub(
+            r"ENGINE\s*=\s*ReplacingMergeTree(?:\([^)]*\))?",
+            "ENGINE = MergeTree",
+            rewritten,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if "ReplacingMergeTree" in rewritten:
+            raise ValueError(f"could not neutralize replacement engine for stage table {table}")
         statements.append(rewritten)
     return statements
 
