@@ -42,6 +42,7 @@ from app.us.target_canary_journal import (
     load_canary_journal,
     mark_stage_complete,
     mark_stage_started,
+    REPLACING_VISIBLE_KEYS,
     reset_interrupted_staging_after_verified_zero_final,
 )
 
@@ -92,9 +93,11 @@ def _final_package_counts(
     result: dict[str, int] = {}
     for table in APPLICATION_CANARY_TABLES:
         package_column = package_column_for_table(table)
+        keys = REPLACING_VISIBLE_KEYS.get(table)
+        aggregate = "count()" if not keys else "uniqExact(tuple(" + ", ".join(keys) + "))"
         result[table] = _query_single(
             client,
-            f"SELECT count() FROM {table} "
+            f"SELECT {aggregate} FROM {table} "
             f"WHERE {package_column}=toUUID('{package_id}')",
         )
     return result
@@ -229,10 +232,23 @@ def _expected_counts_from_canary(journal: dict[str, Any]) -> dict[str, int]:
         if not isinstance(item, dict) or item.get("status") != "COMMITTED":
             raise RuntimeError(f"US target canary table is not COMMITTED: {table}")
         expected = item.get("expected_rows")
+        expected_visible = item.get("expected_visible_rows")
         observed = item.get("observed_rows")
-        if not isinstance(expected, int) or expected < 0 or observed != expected:
+        observed_visible = item.get("observed_visible_rows")
+        if not isinstance(expected, int) or expected < 0:
             raise RuntimeError(f"US target canary committed count is invalid: {table}")
-        counts[table] = expected
+        if expected_visible is None:
+            if observed != expected:
+                raise RuntimeError(f"US target canary legacy committed count is invalid: {table}")
+            counts[table] = expected
+            continue
+        if not isinstance(expected_visible, int) or not 0 <= expected_visible <= expected:
+            raise RuntimeError(f"US target canary visible committed count is invalid: {table}")
+        if not isinstance(observed, int) or not expected_visible <= observed <= expected:
+            raise RuntimeError(f"US target canary observed committed count is invalid: {table}")
+        if observed_visible is not None and observed_visible != expected_visible:
+            raise RuntimeError(f"US target canary observed visible count is invalid: {table}")
+        counts[table] = expected_visible
     return counts
 
 

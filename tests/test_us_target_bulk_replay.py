@@ -545,3 +545,45 @@ def test_interrupted_staging_recovery_refuses_visible_final_rows(monkeypatch) ->
             package=package,
         )
     assert dropped == []
+
+
+def test_complete_canary_counts_use_replacement_visible_cardinality() -> None:
+    commits = {}
+    for table in APPLICATION_CANARY_TABLES:
+        commits[table] = {
+            "status": "COMMITTED",
+            "expected_rows": 10,
+            "expected_visible_rows": 10,
+            "observed_rows": 10,
+            "observed_visible_rows": 10,
+        }
+    owner = "markorbit_facts.us_owner_current"
+    commits[owner].update(
+        expected_rows=5,
+        expected_visible_rows=3,
+        observed_rows=3,
+        observed_visible_rows=3,
+    )
+    counts = bulk_replay._expected_counts_from_canary({"commits": commits})
+    assert counts[owner] == 3
+    assert counts["markorbit_facts.us_case_observation_history"] == 10
+
+
+def test_final_package_counts_are_logical_for_replacing_tables() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.sql: list[str] = []
+
+        def query(self, sql: str):
+            self.sql.append(sql)
+            value = 3 if "uniqExact(" in sql else 4
+            return SimpleNamespace(result_rows=[[value]])
+
+    client = Client()
+    counts = bulk_replay._final_package_counts(
+        client,
+        "6db93db0-77a5-5fc2-a2e3-eef6f05e5da4",
+    )
+    assert counts["markorbit_facts.us_owner_current"] == 3
+    assert counts["markorbit_facts.us_case_observation_history"] == 4
+    assert any("uniqExact(tuple(serial_number, owner_key))" in sql for sql in client.sql)
