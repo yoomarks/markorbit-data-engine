@@ -419,3 +419,65 @@ def test_legacy_insert_started_journal_backfills_visible_expectation(tmp_path: P
     assert commit["status"] == "COMMITTED"
     assert commit["recovered_after_uncertain_insert"] is True
     assert client.commands.count(commit["statement"]) == 0
+
+
+def test_canary_journal_binding_allows_same_source_relocated_to_archive(tmp_path: Path) -> None:
+    incoming = tmp_path / "raw" / "incoming" / "us"
+    archive = tmp_path / "raw" / "archive" / "us"
+    incoming.mkdir(parents=True)
+    archive.mkdir(parents=True)
+    source = incoming / "apc260102.zip"
+    source.write_bytes(b"relocatable-us-canary")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    package = freeze_package(
+        source,
+        expected_size=source.stat().st_size,
+        expected_sha256=digest,
+        package_kind="APPLICATION_DAILY",
+        source_rank=200,
+        source_effective_date=date(2026, 1, 2),
+    )
+    journal_path = tmp_path / "package.canary.json"
+    initialize_canary_journal(journal_path, package=package, schema_manifest_sha256=SCHEMA_SHA)
+    archived = archive / source.name
+    source.replace(archived)
+    relocated = freeze_package(
+        archived,
+        expected_size=archived.stat().st_size,
+        expected_sha256=digest,
+        package_kind="APPLICATION_DAILY",
+        source_rank=200,
+        source_effective_date=date(2026, 1, 2),
+        package_id=package.package_id,
+    )
+    loaded = load_canary_journal(
+        journal_path,
+        package=relocated,
+        schema_manifest_sha256=SCHEMA_SHA,
+    )
+    assert loaded["package"]["path"] == str(package.path)
+    assert relocated.path == archived.resolve()
+
+
+def test_canary_journal_binding_rejects_relocation_outside_same_raw_root(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    journal_path = tmp_path / "package.canary.json"
+    initialize_canary_journal(journal_path, package=package, schema_manifest_sha256=SCHEMA_SHA)
+    other = tmp_path / "other" / "archive" / "us" / package.file_name
+    other.parent.mkdir(parents=True)
+    other.write_bytes(package.path.read_bytes())
+    relocated = freeze_package(
+        other,
+        expected_size=other.stat().st_size,
+        expected_sha256=package.sha256,
+        package_kind=package.package_kind,
+        source_rank=package.source_rank,
+        source_effective_date=package.source_effective_date,
+        package_id=package.package_id,
+    )
+    with pytest.raises(RuntimeError, match="package binding mismatch"):
+        load_canary_journal(
+            journal_path,
+            package=relocated,
+            schema_manifest_sha256=SCHEMA_SHA,
+        )

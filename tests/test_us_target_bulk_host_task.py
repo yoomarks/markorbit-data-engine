@@ -254,3 +254,132 @@ def test_host_worker_forwards_its_exact_python_to_guarded_child() -> None:
     assert "import sys" in source
     assert '"-PythonExe"' in source
     assert "sys.executable" in source
+
+
+def test_nonzero_child_exit_is_accepted_only_after_durable_read_only_reconciliation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from app.us import target_bulk_host_worker as worker
+
+    updates: list[dict] = []
+
+    class Process:
+        returncode = 2
+
+        def poll(self):
+            return 2
+
+    def popen(*args, **kwargs):
+        kwargs["stdout"].write(
+            "decision=BLOCKED\n"
+            "journal_exists=True\n"
+            "error=Traceback (most recent call last):\n"
+            "resume_only_from_durable_journal=True\n"
+            "automatic_next_package=False\n"
+        )
+        kwargs["stdout"].flush()
+        return Process()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        worker,
+        "_reconcile_completed_child_after_nonzero_exit",
+        lambda **kwargs: {"audit_version": "READ_ONLY_CHILD_AUDIT_V1"},
+    )
+    monkeypatch.setattr(
+        worker,
+        "update_target_bulk_task",
+        lambda run_id, **kwargs: updates.append({"run_id": run_id, **kwargs}) or kwargs,
+    )
+    worker._run_child_operator(
+        task={"run_id": "00000000-0000-0000-0000-000000000340"},
+        repo_root=tmp_path,
+        child={
+            "sequence": 8,
+            "plan_path": str(tmp_path / "child.json"),
+            "plan_sha256": "8" * 64,
+            "required_authority_token": "GO child",
+        },
+        child_plan={
+            "execution_main": "a" * 40,
+            "packages": [{"file_name": "p1.zip"}, {"file_name": "p8.zip"}],
+        },
+        completed_sequences=[5, 6, 7],
+    )
+    assert updates[-1]["metrics"]["phase"] == "CHILD_NONZERO_EXIT_RECONCILED_COMPLETE"
+    assert updates[-1]["metrics"]["current_sequence"] == 8
+
+
+def test_nonzero_child_exit_still_blocks_when_reconciliation_fails(monkeypatch, tmp_path: Path) -> None:
+    from app.us import target_bulk_host_worker as worker
+
+    class Process:
+        returncode = 2
+
+        def poll(self):
+            return 2
+    def popen(*args, **kwargs):
+        kwargs["stdout"].write(
+            "decision=BLOCKED\n"
+            "journal_exists=True\n"
+            "error=Traceback (most recent call last):\n"
+            "resume_only_from_durable_journal=True\n"
+            "automatic_next_package=False\n"
+        )
+        kwargs["stdout"].flush()
+        return Process()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        worker,
+        "_reconcile_completed_child_after_nonzero_exit",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("durable audit failed")),
+    )
+    with pytest.raises(RuntimeError, match="reconciliation=RuntimeError: durable audit failed"):
+        worker._run_child_operator(
+            task={"run_id": "00000000-0000-0000-0000-000000000340"},
+            repo_root=tmp_path,
+            child={
+                "sequence": 8,
+                "plan_path": str(tmp_path / "child.json"),
+                "plan_sha256": "8" * 64,
+                "required_authority_token": "GO child",
+            },
+            child_plan={
+                "execution_main": "a" * 40,
+                "packages": [{"file_name": "p1.zip"}, {"file_name": "p8.zip"}],
+            },
+            completed_sequences=[5, 6, 7],
+        )
+
+
+def test_completed_child_source_moves_to_archive_and_remains_plan_resolvable(tmp_path: Path) -> None:
+    import hashlib
+    from app.us import target_bulk_host_worker as worker
+
+    raw_root = tmp_path / "raw"
+    incoming = raw_root / "incoming" / "us"
+    incoming.mkdir(parents=True)
+    source = incoming / "apc20260102.zip"
+    source.write_bytes(b"archive-after-durable-complete")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    child_plan = {
+        "raw_root": str(raw_root),
+        "packages": [
+            {"file_name": "p1.zip"},
+            {
+                "path": str(source),
+                "file_name": source.name,
+                "size_bytes": source.stat().st_size,
+                "sha256": digest,
+                "package_kind": "APPLICATION_DAILY",
+                "source_rank": 2026010200000001,
+                "source_effective_date": "2026-01-02",
+                "package_id": "00000000-0000-0000-0000-000000000008",
+            },
+        ],
+    }
+    archived = Path(worker._archive_completed_child_source(child_plan))
+    assert not source.exists()
+    assert archived == raw_root / "archive" / "us" / source.name
+    assert archived.read_bytes() == b"archive-after-durable-complete"

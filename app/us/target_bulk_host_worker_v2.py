@@ -129,6 +129,7 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
             child_plan=child_plan,
             completed_sequences=completed_sequences,
         )
+        archived_source_path = v1._archive_completed_child_source(child_plan)
         completed_sequences.append(sequence)
         update_target_bulk_task(
             run_id,
@@ -141,6 +142,8 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
                 "accepted_target_sequence_count": 2 + len(completed_sequences),
                 "remaining_to_accepted_corpus": 310 - (2 + len(completed_sequences)),
                 "last_safe_checkpoint_sequence": sequence,
+                "last_archived_source_sequence": sequence,
+                "last_archived_source_path": archived_source_path,
                 "stop_requested": target_bulk_stop_requested(run_id),
             },
             error_message=None,

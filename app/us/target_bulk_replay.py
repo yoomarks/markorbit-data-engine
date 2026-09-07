@@ -174,18 +174,51 @@ def _verify_hot_us_headroom(
     }
 
 
+def _plan_source_candidates(item: dict[str, Any]) -> list[Path]:
+    planned = Path(str(item["path"]))
+    candidates = [planned]
+    parent = planned.parent
+    if parent.name.lower() == "us" and parent.parent.name.lower() in {"incoming", "archive"}:
+        raw_root = parent.parent.parent
+        file_name = str(item.get("file_name") or planned.name)
+        incoming = raw_root / "incoming" / "us" / file_name
+        archive = raw_root / "archive" / "us" / file_name
+        candidates.extend([incoming, archive])
+        archive_dir = raw_root / "archive" / "us"
+        if archive_dir.exists():
+            stem = Path(file_name).stem
+            suffix = Path(file_name).suffix
+            candidates.extend(sorted(archive_dir.glob(f"{stem}_????????{suffix}")))
+    return list(dict.fromkeys(candidates))
+
 def _frozen_from_plan(item: dict[str, Any]) -> FrozenCanaryPackage:
     effective_text = str(item.get("source_effective_date") or "")
     if not effective_text:
         raise RuntimeError(f"planned source effective date missing: {item.get('file_name')}")
-    return freeze_package(
-        Path(str(item["path"])),
-        expected_size=int(item["size_bytes"]),
-        expected_sha256=str(item["sha256"]),
-        package_kind=str(item["package_kind"]),
-        source_rank=int(item["source_rank"]),
-        source_effective_date=date.fromisoformat(effective_text),
-        package_id=uuid.UUID(str(item["package_id"])),
+    expected_size = int(item["size_bytes"])
+    expected_sha = str(item["sha256"])
+    planned = Path(str(item["path"]))
+    if planned.is_file():
+        candidates = [planned]
+    else:
+        candidates = [candidate for candidate in _plan_source_candidates(item) if candidate.is_file()]
+    errors: list[str] = []
+    for candidate in candidates:
+        try:
+            return freeze_package(
+                candidate,
+                expected_size=expected_size,
+                expected_sha256=expected_sha,
+                package_kind=str(item["package_kind"]),
+                source_rank=int(item["source_rank"]),
+                source_effective_date=date.fromisoformat(effective_text),
+                package_id=uuid.UUID(str(item["package_id"])),
+            )
+        except (OSError, RuntimeError) as exc:
+            errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+    raise RuntimeError(
+        "planned US target source is missing from incoming/archive or failed identity checks: "
+        f"{item.get('file_name')} candidates={errors}"
     )
 
 
