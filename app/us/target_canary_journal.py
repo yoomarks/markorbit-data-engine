@@ -18,6 +18,23 @@ from app.us.target_canary import (
 
 CANARY_JOURNAL_VERSION = "US_TARGET_CANARY_JOURNAL_V1"
 
+# Final target tables use ReplacingMergeTree for logical current/event identity.
+# Staging intentionally preserves every submitted row, so final acceptance must
+# compare the visible replacement-key cardinality instead of racing raw part merges.
+REPLACING_VISIBLE_KEYS: dict[str, tuple[str, ...]] = {
+    "markorbit_facts.us_case_current": ("serial_number",),
+    "markorbit_facts.us_owner_current": ("serial_number", "owner_key"),
+    "markorbit_facts.us_classification_current": ("serial_number", "classification_key"),
+    "markorbit_facts.us_event_history": ("event_key",),
+    "markorbit_facts.us_statement_current": ("serial_number", "statement_key"),
+    "markorbit_facts.us_correspondent_current": ("serial_number", "correspondent_key"),
+    "markorbit_facts.us_design_search_current": ("serial_number", "design_search_key"),
+    "markorbit_facts.us_prior_registration_current": ("serial_number", "prior_registration_key"),
+    "markorbit_facts.us_foreign_application_current": ("serial_number", "foreign_application_key"),
+    "markorbit_facts.us_madrid_filing_current": ("serial_number", "madrid_filing_key"),
+    "markorbit_facts.us_madrid_event_history": ("madrid_event_key",),
+}
+
 
 def _canonical_payload(payload: dict[str, Any]) -> bytes:
     material = deepcopy(payload)
@@ -119,7 +136,10 @@ def initialize_canary_journal(
                 **plan[table],
                 "status": "PENDING",
                 "expected_rows": None,
+                "expected_visible_rows": None,
                 "observed_rows": None,
+                "observed_visible_rows": None,
+                "replacement_collapsed_rows": None,
                 "recovered_after_uncertain_insert": False,
             }
             for table in APPLICATION_CANARY_TABLES
@@ -322,6 +342,52 @@ def _final_package_count(
     )
 
 
+def _visible_key_expression(table: str) -> str | None:
+    keys = REPLACING_VISIBLE_KEYS.get(table)
+    if not keys:
+        return None
+    return "tuple(" + ", ".join(keys) + ")"
+
+
+def _stage_visible_count(
+    client: WslNativeClickHouseClient,
+    *,
+    table: str,
+    stage_table: str,
+) -> int:
+    expression = _visible_key_expression(table)
+    if expression is None:
+        return _query_single(client, f"SELECT count() FROM {stage_table}")
+    return _query_single(client, f"SELECT uniqExact({expression}) FROM {stage_table}")
+
+
+def _final_package_counts(
+    client: WslNativeClickHouseClient,
+    *,
+    table: str,
+    package_column: str,
+    package_id: str,
+) -> tuple[int, int]:
+    raw = _final_package_count(
+        client,
+        table=table,
+        package_column=package_column,
+        package_id=package_id,
+    )
+    expression = _visible_key_expression(table)
+    if expression is None:
+        return raw, raw
+    visible = _query_single(
+        client,
+        (
+            f"SELECT uniqExact({expression}) "
+            f"FROM {table} "
+            f"WHERE {package_column} = toUUID('{package_id}')"
+        ),
+    )
+    return raw, visible
+
+
 def mark_stage_complete(
     client: WslNativeClickHouseClient,
     path: Path,
@@ -361,13 +427,30 @@ def mark_stage_complete(
             )
         normalized[table] = expected
 
+    visible_counts: dict[str, int] = {}
+    for table in APPLICATION_CANARY_TABLES:
+        visible = _stage_visible_count(
+            client,
+            table=table,
+            stage_table=plan[table]["stage_table"],
+        )
+        if visible < 0 or visible > normalized[table]:
+            raise RuntimeError(
+                "US target canary invalid replacement-visible stage count: "
+                f"table={table} raw={normalized[table]} visible={visible}"
+            )
+        visible_counts[table] = visible
+
     assert_package_unchanged(package)
     revision = int(payload["revision"])
     stage["status"] = "COMPLETE"
     stage["row_counts"] = normalized
     payload["state"] = "STAGED"
     for table in APPLICATION_CANARY_TABLES:
-        payload["commits"][table]["expected_rows"] = normalized[table]
+        commit = payload["commits"][table]
+        commit["expected_rows"] = normalized[table]
+        commit["expected_visible_rows"] = visible_counts[table]
+        commit["replacement_collapsed_rows"] = normalized[table] - visible_counts[table]
     return _persist_revision(path, payload, expected_revision=revision)
 
 
@@ -401,6 +484,52 @@ def _verify_stage_again(
             )
 
 
+def _ensure_visible_expectations(
+    client: WslNativeClickHouseClient,
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    package: FrozenCanaryPackage,
+) -> dict[str, Any]:
+    changed = False
+    for table in APPLICATION_CANARY_TABLES:
+        commit = payload["commits"][table]
+        raw_expected = int(commit.get("expected_rows"))
+        visible = _stage_visible_count(
+            client,
+            table=table,
+            stage_table=str(commit["stage_table"]),
+        )
+        if visible < 0 or visible > raw_expected:
+            raise RuntimeError(
+                "US target canary invalid replacement-visible expectation: "
+                f"table={table} raw={raw_expected} visible={visible}"
+            )
+        stored = commit.get("expected_visible_rows")
+        if stored is None:
+            commit["expected_visible_rows"] = visible
+            commit["replacement_collapsed_rows"] = raw_expected - visible
+            commit.setdefault("observed_visible_rows", None)
+            changed = True
+        elif int(stored) != visible:
+            raise RuntimeError(
+                "US target canary replacement-visible stage drift: "
+                f"table={table} expected_visible={stored} observed_visible={visible}"
+            )
+        else:
+            collapsed = raw_expected - visible
+            if commit.get("replacement_collapsed_rows") != collapsed:
+                commit["replacement_collapsed_rows"] = collapsed
+                changed = True
+            if "observed_visible_rows" not in commit:
+                commit["observed_visible_rows"] = None
+                changed = True
+    if not changed:
+        return payload
+    revision = int(payload["revision"])
+    return _persist_revision(path, payload, expected_revision=revision)
+
+
 def commit_staged_tables(
     client: WslNativeClickHouseClient,
     path: Path,
@@ -421,61 +550,73 @@ def commit_staged_tables(
 
     assert_package_unchanged(package)
     _verify_stage_again(client, payload, package=package)
+    payload = _ensure_visible_expectations(client, path, payload, package=package)
     package_id = str(package.package_id)
 
     for table in APPLICATION_CANARY_TABLES:
         commit = payload["commits"][table]
-        expected = int(commit.get("expected_rows"))
+        raw_expected = int(commit.get("expected_rows"))
+        visible_expected = int(commit.get("expected_visible_rows"))
         status = str(commit.get("status") or "")
         if status not in {"PENDING", "INSERT_STARTED", "COMMITTED"}:
             raise RuntimeError(f"US target canary invalid commit status: table={table} status={status}")
 
-        observed = _final_package_count(
+        raw_observed, visible_observed = _final_package_counts(
             client,
             table=table,
             package_column=str(commit["package_column"]),
             package_id=package_id,
         )
+        cardinality_ok = (
+            visible_observed == visible_expected
+            and visible_observed <= raw_observed <= raw_expected
+        )
 
         if status == "COMMITTED":
-            if observed != expected:
+            if not cardinality_ok:
                 raise RuntimeError(
-                    "US target canary committed-table count drift: "
-                    f"table={table} expected={expected} observed={observed}"
+                    "US target canary committed-table visible-count drift: "
+                    f"table={table} raw_expected={raw_expected} raw_observed={raw_observed} "
+                    f"visible_expected={visible_expected} visible_observed={visible_observed}"
                 )
             continue
 
-        if status == "INSERT_STARTED" and observed == expected:
+        if status == "INSERT_STARTED" and cardinality_ok:
             revision = int(payload["revision"])
             commit["status"] = "COMMITTED"
-            commit["observed_rows"] = observed
+            commit["observed_rows"] = raw_observed
+            commit["observed_visible_rows"] = visible_observed
             commit["recovered_after_uncertain_insert"] = True
             payload["state"] = "COMMITTING"
             payload = _persist_revision(path, payload, expected_revision=revision)
             continue
 
-        if status == "INSERT_STARTED" and observed == 0:
+        if status == "INSERT_STARTED" and raw_observed == 0:
             raise RuntimeError(
                 "US target canary INSERT_STARTED has zero visible rows; "
                 "explicit read-only in-flight reconciliation is required before retry: "
-                f"table={table} expected={expected}"
+                f"table={table} raw_expected={raw_expected} visible_expected={visible_expected}"
             )
 
-        if observed != 0:
+        if raw_observed != 0 or visible_observed != 0:
             if status == "PENDING":
                 raise RuntimeError(
                     "US target canary found pre-existing package rows before INSERT boundary; "
-                    f"refusing adoption: table={table} expected={expected} observed={observed}"
+                    f"refusing adoption: table={table} raw_expected={raw_expected} "
+                    f"raw_observed={raw_observed} visible_expected={visible_expected} "
+                    f"visible_observed={visible_observed}"
                 )
             raise RuntimeError(
                 "US target canary partial final-table state detected; refusing replay: "
-                f"table={table} expected={expected} observed={observed} status={status}"
+                f"table={table} raw_expected={raw_expected} raw_observed={raw_observed} "
+                f"visible_expected={visible_expected} visible_observed={visible_observed} status={status}"
             )
 
-        if expected == 0:
+        if raw_expected == 0:
             revision = int(payload["revision"])
             commit["status"] = "COMMITTED"
             commit["observed_rows"] = 0
+            commit["observed_visible_rows"] = 0
             commit["recovered_after_uncertain_insert"] = False
             payload["state"] = "COMMITTING"
             payload = _persist_revision(path, payload, expected_revision=revision)
@@ -485,6 +626,7 @@ def commit_staged_tables(
             revision = int(payload["revision"])
             commit["status"] = "INSERT_STARTED"
             commit["observed_rows"] = 0
+            commit["observed_visible_rows"] = 0
             payload["state"] = "COMMITTING"
             payload = _persist_revision(path, payload, expected_revision=revision)
             commit = payload["commits"][table]
@@ -493,39 +635,48 @@ def commit_staged_tables(
         client.command(str(commit["statement"]))
         assert_package_unchanged(package)
 
-        observed_after = _final_package_count(
+        raw_after, visible_after = _final_package_counts(
             client,
             table=table,
             package_column=str(commit["package_column"]),
             package_id=package_id,
         )
-        if observed_after != expected:
+        if not (visible_after == visible_expected and visible_after <= raw_after <= raw_expected):
             raise RuntimeError(
-                "US target canary final-table insert did not reach exact expected count: "
-                f"table={table} expected={expected} observed={observed_after}"
+                "US target canary final-table insert did not reach exact replacement-visible count: "
+                f"table={table} raw_expected={raw_expected} raw_observed={raw_after} "
+                f"visible_expected={visible_expected} visible_observed={visible_after}"
             )
 
         revision = int(payload["revision"])
         commit = payload["commits"][table]
         commit["status"] = "COMMITTED"
-        commit["observed_rows"] = observed_after
+        commit["observed_rows"] = raw_after
+        commit["observed_visible_rows"] = visible_after
         payload["state"] = "COMMITTING"
         payload = _persist_revision(path, payload, expected_revision=revision)
 
     assert_package_unchanged(package)
     for table in APPLICATION_CANARY_TABLES:
         commit = payload["commits"][table]
-        expected = int(commit.get("expected_rows"))
-        observed = _final_package_count(
+        raw_expected = int(commit.get("expected_rows"))
+        visible_expected = int(commit.get("expected_visible_rows"))
+        raw_observed, visible_observed = _final_package_counts(
             client,
             table=table,
             package_column=str(commit["package_column"]),
             package_id=package_id,
         )
-        if commit.get("status") != "COMMITTED" or observed != expected:
+        if (
+            commit.get("status") != "COMMITTED"
+            or visible_observed != visible_expected
+            or raw_observed < visible_observed
+            or raw_observed > raw_expected
+        ):
             raise RuntimeError(
-                "US target canary final acceptance count mismatch: "
-                f"table={table} expected={expected} observed={observed} "
+                "US target canary final acceptance replacement-visible mismatch: "
+                f"table={table} raw_expected={raw_expected} raw_observed={raw_observed} "
+                f"visible_expected={visible_expected} visible_observed={visible_observed} "
                 f"status={commit.get('status')}"
             )
 

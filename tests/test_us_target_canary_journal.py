@@ -14,6 +14,7 @@ from app.us.target_canary import (
     stage_table_map,
 )
 from app.us.target_canary_journal import (
+    _seal,
     commit_staged_tables,
     initialize_canary_journal,
     load_canary_journal,
@@ -45,9 +46,12 @@ class FakeClient:
         self.package = package
         self.counts = dict(counts)
         self.stage_map = stage_table_map(package)
+        self.stage_reverse = {value: key for key, value in self.stage_map.items()}
         self.stage_total = {self.stage_map[table]: count for table, count in counts.items()}
         self.stage_matching = dict(self.stage_total)
+        self.stage_visible = dict(counts)
         self.final_count = {table: 0 for table in APPLICATION_CANARY_TABLES}
+        self.final_visible = {table: 0 for table in APPLICATION_CANARY_TABLES}
         self.commands: list[str] = []
         self.raise_before_commit_for: str | None = None
         self.raise_after_commit_for: str | None = None
@@ -60,19 +64,30 @@ class FakeClient:
                 result_rows=[[self.stage_total[stage_table], self.stage_matching[stage_table]]]
             )
         table = sql.split("FROM ", 1)[1].split(" WHERE ", 1)[0].strip()
+        if "uniqExact(" in sql:
+            if table in self.stage_reverse:
+                value = self.stage_visible[self.stage_reverse[table]]
+            else:
+                value = self.final_visible[table]
+            return QueryRows(result_rows=[[value]])
+        if table in self.stage_reverse:
+            return QueryRows(result_rows=[[self.stage_total[table]]])
         return QueryRows(result_rows=[[self.final_count[table]]])
 
     def command(self, sql: str) -> str:
         self.commands.append(sql)
         table = sql.split("INSERT INTO ", 1)[1].split(" SELECT ", 1)[0].strip()
         expected = self.counts[table]
+        visible = self.stage_visible[table]
         if self.raise_before_commit_for == table:
             self.raise_before_commit_for = None
             raise RuntimeError("simulated transport loss before server commit")
         if self.partial_after_commit_for == table:
-            self.final_count[table] = max(expected - 1, 1)
+            self.final_count[table] = max(visible - 1, 1)
+            self.final_visible[table] = max(visible - 1, 1)
             return ""
-        self.final_count[table] = expected
+        self.final_count[table] = visible if visible < expected else expected
+        self.final_visible[table] = visible
         if self.raise_after_commit_for == table:
             self.raise_after_commit_for = None
             raise RuntimeError("simulated transport loss after server commit")
@@ -267,7 +282,7 @@ def test_partial_final_count_fails_closed_and_is_not_retried(tmp_path: Path) -> 
     first = APPLICATION_CANARY_TABLES[0]
     client.partial_after_commit_for = first
 
-    with pytest.raises(RuntimeError, match="did not reach exact expected count"):
+    with pytest.raises(RuntimeError, match="did not reach exact replacement-visible count"):
         commit_staged_tables(
             client,
             journal,
@@ -338,3 +353,69 @@ def test_interrupted_staging_reset_rejects_visible_final_rows(tmp_path: Path) ->
             verified_final_row_counts=counts,
             removed_stage_table_count=1,
         )
+
+
+def test_replacing_visible_count_recovers_without_duplicate_insert(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    counts = {table: 2 for table in APPLICATION_CANARY_TABLES}
+    owner = "markorbit_facts.us_owner_current"
+    counts[owner] = 5
+    client = FakeClient(package, counts)
+    client.stage_visible[owner] = 3
+    journal = _ready_journal(tmp_path, package, client, counts)
+    client.raise_after_commit_for = owner
+
+    with pytest.raises(RuntimeError, match="transport loss"):
+        commit_staged_tables(
+            client, journal, package=package, schema_manifest_sha256=SCHEMA_SHA
+        )
+    after_failure = load_canary_journal(
+        journal, package=package, schema_manifest_sha256=SCHEMA_SHA
+    )
+    assert after_failure["commits"][owner]["status"] == "INSERT_STARTED"
+    assert after_failure["commits"][owner]["expected_rows"] == 5
+    assert after_failure["commits"][owner]["expected_visible_rows"] == 3
+    assert client.final_count[owner] == 3
+
+    result = commit_staged_tables(
+        client, journal, package=package, schema_manifest_sha256=SCHEMA_SHA
+    )
+    assert result["commits"][owner]["status"] == "COMMITTED"
+    assert result["commits"][owner]["recovered_after_uncertain_insert"] is True
+    assert result["commits"][owner]["observed_visible_rows"] == 3
+    assert client.commands.count(result["commits"][owner]["statement"]) == 1
+
+
+def test_legacy_insert_started_journal_backfills_visible_expectation(tmp_path: Path) -> None:
+    package = _package(tmp_path)
+    counts = {table: 2 for table in APPLICATION_CANARY_TABLES}
+    owner = "markorbit_facts.us_owner_current"
+    counts[owner] = 5
+    client = FakeClient(package, counts)
+    client.stage_visible[owner] = 3
+    journal = _ready_journal(tmp_path, package, client, counts)
+    raw = json.loads(journal.read_text(encoding="utf-8"))
+    raw["state"] = "COMMITTING"
+    raw["commits"][owner]["status"] = "INSERT_STARTED"
+    raw["commits"][owner]["observed_rows"] = 0
+    for item in raw["commits"].values():
+        item.pop("expected_visible_rows", None)
+        item.pop("observed_visible_rows", None)
+        item.pop("replacement_collapsed_rows", None)
+    journal.write_text(
+        json.dumps(_seal(raw), ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    client.final_count[owner] = 3
+    client.final_visible[owner] = 3
+
+    result = commit_staged_tables(
+        client, journal, package=package, schema_manifest_sha256=SCHEMA_SHA
+    )
+    commit = result["commits"][owner]
+    assert commit["expected_rows"] == 5
+    assert commit["expected_visible_rows"] == 3
+    assert commit["replacement_collapsed_rows"] == 2
+    assert commit["status"] == "COMMITTED"
+    assert commit["recovered_after_uncertain_insert"] is True
+    assert client.commands.count(commit["statement"]) == 0
