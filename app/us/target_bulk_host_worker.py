@@ -16,7 +16,9 @@ from app.us.target_bulk_batch import (
     write_batch_manifest,
 )
 from app.us.target_bulk_journal import load_bulk_journal
-from app.us.target_bulk_plan import validate_bulk_plan
+from app.us.target_bulk_plan import validate_bulk_plan, validate_stage2_anchor
+from app.us.target_bulk_replay import _frozen_from_plan, audit_bulk_plan
+from app.us.ingest import _archive_package
 from app.us.target_bulk_task_control import fail_closed_recover_target_bulk_tasks
 from app.us.target_bulk_tasks import (
     STATUS_BLOCKED,
@@ -48,6 +50,25 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError(f"{label} root must be an object")
     return payload
+
+
+def _git_origin_main(repo_root: Path) -> str:
+    fetched = subprocess.run(
+        ["git", "fetch", "origin", "main", "--quiet"],
+        cwd=repo_root, capture_output=True, text=True, check=False,
+    )
+    if fetched.returncode != 0:
+        raise RuntimeError(f"git fetch origin main failed: {fetched.stderr.strip()}")
+    completed = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=repo_root, capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"git rev-parse origin/main failed: {completed.stderr.strip()}")
+    value = completed.stdout.strip().lower()
+    if len(value) != 40:
+        raise RuntimeError("git origin/main is not a 40-character commit SHA")
+    return value
 
 
 def _git_head(repo_root: Path) -> str:
@@ -206,6 +227,64 @@ def _child_progress(
     }
 
 
+def _find_accepted_stage2_receipt(repo_root: Path) -> dict[str, Any]:
+    reports = repo_root / "reports"
+    candidates = sorted(
+        reports.glob("production_us_application_canary_stage2_*/stage2_python_receipt.json"),
+        reverse=True,
+    )
+    for candidate in candidates:
+        try:
+            payload = _read_json(candidate, "accepted Package 2 Stage 2 receipt")
+            validate_stage2_anchor(payload)
+            return payload
+        except Exception:
+            continue
+    raise RuntimeError("no accepted Package 2 Stage 2 receipt is available for child reconciliation")
+
+
+def _child_bulk_journal_path(repo_root: Path, child: dict[str, Any]) -> Path:
+    return (
+        repo_root / "reports" / "production_us_application_bulk_state"
+        / f"bulk_{child['plan_sha256']}.journal.json"
+    )
+
+
+def _reconcile_completed_child_after_nonzero_exit(
+    *, repo_root: Path, child: dict[str, Any], child_plan: dict[str, Any]
+) -> dict[str, Any]:
+    expected_main = str(child_plan["execution_main"]).lower()
+    if _git_head(repo_root) != expected_main or _git_origin_main(repo_root) != expected_main:
+        raise RuntimeError("exact main changed while reconciling a nonzero child exit")
+    journal_path = _child_bulk_journal_path(repo_root, child)
+    if not journal_path.is_file():
+        raise RuntimeError("child bulk journal is missing after nonzero exit")
+    journal = load_bulk_journal(journal_path, plan=child_plan)
+    sequence = int(child["sequence"])
+    package_state = journal.get("packages", {}).get(str(sequence))
+    if journal.get("state") != "COMPLETE":
+        raise RuntimeError("child bulk journal is not durable COMPLETE")
+    if not isinstance(package_state, dict) or package_state.get("status") != "COMPLETE":
+        raise RuntimeError("child package checkpoint is not durable COMPLETE")
+    if not bool(package_state.get("stage_cleanup_complete")):
+        raise RuntimeError("child staging cleanup is not durable COMPLETE")
+    stage2 = _find_accepted_stage2_receipt(repo_root)
+    return audit_bulk_plan(
+        plan=child_plan, stage2_receipt=stage2, journal_path=journal_path
+    )
+
+
+def _archive_completed_child_source(child_plan: dict[str, Any]) -> str:
+    item = child_plan["packages"][1]
+    package = _frozen_from_plan(item)
+    raw_root = Path(str(child_plan["raw_root"]))
+    archived = _archive_package(package.path, raw_root)
+    relocated = _frozen_from_plan(item)
+    if relocated.sha256 != package.sha256 or relocated.size_bytes != package.size_bytes:
+        raise RuntimeError("archived child source identity drifted after move")
+    return str(archived)
+
+
 def _run_child_operator(
     *,
     task: dict[str, Any],
@@ -284,10 +363,38 @@ def _run_child_operator(
             log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-6000:]
         except OSError:
             log_tail = "<host child log unreadable>"
-        raise RuntimeError(
-            f"guarded child operator failed: sequence={child['sequence']} "
-            f"exit={return_code} log_tail={log_tail}"
+        known_post_complete_shape = all(
+            marker in log_tail
+            for marker in (
+                "decision=BLOCKED",
+                "journal_exists=True",
+                "error=Traceback (most recent call last):",
+                "resume_only_from_durable_journal=True",
+                "automatic_next_package=False",
+            )
         )
+        try:
+            if not known_post_complete_shape:
+                raise RuntimeError("nonzero child exit is not the known durable-complete false-block shape")
+            audit = _reconcile_completed_child_after_nonzero_exit(
+                repo_root=repo_root, child=child, child_plan=child_plan
+            )
+        except Exception as reconciliation_exc:
+            raise RuntimeError(
+                f"guarded child operator failed: sequence={child['sequence']} "
+                f"exit={return_code} reconciliation={type(reconciliation_exc).__name__}: "
+                f"{reconciliation_exc} log_tail={log_tail}"
+            ) from reconciliation_exc
+        update_target_bulk_task(
+            run_id,
+            metrics={
+                "phase": "CHILD_NONZERO_EXIT_RECONCILED_COMPLETE",
+                "current_sequence": int(child["sequence"]),
+                "child_reconciliation_audit": audit.get("audit_version"),
+            },
+            error_message=None,
+        )
+        return
     if monitor_error:
         update_target_bulk_task(
             run_id,
@@ -368,6 +475,7 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
             child_plan=child_plan,
             completed_sequences=completed_sequences,
         )
+        archived_source_path = _archive_completed_child_source(child_plan)
         completed_sequences.append(sequence)
         update_target_bulk_task(
             run_id,
@@ -379,6 +487,8 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
                 "accepted_target_sequence_count": 2 + len(completed_sequences),
                 "remaining_to_accepted_corpus": 310 - (2 + len(completed_sequences)),
                 "last_safe_checkpoint_sequence": sequence,
+                "last_archived_source_sequence": sequence,
+                "last_archived_source_path": archived_source_path,
                 "stop_requested": target_bulk_stop_requested(run_id),
             },
             error_message=None,

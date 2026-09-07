@@ -587,3 +587,58 @@ def test_final_package_counts_are_logical_for_replacing_tables() -> None:
     assert counts["markorbit_facts.us_owner_current"] == 3
     assert counts["markorbit_facts.us_case_observation_history"] == 4
     assert any("uniqExact(tuple(serial_number, owner_key))" in sql for sql in client.sql)
+
+
+def test_frozen_plan_source_resolves_exact_archive_copy_after_incoming_move(tmp_path: Path) -> None:
+    import hashlib
+
+    raw_root = tmp_path / "raw"
+    incoming = raw_root / "incoming" / "us"
+    archive = raw_root / "archive" / "us"
+    incoming.mkdir(parents=True)
+    archive.mkdir(parents=True)
+    source = incoming / "apc20260102.zip"
+    source.write_bytes(b"bounded-source-relocation")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    item = {
+        "path": str(source),
+        "file_name": source.name,
+        "size_bytes": source.stat().st_size,
+        "sha256": digest,
+        "package_kind": "APPLICATION_DAILY",
+        "source_rank": 2026010200000001,
+        "source_effective_date": "2026-01-02",
+        "package_id": "00000000-0000-0000-0000-000000000008",
+    }
+    archived = archive / source.name
+    source.replace(archived)
+    frozen = bulk_replay._frozen_from_plan(item)
+    assert frozen.path == archived.resolve()
+    assert frozen.sha256 == digest
+    assert frozen.size_bytes == archived.stat().st_size
+
+
+def test_frozen_plan_source_does_not_hide_tampered_planned_file(tmp_path: Path) -> None:
+    import hashlib
+
+    incoming = tmp_path / "raw" / "incoming" / "us"
+    archive = tmp_path / "raw" / "archive" / "us"
+    incoming.mkdir(parents=True)
+    archive.mkdir(parents=True)
+    source = incoming / "apc20260102.zip"
+    source.write_bytes(b"expected")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    (archive / source.name).write_bytes(b"expected")
+    source.write_bytes(b"tampered")
+    item = {
+        "path": str(source),
+        "file_name": source.name,
+        "size_bytes": len(b"expected"),
+        "sha256": digest,
+        "package_kind": "APPLICATION_DAILY",
+        "source_rank": 2026010200000001,
+        "source_effective_date": "2026-01-02",
+        "package_id": "00000000-0000-0000-0000-000000000008",
+    }
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        bulk_replay._frozen_from_plan(item)

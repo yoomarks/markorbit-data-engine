@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from app.us.target_canary import (
@@ -17,6 +18,43 @@ from app.us.target_canary import (
 
 
 CANARY_JOURNAL_VERSION = "US_TARGET_CANARY_JOURNAL_V1"
+
+_ARCHIVE_NAME_SUFFIX_RE = re.compile(r"^(?P<stem>.+)_[0-9a-fA-F]{8}(?P<suffix>\.[^.]+)$")
+
+def _canonical_source_name(value: object) -> str:
+    name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1]
+    match = _ARCHIVE_NAME_SUFFIX_RE.match(name)
+    return (match.group("stem") + match.group("suffix")) if match else name
+
+def _raw_source_location(value: object) -> tuple[str, str] | None:
+    normalized = str(value or "").replace("\\", "/").rstrip("/")
+    parts = normalized.split("/")
+    if len(parts) < 4 or parts[-2].lower() != "us":
+        return None
+    location = parts[-3].lower()
+    if location not in {"incoming", "archive"}:
+        return None
+    return "/".join(parts[:-3]).casefold(), location
+
+def _package_binding_matches(stored: object, expected: dict[str, object]) -> bool:
+    if not isinstance(stored, dict) or set(stored) != set(expected):
+        return False
+    for key, value in expected.items():
+        if key not in {"path", "file_name"} and stored.get(key) != value:
+            return False
+    if _canonical_source_name(stored.get("file_name")) != _canonical_source_name(expected.get("file_name")):
+        return False
+    if stored.get("path") == expected.get("path"):
+        return True
+    stored_location = _raw_source_location(stored.get("path"))
+    expected_location = _raw_source_location(expected.get("path"))
+    return (
+        stored_location is not None
+        and expected_location is not None
+        and stored_location[0] == expected_location[0]
+        and stored_location[1] in {"incoming", "archive"}
+        and expected_location[1] in {"incoming", "archive"}
+    )
 
 # Final target tables use ReplacingMergeTree for logical current/event identity.
 # Staging intentionally preserves every submitted row, so final acceptance must
@@ -158,7 +196,7 @@ def validate_canary_journal_binding(
     _validate_integrity(payload)
     if payload.get("journal_version") != CANARY_JOURNAL_VERSION:
         raise RuntimeError("US target canary journal version mismatch")
-    if payload.get("package") != package.as_dict():
+    if not _package_binding_matches(payload.get("package"), package.as_dict()):
         raise RuntimeError("US target canary journal package binding mismatch")
     if payload.get("schema_manifest_sha256") != schema_manifest_sha256.lower():
         raise RuntimeError("US target canary journal schema binding mismatch")
