@@ -1,10 +1,17 @@
 from datetime import date
+import io
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import pytest
 
-from app.us.parser import USParseError, iter_case_bundles, parse_case_element, parse_uspto_date
+from app.us.parser import (
+    USParseError,
+    iter_case_bundles,
+    iter_case_bundles_fragmented,
+    parse_case_element,
+    parse_uspto_date,
+)
 
 
 FIXTURE = Path("tests/fixtures/us_m1_daily.xml")
@@ -58,3 +65,29 @@ def test_invalid_serial_number_fails_closed() -> None:
     )
     with pytest.raises(USParseError, match="Invalid USPTO serial number"):
         parse_case_element(element, "bad.xml")
+
+
+class _ShortReadBytesIO(io.BytesIO):
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            size = 7
+        return super().read(min(size, 7))
+
+
+def test_fragmented_parser_restarts_xml_parser_per_case_and_handles_split_tags() -> None:
+    payload = (
+        b"<?xml version='1.0'?><daily><action-key>ignored</action-key>"
+        b"<case-file><serial-number>97123456</serial-number><case-file-header /></case-file>"
+        b"<case-file><serial-number>97123457</serial-number><case-file-header /></case-file>"
+        b"</daily>"
+    )
+    bundles = list(
+        iter_case_bundles_fragmented(_ShortReadBytesIO(payload), source_name="large.xml")
+    )
+    assert [bundle.case.serial_number for bundle in bundles] == ["97123456", "97123457"]
+
+
+def test_fragmented_parser_fails_closed_on_truncated_case() -> None:
+    payload = b"<daily><case-file><serial-number>97123456</serial-number>"
+    with pytest.raises(USParseError, match="Truncated USPTO case element"):
+        list(iter_case_bundles_fragmented(io.BytesIO(payload), source_name="broken.xml"))

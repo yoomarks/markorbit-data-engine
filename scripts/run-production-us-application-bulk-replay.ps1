@@ -51,8 +51,19 @@ function Require-True {
 
 function Invoke-NativeCapture {
     param([scriptblock]$Command, [string]$Label)
-    $lines = @(& $Command 2>&1)
-    $code = $LASTEXITCODE
+    # PowerShell 5.1 can promote redirected native stderr into a terminating
+    # NativeCommandError when the caller uses ErrorActionPreference=Stop.
+    # Let the native process finish so we capture its complete traceback, then
+    # fail closed from the exact exit code with the full combined output.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $lines = @(& $Command 2>&1)
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($code -ne 0) {
         $joined = ($lines | ForEach-Object { [string]$_ }) -join "`n"
         throw "$Label failed with exit $code`n$joined"

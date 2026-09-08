@@ -383,3 +383,13 @@ def test_completed_child_source_moves_to_archive_and_remains_plan_resolvable(tmp
     assert not source.exists()
     assert archived == raw_root / "archive" / "us" / source.name
     assert archived.read_bytes() == b"archive-after-durable-complete"
+
+
+def test_bulk_wrapper_captures_full_native_stderr_before_failing_closed() -> None:
+    wrapper = (
+        ROOT / "scripts" / "run-production-us-application-bulk-replay.ps1"
+    ).read_text(encoding="utf-8")
+    assert "$previousErrorActionPreference = $ErrorActionPreference" in wrapper
+    assert "$ErrorActionPreference = 'Continue'" in wrapper
+    assert "$ErrorActionPreference = $previousErrorActionPreference" in wrapper
+    assert '$joined = ($lines | ForEach-Object { [string]$_ }) -join "`n"' in wrapper
