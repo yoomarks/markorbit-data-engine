@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import re
 from typing import BinaryIO, Iterator
 import xml.etree.ElementTree as ET
 
@@ -588,6 +589,85 @@ def parse_case_element(
         madrid_filings=madrid_filings,
         madrid_events=madrid_events,
     )
+
+
+_CASE_FRAGMENT_START = re.compile(br"<(case-file|trademark-case-file)(?=[\s>])")
+_CASE_FRAGMENT_READ_BYTES = 1024 * 1024
+_CASE_FRAGMENT_TAIL_BYTES = 64
+
+
+def iter_case_bundles_fragmented(
+    source: BinaryIO,
+    *,
+    source_name: str = "",
+) -> Iterator[USCaseBundle]:
+    """Parse complete case subtrees with a fresh Expat parser per case.
+
+    Python's ElementTree/Expat stream parser fails near the signed 2 GiB input
+    boundary on the multi-gigabyte historical USPTO XML packages. Framing only
+    complete case-file elements keeps parser byte indexes and memory bounded
+    without changing case-level parsing semantics.
+    """
+    buffer = b""
+    cursor = 0
+    active_start: int | None = None
+    end_tag = b""
+
+    while True:
+        chunk = source.read(_CASE_FRAGMENT_READ_BYTES)
+        eof = not chunk
+        if chunk:
+            if active_start is not None:
+                if active_start:
+                    buffer = buffer[active_start:]
+                    cursor = 0
+                    active_start = 0
+                buffer += chunk
+            else:
+                buffer = buffer[cursor:] + chunk
+                cursor = 0
+
+        while True:
+            if active_start is None:
+                match = _CASE_FRAGMENT_START.search(buffer, cursor)
+                if match is None:
+                    if eof:
+                        return
+                    keep_from = max(cursor, len(buffer) - _CASE_FRAGMENT_TAIL_BYTES)
+                    buffer = buffer[keep_from:]
+                    cursor = 0
+                    break
+                active_start = match.start()
+                active_name = bytes(match.group(1))
+                end_tag = b"</" + active_name + b">"
+
+            end_at = buffer.find(end_tag, active_start)
+            if end_at < 0:
+                if eof:
+                    raise USParseError(
+                        f"Truncated USPTO case element in {source_name or '<stream>'}"
+                    )
+                if active_start:
+                    buffer = buffer[active_start:]
+                    cursor = 0
+                    active_start = 0
+                break
+
+            fragment_end = end_at + len(end_tag)
+            fragment = buffer[active_start:fragment_end]
+            try:
+                element = ET.fromstring(fragment)
+            except ET.ParseError as exc:
+                raise USParseError(
+                    f"Invalid USPTO case XML in {source_name or '<stream>'}: {exc}"
+                ) from exc
+            yield parse_case_element(element, source_name)
+            cursor = fragment_end
+            active_start = None
+            end_tag = b""
+
+        if eof:
+            return
 
 
 def iter_case_bundles(

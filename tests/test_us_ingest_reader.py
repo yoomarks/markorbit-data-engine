@@ -1,6 +1,9 @@
 from pathlib import Path
 import zipfile
 
+import pytest
+
+import app.us.ingest as ingest_module
 from app.us.ingest import _iter_package_bundles
 
 
@@ -38,3 +41,20 @@ def test_zip_without_xml_fails_closed(tmp_path: Path) -> None:
         assert "contains no XML members" in str(exc)
     else:
         raise AssertionError("ZIP without XML must be rejected")
+
+
+def test_large_zip_member_uses_fragmented_parser_without_extracting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "apc-large.zip"
+    with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("nested/apc-large.xml", FIXTURE.read_bytes())
+
+    monkeypatch.setattr(ingest_module, "LARGE_XML_FRAGMENT_THRESHOLD_BYTES", 1)
+    rows = list(ingest_module._iter_package_bundles(package))
+
+    assert [bundle.case.serial_number for _source, bundle in rows] == [
+        "97123456",
+        "79345678",
+    ]
+    assert {source for source, _bundle in rows} == {"nested/apc-large.xml"}

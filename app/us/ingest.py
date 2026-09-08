@@ -12,9 +12,12 @@ from app.scanner import sha256_file
 from app.us.change_history import CASE_OBSERVATION_TABLE
 from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import USCaseBundle
-from app.us.parser import iter_case_bundles
+from app.us.parser import iter_case_bundles, iter_case_bundles_fragmented
 from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
 from app.us.repository import list_us_replay_registry
+
+
+LARGE_XML_FRAGMENT_THRESHOLD_BYTES = 2_000_000_000
 
 
 OUTPUT_PACKAGE_COLUMNS = {
@@ -36,8 +39,13 @@ OUTPUT_PACKAGE_COLUMNS = {
 def _iter_package_bundles(path: Path) -> Iterator[tuple[str, USCaseBundle]]:
     suffix = path.suffix.lower()
     if suffix == ".xml":
-        for bundle in iter_case_bundles(path, source_name=path.name):
-            yield path.name, bundle
+        if path.stat().st_size >= LARGE_XML_FRAGMENT_THRESHOLD_BYTES:
+            with path.open("rb") as stream:
+                for bundle in iter_case_bundles_fragmented(stream, source_name=path.name):
+                    yield path.name, bundle
+        else:
+            for bundle in iter_case_bundles(path, source_name=path.name):
+                yield path.name, bundle
         return
     if suffix != ".zip":
         raise RuntimeError(f"Unsupported US M1 source package: {path.name}")
@@ -52,7 +60,12 @@ def _iter_package_bundles(path: Path) -> Iterator[tuple[str, USCaseBundle]]:
             raise RuntimeError(f"USPTO package contains no XML members: {path.name}")
         for member in members:
             with archive.open(member, "r") as stream:
-                for bundle in iter_case_bundles(stream, source_name=member.filename):
+                parser = (
+                    iter_case_bundles_fragmented
+                    if member.file_size >= LARGE_XML_FRAGMENT_THRESHOLD_BYTES
+                    else iter_case_bundles
+                )
+                for bundle in parser(stream, source_name=member.filename):
                     yield member.filename, bundle
 
 
