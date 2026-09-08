@@ -2,6 +2,8 @@ from datetime import date
 from pathlib import Path
 import uuid
 
+import pytest
+
 from app.us.model import USCaseBundle, USCaseRecord, USMadridFilingRecord
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, bundle_rows
@@ -143,6 +145,69 @@ def test_madrid_filing_current_compacts_reference_status_history() -> None:
     assert current.madrid_filings[0].reference_number == "A0003329"
     assert current.madrid_filings[0].international_status_date == date(2022, 12, 14)
     assert current.madrid_filings[0].entry_number == 13
+
+
+def test_madrid_filing_current_uses_latest_renewal_date_for_exact_tie() -> None:
+    serial_number = "75019416"
+    bundle = USCaseBundle(
+        case=USCaseRecord(serial_number=serial_number),
+        madrid_filings=(
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=192589,
+                reference_number="Z1232308",
+                international_registration_number="1020534",
+                international_registration_date=date(2009, 9, 23),
+                international_status_code="480",
+                international_status_date=date(2010, 7, 23),
+                international_renewal_date=date(2019, 9, 23),
+            ),
+            USMadridFilingRecord(
+                serial_number=serial_number,
+                entry_number=192589,
+                reference_number="Z1232308",
+                international_registration_number="1020534",
+                international_registration_date=date(2009, 9, 23),
+                international_status_code="480",
+                international_status_date=date(2010, 7, 23),
+                international_renewal_date=date(2029, 9, 23),
+            ),
+        ),
+    )
+
+    current = _compact_madrid_filing_snapshot(bundle)
+
+    assert len(current.madrid_filings) == 1
+    assert current.madrid_filings[0].entry_number == 192589
+    assert current.madrid_filings[0].international_renewal_date == date(2029, 9, 23)
+
+
+def test_madrid_filing_current_still_fails_closed_after_renewal_tie() -> None:
+    serial_number = "75019416"
+    common = {
+        "serial_number": serial_number,
+        "entry_number": 192589,
+        "reference_number": "Z1232308",
+        "international_registration_date": date(2009, 9, 23),
+        "international_status_date": date(2010, 7, 23),
+        "international_renewal_date": date(2029, 9, 23),
+    }
+    bundle = USCaseBundle(
+        case=USCaseRecord(serial_number=serial_number),
+        madrid_filings=(
+            USMadridFilingRecord(
+                **common,
+                international_registration_number="1020534",
+            ),
+            USMadridFilingRecord(
+                **common,
+                international_registration_number="DIFFERENT",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Ambiguous Madrid filing current snapshot"):
+        _compact_madrid_filing_snapshot(bundle)
 
 
 def test_m13_publisher_outputs_all_official_fact_tables_with_lineage() -> None:
