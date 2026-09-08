@@ -17,7 +17,6 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $TargetDistro = 'MarkOrbit-ClickHouse'
-$KeeperPid = 27700
 $TargetHost = '127.0.0.1'
 $TargetPort = 29000
 $TargetVersion = '24.8.14.39'
@@ -85,6 +84,24 @@ function Normalize-WslNames {
             ForEach-Object { ([string]$_).Replace([string][char]0, [string]'').Trim() } |
             Where-Object { $_ }
     )
+}
+
+function Get-ExactTargetKeeper {
+    param([string]$Phase)
+    $keepers = @(
+        Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                [string]$_.Name -ieq 'wsl.exe' -and
+                [string]$_.CommandLine -match [regex]::Escape($TargetDistro) -and
+                [string]$_.CommandLine -match 'tail\s+-f\s+/dev/null'
+            }
+    )
+    $keeperIds = @($keepers | ForEach-Object { [int]$_.ProcessId })
+    $roots = @(
+        $keepers | Where-Object { $keeperIds -notcontains [int]$_.ParentProcessId }
+    )
+    Require-True ($roots.Count -eq 1) "Expected exactly one target WSL keeper root during $Phase; observed=$($roots.Count) matching_processes=$($keepers.Count)"
+    return $roots[0]
 }
 
 function Invoke-TargetQuery {
@@ -172,11 +189,8 @@ function Assert-TargetRuntime {
     $running = Normalize-WslNames $runningRaw
     Require-True ($running -contains $TargetDistro) "Target distro is not already running during $Phase; refusing any command that could start it."
 
-    $keeper = Get-CimInstance Win32_Process -Filter "ProcessId=$KeeperPid" -ErrorAction SilentlyContinue
-    Require-True ($null -ne $keeper) "Accepted target keeper PID $KeeperPid is missing during $Phase."
-    Require-True ([string]$keeper.Name -eq 'wsl.exe') "Accepted target keeper PID $KeeperPid is no longer wsl.exe during $Phase."
-    Require-True ([string]$keeper.CommandLine -match [regex]::Escape($TargetDistro)) "Accepted target keeper distro binding drifted during $Phase."
-    Require-True ([string]$keeper.CommandLine -match 'tail\s+-f\s+/dev/null') "Accepted target keeper command drifted during $Phase."
+    $keeper = Get-ExactTargetKeeper -Phase $Phase
+    Require-True ([string]$keeper.Name -ieq 'wsl.exe') "Target keeper process type drifted during $Phase."
 
     $serverPids = @(Invoke-NativeCapture -Label "target server process inspection ($Phase)" -Command {
         & wsl.exe -d $TargetDistro -u root --exec pgrep -f '[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml'
