@@ -53,9 +53,9 @@ def _compact_madrid_filing_snapshot(bundle: USCaseBundle) -> USCaseBundle:
     """Keep one deterministic current Madrid filing row per filing identity.
 
     Real USPTO application XML may repeat one Madrid reference across several
-    entry numbers and historical international-status dates. Those source rows
-    remain available to package observations/history, but the replaceable
-    current table needs exactly one winner for the reference.
+    entry numbers, historical international-status dates, and corrected renewal
+    dates. Those source rows remain available to package observations/history,
+    but the replaceable current table needs exactly one winner for the reference.
     """
     if len(bundle.madrid_filings) < 2:
         return bundle
@@ -85,12 +85,22 @@ def _compact_madrid_filing_snapshot(bundle: USCaseBundle) -> USCaseBundle:
             record for record in candidates if record.entry_number == latest_entry_number
         ]
 
+        latest_renewal_date = max(
+            (record.international_renewal_date or date.min for record in candidates),
+            default=date.min,
+        )
+        candidates = [
+            record
+            for record in candidates
+            if (record.international_renewal_date or date.min) == latest_renewal_date
+        ]
+
         by_hash = {stable_hash(asdict(record)): record for record in candidates}
         if len(by_hash) != 1:
             raise ValueError(
                 "Ambiguous Madrid filing current snapshot for "
                 f"identity={identity!r}, status_date={latest_status_date}, "
-                f"entry_number={latest_entry_number}"
+                f"entry_number={latest_entry_number}, renewal_date={latest_renewal_date}"
             )
         winners.append(next(iter(by_hash.values())))
 
