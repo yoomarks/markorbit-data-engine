@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -121,3 +122,50 @@ def test_worker_recovers_and_executes_admin_queue_before_scheduled_cn() -> None:
     assert "finish_admin_domain_task(task)" in source
     assert source.index("claim_next_admin_domain_task()") < source.index("_run_scheduled_cn(logger)", source.index("while True"))
     assert "_ADMIN_POLL_SECONDS = 2.0" in source
+
+
+def test_engine_mutation_guard_commits_session_lock_before_body(monkeypatch) -> None:
+    events: list[str] = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, query, params):
+            if "pg_try_advisory_lock" in query:
+                events.append("try_lock")
+            elif "pg_advisory_unlock" in query:
+                events.append("unlock")
+
+        def fetchone(self):
+            events.append("fetch_lock")
+            return {"acquired": True}
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            events.append("commit")
+
+    @contextmanager
+    def fake_postgres_conn():
+        yield FakeConnection()
+
+    monkeypatch.setattr(admin_domain_tasks, "postgres_conn", fake_postgres_conn)
+
+    with admin_domain_tasks.engine_mutation_guard() as acquired:
+        assert acquired is True
+        events.append("body")
+
+    assert events == [
+        "try_lock",
+        "fetch_lock",
+        "commit",
+        "body",
+        "unlock",
+        "commit",
+    ]

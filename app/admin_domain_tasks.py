@@ -263,6 +263,14 @@ def engine_mutation_guard() -> Iterator[bool]:
                 (_MUTATION_LOCK_NAME,),
             )
             acquired = bool(cur.fetchone()["acquired"])
+        # pg_try_advisory_lock() is session-scoped, so committing here keeps
+        # the lock while ending the transaction opened by the SELECT. Without
+        # this boundary, long-running package work leaves the guard connection
+        # idle in transaction and PostgreSQL's 60s
+        # idle_in_transaction_session_timeout can terminate the session after
+        # the package is already durable, turning success into a false failure
+        # when the finally block attempts pg_advisory_unlock().
+        conn.commit()
         try:
             yield acquired
         finally:
