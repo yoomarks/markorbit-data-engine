@@ -104,3 +104,14 @@ def test_bulk_execute_mount_size_uses_available_lsblk_without_blockdev() -> None
     ).read_text(encoding="utf-8")
     assert "lsblk -bno SIZE $device" in source
     assert " --exec blockdev " not in source
+
+def test_bulk_execute_requires_exact_dynamic_target_keeper_without_fixed_pid() -> None:
+    source = (
+        ROOT / "scripts" / "run-production-us-application-bulk-replay.ps1"
+    ).read_text(encoding="utf-8")
+    lowered = source.lower()
+    assert "$keeperpid = 27700" not in lowered
+    assert "function get-exacttargetkeeper" in lowered
+    assert "get-ciminstance win32_process" in lowered
+    assert "tail\\s+-f\\s+/dev/null" in lowered
+    assert "expected exactly one target wsl keeper" in lowered
