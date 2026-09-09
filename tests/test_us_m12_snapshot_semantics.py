@@ -3,6 +3,8 @@ from datetime import date
 from pathlib import Path
 import uuid
 
+import pytest
+
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, bundle_rows
 from app.us.publisher_m12 import (
@@ -25,7 +27,7 @@ class FakeClickHouse:
     def __init__(
         self,
         existing: dict[str, list[list[object]]],
-        existing_case_dates: dict[str, date] | None = None,
+        existing_case_dates: dict[str, object] | None = None,
     ) -> None:
         self.existing = existing
         self.existing_case_dates = existing_case_dates or {}
@@ -171,6 +173,49 @@ def test_older_transaction_does_not_replace_newer_current_snapshot() -> None:
     assert not (inserted_tables & CURRENT_SNAPSHOT_TABLES)
     assert "markorbit_facts.us_case_observation_history" in inserted_tables
     assert all(count == 0 for count in publisher.tombstone_counts.values())
+
+
+def test_older_transaction_handles_native_json_string_current_date() -> None:
+    old_bundle, existing = _old_child_rows()
+    serial = old_bundle.case.serial_number
+    incoming = replace(
+        old_bundle,
+        case=replace(old_bundle.case, transaction_date=date(2026, 1, 8)),
+    )
+    client = FakeClickHouse(existing, {serial: "2026-03-04"})
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("99999999-9999-9999-9999-999999999999"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=3_000_000_000_000_003,
+        batch_size=100,
+    )
+
+    publisher.add(incoming, "apc260108.xml")
+    publisher.close()
+
+    inserted_tables = {name for name, _rows, _columns in client.inserts}
+    assert not (inserted_tables & CURRENT_SNAPSHOT_TABLES)
+    assert "markorbit_facts.us_case_observation_history" in inserted_tables
+
+
+def test_invalid_native_json_current_date_fails_closed() -> None:
+    old_bundle, existing = _old_child_rows()
+    serial = old_bundle.case.serial_number
+    client = FakeClickHouse(existing, {serial: "not-a-date"})
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=3_000_000_000_000_004,
+        batch_size=100,
+    )
+
+    publisher.add(old_bundle, "apc260108.xml")
+    with pytest.raises(ValueError, match="invalid ClickHouse transaction_date"):
+        publisher.close()
 
 
 def test_newer_transaction_still_updates_current_snapshot() -> None:
