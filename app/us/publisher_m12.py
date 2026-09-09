@@ -49,6 +49,16 @@ def _normalize_queried_value(value: object) -> object:
     return value
 
 
+def _queried_date(value: object) -> date:
+    """Normalize ClickHouse Date32 values across HTTP and native JSON reads."""
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(_text(value))
+    except ValueError as exc:
+        raise ValueError(f"invalid ClickHouse transaction_date: {value!r}") from exc
+
+
 def _compact_madrid_filing_snapshot(bundle: USCaseBundle) -> USCaseBundle:
     """Keep one deterministic current Madrid filing row per filing identity.
 
@@ -167,7 +177,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             """
         ).result_rows
         existing_dates = {
-            _text(serial): transaction_date
+            _text(serial): _queried_date(transaction_date)
             for serial, transaction_date in rows
             if transaction_date is not None
         }
