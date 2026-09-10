@@ -145,9 +145,11 @@ def test_snapshot_lookup_only_considers_older_current_children() -> None:
 
     assert len(client.queries) == len(SNAPSHOT_CHILD_TABLES) + 1
     assert "FROM markorbit_facts.us_case_current FINAL" in client.queries[0]
+    assert "SETTINGS max_threads = 1" in client.queries[0]
     child_queries = client.queries[1:]
     assert all("source_rank < 200" in sql for sql in child_queries)
     assert all("is_deleted = 0" in sql for sql in child_queries)
+    assert all("SETTINGS max_threads = 1" in sql for sql in child_queries)
 
 
 def test_snapshot_lookups_chunk_serials_to_bound_final_working_set() -> None:
