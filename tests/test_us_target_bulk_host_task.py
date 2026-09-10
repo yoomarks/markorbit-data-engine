@@ -15,6 +15,7 @@ from app.us.target_bulk_plan import (
     _canonical_sha256,
     validate_bulk_plan,
 )
+from app.us.target_bulk_task_control import _is_superseded_target_bulk_task
 from app.us.target_bulk_tasks import TARGET_BULK_TASK_KIND
 
 
@@ -232,6 +233,29 @@ def test_admin_api_exposes_prepare_approve_resume_status_surface() -> None:
     assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/ACTIVE" in methods_by_path
     assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/{run_id}/APPROVE" in methods_by_path
     assert "/api/admin/v2/domain-tasks/US_APPLICATION/BULK/{run_id}/RESUME" in methods_by_path
+
+
+def test_superseded_target_bulk_authority_is_never_resumable() -> None:
+    assert _is_superseded_target_bulk_task({"payload": {"host_phase": "SUPERSEDED"}})
+    assert _is_superseded_target_bulk_task(
+        {"metrics": {"phase": "SUPERSEDED_AFTER_P97_UNICODE_ROW_SPLIT_FIX"}}
+    )
+    assert not _is_superseded_target_bulk_task(
+        {"status": "BLOCKED", "payload": {"host_phase": "EXECUTE"}}
+    )
+
+
+def test_resumable_queries_exclude_superseded_target_bulk_authority() -> None:
+    control_source = (ROOT / "app" / "us" / "target_bulk_task_control.py").read_text(
+        encoding="utf-8"
+    )
+    assert control_source.count(
+        "COALESCE(payload->>'host_phase', '') <> 'SUPERSEDED'"
+    ) == 2
+    assert control_source.count(
+        "COALESCE(metrics->>'phase', '') NOT LIKE 'SUPERSEDED_%%'"
+    ) == 2
+    assert "US target bulk task was superseded and cannot be resumed" in control_source
 
 
 def test_target_bulk_jsonb_string_parameters_are_explicitly_typed() -> None:
