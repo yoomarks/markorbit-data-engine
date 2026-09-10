@@ -56,11 +56,9 @@ class FakeClient:
 def test_wsl_native_client_uses_explicit_exec_for_backtick_ddl() -> None:
     calls: list[list[str]] = []
 
-    def runner(args, *, input, text, encoding, errors, capture_output, check):
-        assert encoding == "utf-8"
-        assert errors == "strict"
+    def runner(args, *, input, capture_output, check):
         calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
 
     client = WslNativeClickHouseClient(runner=runner)
     ddl = "CREATE TABLE markorbit_facts.t (`case_id` String) ENGINE=Memory"

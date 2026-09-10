@@ -172,32 +172,30 @@ def test_native_client_is_pinned_to_target_runtime_and_port() -> None:
 
 
 def test_native_client_executes_only_wsl_target_clickhouse_client() -> None:
-    calls: list[tuple[list[str], str | None, str, str]] = []
+    calls: list[tuple[list[str], bytes | None]] = []
 
-    def runner(args, *, input, text, encoding, errors, capture_output, check):
-        calls.append((list(args), input, encoding, errors))
-        return subprocess.CompletedProcess(args, 0, stdout="[1]\n", stderr="")
+    def runner(args, *, input, capture_output, check):
+        calls.append((list(args), input))
+        return subprocess.CompletedProcess(args, 0, stdout=b"[1]\n", stderr=b"")
 
     client = WslNativeClickHouseClient(runner=runner)
     result = client.query("SELECT 1")
 
     assert result.result_rows == [[1]]
-    args, payload, encoding, errors = calls[0]
+    args, payload = calls[0]
     assert args[:5] == ["wsl.exe", "-d", TARGET_DISTRO, "-u", "root"]
     assert "docker" not in " ".join(args).lower()
     assert args[5:8] == ["--exec", "clickhouse", "client"]
     assert "clickhouse-client" not in args
     assert str(TARGET_NATIVE_PORT) in args
     assert payload is None
-    assert encoding == "utf-8"
-    assert errors == "strict"
 
 
 def test_native_client_query_preserves_unicode_line_separator_inside_json_string() -> None:
     payload = "[\"BASS ADDICTION You Wouldn't Understand\u0085\"]\n"
 
-    def runner(args, *, input, text, encoding, errors, capture_output, check):
-        return subprocess.CompletedProcess(args, 0, stdout=payload, stderr="")
+    def runner(args, *, input, capture_output, check):
+        return subprocess.CompletedProcess(args, 0, stdout=payload.encode("utf-8"), stderr=b"")
 
     client = WslNativeClickHouseClient(runner=runner)
     result = client.query("SELECT statement_text")
@@ -208,9 +206,9 @@ def test_native_client_query_preserves_unicode_line_separator_inside_json_string
 def test_native_client_insert_pins_utf8_for_non_gbk_payload() -> None:
     captured: dict[str, object] = {}
 
-    def runner(args, *, input, text, encoding, errors, capture_output, check):
-        captured.update(input=input, encoding=encoding, errors=errors)
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+    def runner(args, *, input, capture_output, check):
+        captured.update(input=input)
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
 
     client = WslNativeClickHouseClient(runner=runner)
     client.insert(
@@ -218,9 +216,24 @@ def test_native_client_insert_pins_utf8_for_non_gbk_payload() -> None:
         [["orbit-😀"]],
         column_names=["mark_name"],
     )
-    assert "orbit-😀" in str(captured["input"])
-    assert captured["encoding"] == "utf-8"
-    assert captured["errors"] == "strict"
+    assert captured["input"] == b'{"mark_name":"orbit-\xf0\x9f\x98\x80"}\n'
+
+
+def test_native_client_decodes_stdout_only_after_binary_capture() -> None:
+    def runner(args, *, input, capture_output, check):
+        return subprocess.CompletedProcess(args, 0, stdout=b"[1]\n", stderr=b"")
+
+    client = WslNativeClickHouseClient(runner=runner)
+    assert client.query("SELECT 1").result_rows == [[1]]
+
+
+def test_native_client_reports_invalid_utf8_without_text_reader_thread() -> None:
+    def runner(args, *, input, capture_output, check):
+        return subprocess.CompletedProcess(args, 0, stdout=b'["0"]\n\x8e', stderr=b"")
+
+    client = WslNativeClickHouseClient(runner=runner)
+    with pytest.raises(RuntimeError, match="invalid UTF-8 on stdout"):
+        client.query("SELECT count()")
 
 
 def test_native_client_rejects_destructive_commands_before_runner() -> None:
