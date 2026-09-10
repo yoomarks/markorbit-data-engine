@@ -193,6 +193,18 @@ def test_native_client_executes_only_wsl_target_clickhouse_client() -> None:
     assert errors == "strict"
 
 
+def test_native_client_query_preserves_unicode_line_separator_inside_json_string() -> None:
+    payload = "[\"BASS ADDICTION You Wouldn't Understand\u0085\"]\n"
+
+    def runner(args, *, input, text, encoding, errors, capture_output, check):
+        return subprocess.CompletedProcess(args, 0, stdout=payload, stderr="")
+
+    client = WslNativeClickHouseClient(runner=runner)
+    result = client.query("SELECT statement_text")
+
+    assert result.result_rows == [["BASS ADDICTION You Wouldn't Understand\u0085"]]
+
+
 def test_native_client_insert_pins_utf8_for_non_gbk_payload() -> None:
     captured: dict[str, object] = {}
 
