@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import subprocess
-
 import pytest
 
 from app.us.target_canary import (
     APPLICATION_CANARY_TABLES,
     QueryRows,
-    TARGET_DISTRO,
     WslNativeClickHouseClient,
 )
 from app.us.target_canary_stage2_reconcile import (
@@ -53,24 +50,36 @@ class FakeClient:
         raise AssertionError(f"unexpected SQL: {sql}")
 
 
-def test_wsl_native_client_uses_explicit_exec_for_backtick_ddl() -> None:
-    calls: list[list[str]] = []
+def test_target_http_client_preserves_backtick_ddl_bytes() -> None:
+    calls = []
 
-    def runner(args, *, input, capture_output, check):
-        calls.append(list(args))
-        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+    class Response:
+        status = 200
 
-    client = WslNativeClickHouseClient(runner=runner)
+        def read(self):
+            return b""
+
+        def getheader(self, name):
+            return None
+
+    class Connection:
+        def request(self, method, path, *, body, headers):
+            calls.append((method, path, body, headers))
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            pass
+
+    client = WslNativeClickHouseClient(connection=Connection())
     ddl = "CREATE TABLE markorbit_facts.t (`case_id` String) ENGINE=Memory"
     client.command(ddl)
 
-    args = calls[0]
-    assert args[:5] == ["wsl.exe", "-d", TARGET_DISTRO, "-u", "root"]
-    assert args[5:8] == ["--exec", "clickhouse", "client"]
-    assert "--" not in args[:8]
-    assert args[args.index("--query") + 1] == ddl
-    assert "`case_id`" in args[-1]
-
+    assert len(calls) == 1
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == "/?wait_end_of_query=1"
+    assert calls[0][2] == ddl.encode("utf-8")
 
 def test_prepared_reconciliation_accepts_schema_only_empty_target() -> None:
     journal = _prepared_journal()

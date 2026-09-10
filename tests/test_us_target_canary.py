@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -11,8 +10,7 @@ from app.us.target_canary import (
     APPLICATION_CANARY_TABLES,
     STAGE_DATABASE,
     TARGET_DATABASE,
-    TARGET_DISTRO,
-    TARGET_NATIVE_PORT,
+    TARGET_HTTP_PORT,
     TARGET_STORAGE_POLICY,
     WslNativeClickHouseClient,
     build_target_schema_manifest,
@@ -23,6 +21,38 @@ from app.us.target_canary import (
     stage_table_map,
     validate_target_schema_manifest,
 )
+
+
+class FakeHttpResponse:
+    def __init__(self, body=b"", *, status=200, headers=None):
+        self._body = body
+        self.status = status
+        self._headers = dict(headers or {})
+
+    def read(self):
+        return self._body
+
+    def getheader(self, name):
+        return self._headers.get(name)
+
+
+class FakeHttpConnection:
+    def __init__(self, response=None, *, request_error=None):
+        self.response = response or FakeHttpResponse()
+        self.request_error = request_error
+        self.requests = []
+        self.closed = False
+
+    def request(self, method, path, *, body, headers):
+        self.requests.append((method, path, body, dict(headers)))
+        if self.request_error is not None:
+            raise self.request_error
+
+    def getresponse(self):
+        return self.response
+
+    def close(self):
+        self.closed = True
 
 
 def _full_table(short_name: str) -> str:
@@ -164,91 +194,94 @@ def test_freeze_package_fails_before_write_on_size_or_hash_mismatch(tmp_path: Pa
         )
 
 
-def test_native_client_is_pinned_to_target_runtime_and_port() -> None:
+def test_native_client_is_pinned_to_target_runtime_and_ports() -> None:
     with pytest.raises(ValueError, match="distro"):
         WslNativeClickHouseClient(distro="docker-desktop")
-    with pytest.raises(ValueError, match="port"):
+    with pytest.raises(ValueError, match="native port"):
         WslNativeClickHouseClient(port=28123)
+    with pytest.raises(ValueError, match="HTTP port"):
+        WslNativeClickHouseClient(http_port=29000)
 
 
-def test_native_client_executes_only_wsl_target_clickhouse_client() -> None:
-    calls: list[tuple[list[str], bytes | None]] = []
+def test_target_client_uses_persistent_host_http_transport() -> None:
+    connection = FakeHttpConnection(FakeHttpResponse(b"[1]\n"))
+    client = WslNativeClickHouseClient(connection=connection)
 
-    def runner(args, *, input, capture_output, check):
-        calls.append((list(args), input))
-        return subprocess.CompletedProcess(args, 0, stdout=b"[1]\n", stderr=b"")
+    assert client.query("SELECT 1").result_rows == [[1]]
+    assert client.query("SELECT 1").result_rows == [[1]]
 
-    client = WslNativeClickHouseClient(runner=runner)
-    result = client.query("SELECT 1")
-
-    assert result.result_rows == [[1]]
-    args, payload = calls[0]
-    assert args[:5] == ["wsl.exe", "-d", TARGET_DISTRO, "-u", "root"]
-    assert "docker" not in " ".join(args).lower()
-    assert args[5:8] == ["--exec", "clickhouse", "client"]
-    assert "clickhouse-client" not in args
-    assert str(TARGET_NATIVE_PORT) in args
-    assert payload is None
-
+    assert len(connection.requests) == 2
+    for method, path, body, headers in connection.requests:
+        assert method == "POST"
+        assert path == "/?wait_end_of_query=1"
+        assert body == b"SELECT 1 FORMAT JSONCompactEachRow"
+        assert headers["Content-Type"] == "application/octet-stream"
+    assert client.http_port == TARGET_HTTP_PORT
 
 def test_native_client_query_preserves_unicode_line_separator_inside_json_string() -> None:
     payload = "[\"BASS ADDICTION You Wouldn't Understand\u0085\"]\n"
+    connection = FakeHttpConnection(FakeHttpResponse(payload.encode("utf-8")))
+    client = WslNativeClickHouseClient(connection=connection)
 
-    def runner(args, *, input, capture_output, check):
-        return subprocess.CompletedProcess(args, 0, stdout=payload.encode("utf-8"), stderr=b"")
-
-    client = WslNativeClickHouseClient(runner=runner)
     result = client.query("SELECT statement_text")
 
     assert result.result_rows == [["BASS ADDICTION You Wouldn't Understand\u0085"]]
 
 
 def test_native_client_insert_pins_utf8_for_non_gbk_payload() -> None:
-    captured: dict[str, object] = {}
-
-    def runner(args, *, input, capture_output, check):
-        captured.update(input=input)
-        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
-
-    client = WslNativeClickHouseClient(runner=runner)
+    connection = FakeHttpConnection()
+    client = WslNativeClickHouseClient(connection=connection)
     client.insert(
         f"{STAGE_DATABASE}.utf8_transport_probe",
         [["orbit-😀"]],
         column_names=["mark_name"],
     )
-    assert captured["input"] == b'{"mark_name":"orbit-\xf0\x9f\x98\x80"}\n'
 
+    assert len(connection.requests) == 1
+    body = connection.requests[0][2]
+    assert body.startswith(
+        b"INSERT INTO markorbit_canary_stage.utf8_transport_probe (mark_name) FORMAT JSONEachRow\n"
+    )
+    assert body.endswith(b'{"mark_name":"orbit-\xf0\x9f\x98\x80"}\n')
 
-def test_native_client_decodes_stdout_only_after_binary_capture() -> None:
-    def runner(args, *, input, capture_output, check):
-        return subprocess.CompletedProcess(args, 0, stdout=b"[1]\n", stderr=b"")
+def test_native_client_reports_invalid_utf8_after_binary_http_capture() -> None:
+    connection = FakeHttpConnection(FakeHttpResponse(b'["0"]\n\x8e'))
+    client = WslNativeClickHouseClient(connection=connection)
 
-    client = WslNativeClickHouseClient(runner=runner)
-    assert client.query("SELECT 1").result_rows == [[1]]
-
-
-def test_native_client_reports_invalid_utf8_without_text_reader_thread() -> None:
-    def runner(args, *, input, capture_output, check):
-        return subprocess.CompletedProcess(args, 0, stdout=b'["0"]\n\x8e', stderr=b"")
-
-    client = WslNativeClickHouseClient(runner=runner)
     with pytest.raises(RuntimeError, match="invalid UTF-8 on stdout"):
         client.query("SELECT count()")
 
 
-def test_native_client_rejects_destructive_commands_before_runner() -> None:
-    called = False
+def test_target_http_error_is_fail_closed_with_clickhouse_diagnostic() -> None:
+    response = FakeHttpResponse(
+        b"Code: 241. Memory limit exceeded",
+        status=500,
+        headers={"X-ClickHouse-Exception-Code": "241"},
+    )
+    connection = FakeHttpConnection(response)
+    client = WslNativeClickHouseClient(connection=connection)
 
-    def runner(*args, **kwargs):
-        nonlocal called
-        called = True
-        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+    with pytest.raises(RuntimeError, match="status=500.*exception_code=241"):
+        client.query("SELECT 1")
+    assert len(connection.requests) == 1
 
-    client = WslNativeClickHouseClient(runner=runner)
+def test_target_http_transport_failure_is_not_retried() -> None:
+    connection = FakeHttpConnection(request_error=ConnectionResetError("channel closed"))
+    client = WslNativeClickHouseClient(connection=connection)
+
+    with pytest.raises(RuntimeError, match="failed without retry"):
+        client.query("SELECT 1")
+    assert len(connection.requests) == 1
+    assert connection.closed is True
+
+
+def test_native_client_rejects_destructive_commands_before_transport() -> None:
+    connection = FakeHttpConnection()
+    client = WslNativeClickHouseClient(connection=connection)
+
     with pytest.raises(RuntimeError, match="forbidden mutation"):
         client.command("ALTER TABLE markorbit_facts.us_case_current DELETE WHERE 1")
-    assert called is False
-
+    assert connection.requests == []
 
 def test_stage_tables_are_package_scoped_hot_us_and_not_idempotent_create(
     tmp_path: Path,

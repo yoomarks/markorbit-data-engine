@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
+import http.client
 import json
 from pathlib import Path
 import re
-import subprocess
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 import uuid
 
 from app.scanner import sha256_file
@@ -19,6 +19,8 @@ from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
 TARGET_DISTRO = "MarkOrbit-ClickHouse"
 TARGET_NATIVE_HOST = "127.0.0.1"
 TARGET_NATIVE_PORT = 29000
+TARGET_HTTP_PORT = 28123
+TARGET_HTTP_TIMEOUT_SECONDS = 300
 TARGET_STORAGE_POLICY = "hot_us_only"
 TARGET_DATABASE = "markorbit_facts"
 STAGE_DATABASE = "markorbit_canary_stage"
@@ -73,8 +75,6 @@ class FrozenCanaryPackage:
 class QueryRows:
     result_rows: list[list[Any]]
 
-
-Runner = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
 def _validate_identifier(value: str) -> str:
@@ -280,10 +280,12 @@ def _json_default(value: object) -> object:
 
 
 class WslNativeClickHouseClient:
-    """Native-protocol client pinned to the accepted target WSL runtime.
+    """ClickHouse client pinned to the accepted target runtime.
 
-    There is intentionally no Docker/source fallback. The only transport is
-    clickhouse client inside MarkOrbit-ClickHouse to localhost:29000.
+    The accepted server still lives in MarkOrbit-ClickHouse, but host-side SQL
+    uses one persistent localhost HTTP connection instead of spawning wsl.exe
+    for every statement. This avoids Hyper-V socket channel churn while keeping
+    every mutation fail-closed: transport failures are never retried here.
     """
 
     def __init__(
@@ -292,7 +294,8 @@ class WslNativeClickHouseClient:
         distro: str = TARGET_DISTRO,
         host: str = TARGET_NATIVE_HOST,
         port: int = TARGET_NATIVE_PORT,
-        runner: Runner = subprocess.run,
+        http_port: int = TARGET_HTTP_PORT,
+        connection: Any | None = None,
     ) -> None:
         if distro != TARGET_DISTRO:
             raise ValueError(f"target distro must be exactly {TARGET_DISTRO}")
@@ -300,42 +303,47 @@ class WslNativeClickHouseClient:
             raise ValueError(f"target native host must be exactly {TARGET_NATIVE_HOST}")
         if port != TARGET_NATIVE_PORT:
             raise ValueError(f"target native port must be exactly {TARGET_NATIVE_PORT}")
+        if http_port != TARGET_HTTP_PORT:
+            raise ValueError(f"target HTTP port must be exactly {TARGET_HTTP_PORT}")
         self.distro = distro
         self.host = host
         self.port = port
-        self._runner = runner
+        self.http_port = http_port
+        self._connection = connection or http.client.HTTPConnection(
+            host,
+            http_port,
+            timeout=TARGET_HTTP_TIMEOUT_SECONDS,
+        )
 
     def _exec(self, query: str, *, input_text: str | None = None) -> str:
-        args = [
-            "wsl.exe",
-            "-d",
-            self.distro,
-            "-u",
-            "root",
-            "--exec",
-            "clickhouse",
-            "client",
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-            "--query",
-            query,
-        ]
-        input_bytes = input_text.encode("utf-8") if input_text is not None else None
-        completed = self._runner(
-            args,
-            input=input_bytes,
-            capture_output=True,
-            check=False,
-        )
-        stdout = bytes(completed.stdout or b"")
-        stderr = bytes(completed.stderr or b"")
-        if completed.returncode != 0:
-            diagnostic = stderr.decode("utf-8", errors="backslashreplace").strip()
+        body = query.encode("utf-8")
+        if input_text is not None:
+            body += b"\n" + input_text.encode("utf-8")
+        try:
+            self._connection.request(
+                "POST",
+                "/?wait_end_of_query=1",
+                body=body,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            response = self._connection.getresponse()
+            stdout = bytes(response.read() or b"")
+        except (OSError, http.client.HTTPException) as exc:
+            try:
+                self._connection.close()
+            except Exception:
+                pass
             raise RuntimeError(
-                "target clickhouse client failed: "
-                f"exit={completed.returncode} stderr={diagnostic}"
+                "target clickhouse HTTP transport failed without retry: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        exception_code = response.getheader("X-ClickHouse-Exception-Code")
+        if not 200 <= int(response.status) < 300 or exception_code:
+            diagnostic = stdout.decode("utf-8", errors="backslashreplace").strip()
+            raise RuntimeError(
+                "target clickhouse HTTP request failed: "
+                f"status={response.status} exception_code={exception_code or ''} "
+                f"body={diagnostic[:2000]}"
             )
         try:
             return stdout.decode("utf-8", errors="strict")
@@ -352,7 +360,6 @@ class WslNativeClickHouseClient:
         if not re.match(r"^\s*(CREATE|INSERT)\b", sql, re.IGNORECASE):
             raise RuntimeError("target canary command permits only CREATE/INSERT")
         return self._exec(sql)
-
     def query(self, sql: str) -> QueryRows:
         if not re.match(r"^\s*(SELECT|SHOW|DESCRIBE|EXISTS)\b", sql, re.IGNORECASE):
             raise RuntimeError("target canary query permits only read-only SQL")
@@ -389,7 +396,6 @@ class WslNativeClickHouseClient:
         )
         query = f"INSERT INTO {table} ({', '.join(columns)}) FORMAT JSONEachRow"
         self._exec(query, input_text=payload)
-
 
 class _StagingClient:
     def __init__(self, base: WslNativeClickHouseClient, stage_tables: dict[str, str]) -> None:

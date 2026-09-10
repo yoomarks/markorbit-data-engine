@@ -438,20 +438,38 @@ def test_executor_rejects_wrong_plan_bound_authority(corpus, tmp_path, monkeypat
 
 
 def test_bulk_stage_drop_is_strictly_package_scoped() -> None:
-    calls: list[list[str]] = []
+    calls: list[tuple[str, str, bytes]] = []
 
-    def runner(args, **kwargs):
-        calls.append(list(args))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    class Response:
+        status = 200
 
-    client = bulk_replay.BulkTargetClient(runner=runner)
+        def read(self):
+            return b""
+
+        def getheader(self, name):
+            return None
+
+    class Connection:
+        def request(self, method, path, *, body, headers):
+            calls.append((method, path, bytes(body)))
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            pass
+
+    client = bulk_replay.BulkTargetClient(connection=Connection())
     short = APPLICATION_CANARY_TABLES[0].split(".", 1)[1]
     table = f"markorbit_canary_stage.{short}__0123456789abcdef"
     client.drop_bulk_stage_table(table)
-    assert calls
-    args = calls[0]
-    assert "--exec" in args
-    assert args[-1] == f"DROP TABLE IF EXISTS {table}"
+    assert calls == [
+        (
+            "POST",
+            "/?wait_end_of_query=1",
+            f"DROP TABLE IF EXISTS {table}".encode("utf-8"),
+        )
+    ]
 
     with pytest.raises(ValueError):
         client.drop_bulk_stage_table(APPLICATION_CANARY_TABLES[0])
