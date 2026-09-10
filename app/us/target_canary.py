@@ -349,7 +349,10 @@ class WslNativeClickHouseClient:
         if not re.match(r"^\s*(SELECT|SHOW|DESCRIBE|EXISTS)\b", sql, re.IGNORECASE):
             raise RuntimeError("target canary query permits only read-only SQL")
         output = self._exec(f"{sql.rstrip().rstrip(';')} FORMAT JSONCompactEachRow")
-        rows = [json.loads(line) for line in output.splitlines() if line.strip()]
+        # JSONCompactEachRow records are delimited by physical LF bytes.  Do not use
+        # str.splitlines(): legal JSON string data may contain Unicode line separators
+        # such as U+0085, which splitlines() would incorrectly treat as record breaks.
+        rows = [json.loads(line) for line in output.split("\n") if line.strip()]
         return QueryRows(result_rows=rows)
 
     def insert(
