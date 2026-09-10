@@ -10,6 +10,7 @@ from app.us.publisher import TABLE_COLUMNS, bundle_rows
 from app.us.publisher_m12 import (
     CURRENT_SNAPSHOT_TABLES,
     SNAPSHOT_CHILD_TABLES,
+    SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE,
     SnapshotAwareUSBatchPublisher,
     _text,
 )
@@ -147,6 +148,26 @@ def test_snapshot_lookup_only_considers_older_current_children() -> None:
     child_queries = client.queries[1:]
     assert all("source_rank < 200" in sql for sql in child_queries)
     assert all("is_deleted = 0" in sql for sql in child_queries)
+
+
+def test_snapshot_lookups_chunk_serials_to_bound_final_working_set() -> None:
+    client = FakeClickHouse({})
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("45454545-4545-4545-4545-454545454545"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=200,
+    )
+    serials = [f"{index:08d}" for index in range(SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE + 1)]
+    publisher._touched_serial_transactions = {serial: date(2026, 1, 8) for serial in serials}
+    assert publisher._stale_current_serials() == set()
+    assert len(client.queries) == 2
+    client.queries.clear()
+    publisher._touched_serial_sources = {serial: "apc260108.xml" for serial in serials}
+    publisher._append_snapshot_tombstones()
+    assert len(client.queries) == 2 * len(SNAPSHOT_CHILD_TABLES)
+    assert all(sql.count("'") // 2 <= SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE for sql in client.queries)
 
 
 def test_older_transaction_does_not_replace_newer_current_snapshot() -> None:

@@ -30,6 +30,15 @@ SNAPSHOT_CHILD_TABLES = {
     "markorbit_facts.us_madrid_filing_current": "madrid_filing_key",
 }
 CURRENT_SNAPSHOT_TABLES = {"markorbit_facts.us_case_current", *SNAPSHOT_CHILD_TABLES}
+SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE = 200
+
+
+def _serial_chunks(serials: list[str]) -> list[list[str]]:
+    return [serials[i:i + SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE] for i in range(0, len(serials), SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE)]
+
+
+def _serial_sql(serials: list[str]) -> str:
+    return ", ".join("'" + serial.replace("'", "''") + "'" for serial in serials)
 
 
 def _text(value: object) -> str:
@@ -165,17 +174,15 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
     def _stale_current_serials(self) -> set[str]:
         if not self._touched_serial_transactions:
             return set()
-        serial_sql = ", ".join(
-            f"'{serial}'" for serial in sorted(self._touched_serial_transactions)
-        )
-        rows = self.client.query(
-            f"""
-            SELECT serial_number, transaction_date
-            FROM markorbit_facts.us_case_current FINAL
-            WHERE is_deleted = 0
-              AND serial_number IN ({serial_sql})
-            """
-        ).result_rows
+        serials = sorted(self._touched_serial_transactions)
+        rows: list[tuple[object, ...]] = []
+        for serial_chunk in _serial_chunks(serials):
+            rows.extend(self.client.query(f"""
+                SELECT serial_number, transaction_date
+                FROM markorbit_facts.us_case_current FINAL
+                WHERE is_deleted = 0
+                  AND serial_number IN ({_serial_sql(serial_chunk)})
+                """).result_rows)
         existing_dates = {
             _text(serial): _queried_date(transaction_date)
             for serial, transaction_date in rows
@@ -209,8 +216,6 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             return
 
         serials = sorted(self._touched_serial_sources)
-        serial_sql = ", ".join(f"'{serial}'" for serial in serials)
-
         for table, key_column in SNAPSHOT_CHILD_TABLES.items():
             columns = TABLE_COLUMNS[table]
             serial_index = columns.index("serial_number")
@@ -222,15 +227,15 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                     desired_keys[serial].add(_text(row[key_index]))
 
             column_sql = ", ".join(columns)
-            existing_rows = self.client.query(
-                f"""
-                SELECT {column_sql}
-                FROM {table} FINAL
-                WHERE is_deleted = 0
-                  AND source_rank < {self.source_rank}
-                  AND serial_number IN ({serial_sql})
-                """
-            ).result_rows
+            existing_rows: list[tuple[object, ...]] = []
+            for serial_chunk in _serial_chunks(serials):
+                existing_rows.extend(self.client.query(f"""
+                    SELECT {column_sql}
+                    FROM {table} FINAL
+                    WHERE is_deleted = 0
+                      AND source_rank < {self.source_rank}
+                      AND serial_number IN ({_serial_sql(serial_chunk)})
+                    """).result_rows)
 
             for existing in existing_rows:
                 serial = _text(existing[serial_index])
