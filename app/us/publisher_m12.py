@@ -30,7 +30,7 @@ SNAPSHOT_CHILD_TABLES = {
     "markorbit_facts.us_madrid_filing_current": "madrid_filing_key",
 }
 CURRENT_SNAPSHOT_TABLES = {"markorbit_facts.us_case_current", *SNAPSHOT_CHILD_TABLES}
-SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE = 200
+SNAPSHOT_LOOKUP_SERIAL_CHUNK_SIZE = 50
 
 
 def _serial_chunks(serials: list[str]) -> list[list[str]]:
@@ -182,6 +182,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                 FROM markorbit_facts.us_case_current FINAL
                 WHERE is_deleted = 0
                   AND serial_number IN ({_serial_sql(serial_chunk)})
+                SETTINGS max_threads = 1
                 """).result_rows)
         existing_dates = {
             _text(serial): _queried_date(transaction_date)
@@ -235,6 +236,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                     WHERE is_deleted = 0
                       AND source_rank < {self.source_rank}
                       AND serial_number IN ({_serial_sql(serial_chunk)})
+                    SETTINGS max_threads = 1
                     """).result_rows)
 
             for existing in existing_rows:
