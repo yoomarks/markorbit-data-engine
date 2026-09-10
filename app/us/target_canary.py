@@ -74,7 +74,7 @@ class QueryRows:
     result_rows: list[list[Any]]
 
 
-Runner = Callable[..., subprocess.CompletedProcess[str]]
+Runner = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
 def _validate_identifier(value: str) -> str:
@@ -322,21 +322,29 @@ class WslNativeClickHouseClient:
             "--query",
             query,
         ]
+        input_bytes = input_text.encode("utf-8") if input_text is not None else None
         completed = self._runner(
             args,
-            input=input_text,
-            text=True,
-            encoding="utf-8",
-            errors="strict",
+            input=input_bytes,
             capture_output=True,
             check=False,
         )
+        stdout = bytes(completed.stdout or b"")
+        stderr = bytes(completed.stderr or b"")
         if completed.returncode != 0:
+            diagnostic = stderr.decode("utf-8", errors="backslashreplace").strip()
             raise RuntimeError(
                 "target clickhouse client failed: "
-                f"exit={completed.returncode} stderr={completed.stderr.strip()}"
+                f"exit={completed.returncode} stderr={diagnostic}"
             )
-        return completed.stdout
+        try:
+            return stdout.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            sample = stdout[max(0, exc.start - 8) : exc.end + 8].hex()
+            raise RuntimeError(
+                "target clickhouse client returned invalid UTF-8 on stdout: "
+                f"offset={exc.start} bytes={sample}"
+            ) from exc
 
     def command(self, sql: str) -> str:
         if _FORBIDDEN_MUTATION.search(sql):
