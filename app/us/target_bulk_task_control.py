@@ -19,6 +19,15 @@ from app.us.target_bulk_tasks import (
 _RESUMABLE = {STATUS_BLOCKED, STATUS_FAILED, STATUS_INTERRUPTED}
 
 
+def _is_superseded_target_bulk_task(task: dict[str, Any]) -> bool:
+    """Return whether a historical target bulk authority was explicitly superseded."""
+    payload = dict(task.get("payload") or {})
+    metrics = dict(task.get("metrics") or {})
+    host_phase = str(payload.get("host_phase") or "").upper()
+    phase = str(metrics.get("phase") or "").upper()
+    return host_phase == "SUPERSEDED" or phase.startswith("SUPERSEDED_")
+
+
 def fail_closed_recover_target_bulk_tasks() -> dict[str, int]:
     """Recover host-worker restart state without blind replay of an uncertain mutation."""
     report = {
@@ -105,6 +114,8 @@ def resumable_target_bulk_task() -> dict[str, Any] | None:
                   AND payload->>'execution_lane' = %s
                   AND payload->>'domain' = 'US_APPLICATION'
                   AND status = ANY(%s)
+                  AND COALESCE(payload->>'host_phase', '') <> 'SUPERSEDED'
+                  AND COALESCE(metrics->>'phase', '') NOT LIKE 'SUPERSEDED_%%'
                 ORDER BY started_at DESC, run_id DESC
                 LIMIT 1
                 """,
@@ -146,6 +157,8 @@ def resume_target_bulk_task(*, run_id: str | None = None) -> dict[str, Any]:
                       AND payload->>'execution_lane' = %s
                       AND payload->>'domain' = 'US_APPLICATION'
                       AND status = ANY(%s)
+                      AND COALESCE(payload->>'host_phase', '') <> 'SUPERSEDED'
+                      AND COALESCE(metrics->>'phase', '') NOT LIKE 'SUPERSEDED_%%'
                     ORDER BY started_at DESC, run_id DESC
                     LIMIT 1
                     FOR UPDATE
@@ -164,6 +177,8 @@ def resume_target_bulk_task(*, run_id: str | None = None) -> dict[str, Any]:
             status = str(task.get("status") or "")
             if status not in _RESUMABLE:
                 raise ValueError(f"US target bulk task is not resumable from status {status}")
+            if _is_superseded_target_bulk_task(task):
+                raise ValueError("US target bulk task was superseded and cannot be resumed")
             payload = dict(task.get("payload") or {})
             approved = str(payload.get("approved_plan_sha256") or "")
             prepared = str(payload.get("plan_sha256") or "")
