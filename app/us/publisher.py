@@ -8,6 +8,7 @@ import re
 from typing import Any
 import uuid
 
+from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE
 from app.us.model import USCaseBundle
 
 
@@ -107,6 +108,8 @@ OWNER_COLUMNS = [
     "source_rank",
     "is_deleted",
 ]
+
+APPLICANT_INDEX_COLUMNS = ["candidate_key", *OWNER_COLUMNS]
 
 CLASS_COLUMNS = [
     "classification_key",
@@ -270,6 +273,7 @@ MADRID_EVENT_COLUMNS = [
 TABLE_COLUMNS = {
     "markorbit_facts.us_case_current": CASE_COLUMNS,
     "markorbit_facts.us_owner_current": OWNER_COLUMNS,
+    APPLICANT_INDEX_TABLE: APPLICANT_INDEX_COLUMNS,
     "markorbit_facts.us_classification_current": CLASS_COLUMNS,
     "markorbit_facts.us_event_history": EVENT_COLUMNS,
     "markorbit_facts.us_statement_current": STATEMENT_COLUMNS,

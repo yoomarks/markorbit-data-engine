@@ -62,6 +62,7 @@ def _package_binding_matches(stored: object, expected: dict[str, object]) -> boo
 REPLACING_VISIBLE_KEYS: dict[str, tuple[str, ...]] = {
     "markorbit_facts.us_case_current": ("serial_number",),
     "markorbit_facts.us_owner_current": ("serial_number", "owner_key"),
+    "markorbit_facts.us_applicant_candidate_current": ("candidate_key", "serial_number", "owner_key"),
     "markorbit_facts.us_classification_current": ("serial_number", "classification_key"),
     "markorbit_facts.us_event_history": ("event_key",),
     "markorbit_facts.us_statement_current": ("serial_number", "statement_key"),

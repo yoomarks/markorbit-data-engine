@@ -5,6 +5,12 @@ from datetime import date
 from typing import Any
 import uuid
 
+from app.us.applicant_candidate_index import (
+    APPLICANT_INDEX_TABLE,
+    applicant_candidate_key,
+    applicant_index_row,
+    owner_mapping,
+)
 from app.us.change_history import (
     CASE_OBSERVATION_COLUMNS,
     CASE_OBSERVATION_TABLE,
@@ -12,6 +18,7 @@ from app.us.change_history import (
 )
 from app.us.model import USCaseBundle
 from app.us.publisher import (
+    OWNER_COLUMNS,
     TABLE_COLUMNS,
     USBatchPublisher,
     _madrid_filing_identity,
@@ -269,6 +276,86 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
                 self.buffers[table].append(tombstone)
                 self.tombstone_counts[table] += 1
 
+    def _prepare_applicant_index_rows(self) -> None:
+        if not self._touched_serial_sources:
+            return
+
+        owner_table = "markorbit_facts.us_owner_current"
+        owner_rows = self.buffers[owner_table]
+        index_rows = self.buffers[APPLICANT_INDEX_TABLE]
+        if index_rows:
+            raise RuntimeError(
+                "US Applicant candidate index buffer must be empty before derivation"
+            )
+
+        serial_index = OWNER_COLUMNS.index("serial_number")
+        owner_key_index = OWNER_COLUMNS.index("owner_key")
+        deleted_index = OWNER_COLUMNS.index("is_deleted")
+        incoming_by_key: dict[tuple[str, str], list[Any]] = {}
+        for row in owner_rows:
+            incoming_by_key[
+                (_text(row[serial_index]), _text(row[owner_key_index]))
+            ] = row
+
+        serials = sorted(self._touched_serial_sources)
+        existing_rows: list[tuple[object, ...]] = []
+        column_sql = ", ".join(OWNER_COLUMNS)
+        for serial_chunk in _serial_chunks(serials):
+            existing_rows.extend(self.client.query(f"""
+                SELECT {column_sql}
+                FROM {owner_table} FINAL
+                WHERE is_deleted = 0
+                  AND source_rank < {self.source_rank}
+                  AND serial_number IN ({_serial_sql(serial_chunk)})
+                SETTINGS max_threads = 1
+                """).result_rows)
+
+        for existing in existing_rows:
+            normalized = [_normalize_queried_value(value) for value in existing]
+            key = (
+                _text(normalized[serial_index]),
+                _text(normalized[owner_key_index]),
+            )
+            incoming = incoming_by_key.get(key)
+            if incoming is None or int(incoming[deleted_index]) != 0:
+                continue
+            old_candidate = applicant_candidate_key(
+                owner_mapping(normalized, OWNER_COLUMNS)
+            )
+            new_candidate = applicant_candidate_key(
+                owner_mapping(incoming, OWNER_COLUMNS)
+            )
+            if old_candidate == new_candidate:
+                continue
+
+            source_file = self._touched_serial_sources[key[0]]
+            tombstone = list(normalized)
+            tombstone_hash = stable_hash(
+                {
+                    "kind": "US_APPLICANT_CANDIDATE_REKEY_V1",
+                    "serial_number": key[0],
+                    "owner_key": key[1],
+                    "old_candidate_key": old_candidate,
+                    "new_candidate_key": new_candidate,
+                    "source_effective_date": self.source_effective_date,
+                    "source_file": source_file,
+                    "source_rank": self.source_rank,
+                }
+            )
+            tombstone[OWNER_COLUMNS.index("source_package_kind")] = self.package_kind
+            tombstone[OWNER_COLUMNS.index("source_effective_date")] = self.source_effective_date
+            tombstone[OWNER_COLUMNS.index("source_file")] = source_file
+            tombstone[OWNER_COLUMNS.index("source_row_hash")] = tombstone_hash
+            tombstone[OWNER_COLUMNS.index("last_source_package_id")] = self.package_id
+            tombstone[OWNER_COLUMNS.index("record_hash")] = tombstone_hash
+            tombstone[OWNER_COLUMNS.index("source_rank")] = self.source_rank
+            tombstone[deleted_index] = 1
+            index_rows.append([old_candidate, *tombstone])
+
+        index_rows.extend(
+            applicant_index_row(row, OWNER_COLUMNS) for row in owner_rows
+        )
+
     def _flush_observations(self) -> None:
         if not self.observation_buffer:
             return
@@ -283,6 +370,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
     def flush(self) -> None:
         self._drop_stale_current_rows(self._stale_current_serials())
         self._append_snapshot_tombstones()
+        self._prepare_applicant_index_rows()
         super().flush()
         self._flush_observations()
         self._touched_serial_sources.clear()

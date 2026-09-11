@@ -16,6 +16,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 APPLICATION_OUTPUT_TABLES = {
     "us_case_current",
     "us_owner_current",
+    "us_applicant_candidate_current",
     "us_classification_current",
     "us_event_history",
     "us_statement_current",
