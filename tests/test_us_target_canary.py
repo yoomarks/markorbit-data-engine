@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import app.us.target_canary as target_canary
+
 from app.us.target_canary import (
     APPLICATION_CANARY_TABLES,
     STAGE_DATABASE,
@@ -320,6 +322,36 @@ def test_stage_tables_neutralize_replacing_merge_engine_for_lossless_counts(tmp_
     stage_sql = "\n".join(statements[1:])
     assert "ReplacingMergeTree" not in stage_sql
     assert stage_sql.count("ENGINE = MergeTree") == len(APPLICATION_CANARY_TABLES)
+
+
+def test_stage_package_rows_filters_post_anchor_applicant_count(monkeypatch, tmp_path: Path) -> None:
+    package = _frozen_package(tmp_path)
+    raw_counts = {table: 1 for table in APPLICATION_CANARY_TABLES}
+    raw_counts["markorbit_facts.us_applicant_candidate_current"] = 0
+
+    class FakePublisher:
+        def __init__(self, *args, include_applicant_index: bool, **kwargs) -> None:
+            assert include_applicant_index is False
+
+        def add(self, bundle, source_file: str) -> None:
+            return None
+
+        def close(self) -> dict[str, int]:
+            return dict(raw_counts)
+
+    fake_case = type("Case", (), {"serial_number": "12345678"})()
+    fake_bundle = type("Bundle", (), {"case": fake_case})()
+    monkeypatch.setattr(target_canary, "SnapshotAwareUSBatchPublisher", FakePublisher)
+    monkeypatch.setattr(
+        target_canary,
+        "_iter_package_bundles",
+        lambda path: [("apc260102.xml", fake_bundle)],
+    )
+
+    counts = target_canary.stage_package_rows(object(), package)
+
+    assert counts == {table: 1 for table in APPLICATION_CANARY_TABLES}
+    assert "markorbit_facts.us_applicant_candidate_current" not in counts
 
 
 def test_commit_plan_is_exact_one_package_and_insert_only(tmp_path: Path) -> None:
