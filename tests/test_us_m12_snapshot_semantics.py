@@ -397,3 +397,21 @@ def test_applicant_index_mirrors_owner_omission_tombstone():
     matching = [row for row in index_rows if row[0] == old_candidate]
     assert len(matching) == 1
     assert matching[0][-1] == 1
+
+
+def test_applicant_index_can_be_disabled_for_legacy_bulk_canary_contract():
+    bundle, existing = _old_child_rows()
+    client = FakeClickHouse(existing)
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=200,
+        batch_size=100,
+        include_applicant_index=False,
+    )
+    publisher.add(bundle, "apc260108.xml")
+    publisher.close()
+
+    assert all(table != APPLICANT_INDEX_TABLE for table, _rows, _columns in client.inserts)

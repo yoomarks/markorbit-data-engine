@@ -145,6 +145,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
         source_effective_date: date | None,
         source_rank: int,
         batch_size: int = 1000,
+        include_applicant_index: bool = True,
     ) -> None:
         super().__init__(
             client,
@@ -154,6 +155,7 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             source_rank=source_rank,
             batch_size=batch_size,
         )
+        self.include_applicant_index = bool(include_applicant_index)
         self._touched_serial_sources: dict[str, str] = {}
         self._touched_serial_transactions: dict[str, date | None] = {}
         self.tombstone_counts: dict[str, int] = {
@@ -370,7 +372,10 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
     def flush(self) -> None:
         self._drop_stale_current_rows(self._stale_current_serials())
         self._append_snapshot_tombstones()
-        self._prepare_applicant_index_rows()
+        if self.include_applicant_index:
+            self._prepare_applicant_index_rows()
+        elif self.buffers[APPLICANT_INDEX_TABLE]:
+            raise RuntimeError("US Applicant candidate index buffer must remain empty when disabled")
         super().flush()
         self._flush_observations()
         self._touched_serial_sources.clear()

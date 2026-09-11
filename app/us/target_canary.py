@@ -11,6 +11,7 @@ from typing import Any, Sequence
 import uuid
 
 from app.scanner import sha256_file
+from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE
 from app.us.change_history import CASE_OBSERVATION_TABLE
 from app.us.ingest import OUTPUT_PACKAGE_COLUMNS, _iter_package_bundles
 from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
@@ -26,7 +27,9 @@ TARGET_DATABASE = "markorbit_facts"
 STAGE_DATABASE = "markorbit_canary_stage"
 CANARY_RECEIPT_VERSION = "US_TARGET_CANARY_RECEIPT_V1"
 
-APPLICATION_CANARY_TABLES = tuple(OUTPUT_PACKAGE_COLUMNS)
+APPLICATION_CANARY_TABLES = tuple(
+    table for table in OUTPUT_PACKAGE_COLUMNS if table != APPLICANT_INDEX_TABLE
+)
 
 _FORBIDDEN_MUTATION = re.compile(
     r"\b(ALTER|DELETE|DROP|TRUNCATE|OPTIMIZE|MOVE|ATTACH|DETACH|RENAME|TTL)\b",
@@ -241,7 +244,7 @@ def build_target_schema_manifest(
     ]
     canonical = "\n;\n".join(statements) + ";\n"
     return {
-        "schema_version": "US_M1.4_OWNER_READ_V1_TARGET_HOT_US_V1",
+        "schema_version": "US_M1.4_TARGET_HOT_US_V1",
         "storage_policy": TARGET_STORAGE_POLICY,
         "tables": list(APPLICATION_CANARY_TABLES),
         "statements": statements,
@@ -481,6 +484,7 @@ def stage_package_rows(
         source_effective_date=package.source_effective_date,
         source_rank=package.source_rank,
         batch_size=batch_size,
+        include_applicant_index=False,
     )
     seen_serials: set[str] = set()
     for source_file, bundle in _iter_package_bundles(package.path):
