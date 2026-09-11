@@ -241,7 +241,7 @@ def build_target_schema_manifest(
     ]
     canonical = "\n;\n".join(statements) + ";\n"
     return {
-        "schema_version": "US_M1.4_TARGET_HOT_US_V1",
+        "schema_version": "US_M1.4_OWNER_READ_V1_TARGET_HOT_US_V1",
         "storage_policy": TARGET_STORAGE_POLICY,
         "tables": list(APPLICATION_CANARY_TABLES),
         "statements": statements,

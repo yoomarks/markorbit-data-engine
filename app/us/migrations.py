@@ -7,6 +7,7 @@ US_SCHEMA_VERSION = "US_M1.4"
 REQUIRED_TABLES = {
     "us_case_current",
     "us_owner_current",
+    "us_applicant_candidate_current",
     "us_classification_current",
     "us_event_history",
     "us_statement_current",
@@ -26,6 +27,7 @@ REQUIRED_COLUMNS = {
     ("us_case_current", "section_8_accepted"),
     ("us_case_current", "international_registration_date"),
     ("us_owner_current", "entity_statement"),
+    ("us_applicant_candidate_current", "candidate_key"),
     ("us_event_history", "description_text"),
     ("us_correspondent_current", "attorney_name"),
     ("us_design_search_current", "code"),

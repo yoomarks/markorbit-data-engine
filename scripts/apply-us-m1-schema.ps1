@@ -6,7 +6,8 @@ $clickhouseSchemaPaths = @(
     (Join-Path $repoRoot "database/clickhouse/init/005_us_m11_real_tdxf.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/006_us_m12_snapshot_semantics.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/007_us_m13_official_fact_families.sql"),
-    (Join-Path $repoRoot "database/clickhouse/init/008_us_m14_change_history.sql")
+    (Join-Path $repoRoot "database/clickhouse/init/008_us_m14_change_history.sql"),
+    (Join-Path $repoRoot "database/clickhouse/init/013_us_owner_read_index.sql")
 )
 $postgresSchemaPaths = @(
     (Join-Path $repoRoot "database/postgres/init/002_us_status_reference.sql"),
@@ -20,7 +21,7 @@ foreach ($schemaPath in @($clickhouseSchemaPaths + $postgresSchemaPaths)) {
     }
 }
 
-Write-Host "Applying US M1.4 ClickHouse schema..."
+Write-Host "Applying US M1.4 + owner-read ClickHouse schema..."
 foreach ($schemaPath in $clickhouseSchemaPaths) {
     Get-Content -Raw $schemaPath | docker compose exec -T clickhouse clickhouse-client --multiquery
     if ($LASTEXITCODE -ne 0) {
@@ -47,4 +48,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "US schema runtime guard failed."
 }
 
-Write-Host "US M1.4 + semantic/reference/event-role schema applied."
+Write-Host "US M1.4 + owner-read + semantic/reference/event-role schema applied."

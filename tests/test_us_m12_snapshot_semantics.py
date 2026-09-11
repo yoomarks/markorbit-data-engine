@@ -5,8 +5,9 @@ import uuid
 
 import pytest
 
+from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE, applicant_candidate_key, owner_mapping
 from app.us.parser import iter_case_bundles
-from app.us.publisher import TABLE_COLUMNS, bundle_rows
+from app.us.publisher import OWNER_COLUMNS, TABLE_COLUMNS, bundle_rows
 from app.us.publisher_m12 import (
     CURRENT_SNAPSHOT_TABLES,
     SNAPSHOT_CHILD_TABLES,
@@ -143,7 +144,8 @@ def test_snapshot_lookup_only_considers_older_current_children() -> None:
     publisher.add(replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml")
     publisher.close()
 
-    assert len(client.queries) == len(SNAPSHOT_CHILD_TABLES) + 1
+    # Case freshness + one lookup per snapshot child + one owner lookup for candidate re-key detection.
+    assert len(client.queries) == len(SNAPSHOT_CHILD_TABLES) + 2
     assert "FROM markorbit_facts.us_case_current FINAL" in client.queries[0]
     assert "SETTINGS max_threads = 1" in client.queries[0]
     child_queries = client.queries[1:]
@@ -337,3 +339,61 @@ def test_fixedstring_text_normalization_strips_nul_padding() -> None:
     assert _text(b"abc\x00\x00") == "abc"
     assert _text(bytearray(b"abc\x00")) == "abc"
     assert _text(memoryview(b"abc\x00")) == "abc"
+
+
+def test_applicant_index_rekeys_identity_change_with_old_candidate_tombstone():
+    old_bundle, existing = _old_child_rows()
+    old_owner_row = existing["markorbit_facts.us_owner_current"][0]
+    old_candidate = applicant_candidate_key(owner_mapping(old_owner_row, OWNER_COLUMNS))
+    changed_owner = replace(old_bundle.owners[0], address_1="99 Changed Avenue")
+    incoming = replace(old_bundle, owners=(changed_owner,))
+    client = FakeClickHouse(existing)
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=200,
+        batch_size=100,
+    )
+    publisher.add(incoming, "apc260108.xml")
+    publisher.close()
+
+    index_rows = [
+        row
+        for table, rows, _columns in client.inserts
+        if table == APPLICANT_INDEX_TABLE
+        for row in rows
+    ]
+    assert len(index_rows) == 2
+    old_rows = [row for row in index_rows if row[0] == old_candidate]
+    assert len(old_rows) == 1
+    assert old_rows[0][-1] == 1
+
+
+def test_applicant_index_mirrors_owner_omission_tombstone():
+    old_bundle, existing = _old_child_rows()
+    old_owner_row = existing["markorbit_facts.us_owner_current"][0]
+    old_candidate = applicant_candidate_key(owner_mapping(old_owner_row, OWNER_COLUMNS))
+    incoming = replace(old_bundle, owners=())
+    client = FakeClickHouse(existing)
+    publisher = SnapshotAwareUSBatchPublisher(
+        client,
+        package_id=uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+        package_kind="DAILY_APPLICATIONS",
+        source_effective_date=date(2026, 1, 8),
+        source_rank=200,
+        batch_size=100,
+    )
+    publisher.add(incoming, "apc260108.xml")
+    publisher.close()
+
+    index_rows = [
+        row
+        for table, rows, _columns in client.inserts
+        if table == APPLICANT_INDEX_TABLE
+        for row in rows
+    ]
+    matching = [row for row in index_rows if row[0] == old_candidate]
+    assert len(matching) == 1
+    assert matching[0][-1] == 1
