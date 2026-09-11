@@ -9,6 +9,150 @@
       {"path": "/api/v1/contract", "query": {}, "pagination": "none"},
       {"path": "/api/v1/health", "query": {}, "pagination": "none"},
       {"path": "/api/v1/owner-summary", "query": {}, "pagination": "none", "semantics": "bounded_owner_local_aggregate_projection", "read_only": true, "admin_detail_exposed": false},
+      {
+        "path": "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
+        "jurisdictions": [
+          "CN",
+          "US"
+        ],
+        "query": {
+          "requester_workspace_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "applicant_source_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 1000
+          },
+          "applicant_source_version": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "applicant_source_fingerprint_sha256": {
+            "type": "sha256_reference",
+            "required": true
+          },
+          "applicant_observed_at": {
+            "type": "iso_timestamp",
+            "required": true
+          }
+        },
+        "pagination": "none",
+        "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
+        "semantics": "exact_applicant_candidate_revalidation",
+        "read_only": true,
+        "business_state_owned_outside_data_engine": true
+      },
+      {
+        "path": "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
+        "jurisdictions": [
+          "CN",
+          "US"
+        ],
+        "query": {
+          "requester_workspace_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "applicant_source_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 1000
+          },
+          "applicant_source_version": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "applicant_source_fingerprint_sha256": {
+            "type": "sha256_reference",
+            "required": true
+          },
+          "applicant_observed_at": {
+            "type": "iso_timestamp",
+            "required": true
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "min": 1,
+            "max": 100
+          },
+          "cursor": {
+            "type": "opaque_string",
+            "required": false,
+            "max_length": 8192
+          }
+        },
+        "pagination": "bounded_keyset_cursor",
+        "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
+        "hard_bounds": {
+          "max_pages": 100,
+          "max_results": 500
+        },
+        "semantics": "exact_applicant_bounded_portfolio",
+        "read_only": true,
+        "business_state_owned_outside_data_engine": true
+      },
+      {
+        "path": "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}",
+        "jurisdictions": [
+          "CN",
+          "US"
+        ],
+        "query": {
+          "requester_workspace_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "applicant_source_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 1000
+          },
+          "applicant_source_version": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "applicant_source_fingerprint_sha256": {
+            "type": "sha256_reference",
+            "required": true
+          },
+          "applicant_observed_at": {
+            "type": "iso_timestamp",
+            "required": true
+          },
+          "trademark_source_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 1000
+          },
+          "trademark_source_version": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          },
+          "trademark_source_fingerprint_sha256": {
+            "type": "sha256_reference",
+            "required": true
+          },
+          "trademark_observed_at": {
+            "type": "iso_timestamp",
+            "required": true
+          }
+        },
+        "pagination": "none",
+        "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
+        "semantics": "exact_trademark_revalidation_under_exact_applicant",
+        "read_only": true,
+        "business_state_owned_outside_data_engine": true
+      },
       {"path": "/api/v1/cn/cases/{application_number}", "query": {}, "pagination": "none"},
       {
         "path": "/api/v1/cn/discovery/preliminary-publications",
