@@ -347,11 +347,113 @@ def test_stage_package_rows_filters_post_anchor_applicant_count(monkeypatch, tmp
         "_iter_package_bundles",
         lambda path: [("apc260102.xml", fake_bundle)],
     )
+    monkeypatch.setattr(
+        target_canary,
+        "_bundle_stage_fingerprint",
+        lambda *args, **kwargs: "single",
+    )
 
     counts = target_canary.stage_package_rows(object(), package)
 
     assert counts == {table: 1 for table in APPLICATION_CANARY_TABLES}
     assert "markorbit_facts.us_applicant_candidate_current" not in counts
+
+
+def test_observation_duplicate_fingerprint_ignores_only_order_sensitive_hashes() -> None:
+    columns = target_canary.CASE_OBSERVATION_COLUMNS
+    first = [None] * len(columns)
+    second = [None] * len(columns)
+    for row in (first, second):
+        row[columns.index("serial_number")] = "73533507"
+        row[columns.index("owner_count")] = 6
+        row[columns.index("owner_names")] = ["DALLAS COWBOYS FOOTBALL CLUB, LTD., THE"]
+    first[columns.index("owner_record_set_hash")] = "first-owner-hash"
+    second[columns.index("owner_record_set_hash")] = "second-owner-hash"
+    first[columns.index("observation_hash")] = "first-observation-hash"
+    second[columns.index("observation_hash")] = "second-observation-hash"
+
+    assert target_canary._canonical_stage_row(
+        target_canary.CASE_OBSERVATION_TABLE, first
+    ) == target_canary._canonical_stage_row(target_canary.CASE_OBSERVATION_TABLE, second)
+
+    second[columns.index("owner_count")] = 5
+    assert target_canary._canonical_stage_row(
+        target_canary.CASE_OBSERVATION_TABLE, first
+    ) != target_canary._canonical_stage_row(target_canary.CASE_OBSERVATION_TABLE, second)
+
+
+def test_stage_package_rows_coalesces_equivalent_duplicate_serial(
+    monkeypatch, tmp_path: Path
+) -> None:
+    package = _frozen_package(tmp_path)
+    added = []
+    raw_counts = {table: 1 for table in APPLICATION_CANARY_TABLES}
+    raw_counts["markorbit_facts.us_applicant_candidate_current"] = 0
+
+    class FakePublisher:
+        def __init__(self, *args, include_applicant_index: bool, **kwargs) -> None:
+            assert include_applicant_index is False
+
+        def add(self, bundle, source_file: str) -> None:
+            added.append((bundle.case.serial_number, source_file))
+
+        def close(self) -> dict[str, int]:
+            return dict(raw_counts)
+
+    fake_case = type("Case", (), {"serial_number": "75065963"})()
+    first = type("Bundle", (), {"case": fake_case})()
+    second = type("Bundle", (), {"case": fake_case})()
+    monkeypatch.setattr(target_canary, "SnapshotAwareUSBatchPublisher", FakePublisher)
+    monkeypatch.setattr(
+        target_canary,
+        "_iter_package_bundles",
+        lambda path: [("apc260722.xml", first), ("apc260722.xml", second)],
+    )
+    monkeypatch.setattr(
+        target_canary,
+        "_bundle_stage_fingerprint",
+        lambda *args, **kwargs: "same",
+    )
+
+    counts = target_canary.stage_package_rows(object(), package)
+
+    assert counts == {table: 1 for table in APPLICATION_CANARY_TABLES}
+    assert added == [("75065963", "apc260722.xml")]
+
+
+def test_stage_package_rows_rejects_conflicting_duplicate_serial(
+    monkeypatch, tmp_path: Path
+) -> None:
+    package = _frozen_package(tmp_path)
+
+    class FakePublisher:
+        def __init__(self, *args, include_applicant_index: bool, **kwargs) -> None:
+            assert include_applicant_index is False
+
+        def add(self, bundle, source_file: str) -> None:
+            return None
+
+        def close(self) -> dict[str, int]:
+            raise AssertionError("conflicting duplicate must fail before close")
+
+    fake_case = type("Case", (), {"serial_number": "75065963"})()
+    first = type("Bundle", (), {"case": fake_case})()
+    second = type("Bundle", (), {"case": fake_case})()
+    fingerprints = iter(["first", "second"])
+    monkeypatch.setattr(target_canary, "SnapshotAwareUSBatchPublisher", FakePublisher)
+    monkeypatch.setattr(
+        target_canary,
+        "_iter_package_bundles",
+        lambda path: [("apc260722.xml", first), ("apc260722.xml", second)],
+    )
+    monkeypatch.setattr(
+        target_canary,
+        "_bundle_stage_fingerprint",
+        lambda *args, **kwargs: next(fingerprints),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting duplicate USPTO serial number"):
+        target_canary.stage_package_rows(object(), package)
 
 
 def test_commit_plan_is_exact_one_package_and_insert_only(tmp_path: Path) -> None:

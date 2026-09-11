@@ -12,9 +12,17 @@ import uuid
 
 from app.scanner import sha256_file
 from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE
-from app.us.change_history import CASE_OBSERVATION_TABLE
+from app.us.change_history import (
+    CASE_OBSERVATION_COLUMNS,
+    CASE_OBSERVATION_TABLE,
+    build_case_observation_row,
+)
 from app.us.ingest import OUTPUT_PACKAGE_COLUMNS, _iter_package_bundles
-from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
+from app.us.publisher import bundle_rows
+from app.us.publisher_m12 import (
+    SnapshotAwareUSBatchPublisher,
+    _compact_madrid_filing_snapshot,
+)
 
 
 TARGET_DISTRO = "MarkOrbit-ClickHouse"
@@ -468,6 +476,71 @@ def stage_ddl_from_manifest(
     return statements
 
 
+_OBSERVATION_ORDER_SENSITIVE_DERIVED_COLUMNS = frozenset(
+    {"owner_record_set_hash", "observation_hash"}
+)
+
+
+def _canonical_stage_row(table: str, row: Sequence[Any]) -> str:
+    values = list(row)
+    if table == CASE_OBSERVATION_TABLE:
+        values = [
+            value
+            for column, value in zip(CASE_OBSERVATION_COLUMNS, values, strict=True)
+            if column not in _OBSERVATION_ORDER_SENSITIVE_DERIVED_COLUMNS
+        ]
+    return json.dumps(
+        values,
+        default=str,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _bundle_stage_fingerprint(
+    bundle: Any,
+    *,
+    package: FrozenCanaryPackage,
+) -> str:
+    """Fingerprint exactly the package-scoped facts one bundle would stage.
+
+    USPTO daily files may contain overlapping sorted source segments where one
+    serial appears more than once. Coalescing is permitted only when every row
+    that would reach the canary tables is identical after row-order
+    normalization. Package-member provenance and two observation hashes that are
+    order-sensitive derivatives of the same staged facts are excluded. Any
+    factual difference for one serial still fails closed.
+    """
+    fingerprint_source_file = "<package-member>"
+    rows = bundle_rows(
+        _compact_madrid_filing_snapshot(bundle),
+        package_id=package.package_id,
+        package_kind=package.package_kind,
+        source_effective_date=package.source_effective_date,
+        source_file=fingerprint_source_file,
+        source_rank=package.source_rank,
+    )
+    rows[CASE_OBSERVATION_TABLE] = [
+        build_case_observation_row(
+            bundle,
+            package_id=package.package_id,
+            package_kind=package.package_kind,
+            source_effective_date=package.source_effective_date,
+            source_file=fingerprint_source_file,
+            source_rank=package.source_rank,
+        )
+    ]
+    digest = hashlib.sha256()
+    for table in APPLICATION_CANARY_TABLES:
+        digest.update(table.encode("utf-8"))
+        digest.update(b"\0")
+        for encoded in sorted(_canonical_stage_row(table, row) for row in rows[table]):
+            digest.update(encoded.encode("utf-8"))
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def stage_package_rows(
     client: WslNativeClickHouseClient,
     package: FrozenCanaryPackage,
@@ -486,16 +559,24 @@ def stage_package_rows(
         batch_size=batch_size,
         include_applicant_index=False,
     )
-    seen_serials: set[str] = set()
+    seen_serial_fingerprints: dict[str, str] = {}
     for source_file, bundle in _iter_package_bundles(package.path):
         serial = bundle.case.serial_number
-        if serial in seen_serials:
-            raise RuntimeError(
-                f"duplicate USPTO serial number in frozen canary package: {serial}"
-            )
-        seen_serials.add(serial)
+        fingerprint = _bundle_stage_fingerprint(
+            bundle,
+            package=package,
+        )
+        prior_fingerprint = seen_serial_fingerprints.get(serial)
+        if prior_fingerprint is not None:
+            if fingerprint != prior_fingerprint:
+                raise RuntimeError(
+                    "conflicting duplicate USPTO serial number in frozen canary package: "
+                    f"{serial}"
+                )
+            continue
+        seen_serial_fingerprints[serial] = fingerprint
         publisher.add(bundle, source_file)
-    if not seen_serials:
+    if not seen_serial_fingerprints:
         raise RuntimeError("frozen canary package produced no trademark case records")
     counts = publisher.close()
     canary_counts = {table: counts[table] for table in APPLICATION_CANARY_TABLES}
