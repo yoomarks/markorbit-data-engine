@@ -12,7 +12,6 @@ from app.us.applicant_candidate_backfill_operator import (
     load_backfill_plan,
     prepare_backfill_plan,
 )
-from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE
 
 
 class Result:
