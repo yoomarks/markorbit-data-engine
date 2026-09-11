@@ -498,8 +498,9 @@ def stage_package_rows(
     if not seen_serials:
         raise RuntimeError("frozen canary package produced no trademark case records")
     counts = publisher.close()
+    canary_counts = {table: counts[table] for table in APPLICATION_CANARY_TABLES}
     assert_package_unchanged(package)
-    return counts
+    return canary_counts
 
 
 def package_column_for_table(table: str) -> str:
