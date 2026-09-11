@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $clickhouseSchemaPaths = @(
+    (Join-Path $repoRoot "database/clickhouse/init/000_schema_version.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/004_us_m1_core.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/005_us_m11_real_tdxf.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/006_us_m12_snapshot_semantics.sql"),
