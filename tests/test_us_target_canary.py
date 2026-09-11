@@ -142,6 +142,11 @@ def test_ttl_show_create_fails_closed() -> None:
         )
 
 
+def test_bulk_canary_contract_excludes_post_anchor_owner_read_index() -> None:
+    assert "markorbit_facts.us_applicant_candidate_current" not in APPLICATION_CANARY_TABLES
+    assert len(APPLICATION_CANARY_TABLES) == 12
+
+
 def test_schema_manifest_requires_exact_application_table_set() -> None:
     show_create = {table: _show_create(table) for table in APPLICATION_CANARY_TABLES}
     show_create.pop(next(iter(show_create)))
