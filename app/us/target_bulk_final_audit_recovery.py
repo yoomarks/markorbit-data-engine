@@ -202,8 +202,9 @@ def recover_final_audit(
         batch_manifest=manifest,
         state_dir=state_dir,
     )
-    if audit.get("verified_sequences") != list(range(1, 311)):
-        raise RuntimeError("final-audit recovery did not verify exact 1..310 sequence coverage")
+    accepted_source_count = int(master.get("accepted_source_count") or 310)
+    if audit.get("verified_sequences") != list(range(1, accepted_source_count + 1)):
+        raise RuntimeError("final-audit recovery did not verify exact accepted sequence coverage")
     if not bool(audit.get("full_accepted_source_corpus_on_target")):
         raise RuntimeError("final-audit recovery did not prove the full accepted corpus")
 
@@ -229,7 +230,7 @@ def recover_final_audit(
         "phase": "COMPLETE",
         "completed_suffix_count": len(allowed),
         "completed_sequences": allowed,
-        "accepted_target_sequence_count": 310,
+        "accepted_target_sequence_count": accepted_source_count,
         "remaining_to_accepted_corpus": 0,
         "last_safe_checkpoint_sequence": allowed[-1],
         "final_audit_version": BATCH_FINAL_AUDIT_VERSION,

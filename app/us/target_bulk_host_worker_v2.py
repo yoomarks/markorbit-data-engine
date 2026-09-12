@@ -139,8 +139,8 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
                 "current_sequence": sequence,
                 "completed_suffix_count": len(completed_sequences),
                 "completed_sequences": completed_sequences,
-                "accepted_target_sequence_count": 2 + len(completed_sequences),
-                "remaining_to_accepted_corpus": 310 - (2 + len(completed_sequences)),
+                "accepted_target_sequence_count": (int(master["start_sequence"]) - 1) + len(completed_sequences),
+                "remaining_to_accepted_corpus": int(master["accepted_source_count"]) - ((int(master["start_sequence"]) - 1) + len(completed_sequences)),
                 "last_safe_checkpoint_sequence": sequence,
                 "last_archived_source_sequence": sequence,
                 "last_archived_source_path": archived_source_path,
@@ -191,7 +191,7 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
             "phase": "COMPLETE",
             "completed_suffix_count": len(completed_sequences),
             "completed_sequences": completed_sequences,
-            "accepted_target_sequence_count": 310,
+            "accepted_target_sequence_count": int(master["accepted_source_count"]),
             "remaining_to_accepted_corpus": 0,
             "last_safe_checkpoint_sequence": completed_sequences[-1]
             if completed_sequences

@@ -37,7 +37,6 @@ BATCH_FINAL_AUDIT_VERSION = "US_APPLICATION_TARGET_BULK_BATCH_AUDIT_V2"
 _CANARY_JOURNAL_RE = re.compile(
     r"^package_(?P<sequence>\d{3})_(?P<sha>[0-9a-f]{16})\.canary\.json$"
 )
-_FULL_CANARY_SEQUENCES = frozenset([1, *range(3, 311)])
 
 
 def _query_single(client: BulkTargetClient, sql: str) -> int:
@@ -91,7 +90,9 @@ def _verify_frozen_package2_anchor(
 def _discover_full_corpus_evidence(
     *,
     state_dir: Path,
+    accepted_source_count: int = 310,
 ) -> dict[int, dict[str, Any]]:
+    full_sequences = frozenset([1, *range(3, accepted_source_count + 1)])
     paths_by_sequence: dict[int, Path] = {}
     for path in sorted(state_dir.glob("package_*.canary.json")):
         match = _CANARY_JOURNAL_RE.fullmatch(path.name)
@@ -105,8 +106,8 @@ def _discover_full_corpus_evidence(
         paths_by_sequence[sequence] = path
 
     observed_sequences = set(paths_by_sequence)
-    missing = sorted(_FULL_CANARY_SEQUENCES - observed_sequences)
-    unexpected = sorted(observed_sequences - _FULL_CANARY_SEQUENCES)
+    missing = sorted(full_sequences - observed_sequences)
+    unexpected = sorted(observed_sequences - full_sequences)
     if missing or unexpected:
         raise RuntimeError(
             "US target full-corpus canary coverage drifted: "
@@ -114,7 +115,7 @@ def _discover_full_corpus_evidence(
         )
 
     evidence: dict[int, dict[str, Any]] = {}
-    for sequence in sorted(_FULL_CANARY_SEQUENCES):
+    for sequence in sorted(full_sequences):
         path = paths_by_sequence[sequence]
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -296,10 +297,11 @@ def _verify_target_full_corpus_attribution(
     *,
     evidence: dict[int, dict[str, Any]],
     package2: dict[str, Any],
+    accepted_source_count: int = 310,
 ) -> dict[str, Any]:
     all_evidence = {**evidence, 2: package2}
     expected_by_id: dict[str, dict[str, Any]] = {}
-    for sequence in range(1, 311):
+    for sequence in range(1, accepted_source_count + 1):
         item = all_evidence.get(sequence)
         if item is None:
             raise RuntimeError(
@@ -313,11 +315,11 @@ def _verify_target_full_corpus_attribution(
         expected_by_id[package_id] = item
 
     package_current_rows: dict[str, dict[str, int]] = {
-        str(sequence): {} for sequence in range(1, 311)
+        str(sequence): {} for sequence in range(1, accepted_source_count + 1)
     }
     table_summary: dict[str, dict[str, Any]] = {}
     final_package_state: dict[str, dict[str, int | bool]] = {}
-    final_item = all_evidence[310]
+    final_item = all_evidence[accepted_source_count]
     final_package_id = str(final_item["package_id"])
 
     for table in APPLICATION_CANARY_TABLES:
@@ -486,7 +488,8 @@ def audit_target_bulk_batch(
                 )
         child_journals[str(sequence)] = str(journal_path)
 
-    evidence = _discover_full_corpus_evidence(state_dir=state_dir)
+    accepted_source_count = int(master_plan["accepted_source_count"])
+    evidence = _discover_full_corpus_evidence(state_dir=state_dir, accepted_source_count=accepted_source_count)
     _verify_master_plan_bindings(master_plan, evidence=evidence)
     package2 = _verify_frozen_package2_anchor(target, master_plan=master_plan)
     package2_stage_counts = _verify_stage_evidence(target, package2=package2)
@@ -494,13 +497,14 @@ def audit_target_bulk_batch(
         target,
         evidence=evidence,
         package2=package2,
+        accepted_source_count=accepted_source_count,
     )
 
     storage = _verify_storage(target)
     schema = _read_target_manifest(target)
     headroom = _verify_hot_us_headroom(target)
 
-    verified_sequences = list(range(1, 311))
+    verified_sequences = list(range(1, accepted_source_count + 1))
     package_table_rows = {
         str(sequence): evidence[sequence]["accepted_counts"]
         for sequence in sorted(evidence)

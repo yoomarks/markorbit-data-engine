@@ -51,6 +51,8 @@ def _master_plan() -> dict:
         "raw_root": "F:/MarkOrbitData/raw",
         "expected_history_parts": 91,
         "accepted_source_count": 310,
+        "accepted_prefix": {"through_sequence": 2, "canary_evidence_count": 0, "identity_sha256": None},
+        "batch_start_sequence": 3,
         "accepted_schema_manifest_sha256": ACCEPTED_SCHEMA_MANIFEST_SHA256,
         "accepted_package2_anchor": {"sequence": 2},
         "accepted_package2_source": {
@@ -123,7 +125,7 @@ def test_batch_final_audit_requires_every_child_and_master_package(monkeypatch, 
             "accepted_counts": {"markorbit_facts.application_case": 1},
         }
     }
-    monkeypatch.setattr(audit_mod, "_discover_full_corpus_evidence", lambda state_dir: evidence)
+    monkeypatch.setattr(audit_mod, "_discover_full_corpus_evidence", lambda state_dir, accepted_source_count=310: evidence)
     monkeypatch.setattr(audit_mod, "_verify_master_plan_bindings", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         audit_mod,
@@ -140,7 +142,7 @@ def test_batch_final_audit_requires_every_child_and_master_package(monkeypatch, 
     monkeypatch.setattr(
         audit_mod,
         "_verify_target_full_corpus_attribution",
-        lambda client, evidence, package2: {
+        lambda client, evidence, package2, accepted_source_count=310: {
             "package_current_rows": {},
             "table_summary": {},
             "case_serial_coverage": {},
@@ -365,5 +367,5 @@ def test_production_launcher_uses_v2_and_success_is_after_final_audit() -> None:
     assert source.index('"phase": "FINAL_AUDIT"') < source.index("status=STATUS_SUCCESS")
     assert "batch final audit failed" in source
     assert "completed-sequence checkpoint is not the contiguous approved prefix" in source
-    assert '"accepted_target_sequence_count": 310' in source
+    assert 'int(master["accepted_source_count"])' in source
     assert '"remaining_to_accepted_corpus": 0' in source

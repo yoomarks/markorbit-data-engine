@@ -8,12 +8,14 @@ from typing import Any
 
 from app.us.package_meta import infer_us_package_descriptor
 from app.us.source_preflight import build_preflight
-from app.us.target_canary import deterministic_package_id
+from app.us.target_canary import FrozenCanaryPackage, deterministic_package_id
+from app.us.target_canary_journal import load_canary_journal
 
 
-BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V1"
+BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V2"
+LEGACY_BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V1"
 EXPECTED_HISTORY_PARTS = 91
-EXPECTED_SOURCE_COUNT = 310
+EXPECTED_SOURCE_COUNT = 310  # legacy accepted baseline; not a corpus upper bound
 FIRST_BULK_SEQUENCE = 3
 ACCEPTED_SCHEMA_MANIFEST_SHA256 = (
     "ff801dea29e5f4b146e5e7ca24507abf4d7d498f977af64e1bc2e14267f63795"
@@ -152,11 +154,11 @@ def _source_entry(source: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_source_inventory(entries: list[dict[str, Any]]) -> None:
-    _require(len(entries) == EXPECTED_SOURCE_COUNT, "accepted US source corpus count drifted")
+    _require(len(entries) >= 2, "US source corpus is missing accepted anchor packages")
     sequences = [int(item["sequence"]) for item in entries]
     _require(
-        sequences == list(range(1, EXPECTED_SOURCE_COUNT + 1)),
-        "US source replay sequence is not exactly contiguous 1..310",
+        sequences == list(range(1, len(entries) + 1)),
+        f"US source corpus count drifted: replay sequence is not exactly contiguous 1..{len(entries)}",
     )
     shas = [str(item["sha256"]) for item in entries]
     _require(len(shas) == len(set(shas)), "US source inventory contains duplicate SHA-256 identities")
@@ -172,6 +174,39 @@ def _validate_source_inventory(entries: list[dict[str, Any]]) -> None:
     _require(second["package_id"] == ACCEPTED_PACKAGE2_ID, "accepted Package 2 deterministic id drifted")
 
 
+def _frozen_package(entry: dict[str, Any]) -> FrozenCanaryPackage:
+    effective_raw = entry.get("source_effective_date")
+    effective = date.fromisoformat(str(effective_raw)) if effective_raw else None
+    return FrozenCanaryPackage(
+        path=Path(str(entry["path"])),
+        file_name=str(entry["file_name"]),
+        size_bytes=int(entry["size_bytes"]),
+        sha256=str(entry["sha256"]).lower(),
+        package_kind=str(entry["package_kind"]),
+        source_rank=int(entry["source_rank"]),
+        source_effective_date=effective,
+        package_id=deterministic_package_id(str(entry["sha256"])),
+    )
+
+
+def _validate_accepted_prefix(
+    entries: list[dict[str, Any]], *, start_sequence: int, state_dir: Path
+) -> dict[str, Any]:
+    prefix_end = start_sequence - 1
+    _require(prefix_end >= 2, "accepted prefix must include Package 1 and Package 2")
+    state_dir = state_dir.resolve()
+    _require(state_dir.is_dir(), f"accepted prefix state directory is missing: {state_dir}")
+    checked: list[dict[str, Any]] = []
+    for sequence in [1, *range(3, prefix_end + 1)]:
+        matches = sorted(state_dir.glob(f"package_{sequence:03d}_*.canary.json"))
+        _require(len(matches) == 1, f"accepted prefix canary evidence count drifted: sequence={sequence} observed={len(matches)}")
+        package = _frozen_package(entries[sequence - 1])
+        journal = load_canary_journal(matches[0], package=package, schema_manifest_sha256=ACCEPTED_SCHEMA_MANIFEST_SHA256)
+        _require(str(journal.get("state") or "") == "COMPLETE", f"accepted prefix canary is not COMPLETE: sequence={sequence}")
+        checked.append({"sequence": sequence, "sha256": package.sha256, "package_id": str(package.package_id)})
+    return {"through_sequence": prefix_end, "canary_evidence_count": len(checked), "identity_sha256": _canonical_sha256(checked)}
+
+
 def build_bulk_plan(
     raw_root: Path,
     *,
@@ -180,31 +215,20 @@ def build_bulk_plan(
     start_sequence: int = FIRST_BULK_SEQUENCE,
     end_sequence: int | None = None,
     max_packages: int | None = None,
+    to_current_end: bool = False,
     source_preflight: dict[str, Any] | None = None,
+    accepted_state_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Build a fully frozen, read-only bounded target replay plan."""
-    if bool(end_sequence is None) == bool(max_packages is None):
-        raise ValueError("provide exactly one of end_sequence or max_packages")
+    bound_count = int(end_sequence is not None) + int(max_packages is not None) + int(bool(to_current_end))
+    if bound_count != 1:
+        raise ValueError("provide exactly one of end_sequence, max_packages, or to_current_end")
     if len(execution_main) != 40 or any(
         ch not in "0123456789abcdefABCDEF" for ch in execution_main
     ):
         raise ValueError("execution_main must be a 40-character git SHA")
     if start_sequence < FIRST_BULK_SEQUENCE:
         raise ValueError(f"bulk replay cannot start before sequence {FIRST_BULK_SEQUENCE}")
-    if start_sequence > EXPECTED_SOURCE_COUNT:
-        raise ValueError("start_sequence exceeds accepted source corpus")
-    if end_sequence is not None:
-        if end_sequence < start_sequence or end_sequence > EXPECTED_SOURCE_COUNT:
-            raise ValueError("end_sequence is outside the accepted bounded suffix")
-        resolved_end = end_sequence
-    else:
-        assert max_packages is not None
-        if max_packages < 1:
-            raise ValueError("max_packages must be at least 1")
-        resolved_end = start_sequence + max_packages - 1
-        if resolved_end > EXPECTED_SOURCE_COUNT:
-            raise ValueError("max_packages exceeds the accepted source corpus suffix")
-
     anchor = validate_stage2_anchor(stage2_receipt)
     preflight = source_preflight or build_preflight(
         raw_root,
@@ -227,6 +251,28 @@ def build_bulk_plan(
     _require(isinstance(raw_steps, list), "source preflight replay_plan must be a list")
     entries = [_source_entry(_as_object(item, "source replay step")) for item in raw_steps]
     _validate_source_inventory(entries)
+    source_count = len(entries)
+    if start_sequence > source_count:
+        raise ValueError("start_sequence exceeds current source corpus")
+    if to_current_end:
+        resolved_end = source_count
+    elif end_sequence is not None:
+        if end_sequence < start_sequence or end_sequence > source_count:
+            raise ValueError("end_sequence is outside the current bounded suffix")
+        resolved_end = end_sequence
+    else:
+        assert max_packages is not None
+        if max_packages < 1:
+            raise ValueError("max_packages must be at least 1")
+        resolved_end = start_sequence + max_packages - 1
+        if resolved_end > source_count:
+            raise ValueError("max_packages exceeds the current source corpus suffix")
+    if start_sequence > FIRST_BULK_SEQUENCE:
+        if accepted_state_dir is None:
+            raise ValueError("accepted_state_dir is required for incremental replay after sequence 3")
+        accepted_prefix = _validate_accepted_prefix(entries, start_sequence=start_sequence, state_dir=accepted_state_dir)
+    else:
+        accepted_prefix = {"through_sequence": 2, "canary_evidence_count": 0, "identity_sha256": None}
 
     inventory_sha = _canonical_sha256(entries)
     suffix = [
@@ -253,7 +299,9 @@ def build_bulk_plan(
         "execution_main": execution_main.lower(),
         "raw_root": root,
         "expected_history_parts": EXPECTED_HISTORY_PARTS,
-        "accepted_source_count": EXPECTED_SOURCE_COUNT,
+        "accepted_source_count": source_count,
+        "accepted_prefix": accepted_prefix,
+        "batch_start_sequence": start_sequence,
         "accepted_schema_manifest_sha256": ACCEPTED_SCHEMA_MANIFEST_SHA256,
         "accepted_package2_anchor": anchor,
         "accepted_package2_source": dict(entries[1]),
@@ -275,7 +323,8 @@ def build_bulk_plan(
 
 
 def validate_bulk_plan(plan: dict[str, Any]) -> None:
-    if str(plan.get("plan_version") or "") != BULK_PLAN_VERSION:
+    version = str(plan.get("plan_version") or "")
+    if version not in {BULK_PLAN_VERSION, LEGACY_BULK_PLAN_VERSION}:
         raise RuntimeError("unsupported US target bulk plan version")
     if not bool(plan.get("read_only")) or bool(plan.get("production_mutation_authorized")):
         raise RuntimeError("US target bulk plan must remain read-only before explicit execution authority")
@@ -284,8 +333,18 @@ def validate_bulk_plan(plan: dict[str, Any]) -> None:
         raise RuntimeError("US target bulk plan packages are missing")
     start = int(plan.get("start_sequence") or 0)
     end = int(plan.get("end_sequence") or 0)
-    if start < FIRST_BULK_SEQUENCE or end < start:
+    source_count = int(plan.get("accepted_source_count") or 0)
+    if start < FIRST_BULK_SEQUENCE or end < start or end > source_count:
         raise RuntimeError("US target bulk plan range is invalid")
+    prefix = plan.get("accepted_prefix")
+    if version == BULK_PLAN_VERSION:
+        batch_start = int(plan.get("batch_start_sequence") or 0)
+        if batch_start < FIRST_BULK_SEQUENCE or batch_start > start:
+            raise RuntimeError("US target bulk plan batch start binding drifted")
+        if not isinstance(prefix, dict) or int(prefix.get("through_sequence") or 0) != batch_start - 1:
+            raise RuntimeError("US target bulk plan accepted prefix binding drifted")
+    elif prefix is not None:
+        raise RuntimeError("legacy US target bulk plan unexpectedly contains accepted prefix binding")
     expected_order = [1, *range(start, end + 1)]
     if [int(item.get("sequence") or 0) for item in packages if isinstance(item, dict)] != expected_order:
         raise RuntimeError("US target bulk plan execution order drifted")

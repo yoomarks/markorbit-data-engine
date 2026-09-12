@@ -4,16 +4,19 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$ExpectedMain,
 
-    [ValidateRange(3, 310)]
+    [ValidateRange(3, 1000000)]
     [int]$StartSequence = 3,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'ByEnd')]
-    [ValidateRange(3, 310)]
+    [ValidateRange(3, 1000000)]
     [int]$EndSequence,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'ByCount')]
-    [ValidateRange(1, 308)]
+    [ValidateRange(1, 1000000)]
     [int]$MaxPackages,
+
+    [Parameter(Mandatory = $true, ParameterSetName = 'ToCurrentEnd')]
+    [switch]$ToCurrentEnd,
 
     [string]$PythonExe = 'python'
 )
@@ -91,6 +94,7 @@ function Find-AcceptedStage2Receipt {
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 $ReportsRoot = Join-Path $RepoRoot 'reports'
+$StateDir = Join-Path $ReportsRoot 'production_us_application_bulk_state'
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmss')
 $EvidenceDir = Join-Path $ReportsRoot "production_us_application_bulk_plan_$stamp"
 $PlanPath = Join-Path $EvidenceDir 'bulk_plan.json'
@@ -100,9 +104,6 @@ try {
     Require-True (Test-Path -LiteralPath $RawRoot -PathType Container) "Accepted F: Raw root is missing: $RawRoot"
     if ($PSCmdlet.ParameterSetName -eq 'ByEnd') {
         Require-True ($EndSequence -ge $StartSequence) 'EndSequence must be >= StartSequence.'
-    }
-    else {
-        Require-True (($StartSequence + $MaxPackages - 1) -le 310) 'MaxPackages exceeds the accepted sequence-310 source corpus.'
     }
 
     Assert-ExactMain -Phase 'entry'
@@ -116,14 +117,18 @@ try {
         '--raw-root', $RawRoot,
         '--execution-main', $ExpectedMain.ToLowerInvariant(),
         '--stage2-receipt', $stage2Receipt,
+        '--accepted-state-dir', $StateDir,
         '--start-sequence', [string]$StartSequence,
         '--output', $PlanPath
     )
     if ($PSCmdlet.ParameterSetName -eq 'ByEnd') {
         $pythonArgs += @('--end-sequence', [string]$EndSequence)
     }
-    else {
+    elseif ($PSCmdlet.ParameterSetName -eq 'ByCount') {
         $pythonArgs += @('--max-packages', [string]$MaxPackages)
+    }
+    else {
+        $pythonArgs += '--to-current-end'
     }
     Invoke-NativeCapture -Label 'US Application bulk plan builder' -Command { & $PythonExe @pythonArgs } | Out-Null
     Require-True (Test-Path -LiteralPath $PlanPath -PathType Leaf) 'Bulk plan JSON was not written.'
@@ -133,7 +138,7 @@ try {
     Require-True ([bool]$plan.read_only -and -not [bool]$plan.production_mutation_authorized) 'Bulk plan incorrectly authorizes production mutation.'
     Require-True ([int]$plan.bridge_sequence -eq 1 -and [int]$plan.accepted_existing_target_sequence -eq 2) 'Bulk plan target continuity contract drifted.'
     Require-True ([int]$plan.start_sequence -eq $StartSequence) 'Bulk plan start sequence drifted.'
-    Require-True ([int]$plan.end_sequence -le 310) 'Bulk plan escaped the accepted source corpus.'
+    Require-True ([int]$plan.end_sequence -le [int]$plan.accepted_source_count) 'Bulk plan escaped the current source corpus.'
     Require-True ([string]$plan.accepted_schema_manifest_sha256 -eq $SchemaSha) 'Bulk plan target schema SHA drifted.'
 
     Assert-ExactMain -Phase 'exit'

@@ -34,6 +34,8 @@ def _plan(args: argparse.Namespace) -> int:
         start_sequence=args.start_sequence,
         end_sequence=args.end_sequence,
         max_packages=args.max_packages,
+        to_current_end=args.to_current_end,
+        accepted_state_dir=args.accepted_state_dir,
     )
     write_receipt(args.output, plan)
     _emit(
@@ -104,6 +106,8 @@ def build_parser() -> argparse.ArgumentParser:
     bound = plan.add_mutually_exclusive_group(required=True)
     bound.add_argument("--end-sequence", type=int)
     bound.add_argument("--max-packages", type=int)
+    bound.add_argument("--to-current-end", action="store_true")
+    plan.add_argument("--accepted-state-dir", type=Path)
     plan.add_argument("--output", type=Path, required=True)
     plan.set_defaults(handler=_plan)
 
