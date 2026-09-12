@@ -690,11 +690,11 @@ def execute_bulk_plan(
         "automatic_next_package": False,
         "next_sequence": (
             int(plan["end_sequence"]) + 1
-            if int(plan["end_sequence"]) < 310
+            if int(plan["end_sequence"]) < int(plan["accepted_source_count"])
             else None
         ),
         "full_accepted_source_corpus_on_target": (
-            int(plan["start_sequence"]) == 3 and int(plan["end_sequence"]) == 310
+            int(plan["end_sequence"]) == int(plan["accepted_source_count"])
         ),
     }
 

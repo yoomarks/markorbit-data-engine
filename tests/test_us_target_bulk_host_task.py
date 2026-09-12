@@ -54,6 +54,8 @@ def _master_plan() -> dict:
         "raw_root": "F:/MarkOrbitData/raw",
         "expected_history_parts": 91,
         "accepted_source_count": 310,
+        "accepted_prefix": {"through_sequence": 2, "canary_evidence_count": 0, "identity_sha256": None},
+        "batch_start_sequence": 3,
         "accepted_schema_manifest_sha256": ACCEPTED_SCHEMA_MANIFEST_SHA256,
         "accepted_package2_anchor": {"sequence": 2},
         "accepted_package2_source": {
@@ -109,6 +111,7 @@ def test_us_continue_defaults_to_full_frozen_suffix_prepare(monkeypatch) -> None
 
     monkeypatch.setattr(admin_task_api, "resumable_target_bulk_task", lambda: None)
     monkeypatch.setattr(admin_task_api, "queue_target_bulk_prepare", fake_prepare)
+    monkeypatch.setattr(admin_task_api, "next_target_bulk_sequence", lambda: 311)
     result = admin_task_api._queue_us_application_target_task(
         action="CONTINUE",
         expected_history_parts=0,
@@ -116,7 +119,7 @@ def test_us_continue_defaults_to_full_frozen_suffix_prepare(monkeypatch) -> None
         bulk_max_packages=None,
     )
     assert result["accepted"] is True
-    assert captured == {"end_sequence": 310, "max_packages": None}
+    assert captured == {"start_sequence": 311, "to_current_end": True}
 
 
 def test_us_run_prepares_exactly_one_suffix_package(monkeypatch) -> None:

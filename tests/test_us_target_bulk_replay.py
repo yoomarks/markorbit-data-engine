@@ -22,6 +22,8 @@ from app.us.target_bulk_plan import (
     ACCEPTED_PACKAGE2_SHA256,
     ACCEPTED_SCHEMA_MANIFEST_SHA256,
     EXPECTED_SOURCE_COUNT,
+    LEGACY_BULK_PLAN_VERSION,
+    _canonical_sha256,
     build_bulk_plan,
     validate_bulk_plan,
     validate_stage2_anchor,
@@ -75,10 +77,10 @@ def _source_path(root: Path, sequence: int) -> tuple[Path, Path]:
     return canonical, canonical
 
 
-def _fake_preflight(root: Path) -> dict:
+def _fake_preflight(root: Path, count: int = EXPECTED_SOURCE_COUNT) -> dict:
     root.mkdir(parents=True, exist_ok=True)
     steps: list[dict] = []
-    for sequence in range(1, EXPECTED_SOURCE_COUNT + 1):
+    for sequence in range(1, count + 1):
         actual, canonical = _source_path(root, sequence)
         actual.write_bytes(b"")
         descriptor = infer_us_package_descriptor(canonical)
@@ -138,7 +140,7 @@ def test_bulk_plan_freezes_bridge_anchor_and_bounded_suffix(corpus) -> None:
     assert plan["read_only"] is True
     assert plan["production_mutation_authorized"] is False
     assert plan["expected_history_parts"] == 91
-    assert plan["accepted_source_count"] == 310
+    assert plan["accepted_source_count"] == EXPECTED_SOURCE_COUNT
     assert plan["bridge_sequence"] == 1
     assert plan["accepted_existing_target_sequence"] == 2
     assert plan["start_sequence"] == 3
@@ -660,3 +662,97 @@ def test_frozen_plan_source_does_not_hide_tampered_planned_file(tmp_path: Path) 
     }
     with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
         bulk_replay._frozen_from_plan(item)
+
+
+def test_bulk_plan_v1_artifact_remains_valid(corpus) -> None:
+    plan = _plan(corpus, max_packages=1)
+    legacy = deepcopy(plan)
+    legacy["plan_version"] = LEGACY_BULK_PLAN_VERSION
+    legacy.pop("accepted_prefix", None)
+    contract = {
+        key: value
+        for key, value in legacy.items()
+        if key not in {"plan_sha256", "required_authority_token"}
+    }
+    digest = _canonical_sha256(contract)
+    legacy["plan_sha256"] = digest
+    legacy["required_authority_token"] = (
+        f"GO #545 bounded US Application bulk replay {digest}"
+    )
+    validate_bulk_plan(legacy)
+
+
+def test_bulk_plan_supports_verified_incremental_suffix(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "corpus343"
+    preflight = _fake_preflight(root, count=343)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    for sequence in [1, *range(3, 311)]:
+        (state_dir / f"package_{sequence:03d}_{sequence:016x}.canary.json").write_text("{}")
+    monkeypatch.setattr(
+        "app.us.target_bulk_plan.load_canary_journal",
+        lambda *args, **kwargs: {"state": "COMPLETE"},
+    )
+    plan = build_bulk_plan(
+        root,
+        execution_main=EXECUTION_MAIN,
+        stage2_receipt=_stage2_receipt(),
+        start_sequence=311,
+        end_sequence=343,
+        source_preflight=preflight,
+        accepted_state_dir=state_dir,
+    )
+    assert plan["accepted_source_count"] == 343
+    assert plan["accepted_prefix"]["through_sequence"] == 310
+    assert plan["accepted_prefix"]["canary_evidence_count"] == 309
+    assert [item["sequence"] for item in plan["packages"]][1:] == list(range(311, 344))
+
+
+def test_incremental_plan_fails_closed_when_prefix_evidence_missing(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "corpus343_missing"
+    preflight = _fake_preflight(root, count=343)
+    state_dir = tmp_path / "state_missing"
+    state_dir.mkdir()
+    for sequence in [1, *range(3, 311)]:
+        if sequence != 200:
+            (state_dir / f"package_{sequence:03d}_{sequence:016x}.canary.json").write_text("{}")
+    monkeypatch.setattr(
+        "app.us.target_bulk_plan.load_canary_journal",
+        lambda *args, **kwargs: {"state": "COMPLETE"},
+    )
+    with pytest.raises(RuntimeError, match="sequence=200"):
+        build_bulk_plan(
+            root,
+            execution_main=EXECUTION_MAIN,
+            stage2_receipt=_stage2_receipt(),
+            start_sequence=311,
+            end_sequence=343,
+            source_preflight=preflight,
+            accepted_state_dir=state_dir,
+        )
+
+
+def test_incremental_plan_can_freeze_current_corpus_end(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "corpus343_current_end"
+    preflight = _fake_preflight(root, count=343)
+    state_dir = tmp_path / "state_current_end"
+    state_dir.mkdir()
+    for sequence in [1, *range(3, 311)]:
+        (state_dir / f"package_{sequence:03d}_{sequence:016x}.canary.json").write_text("{}")
+    monkeypatch.setattr(
+        "app.us.target_bulk_plan.load_canary_journal",
+        lambda *args, **kwargs: {"state": "COMPLETE"},
+    )
+    plan = build_bulk_plan(
+        root,
+        execution_main=EXECUTION_MAIN,
+        stage2_receipt=_stage2_receipt(),
+        start_sequence=311,
+        to_current_end=True,
+        source_preflight=preflight,
+        accepted_state_dir=state_dir,
+    )
+    assert plan["start_sequence"] == 311
+    assert plan["end_sequence"] == 343
+    assert plan["suffix_package_count"] == 33
+    assert plan["batch_start_sequence"] == 311

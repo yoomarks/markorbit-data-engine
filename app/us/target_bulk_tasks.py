@@ -13,7 +13,8 @@ TARGET_BULK_DOMAIN = "US_APPLICATION"
 TARGET_BULK_ACTION = "CONTINUE"
 TARGET_BULK_EXPECTED_HISTORY_PARTS = 91
 TARGET_BULK_START_SEQUENCE = 3
-TARGET_BULK_SOURCE_COUNT = 310
+TARGET_BULK_SOURCE_COUNT = 310  # legacy completed baseline used by Applicant serving epoch
+TARGET_BULK_MAX_SEQUENCE = 1000000
 
 STATUS_PREPARE_QUEUED = "HOST_PREPARE_QUEUED"
 STATUS_NEEDS_OPERATOR = "NEEDS_OPERATOR"
@@ -43,24 +44,28 @@ def _validate_bound(
     start_sequence: int,
     end_sequence: int | None,
     max_packages: int | None,
-) -> tuple[int | None, int | None]:
-    if start_sequence < TARGET_BULK_START_SEQUENCE or start_sequence > TARGET_BULK_SOURCE_COUNT:
+    to_current_end: bool = False,
+) -> tuple[int | None, int | None, bool]:
+    if start_sequence < TARGET_BULK_START_SEQUENCE or start_sequence > TARGET_BULK_MAX_SEQUENCE:
         raise ValueError(
             f"start_sequence must be between {TARGET_BULK_START_SEQUENCE} "
-            f"and {TARGET_BULK_SOURCE_COUNT}"
+            f"and {TARGET_BULK_MAX_SEQUENCE}"
         )
-    if bool(end_sequence is None) == bool(max_packages is None):
-        raise ValueError("provide exactly one of end_sequence or max_packages")
+    bound_count = int(end_sequence is not None) + int(max_packages is not None) + int(bool(to_current_end))
+    if bound_count != 1:
+        raise ValueError("provide exactly one of end_sequence, max_packages, or to_current_end")
     if end_sequence is not None:
-        if end_sequence < start_sequence or end_sequence > TARGET_BULK_SOURCE_COUNT:
-            raise ValueError("end_sequence is outside the accepted source corpus")
-        return int(end_sequence), None
+        if end_sequence < start_sequence or end_sequence > TARGET_BULK_MAX_SEQUENCE:
+            raise ValueError("end_sequence exceeds the bounded host-task sequence limit")
+        return int(end_sequence), None, False
+    if to_current_end:
+        return None, None, True
     assert max_packages is not None
     if max_packages < 1:
         raise ValueError("max_packages must be at least 1")
-    if start_sequence + max_packages - 1 > TARGET_BULK_SOURCE_COUNT:
-        raise ValueError("max_packages exceeds the accepted source corpus")
-    return None, int(max_packages)
+    if start_sequence + max_packages - 1 > TARGET_BULK_MAX_SEQUENCE:
+        raise ValueError("max_packages exceeds the bounded host-task sequence limit")
+    return None, int(max_packages), False
 
 
 def queue_target_bulk_prepare(
@@ -68,12 +73,14 @@ def queue_target_bulk_prepare(
     start_sequence: int = TARGET_BULK_START_SEQUENCE,
     end_sequence: int | None = None,
     max_packages: int | None = None,
+    to_current_end: bool = False,
 ) -> dict[str, Any]:
     """Queue a read-only host-side plan build. No production mutation is authorized."""
-    end_sequence, max_packages = _validate_bound(
+    end_sequence, max_packages, to_current_end = _validate_bound(
         start_sequence=start_sequence,
         end_sequence=end_sequence,
         max_packages=max_packages,
+        to_current_end=to_current_end,
     )
     payload: dict[str, Any] = {
         "task_kind": TARGET_BULK_TASK_KIND,
@@ -86,6 +93,7 @@ def queue_target_bulk_prepare(
         "start_sequence": int(start_sequence),
         "end_sequence": end_sequence,
         "max_packages": max_packages,
+        "to_current_end": bool(to_current_end),
         "production_mutation_authorized": False,
         "stop_requested": False,
     }
@@ -130,6 +138,39 @@ def queue_target_bulk_prepare(
             task = dict(cur.fetchone())
         conn.commit()
     return {"accepted": True, "task": task}
+
+
+def next_target_bulk_sequence() -> int:
+    """Return the first sequence after the latest fully audited successful corpus."""
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT metrics
+                FROM control.job_run
+                WHERE trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
+                  AND payload->>'domain' = 'US_APPLICATION'
+                  AND payload->>'execution_lane' = %s
+                  AND status = %s
+                  AND COALESCE(metrics->>'phase', '') = 'COMPLETE'
+                  AND COALESCE((metrics->>'full_accepted_source_corpus_on_target')::boolean, false)
+                ORDER BY finished_at DESC NULLS LAST, started_at DESC, run_id DESC
+                LIMIT 1
+                """,
+                (TARGET_BULK_TASK_KIND, TARGET_BULK_EXECUTION_LANE, STATUS_SUCCESS),
+            )
+            row = cur.fetchone()
+    if not row:
+        return TARGET_BULK_START_SEQUENCE
+    metrics = dict(row.get("metrics") or {})
+    checkpoint = max(
+        int(metrics.get("accepted_target_sequence_count") or 0),
+        int(metrics.get("last_safe_checkpoint_sequence") or 0),
+    )
+    if checkpoint < 2:
+        raise RuntimeError("completed US Application target bulk task has no durable checkpoint")
+    return checkpoint + 1
 
 
 def active_target_bulk_task() -> dict[str, Any] | None:

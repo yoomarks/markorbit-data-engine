@@ -119,10 +119,13 @@ def _run_plan_operator(task: dict[str, Any], *, repo_root: Path) -> dict[str, An
     ]
     end_sequence = payload.get("end_sequence")
     max_packages = payload.get("max_packages")
+    to_current_end = bool(payload.get("to_current_end"))
     if end_sequence is not None:
         command.extend(["-EndSequence", str(int(end_sequence))])
     elif max_packages is not None:
         command.extend(["-MaxPackages", str(int(max_packages))])
+    elif to_current_end:
+        command.append("-ToCurrentEnd")
     else:
         raise RuntimeError("queued host task has no explicit bulk bound")
 
@@ -166,7 +169,8 @@ def _run_plan_operator(task: dict[str, Any], *, repo_root: Path) -> dict[str, An
         "end_sequence": int(plan["end_sequence"]),
         "suffix_package_count": int(plan["suffix_package_count"]),
         "child_count": int(manifest["child_count"]),
-        "corpus_total": 310,
+        "corpus_total": int(plan["accepted_source_count"]),
+        "accepted_prefix_sequence": int(plan["start_sequence"]) - 1,
         "accepted_existing_target_sequence": 2,
         "package1_target_bridge_required": True,
         "completed_suffix_count": 0,
@@ -484,8 +488,8 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
                 "current_sequence": sequence,
                 "completed_suffix_count": len(completed_sequences),
                 "completed_sequences": completed_sequences,
-                "accepted_target_sequence_count": 2 + len(completed_sequences),
-                "remaining_to_accepted_corpus": 310 - (2 + len(completed_sequences)),
+                "accepted_target_sequence_count": (int(master["start_sequence"]) - 1) + len(completed_sequences),
+                "remaining_to_accepted_corpus": int(master["accepted_source_count"]) - ((int(master["start_sequence"]) - 1) + len(completed_sequences)),
                 "last_safe_checkpoint_sequence": sequence,
                 "last_archived_source_sequence": sequence,
                 "last_archived_source_path": archived_source_path,
@@ -501,8 +505,8 @@ def _run_execution(task: dict[str, Any], *, repo_root: Path) -> dict[str, Any]:
             "phase": "COMPLETE",
             "completed_suffix_count": len(completed_sequences),
             "completed_sequences": completed_sequences,
-            "accepted_target_sequence_count": 2 + len(completed_sequences),
-            "remaining_to_accepted_corpus": 310 - (2 + len(completed_sequences)),
+            "accepted_target_sequence_count": (int(master["start_sequence"]) - 1) + len(completed_sequences),
+            "remaining_to_accepted_corpus": int(master["accepted_source_count"]) - ((int(master["start_sequence"]) - 1) + len(completed_sequences)),
             "last_safe_checkpoint_sequence": completed_sequences[-1] if completed_sequences else 2,
             "stop_requested": False,
         },

@@ -290,7 +290,7 @@ try {
     Require-True ([string]$Authority -eq [string]$plan.required_authority_token) 'Authority does not exactly bind the frozen bulk plan SHA.'
     Require-True ([int]$plan.bridge_sequence -eq 1) 'Bulk plan Package 1 target bridge contract drifted.'
     Require-True ([int]$plan.accepted_existing_target_sequence -eq 2) 'Bulk plan accepted Package 2 anchor contract drifted.'
-    Require-True ([int]$plan.start_sequence -ge 3 -and [int]$plan.end_sequence -ge [int]$plan.start_sequence -and [int]$plan.end_sequence -le 310) 'Bulk plan range is not an explicit bounded sequence-3+ range.'
+    Require-True ([int]$plan.start_sequence -ge 3 -and [int]$plan.end_sequence -ge [int]$plan.start_sequence -and [int]$plan.end_sequence -le [int]$plan.accepted_source_count) 'Bulk plan range is not an explicit bounded sequence within the frozen source corpus.'
     Require-True ([int]$plan.package_count -eq (1 + [int]$plan.suffix_package_count)) 'Bulk plan package count drifted.'
     Require-True ([string]$plan.accepted_schema_manifest_sha256 -eq $SchemaSha) 'Bulk plan accepted target schema SHA drifted.'
 

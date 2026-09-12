@@ -10,6 +10,7 @@ from app.us.target_bulk_task_control import (
 from app.us.target_bulk_tasks import (
     active_target_bulk_task,
     approve_target_bulk_task,
+    next_target_bulk_sequence,
     queue_target_bulk_prepare,
     request_target_bulk_stop,
 )
@@ -58,8 +59,12 @@ def _queue_us_application_target_task(
         if bulk_end_sequence is not None and bulk_max_packages is not None:
             raise ValueError("provide only one of bulk_end_sequence or bulk_max_packages")
         if bulk_end_sequence is None and bulk_max_packages is None:
-            bulk_end_sequence = 310
+            return queue_target_bulk_prepare(
+                start_sequence=next_target_bulk_sequence(),
+                to_current_end=True,
+            )
         return queue_target_bulk_prepare(
+            start_sequence=next_target_bulk_sequence(),
             end_sequence=bulk_end_sequence,
             max_packages=bulk_max_packages,
         )
@@ -71,8 +76,8 @@ def admin_domain_task(
     domain: str,
     action: str,
     expected_history_parts: int = Query(default=0, ge=0, le=9999),
-    bulk_end_sequence: int | None = Query(default=None, ge=3, le=310),
-    bulk_max_packages: int | None = Query(default=None, ge=1, le=308),
+    bulk_end_sequence: int | None = Query(default=None, ge=3, le=1000000),
+    bulk_max_packages: int | None = Query(default=None, ge=1, le=1000000),
 ):
     try:
         normalized_action = action.strip().upper()
