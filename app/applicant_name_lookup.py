@@ -35,6 +35,9 @@ US_APPLICANT_NAME_LOOKUP_COLUMNS: tuple[str, ...] = (
     "ingested_at",
     "is_deleted",
 )
+US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS: tuple[str, ...] = tuple(
+    column for column in US_APPLICANT_NAME_LOOKUP_COLUMNS if column != "ingested_at"
+)
 
 
 def cn_applicant_name_lookup_row(source: Mapping[str, Any]) -> list[Any] | None:

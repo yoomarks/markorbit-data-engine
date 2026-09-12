@@ -9,6 +9,10 @@ from typing import Any
 import uuid
 
 from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE
+from app.applicant_name_lookup import (
+    US_APPLICANT_NAME_LOOKUP_TABLE,
+    US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS,
+)
 from app.us.model import USCaseBundle
 
 
@@ -274,6 +278,7 @@ TABLE_COLUMNS = {
     "markorbit_facts.us_case_current": CASE_COLUMNS,
     "markorbit_facts.us_owner_current": OWNER_COLUMNS,
     APPLICANT_INDEX_TABLE: APPLICANT_INDEX_COLUMNS,
+    US_APPLICANT_NAME_LOOKUP_TABLE: list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
     "markorbit_facts.us_classification_current": CLASS_COLUMNS,
     "markorbit_facts.us_event_history": EVENT_COLUMNS,
     "markorbit_facts.us_statement_current": STATEMENT_COLUMNS,
