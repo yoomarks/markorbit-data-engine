@@ -75,3 +75,25 @@ def test_cooperative_stop_happens_before_query():
     with pytest.raises(InterruptedError, match="stop requested"):
         backfill_cn_applicant_name_lookup(client=client, stop_requested=lambda: True)
     assert client.queries == []
+
+
+def test_native_backfill_is_single_bounded_operation_and_checkpoints_after_write():
+    final = CNApplicantNameLookupBackfillCursor("CN9", "OWNER", "c" * 64, 87_896_297)
+
+    class NativeClient:
+        def __init__(self):
+            self.settings = None
+
+        def insert_cn_applicant_name_lookup_from_current(self, *, settings):
+            self.settings = settings
+            return final
+
+    client, checkpoints = NativeClient(), []
+    result = backfill_cn_applicant_name_lookup(client=client, checkpoint=checkpoints.append)
+    assert result == final
+    assert checkpoints == [final]
+    assert client.settings == {
+        "max_threads": 1,
+        "max_rows_to_read": 250_000_000,
+        "read_overflow_mode": "throw",
+    }

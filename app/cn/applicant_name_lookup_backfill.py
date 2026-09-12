@@ -11,7 +11,7 @@ from app.applicant_name_lookup import (
 
 DEFAULT_BATCH_SIZE = 5_000
 MAX_BATCH_SIZE = 20_000
-READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 50_000_000, "read_overflow_mode": "throw"}
+READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 250_000_000, "read_overflow_mode": "throw"}
 SOURCE_COLUMNS = (
     "application_number",
     "role",
@@ -91,6 +91,15 @@ def backfill_cn_applicant_name_lookup(
         raise ValueError("max_rows must be positive when provided")
     state = cursor or CNApplicantNameLookupBackfillCursor()
     _assert_epoch(expected_epoch, serving_epoch_getter)
+    native_backfill = getattr(client, "insert_cn_applicant_name_lookup_from_current", None)
+    if native_backfill is not None:
+        if stop_requested is not None and stop_requested():
+            raise InterruptedError("CN Applicant name lookup backfill stop requested")
+        final = native_backfill(settings=READ_SETTINGS)
+        _assert_epoch(expected_epoch, serving_epoch_getter)
+        if checkpoint is not None:
+            checkpoint(final)
+        return final
     while True:
         if stop_requested is not None and stop_requested():
             raise InterruptedError("CN Applicant name lookup backfill stop requested")
