@@ -9,6 +9,7 @@ import pytest
 import app.cn.applicant_name_lookup_backfill_operator as operator
 from app.cn.applicant_name_lookup_backfill_control import CNApplicantServingEpoch
 from app.cn.applicant_name_lookup_backfill_operator import (
+    TargetCNApplicantBackfillClient,
     execute_backfill_plan,
     load_backfill_plan,
     prepare_backfill_plan,
@@ -50,6 +51,19 @@ class SchemaClient:
         raise AssertionError(sql)
 
 
+class NativeBaseClient:
+    def __init__(self):
+        self.queries = []
+        self.commands = []
+
+    def query(self, sql):
+        self.queries.append(sql)
+        return Result([(2, ("CN2", "OWNER", "f" * 64))])
+
+    def command(self, sql):
+        self.commands.append(sql)
+
+
 def epoch():
     return CNApplicantServingEpoch("2026-09-01", 42, 40)
 
@@ -73,6 +87,24 @@ def test_cn_operator_uses_canonical_runtime_clickhouse_owner():
     source = inspect.getsource(operator)
     assert "from app.db import clickhouse_client" in source
     assert "app.us.target_canary" not in source
+
+
+def test_native_backfill_is_restricted_to_lookup_insert_select():
+    base = NativeBaseClient()
+    cursor = TargetCNApplicantBackfillClient(base).insert_cn_applicant_name_lookup_from_current(
+        settings={
+            "max_threads": 1,
+            "max_rows_to_read": 250_000_000,
+            "read_overflow_mode": "throw",
+        }
+    )
+    assert cursor.emitted == 2
+    assert len(base.commands) == 1
+    assert base.commands[0].startswith(
+        "INSERT INTO markorbit_facts.cn_applicant_name_lookup_current"
+    )
+    assert "FROM markorbit_facts.cn_case_party_current FINAL" in base.commands[0]
+    assert "max_rows_to_read = 250000000" in base.commands[0]
 
 
 def test_execute_requires_explicit_authority_before_receipt(tmp_path):

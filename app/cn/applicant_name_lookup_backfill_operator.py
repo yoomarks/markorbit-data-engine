@@ -14,7 +14,10 @@ from app.applicant_name_lookup import (
     APPLICANT_NAME_LOOKUP_SCHEMA_VERSION,
     CN_APPLICANT_NAME_LOOKUP_TABLE,
 )
-from app.cn.applicant_name_lookup_backfill import MAX_BATCH_SIZE
+from app.cn.applicant_name_lookup_backfill import (
+    MAX_BATCH_SIZE,
+    CNApplicantNameLookupBackfillCursor,
+)
 from app.cn.applicant_name_lookup_backfill_control import (
     BACKFILL_JOB_TYPE,
     CNApplicantServingEpoch,
@@ -94,6 +97,43 @@ class TargetCNApplicantBackfillClient:
                 f"CN Applicant backfill may insert only into {CN_APPLICANT_NAME_LOOKUP_TABLE}"
             )
         self._base.insert(table, rows, column_names=column_names)
+
+    def insert_cn_applicant_name_lookup_from_current(self, *, settings: Mapping[str, Any]) -> Any:
+        allowed = {"max_threads", "max_rows_to_read", "read_overflow_mode"}
+        if set(settings) != allowed or str(settings["read_overflow_mode"]) != "throw":
+            raise ValueError("CN Applicant native backfill requires the accepted read budget")
+        suffix = (
+            " SETTINGS max_threads = "
+            f"{int(settings['max_threads'])}, max_rows_to_read = {int(settings['max_rows_to_read'])}, "
+            "read_overflow_mode = 'throw'"
+        )
+        where = (
+            "is_deleted = 0 AND is_current = 1 AND role IN ('OWNER', 'CO_OWNER') "
+            "AND entity_id IS NOT NULL AND normalized_name != ''"
+        )
+        stats = list(
+            self._base.query(
+                "SELECT count(), max(tuple(application_number, role, relation_key)) "
+                "FROM markorbit_facts.cn_case_party_current FINAL WHERE " + where + suffix
+            ).result_rows
+        )
+        if len(stats) != 1:
+            raise RuntimeError("CN Applicant native backfill source bounds are unavailable")
+        emitted, last = int(stats[0][0]), stats[0][1]
+        self._base.command(
+            "INSERT INTO markorbit_facts.cn_applicant_name_lookup_current "
+            "(normalized_name, entity_id, application_number, relation_key, source_row_hash, "
+            "record_hash, source_rank, ingested_at, is_deleted) "
+            "SELECT normalized_name, assumeNotNull(entity_id), application_number, relation_key, "
+            "source_row_hash, record_hash, source_rank, ingested_at, toUInt8(0) "
+            "FROM markorbit_facts.cn_case_party_current FINAL WHERE " + where + suffix
+        )
+        return CNApplicantNameLookupBackfillCursor(
+            after_application_number=str(last[0]) if emitted else "",
+            after_role=str(last[1]) if emitted else "",
+            after_relation_key=str(last[2]) if emitted else "",
+            emitted=emitted,
+        )
 
 
 def target_schema_state(client: Any) -> dict[str, object]:
