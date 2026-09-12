@@ -68,3 +68,10 @@ def test_epoch_drift_fails_before_checkpoint():
         )
     assert checkpoints == []
     assert len(client.inserts) == 1
+
+
+def test_cooperative_stop_happens_before_query():
+    client = Client([])
+    with pytest.raises(InterruptedError, match="stop requested"):
+        backfill_cn_applicant_name_lookup(client=client, stop_requested=lambda: True)
+    assert client.queries == []
