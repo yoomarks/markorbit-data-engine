@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS markorbit_facts.us_applicant_name_lookup_current
     source_row_hash FixedString(64),
     record_hash FixedString(64),
     source_rank UInt64,
-    ingested_at DateTime64(3, 'UTC'),
+    ingested_at DateTime64(3, 'UTC') DEFAULT now64(3),
     is_deleted UInt8 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(source_rank, is_deleted)

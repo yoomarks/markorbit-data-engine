@@ -5,6 +5,10 @@ from datetime import date
 from typing import Any
 import uuid
 
+from app.applicant_name_lookup import (
+    US_APPLICANT_NAME_LOOKUP_TABLE,
+    us_applicant_name_lookup_row,
+)
 from app.us.applicant_candidate_index import (
     APPLICANT_INDEX_TABLE,
     applicant_candidate_key,
@@ -285,10 +289,18 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
         owner_table = "markorbit_facts.us_owner_current"
         owner_rows = self.buffers[owner_table]
         index_rows = self.buffers[APPLICANT_INDEX_TABLE]
+        name_lookup_rows = self.buffers[US_APPLICANT_NAME_LOOKUP_TABLE]
         if index_rows:
             raise RuntimeError(
                 "US Applicant candidate index buffer must be empty before derivation"
             )
+        if name_lookup_rows:
+            raise RuntimeError("US Applicant name lookup buffer must be empty before derivation")
+
+        def append_name_lookup(owner_row: list[Any]) -> None:
+            lookup_row = us_applicant_name_lookup_row(owner_mapping(owner_row, OWNER_COLUMNS))
+            del lookup_row[7]  # ingested_at uses the ClickHouse column default.
+            name_lookup_rows.append(lookup_row)
 
         serial_index = OWNER_COLUMNS.index("serial_number")
         owner_key_index = OWNER_COLUMNS.index("owner_key")
@@ -353,10 +365,13 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
             tombstone[OWNER_COLUMNS.index("source_rank")] = self.source_rank
             tombstone[deleted_index] = 1
             index_rows.append([old_candidate, *tombstone])
+            append_name_lookup(tombstone)
 
         index_rows.extend(
             applicant_index_row(row, OWNER_COLUMNS) for row in owner_rows
         )
+        for row in owner_rows:
+            append_name_lookup(row)
 
     def _flush_observations(self) -> None:
         if not self.observation_buffer:
@@ -375,7 +390,11 @@ class SnapshotAwareUSBatchPublisher(USBatchPublisher):
         if self.include_applicant_index:
             self._prepare_applicant_index_rows()
         elif self.buffers[APPLICANT_INDEX_TABLE]:
-            raise RuntimeError("US Applicant candidate index buffer must remain empty when disabled")
+            raise RuntimeError(
+                "US Applicant candidate index buffer must remain empty when disabled"
+            )
+        elif self.buffers[US_APPLICANT_NAME_LOOKUP_TABLE]:
+            raise RuntimeError("US Applicant name lookup buffer must remain empty when disabled")
         super().flush()
         self._flush_observations()
         self._touched_serial_sources.clear()

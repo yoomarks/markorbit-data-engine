@@ -54,6 +54,7 @@ def test_lookup_schema_is_physically_keyed_by_normalized_name() -> None:
 
     assert "ORDER BY (normalized_name, entity_id, application_number, relation_key)" in sql
     assert "ORDER BY (normalized_name, candidate_key, serial_number, owner_key)" in sql
+    assert "ingested_at DateTime64(3, 'UTC') DEFAULT now64(3)" in sql
     assert APPLICANT_NAME_LOOKUP_SCHEMA_VERSION in sql
 
 

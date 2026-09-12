@@ -5,7 +5,12 @@ import uuid
 
 import pytest
 
-from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE, applicant_candidate_key, owner_mapping
+from app.applicant_name_lookup import US_APPLICANT_NAME_LOOKUP_TABLE
+from app.us.applicant_candidate_index import (
+    APPLICANT_INDEX_TABLE,
+    applicant_candidate_key,
+    owner_mapping,
+)
 from app.us.parser import iter_case_bundles
 from app.us.publisher import OWNER_COLUMNS, TABLE_COLUMNS, bundle_rows
 from app.us.publisher_m12 import (
@@ -40,7 +45,10 @@ class FakeClickHouse:
         self.queries.append(sql)
         if "FROM markorbit_facts.us_case_current FINAL" in sql:
             return QueryResult(
-                [(serial, transaction_date) for serial, transaction_date in self.existing_case_dates.items()]
+                [
+                    (serial, transaction_date)
+                    for serial, transaction_date in self.existing_case_dates.items()
+                ]
             )
         for table, rows in self.existing.items():
             if f"FROM {table} FINAL" in sql:
@@ -141,7 +149,9 @@ def test_snapshot_lookup_only_considers_older_current_children() -> None:
         batch_size=100,
     )
 
-    publisher.add(replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml")
+    publisher.add(
+        replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml"
+    )
     publisher.close()
 
     # Case freshness + one lookup per snapshot child + one owner lookup for candidate re-key detection.
@@ -264,9 +274,7 @@ def test_newer_transaction_still_updates_current_snapshot() -> None:
     publisher.close()
 
     case_rows = [
-        rows
-        for name, rows, _columns in client.inserts
-        if name == "markorbit_facts.us_case_current"
+        rows for name, rows, _columns in client.inserts if name == "markorbit_facts.us_case_current"
     ]
     assert len(case_rows) == 1
     transaction_index = TABLE_COLUMNS["markorbit_facts.us_case_current"].index("transaction_date")
@@ -285,7 +293,9 @@ def test_event_histories_are_not_snapshot_tombstoned() -> None:
         batch_size=100,
     )
 
-    publisher.add(replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml")
+    publisher.add(
+        replace(old_bundle, owners=(), classifications=(), statements=()), "apc260108.xml"
+    )
     publisher.close()
 
     assert "markorbit_facts.us_event_history" not in SNAPSHOT_CHILD_TABLES
@@ -329,9 +339,10 @@ def test_fixedstring_bytes_are_normalized_before_tombstone_reinsert() -> None:
     tombstones = [row for row in inserted[0] if row[owner_columns.index("is_deleted")] == 1]
     assert len(tombstones) == 1
     tombstone = tombstones[0]
-    assert tombstone[owner_columns.index("owner_key")] == original_owner[
-        owner_columns.index("owner_key")
-    ]
+    assert (
+        tombstone[owner_columns.index("owner_key")]
+        == original_owner[owner_columns.index("owner_key")]
+    )
     assert all(not isinstance(value, bytes) for value in tombstone)
 
 
@@ -369,6 +380,14 @@ def test_applicant_index_rekeys_identity_change_with_old_candidate_tombstone():
     old_rows = [row for row in index_rows if row[0] == old_candidate]
     assert len(old_rows) == 1
     assert old_rows[0][-1] == 1
+    lookup_rows = [
+        row
+        for table, rows, _columns in client.inserts
+        if table == US_APPLICANT_NAME_LOOKUP_TABLE
+        for row in rows
+    ]
+    assert len(lookup_rows) == 2
+    assert any(row[1] == old_candidate and row[-1] == 1 for row in lookup_rows)
 
 
 def test_applicant_index_mirrors_owner_omission_tombstone():
@@ -415,3 +434,4 @@ def test_applicant_index_can_be_disabled_for_legacy_bulk_canary_contract():
     publisher.close()
 
     assert all(table != APPLICANT_INDEX_TABLE for table, _rows, _columns in client.inserts)
+    assert all(table != US_APPLICANT_NAME_LOOKUP_TABLE for table, _rows, _columns in client.inserts)
