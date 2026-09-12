@@ -22,7 +22,7 @@ from app.cn.applicant_name_lookup_backfill_control import (
     execute_backfill_run,
     start_backfill_run,
 )
-from app.us.target_canary import WslNativeClickHouseClient
+from app.db import clickhouse_client
 
 PLAN_VERSION = "CN_APPLICANT_NAME_LOOKUP_BACKFILL_PLAN_V1"
 RECEIPT_VERSION = "CN_APPLICANT_NAME_LOOKUP_BACKFILL_RECEIPT_V1"
@@ -63,8 +63,8 @@ def current_main_sha(repo_root: Path | None = None) -> str:
 
 
 class TargetCNApplicantBackfillClient:
-    def __init__(self, base: WslNativeClickHouseClient | None = None) -> None:
-        self._base = base or WslNativeClickHouseClient()
+    def __init__(self, base: Any | None = None) -> None:
+        self._base = base or clickhouse_client()
 
     def query(self, sql: str, *, settings: Mapping[str, Any] | None = None):
         allowed = {"max_threads", "max_rows_to_read", "read_overflow_mode"}
