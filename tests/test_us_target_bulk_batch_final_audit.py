@@ -117,17 +117,34 @@ def test_batch_final_audit_requires_every_child_and_master_package(monkeypatch, 
             },
         },
     )
-    monkeypatch.setattr(audit_mod, "_frozen_from_plan", lambda item: object())
-    monkeypatch.setattr(
-        audit_mod,
-        "_verify_complete_canary",
-        lambda client, journal_path, package: {"markorbit_facts.application_case": 1},
-    )
-    monkeypatch.setattr(audit_mod, "_stage_table_count", lambda client, package: 0)
+    evidence = {
+        1: {
+            "journal_path": "p1.json",
+            "accepted_counts": {"markorbit_facts.application_case": 1},
+        }
+    }
+    monkeypatch.setattr(audit_mod, "_discover_full_corpus_evidence", lambda state_dir: evidence)
+    monkeypatch.setattr(audit_mod, "_verify_master_plan_bindings", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         audit_mod,
         "_verify_frozen_package2_anchor",
-        lambda client, master_plan: {"markorbit_facts.application_case": 2},
+        lambda client, master_plan: {
+            "accepted_counts": {"markorbit_facts.application_case": 2}
+        },
+    )
+    monkeypatch.setattr(
+        audit_mod,
+        "_verify_stage_evidence",
+        lambda client, package2: {"markorbit_facts.application_case": 2},
+    )
+    monkeypatch.setattr(
+        audit_mod,
+        "_verify_target_full_corpus_attribution",
+        lambda client, evidence, package2: {
+            "package_current_rows": {},
+            "table_summary": {},
+            "case_serial_coverage": {},
+        },
     )
     monkeypatch.setattr(
         audit_mod,
@@ -157,8 +174,9 @@ def test_batch_final_audit_requires_every_child_and_master_package(monkeypatch, 
     )
 
     assert result["audit_version"] == audit_mod.BATCH_FINAL_AUDIT_VERSION
-    assert result["verified_sequences"] == [1, 2, 3, 4]
+    assert result["verified_sequences"] == list(range(1, 311))
     assert result["verified_suffix_sequences"] == [3, 4]
+    assert result["full_accepted_source_corpus_on_target"] is True
     assert result["staging_cleanup_complete"] is True
     assert result["automatic_next_package"] is False
 
@@ -171,6 +189,137 @@ def test_batch_final_audit_requires_every_child_and_master_package(monkeypatch, 
             state_dir=state_dir,
             client=object(),
         )
+
+
+def _full_evidence() -> tuple[dict[int, dict], dict]:
+    counts = {table: 1 for table in audit_mod.APPLICATION_CANARY_TABLES}
+    evidence = {}
+    for sequence in [1, *range(3, 311)]:
+        evidence[sequence] = {
+            "sequence": sequence,
+            "package_id": f"pkg-{sequence}",
+            "accepted_counts": dict(counts),
+        }
+    package2 = {
+        "sequence": 2,
+        "package_id": "pkg-2",
+        "accepted_counts": dict(counts),
+    }
+    return evidence, package2
+
+
+def test_full_corpus_attribution_allows_prior_replacing_rows_to_be_superseded(monkeypatch) -> None:
+    evidence, package2 = _full_evidence()
+    all_ids = {f"pkg-{sequence}": 1 for sequence in range(1, 311)}
+
+    def grouped(client, *, table):
+        if table in audit_mod.REPLACING_VISIBLE_KEYS:
+            return {"pkg-310": 1}
+        return dict(all_ids)
+
+    monkeypatch.setattr(audit_mod, "_grouped_current_package_counts", grouped)
+    monkeypatch.setattr(
+        audit_mod,
+        "_final_package_replacing_counts",
+        lambda client, table, package_id: {
+            "all_unique": 1,
+            "deleted_unique": 0,
+            "has_deleted": False,
+        },
+    )
+    monkeypatch.setattr(audit_mod, "_query_single", lambda client, sql: 310)
+
+    result = audit_mod._verify_target_full_corpus_attribution(
+        object(), evidence=evidence, package2=package2
+    )
+
+    current = result["table_summary"]["markorbit_facts.us_case_current"]
+    observation = result["table_summary"]["markorbit_facts.us_case_observation_history"]
+    assert current["superseded_or_deleted_accepted_rows"] == 309
+    assert observation["superseded_or_deleted_accepted_rows"] == 0
+
+
+def test_full_corpus_attribution_requires_append_only_package_exactness(monkeypatch) -> None:
+    evidence, package2 = _full_evidence()
+    all_ids = {f"pkg-{sequence}": 1 for sequence in range(1, 311)}
+
+    def grouped(client, *, table):
+        if table in audit_mod.REPLACING_VISIBLE_KEYS:
+            return {"pkg-310": 1}
+        observed = dict(all_ids)
+        observed.pop("pkg-292")
+        return observed
+
+    monkeypatch.setattr(audit_mod, "_grouped_current_package_counts", grouped)
+    monkeypatch.setattr(
+        audit_mod,
+        "_final_package_replacing_counts",
+        lambda client, table, package_id: {
+            "all_unique": 1,
+            "deleted_unique": 0,
+            "has_deleted": False,
+        },
+    )
+    with pytest.raises(RuntimeError, match="append-only attribution drifted"):
+        audit_mod._verify_target_full_corpus_attribution(
+            object(), evidence=evidence, package2=package2
+        )
+
+
+def test_full_corpus_attribution_rejects_replacing_rows_above_durable_acceptance(monkeypatch) -> None:
+    evidence, package2 = _full_evidence()
+    all_ids = {f"pkg-{sequence}": 1 for sequence in range(1, 311)}
+
+    def grouped(client, *, table):
+        if table in audit_mod.REPLACING_VISIBLE_KEYS:
+            return {"pkg-292": 2, "pkg-310": 1}
+        return dict(all_ids)
+
+    monkeypatch.setattr(audit_mod, "_grouped_current_package_counts", grouped)
+    monkeypatch.setattr(
+        audit_mod,
+        "_final_package_replacing_counts",
+        lambda client, table, package_id: {
+            "all_unique": 1,
+            "deleted_unique": 0,
+            "has_deleted": False,
+        },
+    )
+    with pytest.raises(RuntimeError, match="exceeds durable acceptance"):
+        audit_mod._verify_target_full_corpus_attribution(
+            object(), evidence=evidence, package2=package2
+        )
+
+
+def test_full_corpus_attribution_counts_final_package_tombstone_as_latest_state(monkeypatch) -> None:
+    evidence, package2 = _full_evidence()
+    all_ids = {f"pkg-{sequence}": 1 for sequence in range(1, 311)}
+
+    def grouped(client, *, table):
+        if table in audit_mod.REPLACING_VISIBLE_KEYS:
+            return {}
+        return dict(all_ids)
+
+    monkeypatch.setattr(audit_mod, "_grouped_current_package_counts", grouped)
+    monkeypatch.setattr(
+        audit_mod,
+        "_final_package_replacing_counts",
+        lambda client, table, package_id: {
+            "all_unique": 1,
+            "deleted_unique": 1,
+            "has_deleted": True,
+        },
+    )
+    monkeypatch.setattr(audit_mod, "_query_single", lambda client, sql: 310)
+
+    result = audit_mod._verify_target_full_corpus_attribution(
+        object(), evidence=evidence, package2=package2
+    )
+
+    current = result["table_summary"]["markorbit_facts.us_case_current"]
+    assert current["current_live_rows_attributed_to_accepted_packages"] == 0
+    assert current["final_package_deleted_rows"] == 1
+    assert result["final_package_state"]["markorbit_facts.us_case_current"]["deleted"] == 1
 
 
 def test_final_audit_failure_blocks_host_task(monkeypatch) -> None:
