@@ -83,6 +83,7 @@ def backfill_cn_applicant_name_lookup(
     expected_epoch: str | None = None,
     serving_epoch_getter: Callable[[], str] | None = None,
     checkpoint: Callable[[CNApplicantNameLookupBackfillCursor], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> CNApplicantNameLookupBackfillCursor:
     if batch_size < 1 or batch_size > MAX_BATCH_SIZE:
         raise ValueError(f"batch_size must be between 1 and {MAX_BATCH_SIZE}")
@@ -91,6 +92,8 @@ def backfill_cn_applicant_name_lookup(
     state = cursor or CNApplicantNameLookupBackfillCursor()
     _assert_epoch(expected_epoch, serving_epoch_getter)
     while True:
+        if stop_requested is not None and stop_requested():
+            raise InterruptedError("CN Applicant name lookup backfill stop requested")
         remaining = None if max_rows is None else max_rows - state.emitted
         if remaining is not None and remaining <= 0:
             break
