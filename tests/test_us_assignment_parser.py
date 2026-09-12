@@ -1,6 +1,10 @@
 from datetime import date
+import io
 from pathlib import Path
 
+import pytest
+
+import app.us_assignment.parser as assignment_parser
 from app.us_assignment.parser import iter_assignment_bundles
 
 
@@ -52,3 +56,52 @@ def test_assignment_parser_preserves_partial_or_invalid_dates_raw(tmp_path: Path
     assert record.recorded_date_raw == "20260800"
     assert record.last_update_date is None
     assert record.last_update_date_raw == "bad"
+
+
+def test_assignment_parser_streams_entry_fragments_across_tiny_chunks(monkeypatch) -> None:
+    monkeypatch.setattr(assignment_parser, "_FRAGMENT_CHUNK_SIZE", 17)
+    source = io.BytesIO(
+        b"<trademark-assignments><assignment-information>"
+        b"<assignment-entry><assignment><reel-no>1</reel-no><frame-no>1</frame-no>"
+        b"</assignment></assignment-entry>"
+        b"<assignment-entry><assignment><reel-no>2</reel-no><frame-no>2</frame-no>"
+        b"</assignment></assignment-entry>"
+        b"</assignment-information></trademark-assignments>"
+    )
+    assert [bundle.assignment.reel_frame_id for bundle in iter_assignment_bundles(source)] == [
+        "1/1",
+        "2/2",
+    ]
+
+
+def test_assignment_parser_allows_official_zero_record_delivery(monkeypatch) -> None:
+    monkeypatch.setattr(assignment_parser, "_FRAGMENT_CHUNK_SIZE", 13)
+    source = io.StringIO(
+        "<trademark-assignments><assignment-information>"
+        "<data-available-code>N</data-available-code>"
+        "</assignment-information></trademark-assignments>"
+    )
+    assert list(iter_assignment_bundles(source)) == []
+
+
+def test_assignment_parser_rejects_truncated_document_after_valid_entry() -> None:
+    source = io.BytesIO(
+        b"<trademark-assignments><assignment-information>"
+        b"<assignment-entry><assignment><reel-no>1</reel-no><frame-no>1</frame-no>"
+        b"</assignment></assignment-entry>"
+    )
+    with pytest.raises(assignment_parser.ET.ParseError):
+        list(iter_assignment_bundles(source))
+
+
+def test_assignment_parser_rejects_malformed_markup_between_entries() -> None:
+    source = io.BytesIO(
+        b"<trademark-assignments><assignment-information>"
+        b"<assignment-entry><assignment><reel-no>1</reel-no><frame-no>1</frame-no>"
+        b"</assignment></assignment-entry><broken>"
+        b"<assignment-entry><assignment><reel-no>2</reel-no><frame-no>2</frame-no>"
+        b"</assignment></assignment-entry>"
+        b"</assignment-information></trademark-assignments>"
+    )
+    with pytest.raises(assignment_parser.ET.ParseError):
+        list(iter_assignment_bundles(source))
