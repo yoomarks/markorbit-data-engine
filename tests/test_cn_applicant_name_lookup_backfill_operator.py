@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import inspect
 
 import pytest
 
@@ -66,6 +67,12 @@ def test_prepare_is_deterministic_and_load_rejects_wrong_sha(tmp_path):
     assert load_backfill_plan(path, envelope["plan_sha256"])["source_epoch"] == epoch().to_dict()
     with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
         load_backfill_plan(path, "0" * 64)
+
+
+def test_cn_operator_uses_canonical_runtime_clickhouse_owner():
+    source = inspect.getsource(operator)
+    assert "from app.db import clickhouse_client" in source
+    assert "app.us.target_canary" not in source
 
 
 def test_execute_requires_explicit_authority_before_receipt(tmp_path):
