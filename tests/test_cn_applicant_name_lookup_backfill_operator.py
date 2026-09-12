@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import app.cn.applicant_name_lookup_backfill_operator as operator
 from app.cn.applicant_name_lookup_backfill_control import CNApplicantServingEpoch
 from app.cn.applicant_name_lookup_backfill_operator import (
     execute_backfill_plan,
@@ -137,3 +138,46 @@ def test_partial_completeness_writes_failure_receipt(tmp_path):
             },
         )
     assert json.loads(receipt_path.read_text(encoding="utf-8"))["status"] == "FAILED"
+
+
+def test_cli_prepare_emits_exact_plan_envelope(monkeypatch, tmp_path, capsys):
+    output = tmp_path / "plan.json"
+    monkeypatch.setattr(
+        operator,
+        "prepare_backfill_plan",
+        lambda path, batch_size: {"plan": {"batch_size": batch_size}, "plan_sha256": "a" * 64},
+    )
+    assert operator.main(["prepare", "--output", str(output), "--batch-size", "25"]) == 0
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted["plan_path"] == str(output)
+    assert emitted["plan_sha256"] == "a" * 64
+
+
+def test_cli_resume_forwards_exact_run_and_authority(monkeypatch, tmp_path, capsys):
+    observed = []
+    monkeypatch.setattr(
+        operator,
+        "execute_backfill_plan",
+        lambda *args, **kwargs: observed.append((args, kwargs)) or {"status": "SUCCESS"},
+    )
+    receipt = tmp_path / "receipt.json"
+    assert (
+        operator.main(
+            [
+                "resume",
+                "--plan",
+                str(tmp_path / "plan.json"),
+                "--plan-sha",
+                "b" * 64,
+                "--run-id",
+                "run-1",
+                "--receipt",
+                str(receipt),
+                "--authorize-production-mutation",
+            ]
+        )
+        == 0
+    )
+    assert observed[0][1]["resume_run_id"] == "run-1"
+    assert observed[0][1]["production_mutation_authorized"] is True
+    assert json.loads(capsys.readouterr().out)["receipt_path"] == str(receipt)

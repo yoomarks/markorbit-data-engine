@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -273,3 +275,50 @@ def execute_backfill_plan(
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return receipt
+
+
+def _default_output(prefix: str) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return Path(__file__).resolve().parents[2] / "reports" / f"{prefix}_{stamp}.json"
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Exact-plan gated CN Applicant name lookup backfill"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("--output", type=Path)
+    prepare.add_argument("--batch-size", type=int, default=5_000)
+
+    for command in ("execute", "resume"):
+        action = sub.add_parser(command)
+        action.add_argument("--plan", type=Path, required=True)
+        action.add_argument("--plan-sha", required=True)
+        action.add_argument("--receipt", type=Path)
+        action.add_argument("--authorize-production-mutation", action="store_true")
+        if command == "resume":
+            action.add_argument("--run-id", required=True)
+
+    args = parser.parse_args(argv)
+    if args.command == "prepare":
+        path = args.output or _default_output("production_cn_applicant_name_lookup_plan")
+        envelope = prepare_backfill_plan(path, batch_size=args.batch_size)
+        print(json.dumps({"plan_path": str(path), **envelope}, indent=2, sort_keys=True))
+        return 0
+
+    receipt = args.receipt or _default_output("production_cn_applicant_name_lookup_receipt")
+    result = execute_backfill_plan(
+        args.plan,
+        plan_sha=args.plan_sha,
+        receipt_path=receipt,
+        production_mutation_authorized=bool(args.authorize_production_mutation),
+        resume_run_id=(args.run_id if args.command == "resume" else None),
+    )
+    print(json.dumps({"receipt_path": str(receipt), **result}, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
