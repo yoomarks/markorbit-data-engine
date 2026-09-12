@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import re
 from typing import BinaryIO, Iterator, TextIO
 import xml.etree.ElementTree as ET
 
@@ -263,10 +264,98 @@ def parse_assignment_entry(entry: ET.Element) -> AssignmentBundle:
     )
 
 
+_ENTRY_START = re.compile(
+    rb"<((?:[A-Za-z_][A-Za-z0-9_.-]*:)?(?:assignment-entry|trademark-assignment))(?=[\s>])",
+    re.IGNORECASE,
+)
+_FRAGMENT_CHUNK_SIZE = 1024 * 1024
+_MAX_ENTRY_FRAGMENT_BYTES = 64 * 1024 * 1024
+_MAX_DOCUMENT_SKELETON_BYTES = 64 * 1024 * 1024
+
+
+def _chunk_bytes(stream: BinaryIO | TextIO) -> bytes:
+    chunk = stream.read(_FRAGMENT_CHUNK_SIZE)
+    if isinstance(chunk, str):
+        return chunk.encode("utf-8")
+    return chunk
+
+
+def _iter_assignment_entry_fragments(source: Source) -> Iterator[bytes]:
+    """Yield bounded records and still validate the whole document envelope.
+
+    USPTO historical assignment snapshots can exceed 2 GiB uncompressed. On Windows,
+    Expat-backed ElementTree parsing fails near the signed 32-bit byte boundary even
+    when elements are cleared. Each assignment entry is therefore parsed independently.
+    Everything outside entries is retained as a small document skeleton and parsed at
+    EOF so truncated or malformed source XML still fails closed.
+    """
+    should_close = isinstance(source, (str, Path))
+    stream = Path(source).open("rb") if should_close else source
+    buffer = b""
+    end_tag: bytes | None = None
+    skeleton = bytearray()
+    yielded = 0
+
+    def append_skeleton(payload: bytes) -> None:
+        if not payload:
+            return
+        skeleton.extend(payload)
+        if len(skeleton) > _MAX_DOCUMENT_SKELETON_BYTES:
+            raise ET.ParseError("USPTO assignment document skeleton exceeds bounded size")
+
+    try:
+        while True:
+            chunk = _chunk_bytes(stream)
+            eof = not chunk
+            if chunk:
+                buffer += chunk
+
+            while True:
+                if end_tag is None:
+                    match = _ENTRY_START.search(buffer)
+                    if match is None:
+                        if eof:
+                            append_skeleton(buffer)
+                            buffer = b""
+                            break
+                        if len(buffer) > 512:
+                            append_skeleton(buffer[:-512])
+                            buffer = buffer[-512:]
+                        break
+                    append_skeleton(buffer[: match.start()])
+                    qname = match.group(1)
+                    buffer = buffer[match.start():]
+                    end_tag = b"</" + qname + b">"
+
+                end_index = buffer.lower().find(end_tag.lower())
+                if end_index < 0:
+                    if len(buffer) > _MAX_ENTRY_FRAGMENT_BYTES:
+                        raise ET.ParseError(
+                            "USPTO assignment entry exceeds bounded fragment size"
+                        )
+                    if eof:
+                        raise ET.ParseError("unterminated USPTO assignment entry")
+                    break
+
+                end_index += len(end_tag)
+                yielded += 1
+                yield buffer[:end_index]
+                buffer = buffer[end_index:]
+                end_tag = None
+
+            if eof:
+                skeleton_bytes = bytes(skeleton)
+                if skeleton_bytes.strip():
+                    ET.fromstring(skeleton_bytes)
+                elif not yielded:
+                    raise ET.ParseError("empty USPTO assignment XML source")
+                return
+    finally:
+        if should_close:
+            stream.close()
+
+
 def iter_assignment_bundles(source: Source) -> Iterator[AssignmentBundle]:
-    context = ET.iterparse(source, events=("end",))
-    for _event, element in context:
-        if _local(element.tag) not in {"assignment-entry", "trademark-assignment"}:
-            continue
+    for fragment in _iter_assignment_entry_fragments(source):
+        element = ET.fromstring(fragment)
         yield parse_assignment_entry(element)
-        element.clear()
