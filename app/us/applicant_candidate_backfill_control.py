@@ -11,6 +11,11 @@ from app.us.applicant_candidate_backfill import (
     backfill_us_applicant_candidate_index,
 )
 from app.us.applicant_candidate_completeness import verify_us_applicant_candidate_index
+from app.us.applicant_name_lookup_backfill import (
+    ApplicantNameLookupBackfillCursor,
+    backfill_us_applicant_name_lookup,
+)
+from app.us.applicant_name_lookup_completeness import verify_us_applicant_name_lookup
 from app.us.target_bulk_tasks import (
     STATUS_NEEDS_OPERATOR,
     STATUS_PREPARE_QUEUED,
@@ -207,6 +212,62 @@ def checkpoint_backfill_run(
         conn.commit()
 
 
+def checkpoint_name_lookup_run(
+    run_id: str,
+    cursor: ApplicantNameLookupBackfillCursor,
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> None:
+    with connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE control.job_run
+                SET metrics = metrics || jsonb_build_object(
+                        'name_lookup_cursor', %s::jsonb,
+                        'phase', 'NAME_LOOKUP_BACKFILL'
+                    ),
+                    error_message = NULL
+                WHERE run_id = %s AND job_type = %s AND status = 'RUNNING'
+                RETURNING run_id
+                """,
+                (_json(cursor.to_dict()), run_id, BACKFILL_JOB_TYPE),
+            )
+            if cur.fetchone() is None:
+                raise RuntimeError("name lookup checkpoint rejected: run is not RUNNING")
+        conn.commit()
+
+
+def request_backfill_stop(
+    run_id: str,
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> None:
+    with connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE control.job_run
+                SET payload = payload || jsonb_build_object('stop_requested', true)
+                WHERE run_id = %s AND job_type = %s AND status = 'RUNNING'
+                RETURNING run_id
+                """,
+                (run_id, BACKFILL_JOB_TYPE),
+            )
+            if cur.fetchone() is None:
+                raise RuntimeError("backfill stop rejected: run is not RUNNING")
+        conn.commit()
+
+
+def backfill_stop_requested(
+    run_id: str,
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> bool:
+    run = load_backfill_run(run_id, connection_factory=connection_factory)
+    return bool(dict(run.get("payload") or {}).get("stop_requested"))
+
+
 def _finish_backfill_run(
     run_id: str,
     *,
@@ -240,6 +301,19 @@ def _cursor_from_run(run: dict[str, Any]) -> ApplicantIndexBackfillCursor:
         after_serial=str(metrics.get("after_serial") or ""),
         after_owner_key=str(metrics.get("after_owner_key") or ""),
         emitted=int(metrics.get("emitted") or 0),
+    )
+
+
+def _name_lookup_cursor_from_run(
+    run: dict[str, Any],
+) -> ApplicantNameLookupBackfillCursor:
+    metrics = dict(run.get("metrics") or {})
+    cursor = dict(metrics.get("name_lookup_cursor") or {})
+    return ApplicantNameLookupBackfillCursor(
+        after_candidate_key=str(cursor.get("after_candidate_key") or ""),
+        after_serial=str(cursor.get("after_serial") or ""),
+        after_owner_key=str(cursor.get("after_owner_key") or ""),
+        emitted=int(cursor.get("emitted") or 0),
     )
 
 
@@ -354,11 +428,47 @@ def applicant_index_ready_for_epoch(
     )
 
 
+def applicant_name_lookup_ready_for_epoch(
+    epoch: USApplicantServingEpoch,
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> bool:
+    with connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT payload, metrics
+                FROM control.job_run
+                WHERE job_type = %s AND status = 'SUCCESS'
+                ORDER BY finished_at DESC NULLS LAST, started_at DESC
+                LIMIT 1
+                """,
+                (BACKFILL_JOB_TYPE,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return False
+    payload = dict(row.get("payload") or {})
+    metrics = dict(row.get("metrics") or {})
+    source_epoch = dict(payload.get("source_epoch") or {})
+    completeness = dict(metrics.get("completeness") or {})
+    lookup = dict(completeness.get("name_lookup") or {})
+    return (
+        str(source_epoch.get("token") or "") == epoch.token
+        and str(metrics.get("source_epoch_token") or "") == epoch.token
+        and completeness.get("complete") is True
+        and completeness.get("name_lookup_complete") is True
+        and lookup.get("complete") is True
+    )
+
+
 def execute_backfill_run(
     run_id: str,
     *,
     client: Any,
-    serving_epoch_getter: Callable[[], USApplicantServingEpoch] = current_us_applicant_serving_epoch,
+    serving_epoch_getter: Callable[
+        [], USApplicantServingEpoch
+    ] = current_us_applicant_serving_epoch,
     connection_factory: Callable[..., Any] = postgres_conn,
     batch_size: int = 5_000,
 ) -> dict[str, Any]:
@@ -380,11 +490,42 @@ def execute_backfill_run(
                 state,
                 connection_factory=connection_factory,
             ),
+            stop_requested=lambda: backfill_stop_requested(
+                run_id, connection_factory=connection_factory
+            ),
+        )
+        run = load_backfill_run(run_id, connection_factory=connection_factory)
+        name_cursor = _name_lookup_cursor_from_run(run)
+        final_name_cursor = backfill_us_applicant_name_lookup(
+            client=client,
+            batch_size=batch_size,
+            cursor=name_cursor,
+            expected_epoch=epoch.token,
+            serving_epoch_getter=lambda: serving_epoch_getter().token,
+            checkpoint=lambda state: checkpoint_name_lookup_run(
+                run_id,
+                state,
+                connection_factory=connection_factory,
+            ),
+            stop_requested=lambda: backfill_stop_requested(
+                run_id, connection_factory=connection_factory
+            ),
         )
         current_epoch = serving_epoch_getter()
         if current_epoch.token != epoch.token:
-            raise RuntimeError("US Applicant serving epoch changed before completeness verification")
-        completeness = verify_us_applicant_candidate_index(client)
+            raise RuntimeError(
+                "US Applicant serving epoch changed before completeness verification"
+            )
+        candidate_completeness = verify_us_applicant_candidate_index(client)
+        name_lookup_completeness = verify_us_applicant_name_lookup(client)
+        completeness = {
+            **candidate_completeness,
+            "complete": candidate_completeness.get("complete") is True
+            and name_lookup_completeness.get("complete") is True,
+            "candidate_index_complete": candidate_completeness.get("complete") is True,
+            "name_lookup_complete": name_lookup_completeness.get("complete") is True,
+            "name_lookup": name_lookup_completeness,
+        }
         complete_backfill_run(
             run_id,
             current_epoch=current_epoch,
@@ -394,6 +535,7 @@ def execute_backfill_run(
         return {
             "run_id": run_id,
             "cursor": final_cursor.to_dict(),
+            "name_lookup_cursor": final_name_cursor.to_dict(),
             "source_epoch": current_epoch.to_dict(),
             "completeness": completeness,
         }
