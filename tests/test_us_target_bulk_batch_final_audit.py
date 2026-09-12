@@ -365,3 +365,5 @@ def test_production_launcher_uses_v2_and_success_is_after_final_audit() -> None:
     assert source.index('"phase": "FINAL_AUDIT"') < source.index("status=STATUS_SUCCESS")
     assert "batch final audit failed" in source
     assert "completed-sequence checkpoint is not the contiguous approved prefix" in source
+    assert '"accepted_target_sequence_count": 310' in source
+    assert '"remaining_to_accepted_corpus": 0' in source
