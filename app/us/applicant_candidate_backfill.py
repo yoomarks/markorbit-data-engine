@@ -76,6 +76,7 @@ def backfill_us_applicant_candidate_index(
     expected_epoch: str | None = None,
     serving_epoch_getter: Callable[[], str] | None = None,
     checkpoint: Callable[[ApplicantIndexBackfillCursor], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> ApplicantIndexBackfillCursor:
     """Backfill the derived index in resumable native-key order.
 
@@ -90,6 +91,8 @@ def backfill_us_applicant_candidate_index(
     _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
 
     while True:
+        if stop_requested is not None and stop_requested():
+            raise InterruptedError("US Applicant backfill stop requested")
         remaining = None if max_rows is None else max_rows - state.emitted
         if remaining is not None and remaining <= 0:
             break

@@ -10,6 +10,10 @@ import re
 import subprocess
 from typing import Any
 
+from app.applicant_name_lookup import (
+    APPLICANT_NAME_LOOKUP_SCHEMA_VERSION,
+    US_APPLICANT_NAME_LOOKUP_TABLE,
+)
 from app.us.applicant_candidate_backfill import MAX_BATCH_SIZE
 from app.us.applicant_candidate_backfill_control import (
     USApplicantServingEpoch,
@@ -29,10 +33,11 @@ from app.us.target_canary import (
     WslNativeClickHouseClient,
 )
 
-PLAN_VERSION = "US_APPLICANT_CANDIDATE_BACKFILL_PLAN_V1"
-RECEIPT_VERSION = "US_APPLICANT_CANDIDATE_BACKFILL_RECEIPT_V1"
+PLAN_VERSION = "US_APPLICANT_NAME_LOOKUP_BACKFILL_PLAN_V2"
+RECEIPT_VERSION = "US_APPLICANT_NAME_LOOKUP_BACKFILL_RECEIPT_V2"
 OWNER_TABLE = "markorbit_facts.us_owner_current"
 _EXPECTED_SORTING_KEY = "candidate_key, serial_number, owner_key"
+_EXPECTED_LOOKUP_SORTING_KEY = "normalized_name, candidate_key, serial_number, owner_key"
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_QUERY_SETTINGS = {
@@ -71,12 +76,16 @@ def _repo_root() -> Path:
 
 def current_main_sha(repo_root: Path | None = None) -> str:
     root = repo_root or _repo_root()
-    sha = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        text=True,
-        encoding="utf-8",
-    ).strip().lower()
+    sha = (
+        subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+        )
+        .strip()
+        .lower()
+    )
     if not _HEX40.fullmatch(sha):
         raise RuntimeError("unable to resolve exact 40-character git HEAD")
     branch = subprocess.check_output(
@@ -86,9 +95,7 @@ def current_main_sha(repo_root: Path | None = None) -> str:
         encoding="utf-8",
     ).strip()
     if branch != "main":
-        raise RuntimeError(
-            "production Applicant backfill operator must run from local main"
-        )
+        raise RuntimeError("production Applicant backfill operator must run from local main")
     return sha
 
 
@@ -97,9 +104,7 @@ def _settings_sql(settings: Mapping[str, Any] | None) -> str:
         return ""
     unknown = set(settings) - _ALLOWED_QUERY_SETTINGS
     if unknown:
-        raise ValueError(
-            f"unsupported Applicant backfill query settings: {sorted(unknown)}"
-        )
+        raise ValueError(f"unsupported Applicant backfill query settings: {sorted(unknown)}")
     parts: list[str] = []
     for key in sorted(settings):
         value = settings[key]
@@ -110,9 +115,7 @@ def _settings_sql(settings: Mapping[str, Any] | None) -> str:
             parts.append(f"{key} = {number}")
         elif key == "read_overflow_mode":
             if str(value) != "throw":
-                raise ValueError(
-                    "read_overflow_mode must remain fail-closed at 'throw'"
-                )
+                raise ValueError("read_overflow_mode must remain fail-closed at 'throw'")
             parts.append("read_overflow_mode = 'throw'")
     return " SETTINGS " + ", ".join(parts)
 
@@ -139,10 +142,8 @@ class TargetApplicantBackfillClient:
         *,
         column_names: Sequence[str],
     ) -> None:
-        if table != APPLICANT_INDEX_TABLE:
-            raise RuntimeError(
-                f"Applicant backfill may insert only into {APPLICANT_INDEX_TABLE}"
-            )
+        if table not in {APPLICANT_INDEX_TABLE, US_APPLICANT_NAME_LOOKUP_TABLE}:
+            raise RuntimeError(f"Applicant backfill may insert only into {APPLICANT_INDEX_TABLE}")
         self._base.insert(table, rows, column_names=column_names)
 
 
@@ -158,7 +159,11 @@ def target_schema_state(client: Any) -> dict[str, object]:
         SELECT name, toString(uuid), engine, sorting_key
         FROM system.tables
         WHERE database = 'markorbit_facts'
-          AND name IN ('us_owner_current', 'us_applicant_candidate_current')
+          AND name IN (
+              'us_owner_current',
+              'us_applicant_candidate_current',
+              'us_applicant_name_lookup_current'
+          )
         ORDER BY name
         """,
     )
@@ -170,23 +175,27 @@ def target_schema_state(client: Any) -> dict[str, object]:
         }
         for row in tables
     }
-    if set(by_name) != {"us_owner_current", "us_applicant_candidate_current"}:
+    if set(by_name) != {
+        "us_owner_current",
+        "us_applicant_candidate_current",
+        "us_applicant_name_lookup_current",
+    }:
         raise RuntimeError("US Applicant backfill target tables are incomplete")
     index = by_name["us_applicant_candidate_current"]
+    lookup = by_name["us_applicant_name_lookup_current"]
     normalized_key = (
-        str(index["sorting_key"])
-        .replace("`", "")
-        .replace("(", "")
-        .replace(")", "")
-        .strip()
+        str(index["sorting_key"]).replace("`", "").replace("(", "").replace(")", "").strip()
+    )
+    if index["engine"] != "ReplacingMergeTree" or normalized_key != _EXPECTED_SORTING_KEY:
+        raise RuntimeError("US Applicant index schema does not match the accepted contract")
+    normalized_lookup_key = (
+        str(lookup["sorting_key"]).replace("`", "").replace("(", "").replace(")", "").strip()
     )
     if (
-        index["engine"] != "ReplacingMergeTree"
-        or normalized_key != _EXPECTED_SORTING_KEY
+        lookup["engine"] != "ReplacingMergeTree"
+        or normalized_lookup_key != _EXPECTED_LOOKUP_SORTING_KEY
     ):
-        raise RuntimeError(
-            "US Applicant index schema does not match the accepted contract"
-        )
+        raise RuntimeError("US Applicant name lookup schema does not match the accepted contract")
     marker_rows = _rows(
         client,
         """
@@ -196,11 +205,22 @@ def target_schema_state(client: Any) -> dict[str, object]:
         LIMIT 1
         """,
     )
-    if (
-        len(marker_rows) != 1
-        or str(marker_rows[0][0]) != APPLICANT_INDEX_SCHEMA_VERSION
-    ):
+    if len(marker_rows) != 1 or str(marker_rows[0][0]) != APPLICANT_INDEX_SCHEMA_VERSION:
         raise RuntimeError("US Applicant owner-read schema marker is missing or stale")
+    lookup_marker_rows = _rows(
+        client,
+        """
+        SELECT version
+        FROM markorbit_facts.schema_version FINAL
+        WHERE component = 'APPLICANT_NAME_LOOKUP'
+        LIMIT 1
+        """,
+    )
+    if (
+        len(lookup_marker_rows) != 1
+        or str(lookup_marker_rows[0][0]) != APPLICANT_NAME_LOOKUP_SCHEMA_VERSION
+    ):
+        raise RuntimeError("Applicant name lookup schema marker is missing or stale")
     return {
         "target": {
             "distro": TARGET_DISTRO,
@@ -209,17 +229,17 @@ def target_schema_state(client: Any) -> dict[str, object]:
             "database": TARGET_DATABASE,
         },
         "schema_marker": APPLICANT_INDEX_SCHEMA_VERSION,
+        "lookup_schema_marker": APPLICANT_NAME_LOOKUP_SCHEMA_VERSION,
         "owner_table": by_name["us_owner_current"],
         "candidate_table": index,
+        "name_lookup_table": lookup,
     }
 
 
 def _validate_batch_size(batch_size: int) -> int:
     batch_size = int(batch_size)
     if batch_size < 1 or batch_size > MAX_BATCH_SIZE:
-        raise ValueError(
-            f"batch_size must be between 1 and {MAX_BATCH_SIZE}"
-        )
+        raise ValueError(f"batch_size must be between 1 and {MAX_BATCH_SIZE}")
     return batch_size
 
 
@@ -245,7 +265,7 @@ def prepare_backfill_plan(
         "batch_size": batch_size,
         "target_schema": target_schema_state(target_client),
         "mutation_scope": {
-            "table": APPLICANT_INDEX_TABLE,
+            "tables": [APPLICANT_INDEX_TABLE, US_APPLICANT_NAME_LOOKUP_TABLE],
             "operation": "INSERT_ONLY",
             "control_job_type": "US_APPLICANT_CANDIDATE_BACKFILL_V1",
         },
@@ -267,10 +287,7 @@ def load_backfill_plan(path: Path, expected_sha: str) -> dict[str, Any]:
     if not _HEX64.fullmatch(expected_sha):
         raise ValueError("--plan-sha must be an exact 64-character SHA-256")
     envelope = json.loads(path.read_text(encoding="utf-8"))
-    if (
-        set(envelope) != {"plan", "plan_sha256"}
-        or not isinstance(envelope["plan"], dict)
-    ):
+    if set(envelope) != {"plan", "plan_sha256"} or not isinstance(envelope["plan"], dict):
         raise RuntimeError("malformed Applicant backfill plan envelope")
     computed = _sha256(envelope["plan"])
     if envelope["plan_sha256"] != computed or computed != expected_sha:
@@ -292,28 +309,20 @@ def validate_live_plan(
 ) -> USApplicantServingEpoch:
     main_sha = main_sha_getter().lower()
     if main_sha != str(plan.get("expected_main") or ""):
-        raise RuntimeError(
-            "Applicant backfill main SHA drifted from the frozen plan"
-        )
+        raise RuntimeError("Applicant backfill main SHA drifted from the frozen plan")
     if str(plan.get("implementation_sha") or "") != main_sha:
-        raise RuntimeError(
-            "Applicant backfill implementation SHA does not match current main"
-        )
+        raise RuntimeError("Applicant backfill implementation SHA does not match current main")
     epoch = epoch_getter()
     frozen_epoch = dict(plan.get("source_epoch") or {})
     if epoch.to_dict() != frozen_epoch:
-        raise RuntimeError(
-            "Applicant backfill serving epoch drifted from the frozen plan"
-        )
+        raise RuntimeError("Applicant backfill serving epoch drifted from the frozen plan")
     target_client = client or TargetApplicantBackfillClient()
     if target_schema_state(target_client) != dict(plan.get("target_schema") or {}):
-        raise RuntimeError(
-            "Applicant backfill target schema identity drifted from the frozen plan"
-        )
+        raise RuntimeError("Applicant backfill target schema identity drifted from the frozen plan")
     _validate_batch_size(int(plan.get("batch_size") or 0))
     mutation_scope = dict(plan.get("mutation_scope") or {})
     if mutation_scope != {
-        "table": APPLICANT_INDEX_TABLE,
+        "tables": [APPLICANT_INDEX_TABLE, US_APPLICANT_NAME_LOOKUP_TABLE],
         "operation": "INSERT_ONLY",
         "control_job_type": "US_APPLICANT_CANDIDATE_BACKFILL_V1",
     }:
@@ -343,9 +352,7 @@ def execute_backfill_plan(
     execute_fn: Callable[..., dict[str, Any]] = execute_backfill_run,
 ) -> dict[str, Any]:
     if production_mutation_authorized is not True:
-        raise PermissionError(
-            "explicit production mutation authorization is required"
-        )
+        raise PermissionError("explicit production mutation authorization is required")
     run_id = resume_run_id
     plan: dict[str, Any] = {}
     try:
@@ -371,9 +378,7 @@ def execute_backfill_plan(
         )
         completeness = dict(result["completeness"])
         if completeness.get("complete") is not True:
-            raise RuntimeError(
-                "Applicant backfill returned a non-complete completeness receipt"
-            )
+            raise RuntimeError("Applicant backfill returned a non-complete completeness receipt")
         receipt = {
             "version": RECEIPT_VERSION,
             "status": "SUCCESS",
@@ -382,6 +387,7 @@ def execute_backfill_plan(
             "implementation_sha": str(plan["implementation_sha"]),
             "source_epoch": result["source_epoch"],
             "cursor": result["cursor"],
+            "name_lookup_cursor": result["name_lookup_cursor"],
             "completeness": completeness,
         }
         _write_receipt(receipt_path, receipt)
@@ -406,9 +412,7 @@ def _default_output(prefix: str) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Exact-plan gated US Applicant candidate backfill"
-    )
+    parser = argparse.ArgumentParser(description="Exact-plan gated US Applicant candidate backfill")
     sub = parser.add_subparsers(dest="command", required=True)
 
     prepare = sub.add_parser("prepare")
@@ -436,9 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "prepare":
-        path = args.output or _default_output(
-            "production_us_applicant_candidate_backfill_plan"
-        )
+        path = args.output or _default_output("production_us_applicant_candidate_backfill_plan")
         envelope = prepare_backfill_plan(
             path,
             batch_size=args.batch_size,
@@ -452,19 +454,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    receipt = args.receipt or _default_output(
-        "production_us_applicant_candidate_backfill_receipt"
-    )
+    receipt = args.receipt or _default_output("production_us_applicant_candidate_backfill_receipt")
     result = execute_backfill_plan(
         args.plan,
         plan_sha=args.plan_sha,
         receipt_path=receipt,
-        production_mutation_authorized=bool(
-            args.authorize_production_mutation
-        ),
-        resume_run_id=(
-            args.run_id if args.command == "resume" else None
-        ),
+        production_mutation_authorized=bool(args.authorize_production_mutation),
+        resume_run_id=(args.run_id if args.command == "resume" else None),
     )
     print(
         json.dumps(

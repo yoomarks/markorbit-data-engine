@@ -105,3 +105,10 @@ def test_resume_cursor_starts_after_durable_binding():
     sql = client.queries[0][0]
     assert "'10000002'" in sql
     assert "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'" in sql
+
+
+def test_cooperative_stop_happens_before_next_page():
+    client = FakeClient([])
+    with pytest.raises(InterruptedError, match="stop requested"):
+        backfill_us_applicant_candidate_index(client=client, stop_requested=lambda: True)
+    assert client.queries == []

@@ -26,11 +26,31 @@ class SchemaClient:
     def query(self, sql, *, settings=None):
         self.queries.append((sql, settings))
         if "FROM system.tables" in sql:
-            return Result([
-                ["us_applicant_candidate_current", "1" * 36, "ReplacingMergeTree", "candidate_key, serial_number, owner_key"],
-                ["us_owner_current", "2" * 36, "ReplacingMergeTree", "serial_number, owner_key"],
-            ])
+            return Result(
+                [
+                    [
+                        "us_applicant_candidate_current",
+                        "1" * 36,
+                        "ReplacingMergeTree",
+                        "candidate_key, serial_number, owner_key",
+                    ],
+                    [
+                        "us_applicant_name_lookup_current",
+                        "3" * 36,
+                        "ReplacingMergeTree",
+                        "normalized_name, candidate_key, serial_number, owner_key",
+                    ],
+                    [
+                        "us_owner_current",
+                        "2" * 36,
+                        "ReplacingMergeTree",
+                        "serial_number, owner_key",
+                    ],
+                ]
+            )
         if "schema_version" in sql:
+            if "APPLICANT_NAME_LOOKUP" in sql:
+                return Result([["APPLICANT_NAME_LOOKUP_V1"]])
             return Result([["US_OWNER_READ_V1"]])
         raise AssertionError(sql)
 
@@ -81,6 +101,7 @@ def test_target_adapter_restricts_settings_and_insert_scope():
         client.query("SELECT 1", settings={"max_memory_usage": 1})
     with pytest.raises(RuntimeError, match="may insert only"):
         client.insert("markorbit_facts.us_owner_current", [], column_names=[])
+    client.insert("markorbit_facts.us_applicant_name_lookup_current", [], column_names=[])
 
 
 def test_prepare_fails_without_durable_p310_epoch(tmp_path: Path):
@@ -199,6 +220,12 @@ def test_execute_writes_success_receipt(tmp_path: Path):
         assert run_id == "backfill-run"
         return {
             "cursor": {"after_serial": "9", "after_owner_key": "f" * 64, "emitted": 10},
+            "name_lookup_cursor": {
+                "after_candidate_key": "e" * 64,
+                "after_serial": "9",
+                "after_owner_key": "f" * 64,
+                "emitted": 10,
+            },
             "source_epoch": epoch().to_dict(),
             "completeness": {"complete": True, "source_visible_rows": 10, "index_visible_rows": 10},
         }
@@ -251,17 +278,19 @@ def test_load_plan_rejects_unknown_plan_keys(tmp_path: Path):
     path, envelope = make_plan(tmp_path)
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw["plan"]["unexpected"] = "value"
-    raw["plan_sha256"] = __import__(
-        "hashlib"
-    ).sha256(
-        json.dumps(
-            raw["plan"],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    raw["plan_sha256"] = (
+        __import__("hashlib")
+        .sha256(
+            json.dumps(
+                raw["plan"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        .hexdigest()
+    )
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(RuntimeError, match="malformed Applicant backfill plan keys"):
         load_backfill_plan(path, raw["plan_sha256"])
