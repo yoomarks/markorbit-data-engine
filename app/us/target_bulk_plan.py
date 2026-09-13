@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 from app.us.package_meta import infer_us_package_descriptor
 from app.us.source_preflight import build_preflight
@@ -12,7 +13,8 @@ from app.us.target_canary import FrozenCanaryPackage, deterministic_package_id
 from app.us.target_canary_journal import load_canary_journal
 
 
-BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V2"
+BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V3"
+PREVIOUS_BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V2"
 LEGACY_BULK_PLAN_VERSION = "US_APPLICATION_TARGET_BULK_PLAN_V1"
 EXPECTED_HISTORY_PARTS = 91
 EXPECTED_SOURCE_COUNT = 310  # legacy accepted baseline; not a corpus upper bound
@@ -46,6 +48,17 @@ def _canonical_sha256(value: object) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _normalize_authority_generation_id(value: object) -> str:
+    raw = str(value or "")
+    try:
+        parsed = UUID(raw)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("authority_generation_id must be a canonical UUIDv4") from exc
+    if parsed.version != 4 or str(parsed) != raw:
+        raise ValueError("authority_generation_id must be a canonical UUIDv4")
+    return str(parsed)
 
 
 def _as_object(value: object, label: str) -> dict[str, Any]:
@@ -218,6 +231,7 @@ def build_bulk_plan(
     to_current_end: bool = False,
     source_preflight: dict[str, Any] | None = None,
     accepted_state_dir: Path | None = None,
+    authority_generation_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a fully frozen, read-only bounded target replay plan."""
     bound_count = int(end_sequence is not None) + int(max_packages is not None) + int(bool(to_current_end))
@@ -229,6 +243,9 @@ def build_bulk_plan(
         raise ValueError("execution_main must be a 40-character git SHA")
     if start_sequence < FIRST_BULK_SEQUENCE:
         raise ValueError(f"bulk replay cannot start before sequence {FIRST_BULK_SEQUENCE}")
+    generation_id = _normalize_authority_generation_id(
+        str(uuid4()) if authority_generation_id is None else authority_generation_id
+    )
     anchor = validate_stage2_anchor(stage2_receipt)
     preflight = source_preflight or build_preflight(
         raw_root,
@@ -297,6 +314,7 @@ def build_bulk_plan(
         "read_only": True,
         "production_mutation_authorized": False,
         "execution_main": execution_main.lower(),
+        "authority_generation_id": generation_id,
         "raw_root": root,
         "expected_history_parts": EXPECTED_HISTORY_PARTS,
         "accepted_source_count": source_count,
@@ -324,7 +342,11 @@ def build_bulk_plan(
 
 def validate_bulk_plan(plan: dict[str, Any]) -> None:
     version = str(plan.get("plan_version") or "")
-    if version not in {BULK_PLAN_VERSION, LEGACY_BULK_PLAN_VERSION}:
+    if version not in {
+        BULK_PLAN_VERSION,
+        PREVIOUS_BULK_PLAN_VERSION,
+        LEGACY_BULK_PLAN_VERSION,
+    }:
         raise RuntimeError("unsupported US target bulk plan version")
     if not bool(plan.get("read_only")) or bool(plan.get("production_mutation_authorized")):
         raise RuntimeError("US target bulk plan must remain read-only before explicit execution authority")
@@ -337,7 +359,7 @@ def validate_bulk_plan(plan: dict[str, Any]) -> None:
     if start < FIRST_BULK_SEQUENCE or end < start or end > source_count:
         raise RuntimeError("US target bulk plan range is invalid")
     prefix = plan.get("accepted_prefix")
-    if version == BULK_PLAN_VERSION:
+    if version in {BULK_PLAN_VERSION, PREVIOUS_BULK_PLAN_VERSION}:
         batch_start = int(plan.get("batch_start_sequence") or 0)
         if batch_start < FIRST_BULK_SEQUENCE or batch_start > start:
             raise RuntimeError("US target bulk plan batch start binding drifted")
@@ -345,6 +367,16 @@ def validate_bulk_plan(plan: dict[str, Any]) -> None:
             raise RuntimeError("US target bulk plan accepted prefix binding drifted")
     elif prefix is not None:
         raise RuntimeError("legacy US target bulk plan unexpectedly contains accepted prefix binding")
+    generation = plan.get("authority_generation_id")
+    if version == BULK_PLAN_VERSION:
+        try:
+            _normalize_authority_generation_id(generation)
+        except ValueError as exc:
+            raise RuntimeError("US target bulk plan authority generation binding drifted") from exc
+    elif generation is not None:
+        raise RuntimeError(
+            "pre-V3 US target bulk plan unexpectedly contains authority generation binding"
+        )
     expected_order = [1, *range(start, end + 1)]
     if [int(item.get("sequence") or 0) for item in packages if isinstance(item, dict)] != expected_order:
         raise RuntimeError("US target bulk plan execution order drifted")

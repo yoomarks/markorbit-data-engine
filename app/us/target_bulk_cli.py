@@ -36,6 +36,7 @@ def _plan(args: argparse.Namespace) -> int:
         max_packages=args.max_packages,
         to_current_end=args.to_current_end,
         accepted_state_dir=args.accepted_state_dir,
+        authority_generation_id=args.authority_generation_id,
     )
     write_receipt(args.output, plan)
     _emit(
@@ -45,6 +46,7 @@ def _plan(args: argparse.Namespace) -> int:
             "plan_sha256": plan["plan_sha256"],
             "inventory_sha256": plan["inventory_sha256"],
             "execution_main": plan["execution_main"],
+            "authority_generation_id": plan["authority_generation_id"],
             "bridge_sequence": plan["bridge_sequence"],
             "accepted_existing_target_sequence": plan["accepted_existing_target_sequence"],
             "start_sequence": plan["start_sequence"],
@@ -108,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     bound.add_argument("--max-packages", type=int)
     bound.add_argument("--to-current-end", action="store_true")
     plan.add_argument("--accepted-state-dir", type=Path)
+    plan.add_argument("--authority-generation-id")
     plan.add_argument("--output", type=Path, required=True)
     plan.set_defaults(handler=_plan)
 
