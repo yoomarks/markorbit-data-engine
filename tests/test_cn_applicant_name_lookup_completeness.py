@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.cn.applicant_name_lookup_completeness import verify_cn_applicant_name_lookup
+from app.cn.applicant_name_lookup_completeness import READ_SETTINGS, verify_cn_applicant_name_lookup
 
 
 class Result:
@@ -38,6 +38,11 @@ class Client:
 
 
 def test_complete_receipt_requires_projection_bindings_and_normalization():
+    assert READ_SETTINGS == {
+        "max_threads": 1,
+        "max_rows_to_read": 350_000_000,
+        "read_overflow_mode": "throw",
+    }
     receipt = verify_cn_applicant_name_lookup(Client())
     assert receipt["complete"] is True
     assert receipt["schema_match"] is True
