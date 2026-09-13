@@ -194,6 +194,25 @@ def test_name_lookup_resume_cursor_is_independent_from_candidate_cursor():
     assert cursor.emitted == 12
 
 
+def test_resume_clears_cooperative_stop_flag(monkeypatch):
+    epoch = _epoch()
+    monkeypatch.setattr(
+        control,
+        "load_backfill_run",
+        lambda *args, **kwargs: {
+            "status": "INTERRUPTED",
+            "payload": {"source_epoch": epoch.to_dict(), "stop_requested": True},
+            "metrics": {"emitted": 25},
+        },
+    )
+    cursor = FakeCursor(one_row={"run_id": "run"})
+    resumed = control.resume_backfill_run(
+        "run", current_epoch=epoch, connection_factory=_factory(cursor)
+    )
+    assert resumed.emitted == 25
+    assert "jsonb_build_object('stop_requested', false)" in cursor.executions[0][0]
+
+
 def test_execute_requires_both_candidate_and_name_lookup_completeness(monkeypatch):
     epoch = _epoch()
     completed = []
