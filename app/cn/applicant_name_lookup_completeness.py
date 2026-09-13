@@ -57,17 +57,24 @@ def verify_cn_applicant_name_lookup(client: Any, sample_limit: int = 200) -> dic
     samples = client.query(
         f"""
         SELECT lookup.normalized_name, source.raw_name
-        FROM (SELECT * FROM {CN_APPLICANT_NAME_LOOKUP_TABLE} FINAL WHERE is_deleted = 0) AS lookup
-        INNER JOIN
+        FROM
         (
-            SELECT * FROM markorbit_facts.cn_case_party_current FINAL
+            SELECT entity_id, application_number, relation_key, raw_name
+            FROM markorbit_facts.cn_case_party_current FINAL
             WHERE is_deleted = 0 AND is_current = 1
         ) AS source
+        INNER JOIN
+        (
+            SELECT normalized_name, entity_id, application_number, relation_key
+            FROM {CN_APPLICANT_NAME_LOOKUP_TABLE} FINAL
+            WHERE is_deleted = 0
+            ORDER BY normalized_name, entity_id, application_number, relation_key
+            LIMIT {sample_limit}
+        ) AS lookup
           ON source.entity_id = lookup.entity_id
          AND source.application_number = lookup.application_number
          AND source.relation_key = lookup.relation_key
-        ORDER BY lookup.normalized_name
-        LIMIT {sample_limit}
+        ORDER BY lookup.normalized_name, lookup.entity_id, lookup.application_number, lookup.relation_key
         """,
         settings=READ_SETTINGS,
     )
