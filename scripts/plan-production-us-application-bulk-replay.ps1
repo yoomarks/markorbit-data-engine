@@ -99,6 +99,7 @@ $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd_HHmmss')
 $EvidenceDir = Join-Path $ReportsRoot "production_us_application_bulk_plan_$stamp"
 $PlanPath = Join-Path $EvidenceDir 'bulk_plan.json'
 $WrapperPath = Join-Path $EvidenceDir 'bulk_plan_wrapper.json'
+$AuthorityGenerationId = [Guid]::NewGuid().ToString('D').ToLowerInvariant()
 
 try {
     Require-True (Test-Path -LiteralPath $RawRoot -PathType Container) "Accepted F: Raw root is missing: $RawRoot"
@@ -118,6 +119,7 @@ try {
         '--execution-main', $ExpectedMain.ToLowerInvariant(),
         '--stage2-receipt', $stage2Receipt,
         '--accepted-state-dir', $StateDir,
+        '--authority-generation-id', $AuthorityGenerationId,
         '--start-sequence', [string]$StartSequence,
         '--output', $PlanPath
     )
@@ -135,6 +137,7 @@ try {
 
     $plan = Get-Content -LiteralPath $PlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Require-True ([string]$plan.execution_main -eq $ExpectedMain.ToLowerInvariant()) 'Bulk plan execution_main drifted.'
+    Require-True ([string]$plan.authority_generation_id -eq $AuthorityGenerationId) 'Bulk plan authority generation drifted.'
     Require-True ([bool]$plan.read_only -and -not [bool]$plan.production_mutation_authorized) 'Bulk plan incorrectly authorizes production mutation.'
     Require-True ([int]$plan.bridge_sequence -eq 1 -and [int]$plan.accepted_existing_target_sequence -eq 2) 'Bulk plan target continuity contract drifted.'
     Require-True ([int]$plan.start_sequence -eq $StartSequence) 'Bulk plan start sequence drifted.'
@@ -143,9 +146,10 @@ try {
 
     Assert-ExactMain -Phase 'exit'
     $wrapper = [ordered]@{
-        report_version = 'PRODUCTION_US_APPLICATION_BULK_PLAN_WRAPPER_V1'
+        report_version = 'PRODUCTION_US_APPLICATION_BULK_PLAN_WRAPPER_V2'
         decision = 'US_APPLICATION_TARGET_BULK_PLAN_FROZEN'
         execution_main = $ExpectedMain.ToLowerInvariant()
+        authority_generation_id = $AuthorityGenerationId
         stage2_receipt = $stage2Receipt
         plan_path = $PlanPath
         plan_sha256 = [string]$plan.plan_sha256
@@ -165,6 +169,7 @@ try {
     Write-Host "plan_path=$PlanPath"
     Write-Host "plan_sha256=$($plan.plan_sha256)"
     Write-Host "inventory_sha256=$($plan.inventory_sha256)"
+    Write-Host "authority_generation_id=$($plan.authority_generation_id)"
     Write-Host 'bridge_sequence=1'
     Write-Host 'accepted_existing_target_sequence=2'
     Write-Host "start_sequence=$($plan.start_sequence)"
