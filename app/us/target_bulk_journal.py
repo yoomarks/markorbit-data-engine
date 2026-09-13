@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 from app.us.target_bulk_plan import validate_bulk_plan
@@ -34,6 +35,23 @@ def _seal(payload: dict[str, Any]) -> dict[str, Any]:
     return sealed
 
 
+_ATOMIC_REPLACE_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+
+
+def _replace_with_permission_retry(temporary: Path, path: Path) -> None:
+    last_error: PermissionError | None = None
+    for delay in (0.0, *_ATOMIC_REPLACE_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -41,7 +59,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
         json.dumps(_seal(payload), ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
-    temporary.replace(path)
+    _replace_with_permission_retry(temporary, path)
 
 
 def _load_raw(path: Path) -> dict[str, Any]:
