@@ -57,17 +57,20 @@ def verify_us_applicant_name_lookup(client: Any, sample_limit: int = 200) -> dic
         SELECT lookup.normalized_name, {source_projection}
         FROM
         (
-            SELECT * FROM {US_APPLICANT_NAME_LOOKUP_TABLE} FINAL WHERE is_deleted = 0
-        ) AS lookup
-        INNER JOIN
-        (
             SELECT * FROM markorbit_facts.us_applicant_candidate_current FINAL WHERE is_deleted = 0
         ) AS source
+        INNER JOIN
+        (
+            SELECT normalized_name, candidate_key, serial_number, owner_key
+            FROM {US_APPLICANT_NAME_LOOKUP_TABLE} FINAL
+            WHERE is_deleted = 0
+            ORDER BY normalized_name, candidate_key, serial_number, owner_key
+            LIMIT {sample_limit}
+        ) AS lookup
           ON source.candidate_key = lookup.candidate_key
          AND source.serial_number = lookup.serial_number
          AND source.owner_key = lookup.owner_key
         ORDER BY lookup.normalized_name, lookup.candidate_key, lookup.serial_number, lookup.owner_key
-        LIMIT {sample_limit}
         """,
         settings=READ_SETTINGS,
     )

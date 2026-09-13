@@ -257,3 +257,45 @@ def test_execute_requires_both_candidate_and_name_lookup_completeness(monkeypatc
     assert result["completeness"]["complete"] is False
     assert result["completeness"]["name_lookup_complete"] is False
     assert completed[0]["complete"] is False
+
+
+def test_execute_accepts_already_complete_epoch_without_mutation(monkeypatch):
+    epoch = _epoch()
+    completed = []
+    monkeypatch.setattr(
+        control, "resume_backfill_run", lambda *args, **kwargs: ApplicantIndexBackfillCursor()
+    )
+    monkeypatch.setattr(
+        control,
+        "backfill_us_applicant_candidate_index",
+        lambda **kwargs: pytest.fail("candidate backfill must not run"),
+    )
+    monkeypatch.setattr(
+        control,
+        "backfill_us_applicant_name_lookup",
+        lambda **kwargs: pytest.fail("name lookup backfill must not run"),
+    )
+    monkeypatch.setattr(
+        control,
+        "verify_us_applicant_candidate_index",
+        lambda client: {"complete": True, "index_visible_rows": 32_467_363},
+    )
+    monkeypatch.setattr(
+        control,
+        "verify_us_applicant_name_lookup",
+        lambda client: {"complete": True, "lookup_visible_rows": 32_467_363},
+    )
+    monkeypatch.setattr(
+        control,
+        "complete_backfill_run",
+        lambda *args, **kwargs: completed.append(kwargs["completeness"]),
+    )
+
+    result = control.execute_backfill_run(
+        "run", client=object(), serving_epoch_getter=lambda: epoch
+    )
+
+    assert result["cursor"]["emitted"] == 32_467_363
+    assert result["name_lookup_cursor"]["emitted"] == 32_467_363
+    assert result["completeness"]["complete"] is True
+    assert completed[0]["complete"] is True

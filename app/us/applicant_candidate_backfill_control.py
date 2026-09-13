@@ -482,6 +482,37 @@ def execute_backfill_run(
         connection_factory=connection_factory,
     )
     try:
+        candidate_completeness = verify_us_applicant_candidate_index(client)
+        name_lookup_completeness = verify_us_applicant_name_lookup(client)
+        existing_completeness = {
+            **candidate_completeness,
+            "complete": candidate_completeness.get("complete") is True
+            and name_lookup_completeness.get("complete") is True,
+            "candidate_index_complete": candidate_completeness.get("complete") is True,
+            "name_lookup_complete": name_lookup_completeness.get("complete") is True,
+            "name_lookup": name_lookup_completeness,
+        }
+        if existing_completeness["complete"]:
+            final_cursor = ApplicantIndexBackfillCursor(
+                emitted=int(candidate_completeness["index_visible_rows"])
+            )
+            final_name_cursor = ApplicantNameLookupBackfillCursor(
+                emitted=int(name_lookup_completeness["lookup_visible_rows"])
+            )
+            complete_backfill_run(
+                run_id,
+                current_epoch=epoch,
+                completeness=existing_completeness,
+                connection_factory=connection_factory,
+            )
+            return {
+                "run_id": run_id,
+                "cursor": final_cursor.to_dict(),
+                "name_lookup_cursor": final_name_cursor.to_dict(),
+                "source_epoch": epoch.to_dict(),
+                "completeness": existing_completeness,
+            }
+
         final_cursor = backfill_us_applicant_candidate_index(
             client=client,
             batch_size=batch_size,
