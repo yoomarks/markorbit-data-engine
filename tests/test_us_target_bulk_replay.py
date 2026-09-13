@@ -23,6 +23,7 @@ from app.us.target_bulk_plan import (
     ACCEPTED_SCHEMA_MANIFEST_SHA256,
     EXPECTED_SOURCE_COUNT,
     LEGACY_BULK_PLAN_VERSION,
+    PREVIOUS_BULK_PLAN_VERSION,
     _canonical_sha256,
     build_bulk_plan,
     validate_bulk_plan,
@@ -669,6 +670,7 @@ def test_bulk_plan_v1_artifact_remains_valid(corpus) -> None:
     legacy = deepcopy(plan)
     legacy["plan_version"] = LEGACY_BULK_PLAN_VERSION
     legacy.pop("accepted_prefix", None)
+    legacy.pop("authority_generation_id", None)
     contract = {
         key: value
         for key, value in legacy.items()
@@ -680,6 +682,58 @@ def test_bulk_plan_v1_artifact_remains_valid(corpus) -> None:
         f"GO #545 bounded US Application bulk replay {digest}"
     )
     validate_bulk_plan(legacy)
+
+
+def test_bulk_plan_v2_artifact_remains_valid(corpus) -> None:
+    plan = _plan(corpus, max_packages=1)
+    previous = deepcopy(plan)
+    previous["plan_version"] = PREVIOUS_BULK_PLAN_VERSION
+    previous.pop("authority_generation_id", None)
+    contract = {
+        key: value
+        for key, value in previous.items()
+        if key not in {"plan_sha256", "required_authority_token"}
+    }
+    digest = _canonical_sha256(contract)
+    previous["plan_sha256"] = digest
+    previous["required_authority_token"] = (
+        f"GO #545 bounded US Application bulk replay {digest}"
+    )
+    validate_bulk_plan(previous)
+
+
+def test_v3_authority_generation_changes_plan_sha(corpus) -> None:
+    root, preflight, receipt = corpus
+    common = dict(
+        raw_root=root,
+        execution_main=EXECUTION_MAIN,
+        stage2_receipt=receipt,
+        max_packages=1,
+        source_preflight=deepcopy(preflight),
+    )
+    first = build_bulk_plan(
+        **common, authority_generation_id="11111111-1111-4111-8111-111111111111"
+    )
+    second = build_bulk_plan(
+        **common, authority_generation_id="22222222-2222-4222-8222-222222222222"
+    )
+    assert first["inventory_sha256"] == second["inventory_sha256"]
+    assert first["packages"] == second["packages"]
+    assert first["plan_sha256"] != second["plan_sha256"]
+    assert first["required_authority_token"] != second["required_authority_token"]
+
+
+def test_v3_authority_generation_must_be_canonical_uuid4(corpus) -> None:
+    root, preflight, receipt = corpus
+    with pytest.raises(ValueError, match="canonical UUIDv4"):
+        build_bulk_plan(
+            root,
+            execution_main=EXECUTION_MAIN,
+            stage2_receipt=receipt,
+            max_packages=1,
+            source_preflight=preflight,
+            authority_generation_id="not-a-generation",
+        )
 
 
 def test_bulk_plan_supports_verified_incremental_suffix(monkeypatch, tmp_path) -> None:

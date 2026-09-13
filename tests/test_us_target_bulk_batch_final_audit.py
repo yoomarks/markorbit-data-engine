@@ -48,6 +48,7 @@ def _master_plan() -> dict:
         "read_only": True,
         "production_mutation_authorized": False,
         "execution_main": "a" * 40,
+        "authority_generation_id": "11111111-1111-4111-8111-111111111111",
         "raw_root": "F:/MarkOrbitData/raw",
         "expected_history_parts": 91,
         "accepted_source_count": 310,

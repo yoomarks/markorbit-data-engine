@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 from app.us.target_canary import (
@@ -105,13 +106,30 @@ def _validate_integrity(payload: dict[str, Any]) -> None:
         )
 
 
+_ATOMIC_REPLACE_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+
+
+def _replace_with_permission_retry(temporary: Path, path: Path) -> None:
+    last_error: PermissionError | None = None
+    for delay in (0.0, *_ATOMIC_REPLACE_RETRY_DELAYS_SECONDS):
+        if delay:
+            time.sleep(delay)
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sealed = _seal(payload)
     body = json.dumps(sealed, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(body, encoding="utf-8")
-    temporary.replace(path)
+    _replace_with_permission_retry(temporary, path)
 
 
 def _load(path: Path) -> dict[str, Any]:
