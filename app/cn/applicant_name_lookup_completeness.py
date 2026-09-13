@@ -8,7 +8,7 @@ from app.applicant_name_lookup import (
 )
 from app.cn.text import normalized_match_text
 
-READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 100_000_000, "read_overflow_mode": "throw"}
+READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 350_000_000, "read_overflow_mode": "throw"}
 EXPECTED_SORTING_KEY = "normalized_name, entity_id, application_number, relation_key"
 BINDING_HASH = "cityHash64(concat(toString(entity_id), '\\x1f', application_number, '\\x1f', toString(relation_key), '\\x1f', toString(record_hash), '\\x1f', toString(source_rank)))"
 
