@@ -118,3 +118,29 @@ def test_execute_rejects_partial_completeness_and_marks_resumable(monkeypatch):
         control.execute_backfill_run("run", client=object(), serving_epoch_getter=lambda: current)
     assert finished[0][1] == "INTERRUPTED"
     assert finished[0][2]["resumable"] is True
+
+
+def test_execute_accepts_already_complete_epoch_without_mutation(monkeypatch):
+    current = epoch()
+    finished = []
+    monkeypatch.setattr(
+        control,
+        "resume_backfill_run",
+        lambda *args, **kwargs: CNApplicantNameLookupBackfillCursor(),
+    )
+    monkeypatch.setattr(
+        control,
+        "verify_cn_applicant_name_lookup",
+        lambda client: {"complete": True, "lookup_visible_rows": 87_896_297},
+    )
+    monkeypatch.setattr(
+        control,
+        "backfill_cn_applicant_name_lookup",
+        lambda **kwargs: pytest.fail("complete projection must not be written again"),
+    )
+    monkeypatch.setattr(control, "_finish", lambda *args: finished.append(args))
+    result = control.execute_backfill_run(
+        "run", client=object(), serving_epoch_getter=lambda: current
+    )
+    assert result["cursor"]["emitted"] == 87_896_297
+    assert finished[0][1] == "SUCCESS"

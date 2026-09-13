@@ -237,6 +237,24 @@ def execute_backfill_run(
     epoch = serving_epoch_getter()
     cursor = resume_backfill_run(run_id, current_epoch=epoch, connection_factory=connection_factory)
     try:
+        existing = verify_cn_applicant_name_lookup(client)
+        if existing.get("complete") is True:
+            final = CNApplicantNameLookupBackfillCursor(
+                emitted=int(existing.get("lookup_visible_rows") or 0)
+            )
+            _finish(
+                run_id,
+                "SUCCESS",
+                {"completeness": existing, "source_epoch_token": epoch.token},
+                None,
+                connection_factory,
+            )
+            return {
+                "run_id": run_id,
+                "cursor": final.to_dict(),
+                "source_epoch": epoch.to_dict(),
+                "completeness": existing,
+            }
         final = backfill_cn_applicant_name_lookup(
             client=client,
             batch_size=batch_size,
