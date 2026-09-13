@@ -346,7 +346,10 @@ def resume_backfill_run(
                 cur.execute(
                     """
                     UPDATE control.job_run
-                    SET status = 'RUNNING', finished_at = NULL, error_message = NULL
+                    SET status = 'RUNNING',
+                        finished_at = NULL,
+                        error_message = NULL,
+                        payload = payload || jsonb_build_object('stop_requested', false)
                     WHERE run_id = %s AND job_type = %s AND status = 'INTERRUPTED'
                     RETURNING run_id
                     """,
