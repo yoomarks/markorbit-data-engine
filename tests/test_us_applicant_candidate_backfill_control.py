@@ -218,6 +218,7 @@ def test_resume_clears_cooperative_stop_flag(monkeypatch):
     )
     assert resumed.emitted == 25
     assert "'stop_requested', false" in cursor.executions[0][0]
+    assert "'implementation_sha', %s::text" in cursor.executions[0][0]
     assert cursor.executions[0][1][0] == "b" * 40
     assert '"from": "aaaaaaaa' in cursor.executions[0][1][1]
     assert '"to": "bbbbbbbb' in cursor.executions[0][1][1]
