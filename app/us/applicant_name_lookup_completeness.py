@@ -28,6 +28,11 @@ def _one_row(result: Any) -> tuple[Any, ...]:
     return tuple(rows[0])
 
 
+def _sql_string(value: object) -> str:
+    text = str(value)
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
 def verify_us_applicant_name_lookup(client: Any, sample_limit: int = 200) -> dict[str, object]:
     schema_rows = list(
         client.query(
@@ -51,35 +56,48 @@ def verify_us_applicant_name_lookup(client: Any, sample_limit: int = 200) -> dic
     lookup_stats = _one_row(
         client.query(_stats_sql(US_APPLICANT_NAME_LOOKUP_TABLE), settings=READ_SETTINGS)
     )
-    source_projection = ", ".join(f"source.{column}" for column in APPLICANT_INDEX_COLUMNS)
-    sample = client.query(
-        f"""
-        SELECT lookup.normalized_name, {source_projection}
-        FROM
-        (
-            SELECT * FROM markorbit_facts.us_applicant_candidate_current FINAL WHERE is_deleted = 0
-        ) AS source
-        INNER JOIN
-        (
-            SELECT normalized_name, candidate_key, serial_number, owner_key
-            FROM {US_APPLICANT_NAME_LOOKUP_TABLE} FINAL
-            WHERE is_deleted = 0
-            ORDER BY normalized_name, candidate_key, serial_number, owner_key
-            LIMIT {sample_limit}
-        ) AS lookup
-          ON source.candidate_key = lookup.candidate_key
-         AND source.serial_number = lookup.serial_number
-         AND source.owner_key = lookup.owner_key
-        ORDER BY lookup.normalized_name, lookup.candidate_key, lookup.serial_number, lookup.owner_key
+    lookup_sample = list(
+        client.query(
+            f"""
+        SELECT normalized_name, candidate_key, serial_number, owner_key
+        FROM {US_APPLICANT_NAME_LOOKUP_TABLE} FINAL
+        WHERE is_deleted = 0
+        ORDER BY normalized_name, candidate_key, serial_number, owner_key
+        LIMIT {sample_limit}
         """,
-        settings=READ_SETTINGS,
+            settings=READ_SETTINGS,
+        ).result_rows
     )
+    source_by_binding: dict[tuple[str, str, str], dict[str, Any]] = {}
+    if lookup_sample:
+        bindings = ", ".join(
+            "(" + ", ".join(_sql_string(value) for value in row[1:4]) + ")" for row in lookup_sample
+        )
+        source_rows = client.query(
+            f"""
+            SELECT {", ".join(APPLICANT_INDEX_COLUMNS)}
+            FROM markorbit_facts.us_applicant_candidate_current FINAL
+            WHERE is_deleted = 0
+              AND (candidate_key, serial_number, owner_key) IN ({bindings})
+            """,
+            settings=READ_SETTINGS,
+        )
+        for row in source_rows.result_rows:
+            source = dict(zip(APPLICANT_INDEX_COLUMNS, row, strict=True))
+            source_by_binding[
+                tuple(
+                    str(source[column])
+                    for column in ("candidate_key", "serial_number", "owner_key")
+                )
+            ] = source
     mismatches = 0
-    checked = 0
-    for row in sample.result_rows:
-        source = dict(zip(APPLICANT_INDEX_COLUMNS, row[1:], strict=True))
+    checked = len(lookup_sample)
+    for row in lookup_sample:
+        source = source_by_binding.get(tuple(str(value) for value in row[1:4]))
+        if source is None:
+            mismatches += 1
+            continue
         expected = us_applicant_name_lookup_row(source)
-        checked += 1
         if str(row[0]) != str(expected[0]) or str(source["candidate_key"]) != str(expected[1]):
             mismatches += 1
 
