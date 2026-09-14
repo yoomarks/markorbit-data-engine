@@ -96,9 +96,13 @@ def test_target_adapter_restricts_settings_and_insert_scope():
         settings={"max_threads": 1, "read_overflow_mode": "throw"},
     )
     assert "SETTINGS max_threads = 1, read_overflow_mode = 'throw'" in base.sql[0]
+    client.query("SELECT 1", settings={"join_algorithm": "grace_hash"})
+    assert "join_algorithm = 'grace_hash'" in base.sql[1]
 
     with pytest.raises(ValueError, match="unsupported Applicant backfill query settings"):
         client.query("SELECT 1", settings={"max_memory_usage": 1})
+    with pytest.raises(ValueError, match="join_algorithm must remain bounded"):
+        client.query("SELECT 1", settings={"join_algorithm": "hash"})
     with pytest.raises(RuntimeError, match="may insert only"):
         client.insert("markorbit_facts.us_owner_current", [], column_names=[])
     client.insert("markorbit_facts.us_applicant_name_lookup_current", [], column_names=[])

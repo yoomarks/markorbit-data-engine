@@ -41,6 +41,7 @@ _EXPECTED_LOOKUP_SORTING_KEY = "normalized_name, candidate_key, serial_number, o
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_QUERY_SETTINGS = {
+    "join_algorithm",
     "max_threads",
     "max_rows_to_read",
     "read_overflow_mode",
@@ -117,6 +118,10 @@ def _settings_sql(settings: Mapping[str, Any] | None) -> str:
             if str(value) != "throw":
                 raise ValueError("read_overflow_mode must remain fail-closed at 'throw'")
             parts.append("read_overflow_mode = 'throw'")
+        elif key == "join_algorithm":
+            if str(value) != "grace_hash":
+                raise ValueError("join_algorithm must remain bounded at 'grace_hash'")
+            parts.append("join_algorithm = 'grace_hash'")
     return " SETTINGS " + ", ".join(parts)
 
 

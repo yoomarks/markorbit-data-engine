@@ -138,7 +138,7 @@ def test_reconcile_fails_closed_above_bound():
 def test_reconcile_tombstones_superseded_candidate_identity():
     owner = _owner_row("10000001", "a" * 64)
     old_candidate_key = "f" * 64
-    client = FakeClient([[owner], [(old_candidate_key, *owner)]])
+    client = FakeClient([[owner], [(old_candidate_key, 100, *owner)]])
 
     reconcile_us_applicant_candidate_index(client=client, max_rows=2)
 
@@ -146,3 +146,5 @@ def test_reconcile_tombstones_superseded_candidate_identity():
     tombstone = client.inserts[1][1][0]
     assert tombstone[0] == old_candidate_key
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("is_deleted")] == 1
+    assert tombstone[APPLICANT_INDEX_COLUMNS.index("source_rank")] == 101
+    assert client.queries[1][1]["join_algorithm"] == "grace_hash"
