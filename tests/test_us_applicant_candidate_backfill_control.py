@@ -201,16 +201,26 @@ def test_resume_clears_cooperative_stop_flag(monkeypatch):
         "load_backfill_run",
         lambda *args, **kwargs: {
             "status": "INTERRUPTED",
-            "payload": {"source_epoch": epoch.to_dict(), "stop_requested": True},
+            "payload": {
+                "source_epoch": epoch.to_dict(),
+                "stop_requested": True,
+                "implementation_sha": "a" * 40,
+            },
             "metrics": {"emitted": 25},
         },
     )
     cursor = FakeCursor(one_row={"run_id": "run"})
     resumed = control.resume_backfill_run(
-        "run", current_epoch=epoch, connection_factory=_factory(cursor)
+        "run",
+        current_epoch=epoch,
+        implementation_sha="b" * 40,
+        connection_factory=_factory(cursor),
     )
     assert resumed.emitted == 25
-    assert "jsonb_build_object('stop_requested', false)" in cursor.executions[0][0]
+    assert "'stop_requested', false" in cursor.executions[0][0]
+    assert cursor.executions[0][1][0] == "b" * 40
+    assert '"from": "aaaaaaaa' in cursor.executions[0][1][1]
+    assert '"to": "bbbbbbbb' in cursor.executions[0][1][1]
 
 
 def test_execute_requires_both_candidate_and_name_lookup_completeness(monkeypatch):
