@@ -11,11 +11,81 @@ from app.cn.serving_state_checkpoint import (
 )
 from app.config import get_settings
 from app.us.pipeline_readiness import build_readiness as build_us_readiness
+from app.us.source_preflight import build_preflight as build_us_source_preflight
+from app.us.target_bulk_tasks import latest_complete_target_bulk_epoch
 
 
 TRANSITION_VERSION = "CN_TO_US_APPLICATION_TRANSITION_V2"
 _LEGACY_CN_ACCEPTED_STATUSES = {"PASS", "PASS_WITH_WARNINGS"}
 _LIGHTWEIGHT_CN_ACCEPTED_STATUSES = {"PASS", "WARN"}
+
+
+def _current_application_source_file_count(raw_root: Path) -> int:
+    total = 0
+    for directory in (raw_root / "incoming" / "us", raw_root / "archive" / "us"):
+        if not directory.exists():
+            continue
+        total += sum(
+            1
+            for path in directory.iterdir()
+            if path.is_file() and path.suffix.lower() in {".zip", ".xml"}
+        )
+    return total
+
+
+def _target_bulk_accepted_pipeline(
+    raw_root: Path,
+    *,
+    epoch: dict[str, Any] | None,
+    expected_history_parts: int,
+    deep_source_test: bool,
+    verify_source_files: bool,
+    source_preflight_builder: Callable[..., dict[str, Any]],
+) -> dict[str, Any] | None:
+    if epoch is None:
+        return None
+    checkpoint = int(epoch.get("checkpoint_sequence") or 0)
+    observed_count = _current_application_source_file_count(raw_root)
+    if checkpoint < 1 or observed_count != checkpoint:
+        return None
+    reports: dict[str, Any] = {"target_bulk_epoch": epoch}
+    if verify_source_files:
+        preflight = source_preflight_builder(
+            raw_root,
+            expected_history_parts=expected_history_parts,
+            deep_source_test=deep_source_test,
+        )
+        reports["source_preflight"] = preflight
+        semantic_count = int(
+            (preflight.get("source_inventory") or {}).get("semantic_source_count") or 0
+        )
+        if not preflight.get("safe_to_replay") or semantic_count != checkpoint:
+            return {
+                "state": "SOURCE_CORPUS_BLOCKED",
+                "ready": False,
+                "reason_codes": list(preflight.get("hard_issue_types") or [])
+                + list(preflight.get("not_ready_reasons") or [])
+                + (["target_bulk_checkpoint_source_count_mismatch"] if semantic_count != checkpoint else []),
+                "next_action": {
+                    "code": "INVESTIGATE_TARGET_BULK_SOURCE_EVIDENCE",
+                    "description": "Target-bulk accepted epoch no longer matches source-backed corpus evidence.",
+                },
+                "evidence_mode": "TARGET_BULK_ACCEPTED_EPOCH",
+                "reports": reports,
+            }
+    return {
+        "state": "ACCEPTED",
+        "ready": True,
+        "reason_codes": [],
+        "next_action": {
+            "code": "NONE",
+            "description": "US Application target-bulk corpus is durably accepted.",
+        },
+        "evidence_mode": "TARGET_BULK_ACCEPTED_EPOCH",
+        "accepted_target_sequence_count": checkpoint,
+        "target_bulk_epoch": epoch,
+        "reports": reports,
+    }
 
 
 def _cn_checkpoint_accepted(cn_checkpoint: dict[str, Any]) -> bool:
@@ -136,6 +206,8 @@ def build_transition_gate(
     persistent_worker_running: bool = False,
     cn_checkpoint_builder: Callable[..., dict[str, Any]] = build_serving_state_checkpoint,
     us_readiness_builder: Callable[..., dict[str, Any]] = build_us_readiness,
+    target_bulk_epoch_builder: Callable[[], dict[str, Any] | None] | None = None,
+    source_preflight_builder: Callable[..., dict[str, Any]] = build_us_source_preflight,
 ) -> dict[str, Any]:
     """Return the read-only CN -> US Application transition decision.
 
@@ -180,7 +252,21 @@ def build_transition_gate(
             expected_history_parts=expected_history_parts,
         )
 
-    us_pipeline = us_readiness_builder(
+    if target_bulk_epoch_builder is not None:
+        target_epoch = target_bulk_epoch_builder()
+    elif us_readiness_builder is build_us_readiness:
+        target_epoch = latest_complete_target_bulk_epoch()
+    else:
+        target_epoch = None
+    target_pipeline = _target_bulk_accepted_pipeline(
+        raw_root,
+        epoch=target_epoch,
+        expected_history_parts=expected_history_parts,
+        deep_source_test=deep_source_test,
+        verify_source_files=verify_source_files,
+        source_preflight_builder=source_preflight_builder,
+    )
+    us_pipeline = target_pipeline or us_readiness_builder(
         raw_root,
         expected_history_parts=expected_history_parts,
         deep_source_test=deep_source_test,

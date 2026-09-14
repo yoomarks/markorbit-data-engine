@@ -312,3 +312,27 @@ def test_execute_accepts_already_complete_epoch_without_mutation(monkeypatch):
     assert result["name_lookup_cursor"]["emitted"] == 32_467_363
     assert result["completeness"]["complete"] is True
     assert completed[0]["complete"] is True
+
+
+def test_serving_epoch_accepts_newer_durable_checkpoint_than_legacy_baseline():
+    cursor = FakeCursor(
+        all_rows=[
+            {
+                "run_id": "22222222-2222-2222-2222-222222222222",
+                "status": "SUCCESS",
+                "payload": {"approved_plan_sha256": "d" * 64},
+                "metrics": {
+                    "last_safe_checkpoint_sequence": 343,
+                    "accepted_target_sequence_count": 343,
+                    "remaining_to_accepted_corpus": 0,
+                    "last_archived_source_sequence": 343,
+                    "full_accepted_source_corpus_on_target": True,
+                    "phase": "COMPLETE",
+                    "final_audit_version": "US_APPLICATION_TARGET_BULK_BATCH_AUDIT_V2",
+                },
+            }
+        ]
+    )
+    epoch = current_us_applicant_serving_epoch(connection_factory=_factory(cursor))
+    assert epoch.checkpoint_sequence == 343
+    assert epoch.plan_sha256 == "d" * 64
