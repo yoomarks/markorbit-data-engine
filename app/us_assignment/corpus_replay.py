@@ -324,11 +324,13 @@ def main() -> int:
             parser.error(
                 "--apply requires --authority-plan and --authority-receipt"
             )
-        from app.us_assignment.production_authority import validate_active_receipt
+        from app.us_assignment.production_authority import validate_runtime_start
 
         plan = _load_authority_json(args.authority_plan)
         receipt = _load_authority_json(args.authority_receipt)
-        active = validate_active_receipt(plan, receipt)
+        active = validate_runtime_start(
+            plan, receipt, raw_root=settings.raw_data_root
+        )
         bound_manifest = (
             settings.raw_data_root / str((plan.get("manifest") or {}).get("relative_path") or "")
         ).resolve()

@@ -247,3 +247,30 @@ def test_replay_cli_rejects_apply_without_authority(
     with pytest.raises(SystemExit) as exc:
         corpus_replay.main()
     assert exc.value.code == 2
+
+
+def test_validate_runtime_start_revalidates_frozen_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plan = {"execution_main": MAIN, "plan_sha256": "f" * 64}
+    receipt = {"run_id": "run-1"}
+    seen: dict[str, object] = {}
+
+    def fake_active(*args, **kwargs):
+        seen["active"] = (args, kwargs)
+        return {"run_id": "run-1", "resume_failed": False}
+
+    def fake_validate(*args, **kwargs):
+        seen["validate"] = (args, kwargs)
+        return {"remaining_count": 156}
+
+    monkeypatch.setattr(authority, "validate_active_receipt", fake_active)
+    monkeypatch.setattr(authority, "validate_authority_plan", fake_validate)
+    result = authority.validate_runtime_start(plan, receipt, raw_root=tmp_path)
+
+    assert result["run_id"] == "run-1"
+    assert result["remaining_count"] == 156
+    _, kwargs = seen["validate"]
+    assert kwargs["expected_main"] == MAIN
+    assert kwargs["reject_consumed"] is False
+    assert kwargs["allow_active_plan_sha"] == "f" * 64
