@@ -113,7 +113,7 @@ def test_reconcile_fails_closed_above_bound():
 
 def test_reconcile_tombstones_superseded_lookup_identity():
     candidate = _candidate_row("10000001", "a" * 64)
-    client = FakeClient([[candidate], [("old name", "f" * 64, *candidate)]])
+    client = FakeClient([[candidate], [("old name", "f" * 64, 100, *candidate)]])
 
     reconcile_us_applicant_name_lookup(client=client, max_rows=2)
 
@@ -122,3 +122,5 @@ def test_reconcile_tombstones_superseded_lookup_identity():
     assert tombstone[0] == "old name"
     assert tombstone[1] == "f" * 64
     assert tombstone[-1] == 1
+    assert tombstone[-2] == 101
+    assert client.queries[1][1]["join_algorithm"] == "grace_hash"

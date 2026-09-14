@@ -161,7 +161,11 @@ def reconcile_us_applicant_candidate_index(
             ORDER BY source.serial_number, source.owner_key
             LIMIT {max_rows + 1}
             """,
-            settings={**READ_SETTINGS, "max_rows_to_read": 100_000_000},
+            settings={
+                **READ_SETTINGS,
+                "max_rows_to_read": 100_000_000,
+                "join_algorithm": "grace_hash",
+            },
         ).result_rows
     )
     if len(rows) > max_rows:
@@ -182,7 +186,7 @@ def reconcile_us_applicant_candidate_index(
     stale_rows = list(
         client.query(
             f"""
-            SELECT target.candidate_key, {columns_sql}
+            SELECT target.candidate_key, target.source_rank, {columns_sql}
             FROM
             (
                 SELECT * FROM markorbit_facts.us_owner_current FINAL
@@ -201,7 +205,11 @@ def reconcile_us_applicant_candidate_index(
             ORDER BY source.serial_number, source.owner_key, target.candidate_key
             LIMIT {max_rows + 1}
             """,
-            settings={**READ_SETTINGS, "max_rows_to_read": 100_000_000},
+            settings={
+                **READ_SETTINGS,
+                "max_rows_to_read": 100_000_000,
+                "join_algorithm": "grace_hash",
+            },
         ).result_rows
     )
     if len(stale_rows) > max_rows:
@@ -211,10 +219,14 @@ def reconcile_us_applicant_candidate_index(
     tombstones = []
     for row in stale_rows:
         old_candidate_key = str(row[0])
-        owner_row = list(row[1:])
+        old_source_rank = int(row[1])
+        owner_row = list(row[2:])
         if old_candidate_key == applicant_index_row(owner_row, OWNER_COLUMNS)[0]:
             continue
         owner_row[OWNER_COLUMNS.index("is_deleted")] = 1
+        owner_row[OWNER_COLUMNS.index("source_rank")] = (
+            max(old_source_rank, int(owner_row[OWNER_COLUMNS.index("source_rank")])) + 1
+        )
         tombstones.append([old_candidate_key, *owner_row])
     for offset in range(0, len(tombstones), MAX_BATCH_SIZE):
         _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)

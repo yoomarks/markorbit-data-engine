@@ -160,7 +160,11 @@ def reconcile_us_applicant_name_lookup(
             ORDER BY source.candidate_key, source.serial_number, source.owner_key
             LIMIT {max_rows + 1}
             """,
-            settings={**READ_SETTINGS, "max_rows_to_read": 100_000_000},
+            settings={
+                **READ_SETTINGS,
+                "max_rows_to_read": 100_000_000,
+                "join_algorithm": "grace_hash",
+            },
         ).result_rows
     )
     if len(rows) > max_rows:
@@ -186,7 +190,8 @@ def reconcile_us_applicant_name_lookup(
     stale_rows = list(
         client.query(
             f"""
-            SELECT target.normalized_name, target.candidate_key, {projection}
+            SELECT target.normalized_name, target.candidate_key, target.source_rank,
+                   {projection}
             FROM
             (
                 SELECT * FROM markorbit_facts.us_applicant_candidate_current FINAL
@@ -207,7 +212,11 @@ def reconcile_us_applicant_name_lookup(
                      target.normalized_name, target.candidate_key
             LIMIT {max_rows + 1}
             """,
-            settings={**READ_SETTINGS, "max_rows_to_read": 100_000_000},
+            settings={
+                **READ_SETTINGS,
+                "max_rows_to_read": 100_000_000,
+                "join_algorithm": "grace_hash",
+            },
         ).result_rows
     )
     if len(stale_rows) > max_rows:
@@ -216,7 +225,8 @@ def reconcile_us_applicant_name_lookup(
         )
     tombstones = []
     for row in stale_rows:
-        source = dict(zip(APPLICANT_INDEX_COLUMNS, row[2:], strict=True))
+        old_source_rank = int(row[2])
+        source = dict(zip(APPLICANT_INDEX_COLUMNS, row[3:], strict=True))
         desired = us_applicant_name_lookup_row(source)
         if str(row[0]) == str(desired[0]) and str(row[1]) == str(desired[1]):
             continue
@@ -228,7 +238,7 @@ def reconcile_us_applicant_name_lookup(
                 source["owner_key"],
                 source["source_row_hash"],
                 source["record_hash"],
-                source["source_rank"],
+                max(old_source_rank, int(source["source_rank"])) + 1,
                 1,
             ]
         )
