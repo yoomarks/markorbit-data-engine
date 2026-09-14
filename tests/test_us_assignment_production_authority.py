@@ -325,3 +325,38 @@ def test_replay_cli_requires_authority_control_root(
     with pytest.raises(SystemExit) as exc:
         corpus_replay.main()
     assert exc.value.code == 2
+
+
+def test_validate_authority_plan_accepts_zero_baseline_counts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state = _state()
+    monkeypatch.setattr(authority, "_remote_main", lambda root: MAIN)
+    monkeypatch.setattr(authority, "_authority_rows", lambda plan_sha256=None: [])
+    monkeypatch.setattr(authority, "_start_state", lambda *args, **kwargs: state)
+
+    def fake_git(args: list[str], root: Path, timeout: int = 45) -> str:
+        del root, timeout
+        return "" if args[:2] == ["status", "--porcelain"] else MAIN
+
+    monkeypatch.setattr(authority, "_git", fake_git)
+    control_root = tmp_path / "control"
+    manifest = control_root / "us_assignment" / "corpus_manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}\n", encoding="utf-8")
+    plan = authority.build_authority_plan(
+        repo_root=tmp_path, raw_root=tmp_path, control_root=control_root,
+        manifest_path=manifest, expected_history_parts=91,
+        authority_generation_id="12345678-1234-4234-8234-123456789abc",
+    )
+    assert plan["expected_registry_count"] == 0
+    assert plan["expected_successful_registry_count"] == 0
+    assert plan["expected_archive_source_count"] == 0
+    result = authority.validate_authority_plan(
+        plan,
+        raw_root=tmp_path,
+        control_root=control_root,
+        expected_main=MAIN,
+    )
+    assert result["source_count"] == 1
+    assert result["remaining_count"] == 156

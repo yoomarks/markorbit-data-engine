@@ -409,7 +409,7 @@ def validate_authority_plan(
         raise RuntimeError("bound Assignment manifest escaped CONTROL_ROOT") from exc
     if not manifest_path.is_file():
         raise RuntimeError("bound Assignment manifest disappeared")
-    if manifest_path.stat().st_size != int(manifest_item.get("size_bytes") or -1):
+    if manifest_path.stat().st_size != int(manifest_item["size_bytes"]):
         raise RuntimeError("bound Assignment manifest size drifted")
     if sha256_file(manifest_path) != str(manifest_item.get("sha256") or "").lower():
         raise RuntimeError("bound Assignment manifest SHA drifted")
@@ -426,24 +426,24 @@ def validate_authority_plan(
         raise RuntimeError("Assignment source corpus identity drifted after plan freeze")
     if _source_plan_sha(entries) != str(plan.get("source_plan_sha256") or ""):
         raise RuntimeError("Assignment source-plan SHA drifted after plan freeze")
-    if len(entries) != int(plan.get("expected_source_count") or -1):
+    if len(entries) != int(plan["expected_source_count"]):
         raise RuntimeError("Assignment source count drifted after plan freeze")
-    if len(packages) != int(plan.get("expected_registry_count") or -1):
+    if len(packages) != int(plan["expected_registry_count"]):
         raise RuntimeError("Assignment registry count drifted after plan freeze")
     successful = sum(
         1 for row in packages if str(row.get("status") or "") == "SUCCESS"
     )
-    if successful != int(plan.get("expected_successful_registry_count") or -1):
+    if successful != int(plan["expected_successful_registry_count"]):
         raise RuntimeError("Assignment successful registry count drifted")
-    if state["incoming"] != int(plan.get("expected_incoming_source_count") or -1):
+    if state["incoming"] != int(plan["expected_incoming_source_count"]):
         raise RuntimeError("Assignment incoming source count drifted after plan freeze")
-    if state["archive"] != int(plan.get("expected_archive_source_count") or -1):
+    if state["archive"] != int(plan["expected_archive_source_count"]):
         raise RuntimeError("Assignment archive source count drifted after plan freeze")
     if state["baseline"] != plan.get("assignment_baseline"):
         raise RuntimeError("Assignment database baseline drifted")
     if str(replay.get("status") or "") != str(plan.get("replay_status") or ""):
         raise RuntimeError("Assignment replay status drifted after plan freeze")
-    if int(replay.get("remaining_count") or 0) != int(plan.get("remaining_count") or -1):
+    if int(replay.get("remaining_count") or 0) != int(plan["remaining_count"]):
         raise RuntimeError("Assignment replay remaining count drifted after plan freeze")
     if _next_action_signature(replay) != plan.get("next_action"):
         raise RuntimeError("Assignment replay next action drifted after plan freeze")
