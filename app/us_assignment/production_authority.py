@@ -24,6 +24,7 @@ AUTHORITY_JOB_TYPE = AUTHORITY_VERSION
 AUTHORITY_TRIGGER_TYPE = "ADMIN_UI"
 AUTHORITY_LOCK_NAME = "markorbit:us-assignment-production-authority"
 AUTHORITY_TASK_KIND = "US_ASSIGNMENT_PRODUCTION_REPLAY_AUTHORITY"
+_ALLOWED_REPLAY_STATES = {"READY", "RETRY_REQUIRED"}
 
 
 def sha256_file(path: Path) -> str:
@@ -167,6 +168,22 @@ def _assignment_baseline(transition: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _next_action_signature(replay: dict[str, Any]) -> dict[str, Any] | None:
+    action = replay.get("next_action")
+    if not action:
+        return None
+    return {
+        "manifest_path": str(action.get("manifest_path") or ""),
+        "file_name": str(action.get("file_name") or ""),
+        "sha256": str(action.get("sha256") or "").lower(),
+        "action": str(action.get("action") or ""),
+        "registry_status": str(action.get("registry_status") or ""),
+        "package_id": (
+            str(action.get("package_id")) if action.get("package_id") else None
+        ),
+    }
+
+
 def _authority_rows(plan_sha256: str | None = None) -> list[dict[str, Any]]:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
@@ -204,15 +221,11 @@ def _start_state(
             f"Assignment source preflight is not READY: {preflight.get('issues')}"
         )
     replay = _build_replay_plan_from_preflight(preflight)
-    if replay.get("status") != "READY":
+    if replay.get("status") not in _ALLOWED_REPLAY_STATES:
         raise RuntimeError(
-            f"Assignment deterministic replay is not READY: {replay.get('status')}"
+            f"Assignment deterministic replay is not actionable: {replay.get('status')}"
         )
     packages = list_assignment_packages()
-    if packages:
-        raise RuntimeError(
-            "Initial Assignment production authority requires an empty registry"
-        )
     transition = build_transition_gate(
         raw_root,
         expected_history_parts=expected_history_parts,
@@ -239,21 +252,12 @@ def _start_state(
             "Application transition checkpoint does not match latest accepted epoch"
         )
     baseline = _assignment_baseline(transition)
-    if baseline["package_count"] != 0 or baseline["successful_package_count"] != 0:
-        raise RuntimeError(
-            "Assignment database is not at the empty production start state"
-        )
-    if any(item["row_count"] for item in baseline["tables"].values()):
-        raise RuntimeError("Assignment ClickHouse history tables are not empty")
+    if baseline["package_count"] != len(packages):
+        raise RuntimeError("Assignment audit package count drifted from registry")
     entries, incoming, archive = _source_entries(preflight, raw_root)
-    if incoming != len(entries) or archive != 0:
-        raise RuntimeError(
-            "Initial Assignment production authority requires all manifest sources in incoming"
-        )
-    if int(replay.get("remaining_count") or 0) != len(entries):
-        raise RuntimeError(
-            "Assignment replay remaining count does not match source corpus"
-        )
+    remaining = int(replay.get("remaining_count") or 0)
+    if remaining < 1 or remaining > len(entries):
+        raise RuntimeError("Assignment replay remaining count is invalid")
     return {
         "preflight": preflight,
         "replay": replay,
@@ -263,6 +267,8 @@ def _start_state(
         "entries": entries,
         "incoming": incoming,
         "archive": archive,
+        "packages": packages,
+        "remaining": remaining,
     }
 
 
@@ -285,7 +291,9 @@ def build_authority_plan(
     if _authority_rows():
         raise RuntimeError("another US Assignment production authority run is active")
 
-    generation = str(uuid.uuid4()) if authority_generation_id is None else str(authority_generation_id)
+    generation = (
+        str(uuid.uuid4()) if authority_generation_id is None else str(authority_generation_id)
+    )
     parsed_generation = uuid.UUID(generation)
     if parsed_generation.version != 4 or str(parsed_generation) != generation.lower():
         raise ValueError("authority_generation_id must be canonical UUIDv4")
@@ -295,6 +303,10 @@ def build_authority_plan(
     entries = state["entries"]
     epoch = state["epoch"]
     preflight = state["preflight"]
+    packages = state["packages"]
+    replay = state["replay"]
+    replay_status = str(replay["status"])
+    resume_failed = replay_status == "RETRY_REQUIRED"
     plan: dict[str, Any] = {
         "version": AUTHORITY_VERSION,
         "authority_generation_id": generation.lower(),
@@ -314,7 +326,10 @@ def build_authority_plan(
         ),
         "expected_daily_packages": int(preflight.get("expected_daily_packages") or 0),
         "daily_through": preflight.get("daily_through"),
-        "expected_registry_count": 0,
+        "expected_registry_count": len(packages),
+        "expected_successful_registry_count": sum(
+            1 for row in packages if str(row.get("status") or "") == "SUCCESS"
+        ),
         "expected_incoming_source_count": state["incoming"],
         "expected_archive_source_count": state["archive"],
         "assignment_baseline": state["baseline"],
@@ -322,8 +337,14 @@ def build_authority_plan(
         "application_gate_status": str(
             (state["transition"].get("application_gate") or {}).get("status") or ""
         ),
-        "replay_mode": "ALL_PACKAGES_INITIAL_EMPTY_START",
-        "resume_failed": False,
+        "start_mode": (
+            "INITIAL_EMPTY_START" if not packages else "RESUME_BOUND_STATE"
+        ),
+        "replay_status": replay_status,
+        "remaining_count": state["remaining"],
+        "next_action": _next_action_signature(replay),
+        "replay_mode": "ALL_REMAINING_PACKAGES",
+        "resume_failed": resume_failed,
         "production_mutation_scope": (
             "ASSIGNMENT_SCHEMA_INIT_REGISTER_INGEST_AND_SOURCE_ARCHIVE"
         ),
@@ -384,18 +405,36 @@ def validate_authority_plan(
         int(plan["expected_application_history_parts"]),
     )
     entries = state["entries"]
+    packages = state["packages"]
+    replay = state["replay"]
     if entries != list(plan.get("sources") or []):
         raise RuntimeError("Assignment source corpus identity drifted after plan freeze")
     if _source_plan_sha(entries) != str(plan.get("source_plan_sha256") or ""):
         raise RuntimeError("Assignment source-plan SHA drifted after plan freeze")
     if len(entries) != int(plan.get("expected_source_count") or -1):
         raise RuntimeError("Assignment source count drifted after plan freeze")
+    if len(packages) != int(plan.get("expected_registry_count") or -1):
+        raise RuntimeError("Assignment registry count drifted after plan freeze")
+    successful = sum(
+        1 for row in packages if str(row.get("status") or "") == "SUCCESS"
+    )
+    if successful != int(plan.get("expected_successful_registry_count") or -1):
+        raise RuntimeError("Assignment successful registry count drifted")
     if state["incoming"] != int(plan.get("expected_incoming_source_count") or -1):
         raise RuntimeError("Assignment incoming source count drifted after plan freeze")
     if state["archive"] != int(plan.get("expected_archive_source_count") or -1):
         raise RuntimeError("Assignment archive source count drifted after plan freeze")
     if state["baseline"] != plan.get("assignment_baseline"):
-        raise RuntimeError("Assignment empty-start database baseline drifted")
+        raise RuntimeError("Assignment database baseline drifted")
+    if str(replay.get("status") or "") != str(plan.get("replay_status") or ""):
+        raise RuntimeError("Assignment replay status drifted after plan freeze")
+    if int(replay.get("remaining_count") or 0) != int(plan.get("remaining_count") or -1):
+        raise RuntimeError("Assignment replay remaining count drifted after plan freeze")
+    if _next_action_signature(replay) != plan.get("next_action"):
+        raise RuntimeError("Assignment replay next action drifted after plan freeze")
+    expected_resume = str(replay.get("status") or "") == "RETRY_REQUIRED"
+    if bool(plan.get("resume_failed")) != expected_resume:
+        raise RuntimeError("Assignment retry authority binding drifted")
 
     epoch = state["epoch"]
     bound_epoch = plan.get("application_epoch") or {}
@@ -414,6 +453,8 @@ def validate_authority_plan(
     return {
         "plan_sha256": digest,
         "source_count": len(entries),
+        "remaining_count": int(replay["remaining_count"]),
+        "resume_failed": expected_resume,
         "application_checkpoint": int(epoch["checkpoint_sequence"]),
     }
 
@@ -442,6 +483,9 @@ def consume_authority_plan(
         "manifest_sha256": str((plan.get("manifest") or {}).get("sha256") or ""),
         "source_plan_sha256": str(plan["source_plan_sha256"]),
         "expected_source_count": int(plan["expected_source_count"]),
+        "expected_registry_count": int(plan["expected_registry_count"]),
+        "remaining_count": int(plan["remaining_count"]),
+        "resume_failed": bool(plan["resume_failed"]),
         "production_mutation_authorized": True,
         "mutation_scope": str(plan["production_mutation_scope"]),
         "legal_ownership_conclusion": False,
@@ -449,6 +493,7 @@ def consume_authority_plan(
     metrics = {
         "phase": "AUTHORIZED_FOR_REPLAY",
         "source_count": int(plan["expected_source_count"]),
+        "remaining_count": int(plan["remaining_count"]),
         "application_checkpoint": int(
             (plan.get("application_epoch") or {}).get("checkpoint_sequence") or 0
         ),
@@ -512,6 +557,8 @@ def consume_authority_plan(
         "plan_sha256": plan_sha,
         "authority_generation_id": str(plan["authority_generation_id"]),
         "source_count": int(plan["expected_source_count"]),
+        "remaining_count": int(plan["remaining_count"]),
+        "resume_failed": bool(plan["resume_failed"]),
         "production_mutation_authorized": True,
         "legal_ownership_conclusion": False,
         **validated,
@@ -527,6 +574,8 @@ def validate_active_receipt(
     if str(receipt.get("version")) != AUTHORITY_RECEIPT_VERSION:
         raise RuntimeError("Assignment authority receipt version mismatch")
     plan_sha = str(plan.get("plan_sha256") or "")
+    if canonical_plan_sha(plan) != plan_sha:
+        raise RuntimeError("Assignment authority plan canonical SHA mismatch")
     if str(receipt.get("plan_sha256") or "") != plan_sha:
         raise RuntimeError("Assignment authority receipt plan binding mismatch")
     run_id = str(receipt.get("run_id") or "")
@@ -550,7 +599,14 @@ def validate_active_receipt(
     payload = row["payload"] or {}
     if str(payload.get("plan_sha256") or "") != plan_sha:
         raise RuntimeError("Assignment authority database binding mismatch")
-    return {"run_id": run_id, "plan_sha256": plan_sha, "status": "RUNNING"}
+    if bool(payload.get("resume_failed")) != bool(plan.get("resume_failed")):
+        raise RuntimeError("Assignment authority retry binding mismatch")
+    return {
+        "run_id": run_id,
+        "plan_sha256": plan_sha,
+        "status": "RUNNING",
+        "resume_failed": bool(plan.get("resume_failed")),
+    }
 
 
 def finalize_authority(
@@ -668,6 +724,8 @@ def main() -> int:
                     "plan_sha256": plan["plan_sha256"],
                     "required_authority_token": plan["required_authority_token"],
                     "source_count": plan["expected_source_count"],
+                    "remaining_count": plan["remaining_count"],
+                    "resume_failed": plan["resume_failed"],
                 },
                 ensure_ascii=False,
             )
