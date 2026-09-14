@@ -244,3 +244,80 @@ def test_invalid_expected_history_parts_rejected_before_builders():
         assert str(exc) == "expected_history_parts must be at least 1"
     else:
         raise AssertionError("expected ValueError")
+
+
+def _target_epoch(checkpoint: int) -> dict:
+    return {
+        "run_id": "bulk-run",
+        "plan_sha256": "a" * 64,
+        "checkpoint_sequence": checkpoint,
+        "final_audit_version": "US_APPLICATION_TARGET_BULK_BATCH_AUDIT_V2",
+    }
+
+
+def _touch_application_sources(raw_root: Path, count: int) -> None:
+    archive = raw_root / "archive" / "us"
+    archive.mkdir(parents=True, exist_ok=True)
+    for index in range(1, count + 1):
+        (archive / f"p{index:03d}.zip").write_bytes(b"")
+
+
+def test_stale_target_bulk_epoch_does_not_bypass_current_source_corpus(tmp_path):
+    _touch_application_sources(tmp_path, 343)
+    calls = []
+
+    def us_builder(*_args, **_kwargs):
+        calls.append("legacy")
+        return _us("STAGING_REQUIRED", reasons=["pending_source_requires_archive_staging"])
+
+    report = build_transition_gate(
+        tmp_path,
+        expected_history_parts=91,
+        cn_checkpoint_builder=lambda: _cn_serving("PASS"),
+        us_readiness_builder=us_builder,
+        target_bulk_epoch_builder=lambda: _target_epoch(310),
+    )
+
+    assert report["status"] == "US_APPLICATION_NOT_READY"
+    assert calls == ["legacy"]
+
+
+def test_matching_target_bulk_epoch_short_circuits_legacy_replay_planner(tmp_path):
+    _touch_application_sources(tmp_path, 343)
+
+    def legacy_builder(*_args, **_kwargs):
+        raise AssertionError("matching accepted target-bulk epoch must bypass legacy replay planner")
+
+    report = build_transition_gate(
+        tmp_path,
+        expected_history_parts=91,
+        cn_checkpoint_builder=lambda: _cn_serving("PASS"),
+        us_readiness_builder=legacy_builder,
+        target_bulk_epoch_builder=lambda: _target_epoch(343),
+    )
+
+    assert report["status"] == "US_APPLICATION_ALREADY_ACCEPTED"
+    assert report["us_pipeline"]["evidence_mode"] == "TARGET_BULK_ACCEPTED_EPOCH"
+    assert report["us_pipeline"]["accepted_target_sequence_count"] == 343
+
+
+def test_target_bulk_epoch_source_verification_remains_fail_closed(tmp_path):
+    _touch_application_sources(tmp_path, 343)
+
+    report = build_transition_gate(
+        tmp_path,
+        expected_history_parts=91,
+        verify_source_files=True,
+        cn_checkpoint_builder=lambda: _cn_serving("PASS"),
+        us_readiness_builder=lambda *_args, **_kwargs: _us("STAGING_REQUIRED"),
+        target_bulk_epoch_builder=lambda: _target_epoch(343),
+        source_preflight_builder=lambda *_args, **_kwargs: {
+            "safe_to_replay": False,
+            "hard_issue_types": ["SOURCE_SHA_DRIFT"],
+            "not_ready_reasons": [],
+            "source_inventory": {"semantic_source_count": 343},
+        },
+    )
+
+    assert report["status"] == "US_APPLICATION_NOT_READY"
+    assert report["reason_codes"] == ["SOURCE_SHA_DRIFT"]
