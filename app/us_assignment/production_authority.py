@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import hashlib
@@ -81,22 +81,23 @@ def _remote_main(root: Path) -> str:
     raise RuntimeError(f"unable to verify live origin/main: {last}")
 
 
-def _relative_to_raw(raw_root: Path, path: Path) -> str:
-    root = raw_root.resolve()
+def _relative_to_control(control_root: Path, path: Path) -> str:
+    root = control_root.resolve()
     resolved = path.resolve()
     try:
         return resolved.relative_to(root).as_posix()
     except ValueError as exc:
         raise RuntimeError(
-            "Assignment production manifest must be inside RAW_DATA_ROOT"
+            "Assignment production manifest must be inside CONTROL_ROOT"
         ) from exc
 
 
-def _manifest_evidence(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
+def _manifest_evidence(manifest_path: Path, control_root: Path) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise RuntimeError(f"Assignment manifest missing: {manifest_path}")
     return {
-        "relative_path": _relative_to_raw(raw_root, manifest_path),
+        "storage_root": "CONTROL_ROOT",
+        "relative_path": _relative_to_control(control_root, manifest_path),
         "size_bytes": manifest_path.stat().st_size,
         "sha256": sha256_file(manifest_path),
     }
@@ -276,6 +277,7 @@ def build_authority_plan(
     *,
     repo_root: Path,
     raw_root: Path,
+    control_root: Path,
     manifest_path: Path,
     expected_history_parts: int,
     authority_generation_id: str | None = None,
@@ -298,7 +300,7 @@ def build_authority_plan(
     if parsed_generation.version != 4 or str(parsed_generation) != generation.lower():
         raise ValueError("authority_generation_id must be canonical UUIDv4")
 
-    manifest = _manifest_evidence(manifest_path, raw_root)
+    manifest = _manifest_evidence(manifest_path, control_root)
     state = _start_state(raw_root, manifest_path, expected_history_parts)
     entries = state["entries"]
     epoch = state["epoch"]
@@ -366,6 +368,7 @@ def validate_authority_plan(
     plan: dict[str, Any],
     *,
     raw_root: Path,
+    control_root: Path,
     expected_main: str,
     reject_consumed: bool = True,
     allow_active_plan_sha: str | None = None,
@@ -396,12 +399,14 @@ def validate_authority_plan(
             raise RuntimeError("another US Assignment production authority run is active")
 
     manifest_item = plan.get("manifest") or {}
-    manifest_path = raw_root.resolve() / str(manifest_item.get("relative_path") or "")
+    if str(manifest_item.get("storage_root") or "") != "CONTROL_ROOT":
+        raise RuntimeError("bound Assignment manifest storage root mismatch")
+    manifest_path = control_root.resolve() / str(manifest_item.get("relative_path") or "")
     manifest_path = manifest_path.resolve()
     try:
-        manifest_path.relative_to(raw_root.resolve())
+        manifest_path.relative_to(control_root.resolve())
     except ValueError as exc:
-        raise RuntimeError("bound Assignment manifest escaped RAW_DATA_ROOT") from exc
+        raise RuntimeError("bound Assignment manifest escaped CONTROL_ROOT") from exc
     if not manifest_path.is_file():
         raise RuntimeError("bound Assignment manifest disappeared")
     if manifest_path.stat().st_size != int(manifest_item.get("size_bytes") or -1):
@@ -473,6 +478,7 @@ def consume_authority_plan(
     plan: dict[str, Any],
     *,
     raw_root: Path,
+    control_root: Path,
     expected_main: str,
     authority_token: str,
     connection_factory=postgres_conn,
@@ -480,6 +486,7 @@ def consume_authority_plan(
     validated = validate_authority_plan(
         plan,
         raw_root=raw_root,
+        control_root=control_root,
         expected_main=expected_main,
     )
     if authority_token != str(plan["required_authority_token"]):
@@ -624,6 +631,7 @@ def validate_runtime_start(
     receipt: dict[str, Any],
     *,
     raw_root: Path,
+    control_root: Path,
     connection_factory=postgres_conn,
 ) -> dict[str, Any]:
     active = validate_active_receipt(
@@ -634,6 +642,7 @@ def validate_runtime_start(
     validated = validate_authority_plan(
         plan,
         raw_root=raw_root,
+        control_root=control_root,
         expected_main=str(plan.get("execution_main") or ""),
         reject_consumed=False,
         allow_active_plan_sha=str(plan.get("plan_sha256") or ""),
@@ -712,6 +721,7 @@ def main() -> int:
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--repo-root", type=Path, required=True)
     prepare.add_argument("--raw-root", type=Path, required=True)
+    prepare.add_argument("--control-root", type=Path, required=True)
     prepare.add_argument("--manifest", type=Path, required=True)
     prepare.add_argument("--expected-history-parts", type=int, required=True)
     prepare.add_argument("--output", type=Path, required=True)
@@ -720,12 +730,14 @@ def main() -> int:
     validate.add_argument("--plan", type=Path, required=True)
     validate.add_argument("--expected-main", required=True)
     validate.add_argument("--raw-root", type=Path, default=None)
+    validate.add_argument("--control-root", type=Path, required=True)
 
     consume = sub.add_parser("consume")
     consume.add_argument("--plan", type=Path, required=True)
     consume.add_argument("--expected-main", required=True)
     consume.add_argument("--authority-token", required=True)
     consume.add_argument("--raw-root", type=Path, default=None)
+    consume.add_argument("--control-root", type=Path, required=True)
     consume.add_argument("--output", type=Path, required=True)
 
     verify = sub.add_parser("verify-receipt")
@@ -744,6 +756,7 @@ def main() -> int:
         plan = build_authority_plan(
             repo_root=args.repo_root,
             raw_root=args.raw_root,
+            control_root=args.control_root,
             manifest_path=args.manifest,
             expected_history_parts=args.expected_history_parts,
         )
@@ -768,6 +781,7 @@ def main() -> int:
         result = validate_authority_plan(
             plan,
             raw_root=args.raw_root or get_settings().raw_data_root,
+            control_root=args.control_root,
             expected_main=args.expected_main,
         )
         print(json.dumps(result, ensure_ascii=False))
@@ -776,6 +790,7 @@ def main() -> int:
         receipt = consume_authority_plan(
             plan,
             raw_root=args.raw_root or get_settings().raw_data_root,
+            control_root=args.control_root,
             expected_main=args.expected_main,
             authority_token=args.authority_token,
         )

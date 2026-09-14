@@ -77,6 +77,7 @@ services:
       VISUAL_PROCESSED_ROOT: /data/visual-processed
     volumes:
       - "${RAW_DATA_PATH}:/data/raw"
+      - "${CONTROL_DATA_PATH:-./reports}:/data/control"
       - "${VISUAL_RAW_PATH:-./raw_data}:/data/visual-raw"
       - "${VISUAL_PROCESSED_PATH:-./raw_data/visual_processed}:/data/visual-processed"
     depends_on:

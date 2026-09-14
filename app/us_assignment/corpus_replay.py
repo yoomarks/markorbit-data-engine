@@ -314,25 +314,35 @@ def main() -> int:
     parser.add_argument("--resume-failed", action="store_true")
     parser.add_argument("--authority-plan", type=Path, default=None)
     parser.add_argument("--authority-receipt", type=Path, default=None)
+    parser.add_argument("--authority-control-root", type=Path, default=None)
     args = parser.parse_args()
 
     settings = get_settings()
     if args.apply:
         if not args.all:
             parser.error("--apply requires --all under production authority")
-        if args.authority_plan is None or args.authority_receipt is None:
+        if (
+            args.authority_plan is None
+            or args.authority_receipt is None
+            or args.authority_control_root is None
+        ):
             parser.error(
-                "--apply requires --authority-plan and --authority-receipt"
+                "--apply requires --authority-plan, --authority-receipt, "
+                "and --authority-control-root"
             )
         from app.us_assignment.production_authority import validate_runtime_start
 
         plan = _load_authority_json(args.authority_plan)
         receipt = _load_authority_json(args.authority_receipt)
         active = validate_runtime_start(
-            plan, receipt, raw_root=settings.raw_data_root
+            plan,
+            receipt,
+            raw_root=settings.raw_data_root,
+            control_root=args.authority_control_root,
         )
         bound_manifest = (
-            settings.raw_data_root / str((plan.get("manifest") or {}).get("relative_path") or "")
+            args.authority_control_root.resolve()
+            / str((plan.get("manifest") or {}).get("relative_path") or "")
         ).resolve()
         if args.manifest.resolve() != bound_manifest:
             parser.error("--manifest does not match the active authority plan")
