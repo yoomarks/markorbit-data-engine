@@ -31,7 +31,9 @@ _RETRY_STATUSES = {"PROCESSING", "INTERRUPTED", "FAILED", "MISSING_FILE"}
 def _registry_state(preflight: dict[str, Any]) -> dict[str, Any]:
     packages = list_assignment_packages()
     by_sha = {str(row.get("sha256") or "").lower(): row for row in packages}
-    manifest_shas = {str(item["sha256"]).lower() for item in preflight.get("plan", [])}
+    manifest_shas = {
+        str(item["sha256"]).lower() for item in preflight.get("plan", [])
+    }
     blockers: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
 
@@ -182,7 +184,9 @@ def _build_replay_plan_from_preflight(preflight: dict[str, Any]) -> dict[str, An
 
 
 def build_replay_plan(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
-    return _build_replay_plan_from_preflight(preflight_manifest(manifest_path, raw_root))
+    return _build_replay_plan_from_preflight(
+        preflight_manifest(manifest_path, raw_root)
+    )
 
 
 def execute_replay(
@@ -205,9 +209,17 @@ def execute_replay(
     preflight = preflight_manifest(manifest_path, raw_root)
     initial = _build_replay_plan_from_preflight(preflight)
     if initial["status"] in {"BLOCKED", "COMPLETE"}:
-        return {"mode": "APPLY" if apply else "DRY_RUN", **initial, "processed_count": 0}
+        return {
+            "mode": "APPLY" if apply else "DRY_RUN",
+            **initial,
+            "processed_count": 0,
+        }
     if initial["status"] == "RETRY_REQUIRED" and not resume_failed:
-        return {"mode": "APPLY" if apply else "DRY_RUN", **initial, "processed_count": 0}
+        return {
+            "mode": "APPLY" if apply else "DRY_RUN",
+            **initial,
+            "processed_count": 0,
+        }
     if not apply:
         return {"mode": "DRY_RUN", **initial, "processed_count": 0}
 
@@ -287,6 +299,10 @@ def execute_replay(
     }
 
 
+def _load_authority_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Deterministic manifest-driven USPTO Assignment corpus replay"
@@ -296,10 +312,36 @@ def main() -> int:
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--max-packages", type=int, default=1)
     parser.add_argument("--resume-failed", action="store_true")
+    parser.add_argument("--authority-plan", type=Path, default=None)
+    parser.add_argument("--authority-receipt", type=Path, default=None)
     args = parser.parse_args()
+
+    settings = get_settings()
+    if args.apply:
+        if not args.all:
+            parser.error("--apply requires --all under production authority")
+        if args.authority_plan is None or args.authority_receipt is None:
+            parser.error(
+                "--apply requires --authority-plan and --authority-receipt"
+            )
+        from app.us_assignment.production_authority import validate_runtime_start
+
+        plan = _load_authority_json(args.authority_plan)
+        receipt = _load_authority_json(args.authority_receipt)
+        active = validate_runtime_start(
+            plan, receipt, raw_root=settings.raw_data_root
+        )
+        bound_manifest = (
+            settings.raw_data_root / str((plan.get("manifest") or {}).get("relative_path") or "")
+        ).resolve()
+        if args.manifest.resolve() != bound_manifest:
+            parser.error("--manifest does not match the active authority plan")
+        if bool(args.resume_failed) != bool(active.get("resume_failed")):
+            parser.error("--resume-failed does not match the active authority plan")
+
     report = execute_replay(
         args.manifest,
-        get_settings().raw_data_root,
+        settings.raw_data_root,
         apply=args.apply,
         all_packages=args.all,
         max_packages=args.max_packages,

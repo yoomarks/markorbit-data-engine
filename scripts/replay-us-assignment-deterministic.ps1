@@ -7,6 +7,8 @@ param(
     [switch]$All,
     [switch]$ResumeFailed,
     [ValidateRange(1, 1000000)][int]$MaxPackages = 1,
+    [string]$AuthorityPlanRelativePath = "",
+    [string]$AuthorityToken = "",
     [string]$OutputPath = ""
 )
 
@@ -24,7 +26,67 @@ foreach ($service in @("postgres", "clickhouse")) {
     }
 }
 
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$mode = if ($Apply) { "apply" } else { "dryrun" }
+if (-not $OutputPath) {
+    $OutputPath = Join-Path "reports" "us_assignment_replay_${mode}_$timestamp.json"
+}
+
+$authorityConsumed = $false
+$authorityPlan = ""
+$authorityReceipt = ""
+$effectiveResumeFailed = [bool]$ResumeFailed
+
+function Finalize-AssignmentAuthority {
+    param(
+        [bool]$Success,
+        [string]$ErrorMessage = ""
+    )
+    if (-not $authorityConsumed) { return }
+    $finalizeArgs = @(
+        "run", "--rm", "--no-deps", "-T", "worker",
+        "python", "-m", "app.us_assignment.production_authority",
+        "finalize", "--plan", $authorityPlan,
+        "--receipt", $authorityReceipt,
+        "--report-path", $OutputPath
+    )
+    if ($Success) {
+        $finalizeArgs += "--success"
+    }
+    elseif ($ErrorMessage) {
+        $finalizeArgs += @("--error-message", $ErrorMessage)
+    }
+    & docker compose @finalizeArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "US Assignment authority finalization failed."
+    }
+}
+
 if ($Apply) {
+    if (-not $All) {
+        throw "Production-authorized US Assignment replay must use -All."
+    }
+    if (-not $AuthorityPlanRelativePath -or -not $AuthorityToken) {
+        throw "-Apply requires -AuthorityPlanRelativePath and the exact -AuthorityToken."
+    }
+
+    $dirty = git status --porcelain --untracked-files=no
+    if ($LASTEXITCODE -ne 0 -or $dirty) {
+        throw "Production Assignment replay requires a clean tracked worktree."
+    }
+    $head = (git rev-parse HEAD).Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0 -or $head.Length -ne 40) {
+        throw "Unable to resolve local HEAD before Assignment replay."
+    }
+    $remoteLine = git ls-remote origin refs/heads/main
+    if ($LASTEXITCODE -ne 0 -or -not $remoteLine) {
+        throw "Unable to verify live origin/main before Assignment replay."
+    }
+    $remoteMain = (($remoteLine -split "\s+")[0]).Trim().ToLowerInvariant()
+    if ($remoteMain -ne $head) {
+        throw "Local HEAD is not live origin/main; frozen Assignment authority is invalid."
+    }
+
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
         (Join-Path $PSScriptRoot "assert-domain-apply-gate.ps1") `
         -TargetDomain "US_ASSIGNMENT" `
@@ -32,12 +94,32 @@ if ($Apply) {
     if ($LASTEXITCODE -ne 0) {
         throw "US Assignment apply gate failed; replay was not started."
     }
-}
 
-$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$mode = if ($Apply) { "apply" } else { "dryrun" }
-if (-not $OutputPath) {
-    $OutputPath = Join-Path "reports" "us_assignment_replay_${mode}_$timestamp.json"
+    $authorityPlan = "/data/raw/" + ($AuthorityPlanRelativePath -replace '\\', '/')
+    $receiptRelative = "manifests/us_assignment/authority_receipt_${timestamp}.json"
+    $authorityReceipt = "/data/raw/$receiptRelative"
+    $consumeArgs = @(
+        "run", "--build", "--rm", "--no-deps", "-T", "worker",
+        "python", "-m", "app.us_assignment.production_authority",
+        "consume", "--plan", $authorityPlan,
+        "--expected-main", $head,
+        "--authority-token", $AuthorityToken,
+        "--output", $authorityReceipt
+    )
+    $authorityLines = & docker compose @consumeArgs
+    $authorityExit = $LASTEXITCODE
+    if ($authorityExit -ne 0) {
+        throw "US Assignment production authority was not consumed; replay was not started."
+    }
+    $authorityJson = $authorityLines -join "`n"
+    $authorityResult = $authorityJson | ConvertFrom-Json
+    if ($authorityResult.decision -ne "US_ASSIGNMENT_PRODUCTION_REPLAY_AUTHORIZED") {
+        throw "Unexpected US Assignment authority decision."
+    }
+    $authorityConsumed = $true
+    $effectiveResumeFailed = [bool]$authorityResult.resume_failed
+    Write-Host $authorityJson
+    Write-Host "Authority receipt: $receiptRelative"
 }
 
 $telemetry = $null
@@ -69,16 +151,21 @@ try {
         "--manifest", $manifest,
         "--max-packages", "$MaxPackages"
     )
-    if ($Apply) { $args += "--apply" }
-    if ($All) { $args += "--all" }
-    if ($ResumeFailed) { $args += "--resume-failed" }
+    if ($Apply) {
+        $args += @(
+            "--apply", "--all",
+            "--authority-plan", $authorityPlan,
+            "--authority-receipt", $authorityReceipt
+        )
+    }
+    elseif ($All) {
+        $args += "--all"
+    }
+    if ($effectiveResumeFailed) { $args += "--resume-failed" }
 
     $jsonLines = & docker compose @args
     $exitCode = $LASTEXITCODE
     $json = $jsonLines -join "`n"
-    if (-not $OutputPath) {
-        throw "US Assignment replay output path was not resolved."
-    }
     $outputDirectory = Split-Path -Parent $OutputPath
     if ($outputDirectory) { New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null }
     $json | Set-Content -Encoding UTF8 $OutputPath
@@ -87,20 +174,37 @@ try {
 
     if ($exitCode -ne 0) { throw "Deterministic US Assignment replay failed. See the JSON report above." }
     $report = $json | ConvertFrom-Json
-    if ($report.status -eq "RETRY_REQUIRED" -and -not $ResumeFailed) {
-        throw "US Assignment replay requires explicit -ResumeFailed before the failed package can be retried."
+    if ($report.status -eq "RETRY_REQUIRED") {
+        throw "US Assignment replay stopped at a failed package; freeze a new authority plan before retry."
     }
     if ($report.status -in @("BLOCKED", "FAILED", "BUSY")) {
         throw "Deterministic US Assignment replay stopped: $($report.status)"
     }
+    if ($Apply -and $report.status -ne "COMPLETE") {
+        throw "Production-authorized US Assignment replay did not complete the frozen corpus."
+    }
     if ($telemetry) {
         $telemetryStatus = [string]$report.status
     }
+    if ($authorityConsumed) {
+        Finalize-AssignmentAuthority -Success $true
+        $authorityConsumed = $false
+    }
 }
 catch {
+    $originalError = $_.Exception.Message
     if ($telemetry) {
         $telemetryStatus = "COMMAND_FAILED"
-        $telemetryError = $_.Exception.Message
+        $telemetryError = $originalError
+    }
+    if ($authorityConsumed) {
+        try {
+            Finalize-AssignmentAuthority -Success $false -ErrorMessage $originalError
+            $authorityConsumed = $false
+        }
+        catch {
+            Write-Warning "Assignment authority failure finalization also failed: $($_.Exception.Message)"
+        }
     }
     throw
 }
