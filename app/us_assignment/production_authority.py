@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import hashlib
@@ -368,6 +368,7 @@ def validate_authority_plan(
     raw_root: Path,
     expected_main: str,
     reject_consumed: bool = True,
+    allow_active_plan_sha: str | None = None,
 ) -> dict[str, Any]:
     if str(plan.get("version")) != AUTHORITY_VERSION:
         raise RuntimeError("Assignment production authority plan version mismatch")
@@ -383,7 +384,16 @@ def validate_authority_plan(
         raise RuntimeError("Assignment production authority plan was already consumed")
     active = _authority_rows()
     if active:
-        raise RuntimeError("another US Assignment production authority run is active")
+        active_plan_shas = {
+            str((row.get("payload") or {}).get("plan_sha256") or "")
+            for row in active
+        }
+        if (
+            allow_active_plan_sha is None
+            or active_plan_shas != {allow_active_plan_sha}
+            or len(active) != 1
+        ):
+            raise RuntimeError("another US Assignment production authority run is active")
 
     manifest_item = plan.get("manifest") or {}
     manifest_path = raw_root.resolve() / str(manifest_item.get("relative_path") or "")
@@ -608,6 +618,27 @@ def validate_active_receipt(
         "resume_failed": bool(plan.get("resume_failed")),
     }
 
+
+def validate_runtime_start(
+    plan: dict[str, Any],
+    receipt: dict[str, Any],
+    *,
+    raw_root: Path,
+    connection_factory=postgres_conn,
+) -> dict[str, Any]:
+    active = validate_active_receipt(
+        plan,
+        receipt,
+        connection_factory=connection_factory,
+    )
+    validated = validate_authority_plan(
+        plan,
+        raw_root=raw_root,
+        expected_main=str(plan.get("execution_main") or ""),
+        reject_consumed=False,
+        allow_active_plan_sha=str(plan.get("plan_sha256") or ""),
+    )
+    return {**validated, **active}
 
 def finalize_authority(
     plan: dict[str, Any],
