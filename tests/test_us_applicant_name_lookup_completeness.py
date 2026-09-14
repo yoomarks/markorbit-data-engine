@@ -12,10 +12,11 @@ class Result:
 
 
 class FakeClient:
-    def __init__(self, *, lookup_rows=3, checksum="99", bad_name=False):
+    def __init__(self, *, lookup_rows=3, checksum="99", bad_name=False, missing_source=False):
         self.lookup_rows = lookup_rows
         self.checksum = checksum
         self.bad_name = bad_name
+        self.missing_source = missing_source
         self.queries = []
 
     def query(self, sql, settings=None):
@@ -36,7 +37,13 @@ class FakeClient:
         name = us_applicant_name_lookup_row(source)[0]
         if self.bad_name:
             name = "wrong"
-        return Result([(name, *(source[column] for column in APPLICANT_INDEX_COLUMNS))])
+        if "ORDER BY normalized_name" in sql:
+            return Result(
+                [(name, source["candidate_key"], source["serial_number"], source["owner_key"])]
+            )
+        if self.missing_source:
+            return Result([])
+        return Result([tuple(source[column] for column in APPLICANT_INDEX_COLUMNS)])
 
 
 def test_complete_receipt_checks_schema_bindings_and_sample_normalization():
@@ -46,14 +53,23 @@ def test_complete_receipt_checks_schema_bindings_and_sample_normalization():
     assert receipt["schema_match"] is True
     assert receipt["binding_checksum_match"] is True
     assert receipt["sample_mismatches"] == 0
-    sample_sql = client.queries[-1]
-    assert "LIMIT 200\n        ) AS lookup" in sample_sql
-    assert sample_sql.index(") AS source") < sample_sql.index(") AS lookup")
+    lookup_sql, source_sql = client.queries[-2:]
+    assert "LIMIT 200" in lookup_sql
+    assert "us_applicant_candidate_current FINAL" not in lookup_sql
+    assert "(candidate_key, serial_number, owner_key) IN" in source_sql
+    assert "us_applicant_name_lookup_current" not in source_sql
 
 
 def test_bad_normalized_name_fails_closed():
     receipt = verify_us_applicant_name_lookup(FakeClient(bad_name=True))
     assert receipt["complete"] is False
+    assert receipt["sample_mismatches"] == 1
+
+
+def test_missing_sample_source_fails_closed():
+    receipt = verify_us_applicant_name_lookup(FakeClient(missing_source=True))
+    assert receipt["complete"] is False
+    assert receipt["sample_checked"] == 1
     assert receipt["sample_mismatches"] == 1
 
 
