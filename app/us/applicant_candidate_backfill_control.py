@@ -363,7 +363,7 @@ def resume_backfill_run(
                         error_message = NULL,
                         payload = payload || jsonb_build_object(
                             'stop_requested', false,
-                            'implementation_sha', %s,
+                            'implementation_sha', %s::text,
                             'implementation_lineage', %s::jsonb
                         )
                     WHERE run_id = %s AND job_type = %s AND status = 'INTERRUPTED'
