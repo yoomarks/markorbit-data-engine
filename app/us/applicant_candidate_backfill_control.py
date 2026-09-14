@@ -24,8 +24,8 @@ from app.us.target_bulk_tasks import (
     STATUS_RUN_QUEUED,
     STATUS_RUNNING,
     TARGET_BULK_EXECUTION_LANE,
-    TARGET_BULK_SOURCE_COUNT,
     TARGET_BULK_TASK_KIND,
+    accepted_target_bulk_epoch_from_row,
 )
 
 BACKFILL_JOB_TYPE = "US_APPLICANT_CANDIDATE_BACKFILL_V1"
@@ -99,25 +99,14 @@ def current_us_applicant_serving_epoch(
         raise RuntimeError("US Applicant serving epoch is not quiescent: bulk publication active")
 
     for row in rows:
-        if str(row.get("status")) != "SUCCESS":
+        epoch = accepted_target_bulk_epoch_from_row(row)
+        if epoch is None:
             continue
-        payload = dict(row.get("payload") or {})
-        metrics = dict(row.get("metrics") or {})
-        checkpoint = int(metrics.get("last_safe_checkpoint_sequence") or 0)
-        if checkpoint != TARGET_BULK_SOURCE_COUNT:
-            continue
-        if not bool(metrics.get("full_accepted_source_corpus_on_target")):
-            continue
-        if str(metrics.get("phase") or "") != "COMPLETE":
-            continue
-        plan_sha256 = str(payload.get("approved_plan_sha256") or metrics.get("plan_sha256") or "")
-        if len(plan_sha256) != 64:
-            raise RuntimeError("completed US bulk epoch is missing exact plan SHA-256")
         return USApplicantServingEpoch(
-            bulk_run_id=str(row["run_id"]),
-            plan_sha256=plan_sha256.lower(),
-            checkpoint_sequence=checkpoint,
-            final_audit_version=str(metrics.get("final_audit_version") or ""),
+            bulk_run_id=str(epoch["run_id"]),
+            plan_sha256=str(epoch["plan_sha256"]),
+            checkpoint_sequence=int(epoch["checkpoint_sequence"]),
+            final_audit_version=str(epoch["final_audit_version"]),
         )
 
     raise RuntimeError("no durable complete US Application bulk serving epoch is available")

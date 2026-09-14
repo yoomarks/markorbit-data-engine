@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from app.db import postgres_conn
 
@@ -37,6 +37,82 @@ _QUEUE_LOCK_NAME = "markorbit:us-application-target-bulk-task-queue"
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def accepted_target_bulk_epoch_from_row(
+    row: dict[str, Any],
+    *,
+    minimum_checkpoint: int = TARGET_BULK_SOURCE_COUNT,
+) -> dict[str, Any] | None:
+    if str(row.get("status") or "") != STATUS_SUCCESS:
+        return None
+    payload = dict(row.get("payload") or {})
+    metrics = dict(row.get("metrics") or {})
+    if str(metrics.get("phase") or "") != "COMPLETE":
+        return None
+    if not bool(metrics.get("full_accepted_source_corpus_on_target")):
+        return None
+    checkpoint = max(
+        int(metrics.get("accepted_target_sequence_count") or 0),
+        int(metrics.get("last_safe_checkpoint_sequence") or 0),
+    )
+    if checkpoint < minimum_checkpoint:
+        return None
+    if "remaining_to_accepted_corpus" in metrics and int(metrics.get("remaining_to_accepted_corpus") or 0) != 0:
+        return None
+    if "last_archived_source_sequence" in metrics and int(metrics.get("last_archived_source_sequence") or 0) != checkpoint:
+        return None
+    verified = metrics.get("final_audit_verified_sequences")
+    if isinstance(verified, list) and verified:
+        try:
+            normalized_verified = [int(value) for value in verified]
+        except (TypeError, ValueError):
+            return None
+        if normalized_verified != list(range(1, checkpoint + 1)):
+            return None
+    plan_sha256 = str(payload.get("approved_plan_sha256") or metrics.get("plan_sha256") or "").lower()
+    if len(plan_sha256) != 64:
+        return None
+    try:
+        int(plan_sha256, 16)
+    except ValueError:
+        return None
+    return {
+        "run_id": str(row.get("run_id") or ""),
+        "plan_sha256": plan_sha256,
+        "checkpoint_sequence": checkpoint,
+        "final_audit_version": str(metrics.get("final_audit_version") or ""),
+        "execution_main": str(metrics.get("execution_main") or payload.get("expected_main") or ""),
+        "metrics": metrics,
+        "payload": payload,
+    }
+
+
+def latest_complete_target_bulk_epoch(
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> dict[str, Any] | None:
+    with connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT run_id, status, payload, metrics
+                FROM control.job_run
+                WHERE trigger_type = 'ADMIN_UI'
+                  AND payload->>'task_kind' = %s
+                  AND payload->>'execution_lane' = %s
+                  AND payload->>'domain' = 'US_APPLICATION'
+                  AND status = %s
+                ORDER BY finished_at DESC NULLS LAST, started_at DESC, run_id DESC
+                """,
+                (TARGET_BULK_TASK_KIND, TARGET_BULK_EXECUTION_LANE, STATUS_SUCCESS),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+    for row in rows:
+        epoch = accepted_target_bulk_epoch_from_row(row)
+        if epoch is not None:
+            return epoch
+    return None
 
 
 def _validate_bound(
