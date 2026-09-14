@@ -1,5 +1,5 @@
 param(
-    [string]$ManifestRelativePath = "manifests/us_assignment/corpus.json",
+    [string]$ManifestRelativePath = "us_assignment/corpus_manifest.json",
     [Parameter(Mandatory = $true)]
     [ValidateRange(1, 9999)]
     [int]$ExpectedApplicationHistoryParts,
@@ -36,6 +36,7 @@ $authorityConsumed = $false
 $authorityPlan = ""
 $authorityReceipt = ""
 $effectiveResumeFailed = [bool]$ResumeFailed
+$controlRoot = "/data/control"
 
 function Finalize-AssignmentAuthority {
     param(
@@ -95,13 +96,14 @@ if ($Apply) {
         throw "US Assignment apply gate failed; replay was not started."
     }
 
-    $authorityPlan = "/data/raw/" + ($AuthorityPlanRelativePath -replace '\\', '/')
-    $receiptRelative = "manifests/us_assignment/authority_receipt_${timestamp}.json"
-    $authorityReceipt = "/data/raw/$receiptRelative"
+    $authorityPlan = "$controlRoot/" + ($AuthorityPlanRelativePath -replace '\\', '/')
+    $receiptRelative = "us_assignment/authority_receipt_${timestamp}.json"
+    $authorityReceipt = "$controlRoot/$receiptRelative"
     $consumeArgs = @(
         "run", "--build", "--rm", "--no-deps", "-T", "worker",
         "python", "-m", "app.us_assignment.production_authority",
         "consume", "--plan", $authorityPlan,
+        "--control-root", $controlRoot,
         "--expected-main", $head,
         "--authority-token", $AuthorityToken,
         "--output", $authorityReceipt
@@ -144,7 +146,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "US Assignment schema gate failed." }
     }
 
-    $manifest = "/data/raw/" + ($ManifestRelativePath -replace '\\', '/')
+    $manifest = "$controlRoot/" + ($ManifestRelativePath -replace '\\', '/')
     $args = @(
         "run", "--build", "--rm", "--no-deps", "-T", "worker",
         "python", "-m", "app.us_assignment.corpus_replay",
@@ -155,7 +157,8 @@ try {
         $args += @(
             "--apply", "--all",
             "--authority-plan", $authorityPlan,
-            "--authority-receipt", $authorityReceipt
+            "--authority-receipt", $authorityReceipt,
+            "--authority-control-root", $controlRoot
         )
     }
     elseif ($All) {

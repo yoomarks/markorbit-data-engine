@@ -113,8 +113,9 @@ def _patch_prepare(monkeypatch: pytest.MonkeyPatch, state: dict[str, object]) ->
     monkeypatch.setattr(
         authority,
         "_manifest_evidence",
-        lambda manifest_path, raw_root: {
-            "relative_path": "manifests/us_assignment/corpus.json",
+        lambda manifest_path, control_root: {
+            "storage_root": "CONTROL_ROOT",
+            "relative_path": "us_assignment/corpus_manifest.json",
             "size_bytes": 456,
             "sha256": MANIFEST_SHA,
         },
@@ -137,6 +138,7 @@ def test_build_authority_plan_freezes_initial_empty_start(
     plan = authority.build_authority_plan(
         repo_root=tmp_path,
         raw_root=tmp_path,
+        control_root=tmp_path,
         manifest_path=tmp_path / "corpus.json",
         expected_history_parts=91,
         authority_generation_id="12345678-1234-4234-8234-123456789abc",
@@ -160,6 +162,7 @@ def test_build_authority_plan_freezes_resume_bound_state(
     plan = authority.build_authority_plan(
         repo_root=tmp_path,
         raw_root=tmp_path,
+        control_root=tmp_path,
         manifest_path=tmp_path / "corpus.json",
         expected_history_parts=91,
         authority_generation_id="12345678-1234-4234-8234-123456789abc",
@@ -195,6 +198,7 @@ def test_validate_authority_plan_rejects_consumed_before_source_access(
         authority.validate_authority_plan(
             plan,
             raw_root=tmp_path,
+            control_root=tmp_path,
             expected_main=MAIN,
         )
 
@@ -225,6 +229,7 @@ def test_consume_requires_exact_token_before_database_write(
         authority.consume_authority_plan(
             plan,
             raw_root=tmp_path,
+            control_root=tmp_path,
             expected_main=MAIN,
             authority_token="GO wrong",
             connection_factory=fail_connection,
@@ -266,7 +271,9 @@ def test_validate_runtime_start_revalidates_frozen_state(
 
     monkeypatch.setattr(authority, "validate_active_receipt", fake_active)
     monkeypatch.setattr(authority, "validate_authority_plan", fake_validate)
-    result = authority.validate_runtime_start(plan, receipt, raw_root=tmp_path)
+    result = authority.validate_runtime_start(
+        plan, receipt, raw_root=tmp_path, control_root=tmp_path
+    )
 
     assert result["run_id"] == "run-1"
     assert result["remaining_count"] == 156
@@ -274,3 +281,47 @@ def test_validate_runtime_start_revalidates_frozen_state(
     assert kwargs["expected_main"] == MAIN
     assert kwargs["reject_consumed"] is False
     assert kwargs["allow_active_plan_sha"] == "f" * 64
+
+
+def test_manifest_evidence_binds_control_root(tmp_path: Path) -> None:
+    control_root = tmp_path / "control"
+    manifest = control_root / "us_assignment" / "corpus_manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"version":"test"}\n', encoding="utf-8")
+    evidence = authority._manifest_evidence(manifest, control_root)
+    assert evidence["storage_root"] == "CONTROL_ROOT"
+    assert evidence["relative_path"] == "us_assignment/corpus_manifest.json"
+    assert evidence["size_bytes"] == manifest.stat().st_size
+    assert evidence["sha256"] == authority.sha256_file(manifest)
+
+
+def test_manifest_evidence_rejects_escape(tmp_path: Path) -> None:
+    control_root = tmp_path / "control"
+    control_root.mkdir()
+    manifest = tmp_path / "outside.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="CONTROL_ROOT"):
+        authority._manifest_evidence(manifest, control_root)
+
+
+def test_replay_cli_requires_authority_control_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        corpus_replay,
+        "get_settings",
+        lambda: SimpleNamespace(raw_data_root=tmp_path),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "corpus-replay", "--manifest", str(tmp_path / "corpus.json"),
+            "--apply", "--all",
+            "--authority-plan", str(tmp_path / "plan.json"),
+            "--authority-receipt", str(tmp_path / "receipt.json"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        corpus_replay.main()
+    assert exc.value.code == 2
