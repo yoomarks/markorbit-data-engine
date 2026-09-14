@@ -332,6 +332,7 @@ def resume_backfill_run(
     run_id: str,
     *,
     current_epoch: USApplicantServingEpoch,
+    implementation_sha: str | None = None,
     connection_factory: Callable[..., Any] = postgres_conn,
 ) -> ApplicantIndexBackfillCursor:
     run = load_backfill_run(run_id, connection_factory=connection_factory)
@@ -341,8 +342,17 @@ def resume_backfill_run(
     status = str(run.get("status") or "")
     if status not in {"RUNNING", "INTERRUPTED"}:
         raise RuntimeError(f"backfill run is not resumable from status={status}")
+    payload = dict(run.get("payload") or {})
+    if implementation_sha is not None:
+        implementation_sha = implementation_sha.strip().lower()
+        if len(implementation_sha) != 40:
+            raise ValueError("implementation_sha must be a 40-character git SHA")
 
     if status == "INTERRUPTED":
+        previous_sha = str(payload.get("implementation_sha") or "")
+        lineage = list(payload.get("implementation_lineage") or [])
+        if implementation_sha is not None and implementation_sha != previous_sha:
+            lineage.append({"from": previous_sha, "to": implementation_sha})
         with connection_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -351,11 +361,20 @@ def resume_backfill_run(
                     SET status = 'RUNNING',
                         finished_at = NULL,
                         error_message = NULL,
-                        payload = payload || jsonb_build_object('stop_requested', false)
+                        payload = payload || jsonb_build_object(
+                            'stop_requested', false,
+                            'implementation_sha', %s,
+                            'implementation_lineage', %s::jsonb
+                        )
                     WHERE run_id = %s AND job_type = %s AND status = 'INTERRUPTED'
                     RETURNING run_id
                     """,
-                    (run_id, BACKFILL_JOB_TYPE),
+                    (
+                        implementation_sha or previous_sha,
+                        _json(lineage),
+                        run_id,
+                        BACKFILL_JOB_TYPE,
+                    ),
                 )
                 if cur.fetchone() is None:
                     raise RuntimeError("backfill resume compare-and-set failed")
@@ -476,11 +495,13 @@ def execute_backfill_run(
     ] = current_us_applicant_serving_epoch,
     connection_factory: Callable[..., Any] = postgres_conn,
     batch_size: int = 5_000,
+    implementation_sha: str | None = None,
 ) -> dict[str, Any]:
     epoch = serving_epoch_getter()
     cursor = resume_backfill_run(
         run_id,
         current_epoch=epoch,
+        implementation_sha=implementation_sha,
         connection_factory=connection_factory,
     )
     try:

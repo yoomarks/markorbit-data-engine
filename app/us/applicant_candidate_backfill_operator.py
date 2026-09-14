@@ -375,6 +375,7 @@ def execute_backfill_plan(
             client=target_client,
             serving_epoch_getter=epoch_getter,
             batch_size=int(plan["batch_size"]),
+            implementation_sha=str(plan["implementation_sha"]),
         )
         completeness = dict(result["completeness"])
         if completeness.get("complete") is not True:

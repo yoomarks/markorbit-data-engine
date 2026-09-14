@@ -217,6 +217,7 @@ def test_execute_writes_success_receipt(tmp_path: Path):
         return "backfill-run"
 
     def fake_execute(run_id, **kwargs):
+        assert kwargs["implementation_sha"] == "b" * 40
         assert run_id == "backfill-run"
         return {
             "cursor": {"after_serial": "9", "after_owner_key": "f" * 64, "emitted": 10},
