@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 import hashlib
+import http.client
 import json
 from pathlib import Path
 import re
@@ -35,6 +36,7 @@ from app.us.target_canary import (
 
 PLAN_VERSION = "US_APPLICANT_NAME_LOOKUP_BACKFILL_PLAN_V2"
 RECEIPT_VERSION = "US_APPLICANT_NAME_LOOKUP_BACKFILL_RECEIPT_V2"
+APPLICANT_HTTP_TIMEOUT_SECONDS = 1_800
 OWNER_TABLE = "markorbit_facts.us_owner_current"
 _EXPECTED_SORTING_KEY = "candidate_key, serial_number, owner_key"
 _EXPECTED_LOOKUP_SORTING_KEY = "normalized_name, candidate_key, serial_number, owner_key"
@@ -129,7 +131,13 @@ class TargetApplicantBackfillClient:
     """Narrow adapter over the accepted production target transport."""
 
     def __init__(self, base: WslNativeClickHouseClient | None = None) -> None:
-        self._base = base or WslNativeClickHouseClient()
+        self._base = base or WslNativeClickHouseClient(
+            connection=http.client.HTTPConnection(
+                TARGET_NATIVE_HOST,
+                TARGET_HTTP_PORT,
+                timeout=APPLICANT_HTTP_TIMEOUT_SECONDS,
+            )
+        )
 
     def query(
         self,
