@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import app.us.applicant_candidate_backfill_operator as operator
 from app.us.applicant_candidate_backfill_control import USApplicantServingEpoch
 from app.us.applicant_candidate_backfill_operator import (
     TargetApplicantBackfillClient,
@@ -106,6 +107,19 @@ def test_target_adapter_restricts_settings_and_insert_scope():
     with pytest.raises(RuntimeError, match="may insert only"):
         client.insert("markorbit_facts.us_owner_current", [], column_names=[])
     client.insert("markorbit_facts.us_applicant_name_lookup_current", [], column_names=[])
+
+
+def test_target_adapter_scopes_long_timeout_to_applicant_transport(monkeypatch):
+    observed = {}
+
+    def connection(host, port, *, timeout):
+        observed.update(host=host, port=port, timeout=timeout)
+        return BaseClient()
+
+    monkeypatch.setattr(operator.http.client, "HTTPConnection", connection)
+    TargetApplicantBackfillClient()
+
+    assert observed == {"host": "127.0.0.1", "port": 28123, "timeout": 1_800}
 
 
 def test_prepare_fails_without_durable_p310_epoch(tmp_path: Path):
