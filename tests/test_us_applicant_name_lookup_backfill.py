@@ -9,6 +9,7 @@ from app.applicant_name_lookup import (
 from app.us.applicant_name_lookup_backfill import (
     ApplicantNameLookupBackfillCursor,
     backfill_us_applicant_name_lookup,
+    reconcile_us_applicant_name_lookup,
 )
 from app.us.applicant_candidate_index import applicant_candidate_key
 from app.us.publisher import OWNER_COLUMNS
@@ -87,3 +88,37 @@ def test_cooperative_stop_happens_before_next_page():
     with pytest.raises(InterruptedError, match="stop requested"):
         backfill_us_applicant_name_lookup(client=client, stop_requested=lambda: True)
     assert client.queries == []
+
+
+def test_reconcile_inserts_only_bounded_missing_bindings():
+    client = FakeClient([[_candidate_row("10000001", "a" * 64)]])
+
+    reconciled = reconcile_us_applicant_name_lookup(client=client, max_rows=2)
+
+    assert reconciled == 1
+    assert "LEFT ANTI JOIN" in client.queries[0][0]
+    assert "target.record_hash = source.record_hash" in client.queries[0][0]
+    assert "LIMIT 3" in client.queries[0][0]
+    assert client.inserts[0][0] == US_APPLICANT_NAME_LOOKUP_TABLE
+
+
+def test_reconcile_fails_closed_above_bound():
+    client = FakeClient(
+        [[_candidate_row("10000001", "a" * 64), _candidate_row("10000002", "b" * 64)]]
+    )
+    with pytest.raises(RuntimeError, match="exceeds bounded limit 1"):
+        reconcile_us_applicant_name_lookup(client=client, max_rows=1)
+    assert client.inserts == []
+
+
+def test_reconcile_tombstones_superseded_lookup_identity():
+    candidate = _candidate_row("10000001", "a" * 64)
+    client = FakeClient([[candidate], [("old name", "f" * 64, *candidate)]])
+
+    reconcile_us_applicant_name_lookup(client=client, max_rows=2)
+
+    assert len(client.inserts) == 2
+    tombstone = client.inserts[1][1][0]
+    assert tombstone[0] == "old name"
+    assert tombstone[1] == "f" * 64
+    assert tombstone[-1] == 1

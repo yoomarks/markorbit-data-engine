@@ -9,11 +9,13 @@ from app.db import postgres_conn
 from app.us.applicant_candidate_backfill import (
     ApplicantIndexBackfillCursor,
     backfill_us_applicant_candidate_index,
+    reconcile_us_applicant_candidate_index,
 )
 from app.us.applicant_candidate_completeness import verify_us_applicant_candidate_index
 from app.us.applicant_name_lookup_backfill import (
     ApplicantNameLookupBackfillCursor,
     backfill_us_applicant_name_lookup,
+    reconcile_us_applicant_name_lookup,
 )
 from app.us.applicant_name_lookup_completeness import verify_us_applicant_name_lookup
 from app.us.target_bulk_tasks import (
@@ -560,6 +562,31 @@ def execute_backfill_run(
             "name_lookup_complete": name_lookup_completeness.get("complete") is True,
             "name_lookup": name_lookup_completeness,
         }
+        if not completeness["complete"]:
+            candidate_reconciled = reconcile_us_applicant_candidate_index(
+                client=client,
+                expected_epoch=epoch.token,
+                serving_epoch_getter=lambda: serving_epoch_getter().token,
+            )
+            name_lookup_reconciled = reconcile_us_applicant_name_lookup(
+                client=client,
+                expected_epoch=epoch.token,
+                serving_epoch_getter=lambda: serving_epoch_getter().token,
+            )
+            candidate_completeness = verify_us_applicant_candidate_index(client)
+            name_lookup_completeness = verify_us_applicant_name_lookup(client)
+            completeness = {
+                **candidate_completeness,
+                "complete": candidate_completeness.get("complete") is True
+                and name_lookup_completeness.get("complete") is True,
+                "candidate_index_complete": candidate_completeness.get("complete") is True,
+                "name_lookup_complete": name_lookup_completeness.get("complete") is True,
+                "name_lookup": name_lookup_completeness,
+                "reconciliation": {
+                    "candidate_rows": candidate_reconciled,
+                    "name_lookup_rows": name_lookup_reconciled,
+                },
+            }
         complete_backfill_run(
             run_id,
             current_epoch=current_epoch,

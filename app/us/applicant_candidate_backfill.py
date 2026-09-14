@@ -8,6 +8,7 @@ from app.us.publisher import APPLICANT_INDEX_COLUMNS, OWNER_COLUMNS
 
 DEFAULT_BATCH_SIZE = 5_000
 MAX_BATCH_SIZE = 20_000
+MAX_RECONCILE_ROWS = 500_000
 READ_SETTINGS = {
     "max_threads": 1,
     "max_rows_to_read": 50_000_000,
@@ -124,3 +125,103 @@ def backfill_us_applicant_candidate_index(
             break
 
     return state
+
+
+def reconcile_us_applicant_candidate_index(
+    *,
+    client: Any,
+    max_rows: int = MAX_RECONCILE_ROWS,
+    expected_epoch: str | None = None,
+    serving_epoch_getter: Callable[[], str] | None = None,
+) -> int:
+    """Insert a bounded set of source bindings missing from the derived index."""
+    if max_rows < 1 or max_rows > MAX_RECONCILE_ROWS:
+        raise ValueError(f"max_rows must be between 1 and {MAX_RECONCILE_ROWS}")
+    _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+    columns_sql = ", ".join(f"source.{column}" for column in OWNER_COLUMNS)
+    rows = list(
+        client.query(
+            f"""
+            SELECT {columns_sql}
+            FROM
+            (
+                SELECT * FROM markorbit_facts.us_owner_current FINAL
+                WHERE is_deleted = 0
+            ) AS source
+            LEFT ANTI JOIN
+            (
+                SELECT serial_number, owner_key, record_hash, source_rank
+                FROM {APPLICANT_INDEX_TABLE} FINAL
+                WHERE is_deleted = 0
+            ) AS target
+             ON target.serial_number = source.serial_number
+             AND target.owner_key = source.owner_key
+             AND target.record_hash = source.record_hash
+             AND target.source_rank = source.source_rank
+            ORDER BY source.serial_number, source.owner_key
+            LIMIT {max_rows + 1}
+            """,
+            settings={**READ_SETTINGS, "max_rows_to_read": 100_000_000},
+        ).result_rows
+    )
+    if len(rows) > max_rows:
+        raise RuntimeError(
+            f"US Applicant candidate reconciliation exceeds bounded limit {max_rows}"
+        )
+    if not rows:
+        return 0
+    index_rows = [applicant_index_row(row, OWNER_COLUMNS) for row in rows]
+    for offset in range(0, len(index_rows), MAX_BATCH_SIZE):
+        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+        client.insert(
+            APPLICANT_INDEX_TABLE,
+            index_rows[offset : offset + MAX_BATCH_SIZE],
+            column_names=APPLICANT_INDEX_COLUMNS,
+        )
+    columns_sql = ", ".join(f"source.{column}" for column in OWNER_COLUMNS)
+    stale_rows = list(
+        client.query(
+            f"""
+            SELECT target.candidate_key, {columns_sql}
+            FROM
+            (
+                SELECT * FROM markorbit_facts.us_owner_current FINAL
+                WHERE is_deleted = 0
+            ) AS source
+            INNER JOIN
+            (
+                SELECT candidate_key, serial_number, owner_key, record_hash, source_rank
+                FROM {APPLICANT_INDEX_TABLE} FINAL
+                WHERE is_deleted = 0
+            ) AS target
+              ON target.serial_number = source.serial_number
+             AND target.owner_key = source.owner_key
+            WHERE target.record_hash != source.record_hash
+               OR target.source_rank != source.source_rank
+            ORDER BY source.serial_number, source.owner_key, target.candidate_key
+            LIMIT {max_rows + 1}
+            """,
+            settings={**READ_SETTINGS, "max_rows_to_read": 100_000_000},
+        ).result_rows
+    )
+    if len(stale_rows) > max_rows:
+        raise RuntimeError(
+            f"US Applicant candidate stale-binding reconciliation exceeds bounded limit {max_rows}"
+        )
+    tombstones = []
+    for row in stale_rows:
+        old_candidate_key = str(row[0])
+        owner_row = list(row[1:])
+        if old_candidate_key == applicant_index_row(owner_row, OWNER_COLUMNS)[0]:
+            continue
+        owner_row[OWNER_COLUMNS.index("is_deleted")] = 1
+        tombstones.append([old_candidate_key, *owner_row])
+    for offset in range(0, len(tombstones), MAX_BATCH_SIZE):
+        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+        client.insert(
+            APPLICANT_INDEX_TABLE,
+            tombstones[offset : offset + MAX_BATCH_SIZE],
+            column_names=APPLICANT_INDEX_COLUMNS,
+        )
+    _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+    return len(rows)

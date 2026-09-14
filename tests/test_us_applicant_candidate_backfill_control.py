@@ -249,6 +249,8 @@ def test_execute_requires_both_candidate_and_name_lookup_completeness(monkeypatc
         "complete_backfill_run",
         lambda *args, **kwargs: completed.append(kwargs["completeness"]),
     )
+    monkeypatch.setattr(control, "reconcile_us_applicant_candidate_index", lambda **kwargs: 0)
+    monkeypatch.setattr(control, "reconcile_us_applicant_name_lookup", lambda **kwargs: 0)
 
     result = control.execute_backfill_run(
         "run", client=object(), serving_epoch_getter=lambda: epoch
