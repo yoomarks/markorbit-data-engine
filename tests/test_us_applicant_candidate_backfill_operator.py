@@ -97,13 +97,26 @@ def test_target_adapter_restricts_settings_and_insert_scope():
         settings={"max_threads": 1, "read_overflow_mode": "throw"},
     )
     assert "SETTINGS max_threads = 1, read_overflow_mode = 'throw'" in base.sql[0]
-    client.query("SELECT 1", settings={"join_algorithm": "grace_hash"})
-    assert "join_algorithm = 'grace_hash'" in base.sql[1]
+    client.query(
+        "SELECT 1",
+        settings={
+            "join_algorithm": "full_sorting_merge",
+            "max_bytes_before_external_sort": 268_435_456,
+            "max_memory_usage": 4_294_967_296,
+        },
+    )
+    assert "join_algorithm = 'full_sorting_merge'" in base.sql[1]
+    assert "max_bytes_before_external_sort = 268435456" in base.sql[1]
+    assert "max_memory_usage = 4294967296" in base.sql[1]
 
     with pytest.raises(ValueError, match="unsupported Applicant backfill query settings"):
-        client.query("SELECT 1", settings={"max_memory_usage": 1})
-    with pytest.raises(ValueError, match="join_algorithm must remain bounded"):
+        client.query("SELECT 1", settings={"max_block_size": 1})
+    with pytest.raises(ValueError, match="join_algorithm must remain spill-safe"):
         client.query("SELECT 1", settings={"join_algorithm": "hash"})
+    with pytest.raises(ValueError, match="512 MiB safety cap"):
+        client.query("SELECT 1", settings={"max_bytes_before_external_sort": 536_870_913})
+    with pytest.raises(ValueError, match="4 GiB safety cap"):
+        client.query("SELECT 1", settings={"max_memory_usage": 4_294_967_297})
     with pytest.raises(RuntimeError, match="may insert only"):
         client.insert("markorbit_facts.us_owner_current", [], column_names=[])
     client.insert("markorbit_facts.us_applicant_name_lookup_current", [], column_names=[])

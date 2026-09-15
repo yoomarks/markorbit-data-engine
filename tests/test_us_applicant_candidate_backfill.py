@@ -117,22 +117,38 @@ def test_cooperative_stop_happens_before_next_page():
     assert client.queries == []
 
 
+def _owner_binding(row):
+    source = dict(zip(OWNER_COLUMNS, row, strict=True))
+    return (
+        source["serial_number"],
+        source["owner_key"],
+        source["record_hash"],
+        source["source_rank"],
+    )
+
+
 def test_reconcile_inserts_only_bounded_missing_bindings():
     row = _owner_row("10000001", "a" * 64)
-    client = FakeClient([[row]])
+    client = FakeClient([[ _owner_binding(row) ], [row], [], []])
 
     reconciled = reconcile_us_applicant_candidate_index(client=client, max_rows=2)
 
     assert reconciled == 1
-    assert "LEFT ANTI JOIN" in client.queries[0][0]
+    assert "LEFT JOIN" in client.queries[0][0]
+    assert "SELECT source.serial_number, source.owner_key, source.record_hash" in client.queries[0][0]
+    assert "source.party_name" not in client.queries[0][0]
     assert "target.record_hash = source.record_hash" in client.queries[0][0]
     assert "LIMIT 3" in client.queries[0][0]
     assert client.inserts[0][0] == APPLICANT_INDEX_TABLE
     assert client.queries[0][1]["max_rows_to_read"] == 150_000_000
+    assert client.queries[0][1]["join_algorithm"] == "full_sorting_merge"
+    assert client.queries[0][1]["max_bytes_before_external_sort"] == 268_435_456
 
 
 def test_reconcile_fails_closed_above_bound():
-    client = FakeClient([[_owner_row("10000001", "a" * 64), _owner_row("10000002", "b" * 64)]])
+    row1 = _owner_row("10000001", "a" * 64)
+    row2 = _owner_row("10000002", "b" * 64)
+    client = FakeClient([[ _owner_binding(row1), _owner_binding(row2) ]])
     with pytest.raises(RuntimeError, match="exceeds bounded limit 1"):
         reconcile_us_applicant_candidate_index(client=client, max_rows=1)
     assert client.inserts == []
@@ -140,8 +156,17 @@ def test_reconcile_fails_closed_above_bound():
 
 def test_reconcile_tombstones_superseded_candidate_identity():
     owner = _owner_row("10000001", "a" * 64)
+    source = dict(zip(OWNER_COLUMNS, owner, strict=True))
     old_candidate_key = "f" * 64
-    client = FakeClient([[owner], [(old_candidate_key, 100, *owner)]])
+    stale = (
+        old_candidate_key,
+        100,
+        source["serial_number"],
+        source["owner_key"],
+        source["record_hash"],
+        source["source_rank"],
+    )
+    client = FakeClient([[ _owner_binding(owner) ], [owner], [stale], [owner], []])
 
     reconcile_us_applicant_candidate_index(client=client, max_rows=2)
 
@@ -150,22 +175,30 @@ def test_reconcile_tombstones_superseded_candidate_identity():
     assert tombstone[0] == old_candidate_key
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("is_deleted")] == 1
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("source_rank")] == 101
-    assert client.queries[1][1]["join_algorithm"] == "grace_hash"
-
+    assert client.queries[2][1]["join_algorithm"] == "full_sorting_merge"
 
 
 def test_reconcile_tombstones_orphan_candidate_identity_even_without_missing_rows():
     owner = _owner_row("10000001", "a" * 64)
-    orphan = ["e" * 64, *owner]
-    client = FakeClient([[], [], [orphan]])
+    source = dict(zip(OWNER_COLUMNS, owner, strict=True))
+    candidate_key = "e" * 64
+    orphan_compact = (
+        candidate_key,
+        source["serial_number"],
+        source["owner_key"],
+        source["source_rank"],
+    )
+    orphan_full = [candidate_key, *owner]
+    client = FakeClient([[], [], [orphan_compact], [orphan_full]])
 
     reconciled = reconcile_us_applicant_candidate_index(client=client, max_rows=2)
 
     assert reconciled == 1
     assert len(client.inserts) == 1
     tombstone = client.inserts[0][1][0]
-    assert tombstone[0] == "e" * 64
+    assert tombstone[0] == candidate_key
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("is_deleted")] == 1
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("source_rank")] == 101
-    assert "LEFT ANTI JOIN" in client.queries[2][0]
+    assert "LEFT JOIN" in client.queries[2][0]
     assert "source.serial_number = target.serial_number" in client.queries[2][0]
+    assert "target.party_name" not in client.queries[2][0]
