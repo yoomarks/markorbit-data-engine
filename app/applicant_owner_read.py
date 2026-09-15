@@ -186,6 +186,28 @@ def applicant_query(
     return {**body, "query_hash": query_hash(body)}
 
 
+def applicant_name_query(
+    *, context: Mapping[str, str], jurisdiction: str, normalized_name: str, page_size: int,
+) -> dict[str, Any]:
+    if jurisdiction not in {"CN", "US"}:
+        raise OwnerReadInvalid("unsupported owner-read jurisdiction")
+    normalized = str(normalized_name or "").strip()
+    if not normalized or len(normalized) > 512:
+        raise OwnerReadInvalid("normalized applicant name is required")
+    if type(page_size) is not int or page_size < 1 or page_size > 100:
+        raise OwnerReadInvalid("page_size must be between 1 and 100")
+    body = {
+        "contract_version": DISCOVERY_CONTRACT_VERSION,
+        "request_context": dict(context),
+        "jurisdiction": jurisdiction,
+        "input": {"kind": "EXACT_NORMALIZED_NAME", "value": normalized},
+        "ordering": ["applicant_candidate_id ASC"],
+        "ranking_authority": "NONE",
+        "limits": {"page_size": page_size, "max_results": 500},
+    }
+    return {**body, "query_hash": query_hash(body)}
+
+
 def applicant_revalidation_query(
     *, context: Mapping[str, str], jurisdiction: str,
     applicant_candidate_id: str, page_size: int = 1,
@@ -225,6 +247,42 @@ def page_payload(
         "provenance": provenance,
         "authority_consequences": dict(NO_AUTHORITY_CONSEQUENCES),
     }
+
+
+def applicant_name_cursor_state(
+    *, token: str | None, query: Mapping[str, Any], source_version: str,
+) -> tuple[str, int, int]:
+    if token is None:
+        return "", 1, 0
+    limits = DiscoveryLimits(
+        page_size=int(query["limits"]["page_size"]), max_pages=100,
+        max_results=int(query["limits"]["max_results"]),
+    )
+    decoded = decode_cursor(
+        token, expected_query_hash=str(query["query_hash"]),
+        expected_snapshot_id=source_version, limits=limits,
+    )
+    position = decoded["position"]
+    if len(position) != 1 or not isinstance(position[0], str):
+        raise DiscoveryCursorError("Applicant Name cursor must contain one string key")
+    return position[0], int(decoded["next_page"]), int(decoded["emitted_count"])
+
+
+def next_applicant_name_cursor(
+    *, query: Mapping[str, Any], source_version: str, last_candidate_key: str,
+    page_number: int, emitted_count: int,
+) -> str | None:
+    limits = DiscoveryLimits(
+        page_size=int(query["limits"]["page_size"]), max_pages=100,
+        max_results=int(query["limits"]["max_results"]),
+    )
+    if emitted_count >= limits.max_results or page_number >= limits.max_pages:
+        return None
+    return encode_cursor(
+        query_hash=str(query["query_hash"]), snapshot_id=source_version,
+        position=[last_candidate_key], next_page=page_number + 1,
+        emitted_count=emitted_count, limits=limits,
+    )
 
 
 def portfolio_cursor_state(
