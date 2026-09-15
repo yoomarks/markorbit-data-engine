@@ -132,3 +132,53 @@ def test_metadata_preflight_rejects_ambiguous_duplicate_file_records() -> None:
         "file_name": "asb260809.zip",
         "match_count": 2,
     }
+
+
+
+def test_ttab_accepts_historical_odp_product_identity() -> None:
+    result = evaluate_metadata(
+        domain="ttab",
+        metadata={
+            "productIdentifier": "ttabyr",
+            "files": [
+                {
+                    "fileName": "tt19511002-20251231-1.zip",
+                    "releaseDateTime": "2026-09-03T17:00:00-04:00",
+                }
+            ],
+        },
+        expected_file_names=["tt19511002-20251231-1.zip"],
+    )
+    assert result["status"] == "READY"
+    assert result["plan"][0]["snapshot_at"] == "2026-09-03T17:00:00.000-04:00"
+    assert "ttabyr" in result["metadata_product_identifiers_observed"]
+
+
+def test_ttab_metadata_can_resolve_historical_and_daily_products_together() -> None:
+    result = evaluate_metadata(
+        domain="ttab",
+        metadata=[
+            {
+                "productIdentifier": "ttabyr",
+                "files": [
+                    {
+                        "fileName": "tt19511002-20251231-1.zip",
+                        "releaseDateTime": "2026-09-03T17:00:00-04:00",
+                    }
+                ],
+            },
+            {
+                "productIdentifier": "ttabtdxf",
+                "files": [
+                    {
+                        "fileName": "tt260904.zip",
+                        "releaseDateTime": "2026-09-04T17:00:00-04:00",
+                    }
+                ],
+            },
+        ],
+        expected_file_names=["tt19511002-20251231-1.zip", "tt260904.zip"],
+    )
+    assert result["status"] == "READY"
+    assert result["resolved_file_count"] == 2
+    assert result["metadata_product_identifiers_observed"] == ["ttabtdxf", "ttabyr"]

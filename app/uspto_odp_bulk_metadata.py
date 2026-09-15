@@ -16,6 +16,7 @@ PRODUCT_IDENTITY = {
     },
     "ttab": {
         "dataset_slug": "ttabtdxf",
+        "historical_dataset_slug": "ttabyr",
         "federal_catalog_identifier": "EIP-5904T-OL",
     },
 }

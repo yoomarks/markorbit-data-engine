@@ -89,9 +89,9 @@ def load_manifest(path: Path) -> TTABCorpusManifest:
 
     historical_count = _nonnegative_int(payload, "expected_historical_packages")
     daily_count = _nonnegative_int(payload, "expected_daily_packages")
-    if historical_count != 1:
+    if historical_count < 1:
         raise ValueError(
-            "TTAB corpus V1 requires exactly one authoritative historical bulk package"
+            "TTAB corpus V1 requires at least one authoritative historical bulk package"
         )
 
     daily_through_raw = payload.get("daily_through")
@@ -215,19 +215,28 @@ def preflight_manifest(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
             }
         )
 
-    timestamps = [source.snapshot_at for source in manifest.sources]
-    duplicate_timestamps = sorted(
-        {value for value in timestamps if timestamps.count(value) > 1}
-    )
-    if duplicate_timestamps:
+    historical_timestamps = sorted({source.snapshot_at for source in historical})
+    historical_at = historical_timestamps[0] if len(historical_timestamps) == 1 else None
+    if len(historical_timestamps) > 1:
         issues.append(
             {
-                "type": "DUPLICATE_SNAPSHOT_AT_NOT_MODELED",
-                "timestamps": [_snapshot_text(item) for item in duplicate_timestamps],
+                "type": "HISTORICAL_PART_SNAPSHOT_MISMATCH",
+                "timestamps": [_snapshot_text(item) for item in historical_timestamps],
             }
         )
 
-    historical_at = historical[0].snapshot_at if len(historical) == 1 else None
+    daily_timestamps = [source.snapshot_at for source in dailies]
+    duplicate_daily_timestamps = sorted(
+        {value for value in daily_timestamps if daily_timestamps.count(value) > 1}
+    )
+    if duplicate_daily_timestamps:
+        issues.append(
+            {
+                "type": "DUPLICATE_DAILY_SNAPSHOT_AT_NOT_MODELED",
+                "timestamps": [_snapshot_text(item) for item in duplicate_daily_timestamps],
+            }
+        )
+
     if historical_at is not None:
         invalid_daily = sorted(s.snapshot_at for s in dailies if s.snapshot_at <= historical_at)
         if invalid_daily:

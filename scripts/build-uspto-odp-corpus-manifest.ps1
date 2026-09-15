@@ -4,7 +4,7 @@ param(
     [string]$Domain,
 
     [Parameter(Mandatory = $true)]
-    [string]$MetadataPath,
+    [string[]]$MetadataPath,
 
     [Parameter(Mandatory = $true)]
     [string]$SourceSpecPath,
@@ -26,14 +26,18 @@ if ($worker) {
     throw "Persistent worker is running. Stop it before ODP corpus manifest generation."
 }
 
-foreach ($path in @($MetadataPath, $SourceSpecPath)) {
+foreach ($path in @($MetadataPath) + @($SourceSpecPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required JSON input not found: $path"
     }
 }
 
 try {
-    $metadata = (Get-Content -LiteralPath $MetadataPath -Raw -Encoding UTF8) | ConvertFrom-Json
+    $metadataItems = @()
+    foreach ($path in @($MetadataPath)) {
+        $metadataItems += ,((Get-Content -LiteralPath $path -Raw -Encoding UTF8) | ConvertFrom-Json)
+    }
+    $metadata = if ($metadataItems.Count -eq 1) { $metadataItems[0] } else { @($metadataItems) }
     $sourceSpec = (Get-Content -LiteralPath $SourceSpecPath -Raw -Encoding UTF8) | ConvertFrom-Json
 }
 catch {

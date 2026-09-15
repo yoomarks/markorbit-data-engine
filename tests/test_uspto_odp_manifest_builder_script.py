@@ -7,6 +7,8 @@ def test_manifest_builder_script_is_dry_run_by_default_and_worker_guarded() -> N
     assert "[switch]$Apply" in source
     assert "SourceSpecPath" in source
     assert "MetadataPath" in source
+    assert "[string[]]$MetadataPath" in source
+    assert "$metadataItems" in source
     assert "docker compose ps --status running -q worker" in source
     assert "Persistent worker is running" in source
     assert "python -m app.uspto_odp_manifest_builder --stdin" in source

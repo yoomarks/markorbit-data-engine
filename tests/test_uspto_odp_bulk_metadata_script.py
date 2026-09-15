@@ -5,6 +5,8 @@ def test_odp_metadata_preflight_is_read_only_and_worker_guarded() -> None:
     source = Path("scripts/preflight-uspto-odp-bulk-metadata.ps1").read_text(encoding="utf-8")
     assert '[ValidateSet("assignment", "ttab")]' in source
     assert "ExpectedFileName" in source
+    assert "[string[]]$MetadataPath" in source
+    assert "$metadataItems" in source
     assert "ConvertFrom-Json" in source
     assert "ConvertTo-Json" in source
     assert "python -m app.uspto_odp_bulk_metadata --stdin" in source

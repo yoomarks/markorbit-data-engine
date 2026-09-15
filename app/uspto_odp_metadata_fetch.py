@@ -35,9 +35,19 @@ def _normalized_domain(domain: str) -> str:
     return value
 
 
-def product_data_url(domain: str) -> str:
+def product_data_url(domain: str, *, ttab_product: str = "daily") -> str:
     normalized = _normalized_domain(domain)
-    slug = PRODUCT_IDENTITY[normalized]["dataset_slug"]
+    if normalized == "ttab":
+        role = ttab_product.strip().lower()
+        if role not in {"daily", "historical"}:
+            raise MetadataFetchError(
+                "ODP_TTAB_PRODUCT_INVALID",
+                "ttab_product must be either daily or historical.",
+            )
+        key = "historical_dataset_slug" if role == "historical" else "dataset_slug"
+        slug = PRODUCT_IDENTITY[normalized][key]
+    else:
+        slug = PRODUCT_IDENTITY[normalized]["dataset_slug"]
     return f"{PRODUCT_DATA_BASE_URL}/{slug}"
 
 
@@ -71,9 +81,19 @@ def _observed_product_identifiers(payload: Any) -> set[str]:
     return identifiers
 
 
-def _validate_payload_identity(domain: str, payload: Any) -> set[str]:
+def _validate_payload_identity(
+    domain: str,
+    payload: Any,
+    *,
+    expected_product_identifier: str | None = None,
+) -> set[str]:
     identity = PRODUCT_IDENTITY[domain]
     accepted = set(identity.values())
+    if expected_product_identifier is not None:
+        accepted = {
+            expected_product_identifier,
+            identity["federal_catalog_identifier"],
+        }
     observed = _observed_product_identifiers(payload)
     if not observed:
         raise MetadataFetchError(
@@ -95,6 +115,7 @@ def fetch_product_metadata(
     api_key_header: str,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     open_url: Callable[..., Any] = urlopen,
+    ttab_product: str = "daily",
 ) -> dict[str, Any]:
     normalized = _normalized_domain(domain)
     key = api_key.strip()
@@ -104,7 +125,8 @@ def fetch_product_metadata(
             "USPTO_ODP_API_KEY must be configured before metadata can be fetched.",
         )
     header = _validate_header_name(api_key_header)
-    endpoint = product_data_url(normalized)
+    endpoint = product_data_url(normalized, ttab_product=ttab_product)
+    requested_slug = endpoint.rsplit("/", 1)[-1]
     request = Request(
         endpoint,
         headers={
@@ -147,7 +169,11 @@ def fetch_product_metadata(
             "USPTO ODP Product Data response was not valid UTF-8 JSON.",
         ) from None
 
-    observed = _validate_payload_identity(normalized, payload)
+    observed = _validate_payload_identity(
+        normalized,
+        payload,
+        expected_product_identifier=requested_slug,
+    )
     identity = PRODUCT_IDENTITY[normalized]
     return {
         "fetch_version": FETCH_VERSION,
@@ -155,7 +181,8 @@ def fetch_product_metadata(
         "safe": True,
         "domain": normalized,
         "endpoint": endpoint,
-        "odp_dataset_slug": identity["dataset_slug"],
+        "odp_dataset_slug": requested_slug,
+        "ttab_product": ttab_product.strip().lower() if normalized == "ttab" else None,
         "federal_catalog_identifier": identity["federal_catalog_identifier"],
         "metadata_product_identifiers_observed": sorted(observed),
         "response_byte_count": len(raw),
@@ -186,12 +213,14 @@ def main() -> int:
         description="Fetch authoritative USPTO ODP Product Data metadata for a frozen bulk dataset"
     )
     parser.add_argument("--domain", required=True, choices=sorted(PRODUCT_IDENTITY))
+    parser.add_argument("--ttab-product", choices=("daily", "historical"), default="daily")
     args = parser.parse_args()
     try:
         report = fetch_product_metadata(
             domain=args.domain,
             api_key=os.environ.get("USPTO_ODP_API_KEY", ""),
             api_key_header=os.environ.get("USPTO_ODP_API_KEY_HEADER", ""),
+            ttab_product=args.ttab_product,
         )
     except MetadataFetchError as exc:
         print(json.dumps(_error_report(args.domain, exc), ensure_ascii=False, indent=2))
