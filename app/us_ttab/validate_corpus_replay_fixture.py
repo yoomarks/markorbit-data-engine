@@ -24,7 +24,7 @@ DAILY_PROCEEDING = "79412016"
 
 
 HISTORICAL_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<ttab-proceedings><proceeding-information><proceeding-entry>
+<ttab-proceedings><transaction-date>20260902</transaction-date><proceeding-information><proceeding-entry>
 <number>97658985</number><type-code>EXA</type-code><filing-date>20250620</filing-date>
 <location-code>845</location-code><day-in-location>20250621</day-in-location>
 <status-update-date>20251222</status-update-date><status-code>3</status-code>
@@ -38,7 +38,7 @@ HISTORICAL_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </proceeding-entry></proceeding-information></ttab-proceedings>"""
 
 DAILY_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<ttab-proceedings><proceeding-information><proceeding-entry>
+<ttab-proceedings><transaction-date>20260514</transaction-date><proceeding-information><proceeding-entry>
 <number>79412016</number><type-code>EXA</type-code><filing-date>20260414</filing-date>
 <location-code>845</location-code><day-in-location>20260414</day-in-location>
 <status-update-date>20260610</status-update-date><status-code>2</status-code>
@@ -108,7 +108,7 @@ def main() -> None:
                         {
                             "path": f"incoming/us_ttab/{FILES[0]}",
                             "source_kind": "TTAB_BULK_HISTORICAL_XML",
-                            "snapshot_at": "2026-05-13T12:00:00Z",
+                            "snapshot_at": "2026-09-03T17:00:53Z",
                         },
                         {
                             "path": f"incoming/us_ttab/{FILES[1]}",

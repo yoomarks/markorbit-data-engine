@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 import uuid
 
@@ -38,14 +38,24 @@ def test_ttab_source_kinds_cover_rawxml_and_official_bulk() -> None:
     assert "apply-us-ttab-schema.ps1" in run_script
 
 
-def test_ttab_source_rank_orders_milliseconds_then_package_sequence() -> None:
-    base = datetime(2026, 8, 9, 12, 0, 0, 1000, tzinfo=timezone.utc)
-    next_millisecond = datetime(2026, 8, 9, 12, 0, 0, 2000, tzinfo=timezone.utc)
-    older = ttab_source_rank(base, 999)
-    newer = ttab_source_rank(next_millisecond, 1)
-    same_millisecond_later_package = ttab_source_rank(base, 1000)
-    assert older < newer
-    assert older < same_millisecond_later_package
+def test_ttab_source_rank_orders_logical_roles_and_day_precedence() -> None:
+    publication = datetime(2026, 9, 3, 17, 1, tzinfo=timezone.utc)
+    historical = ttab_source_rank(
+        publication, 999, source_kind="TTAB_BULK_HISTORICAL_XML",
+        transaction_date=date(2026, 9, 2),
+    )
+    daily = ttab_source_rank(
+        datetime(2026, 1, 2, 5, 8, tzinfo=timezone.utc), 1,
+        source_kind="TTAB_BULK_DAILY_XML", transaction_date=date(2026, 1, 1),
+    )
+    same_day_rawxml = ttab_source_rank(
+        datetime(2026, 1, 1, 12, 0, 0, 1000, tzinfo=timezone.utc), 1
+    )
+    next_daily = ttab_source_rank(
+        datetime(2026, 1, 3, 5, 8, tzinfo=timezone.utc), 1,
+        source_kind="TTAB_BULK_DAILY_XML", transaction_date=date(2026, 1, 2),
+    )
+    assert historical < daily < same_day_rawxml < next_daily
     normalized = normalize_snapshot_at(
         datetime(2026, 8, 9, 12, 0, 0, 1999, tzinfo=timezone.utc)
     )

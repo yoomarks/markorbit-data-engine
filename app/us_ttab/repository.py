@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,11 @@ VALID_SOURCE_KINDS = {
     "TTAB_BULK_DAILY_XML",
     "TTAB_BULK_HISTORICAL_XML",
 }
-_SOURCE_RANK_BASE = 5_000_000_000_000_000_000
+_HISTORICAL_RANK_BASE = 1_000_000_000_000_000_000
+_CHRONO_RANK_BASE = 2_000_000_000_000_000_000
+_DAY_STRIDE = 100_000_000_000_000
+_RAWXML_DAY_OFFSET = 1_000_000_000
+_EPOCH_DATE = date(1970, 1, 1)
 _SOURCE_RANK_MINOR_WIDTH = 1_000_000
 
 
@@ -27,12 +31,43 @@ def normalize_snapshot_at(value: datetime) -> datetime:
     return utc.replace(microsecond=(utc.microsecond // 1000) * 1000)
 
 
-def ttab_source_rank(snapshot_at: datetime, package_sequence: int) -> int:
+def ttab_source_rank(
+    snapshot_at: datetime,
+    package_sequence: int,
+    *,
+    source_kind: str = "TTABVUE_PROCEEDING_RAWXML_SNAPSHOT",
+    transaction_date: date | None = None,
+) -> int:
     snapshot_at = normalize_snapshot_at(snapshot_at)
+    source_kind = source_kind.strip().upper()
+    if source_kind not in VALID_SOURCE_KINDS:
+        raise ValueError(f"source_kind must be one of {sorted(VALID_SOURCE_KINDS)}")
     if package_sequence <= 0 or package_sequence >= _SOURCE_RANK_MINOR_WIDTH:
         raise ValueError("TTAB package_sequence exceeds modeled source-rank minor range")
-    epoch_millis = int(snapshot_at.timestamp() * 1000)
-    return _SOURCE_RANK_BASE + epoch_millis * _SOURCE_RANK_MINOR_WIDTH + package_sequence
+    if source_kind == "TTAB_BULK_HISTORICAL_XML":
+        return _HISTORICAL_RANK_BASE + package_sequence
+    if source_kind == "TTAB_BULK_DAILY_XML":
+        if transaction_date is None:
+            raise ValueError("TTAB daily source_rank requires authoritative transaction_date")
+        days_since_epoch = (transaction_date - _EPOCH_DATE).days
+        if days_since_epoch < 0:
+            raise ValueError("TTAB transaction_date must be on or after 1970-01-01")
+        return _CHRONO_RANK_BASE + days_since_epoch * _DAY_STRIDE + package_sequence
+
+    millis_of_day = (
+        ((snapshot_at.hour * 60 + snapshot_at.minute) * 60 + snapshot_at.second) * 1000
+        + snapshot_at.microsecond // 1000
+    )
+    days_since_epoch = (snapshot_at.date() - _EPOCH_DATE).days
+    if days_since_epoch < 0:
+        raise ValueError("TTAB snapshot_at must be on or after 1970-01-01")
+    return (
+        _CHRONO_RANK_BASE
+        + days_since_epoch * _DAY_STRIDE
+        + _RAWXML_DAY_OFFSET
+        + millis_of_day * _SOURCE_RANK_MINOR_WIDTH
+        + package_sequence
+    )
 
 
 def register_ttab_source(
@@ -40,6 +75,7 @@ def register_ttab_source(
     *,
     snapshot_at: datetime,
     source_kind: str = "TTABVUE_PROCEEDING_RAWXML_SNAPSHOT",
+    transaction_date: date | None = None,
 ) -> tuple[str, bool]:
     source_kind = source_kind.strip().upper()
     if source_kind not in VALID_SOURCE_KINDS:
@@ -47,6 +83,12 @@ def register_ttab_source(
     if path.suffix.lower() not in {".xml", ".zip"}:
         raise ValueError("US TTAB source must be .xml or .zip")
     snapshot_at = normalize_snapshot_at(snapshot_at)
+    if source_kind in {"TTAB_BULK_DAILY_XML", "TTAB_BULK_HISTORICAL_XML"}:
+        if transaction_date is None:
+            raise ValueError("TTAB bulk source registration requires authoritative transaction_date")
+        logical_date = transaction_date
+    else:
+        logical_date = snapshot_at.date()
     stat = path.stat()
     digest = sha256_file(path)
     partition_value = snapshot_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -55,7 +97,8 @@ def register_ttab_source(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT package_id, jurisdiction, package_kind, partition_value
+                SELECT package_id, jurisdiction, package_kind, partition_value,
+                       source_period_start, source_period_end
                 FROM control.source_package WHERE sha256 = %s
                 """,
                 (digest,),
@@ -69,6 +112,8 @@ def register_ttab_source(
             if same_sha and (
                 same_sha["package_kind"] != source_kind
                 or same_sha["partition_value"] != partition_value
+                or same_sha["source_period_start"] != logical_date
+                or same_sha["source_period_end"] != logical_date
             ):
                 raise RuntimeError(
                     "The same US TTAB SHA-256 is already registered with different "
@@ -108,13 +153,18 @@ def register_ttab_source(
                     datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                     source_kind,
                     partition_value,
-                    snapshot_at.date(),
-                    snapshot_at.date(),
+                    logical_date,
+                    logical_date,
                     TTAB_SCHEMA_VERSION,
                 ),
             )
             row = cur.fetchone()
-            source_rank = ttab_source_rank(snapshot_at, int(row["package_sequence"]))
+            source_rank = ttab_source_rank(
+                snapshot_at,
+                int(row["package_sequence"]),
+                source_kind=source_kind,
+                transaction_date=transaction_date,
+            )
             cur.execute(
                 "UPDATE control.source_package SET source_rank = %s WHERE package_id = %s",
                 (source_rank, row["package_id"]),

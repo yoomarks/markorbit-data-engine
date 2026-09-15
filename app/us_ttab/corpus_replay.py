@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import date, datetime
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -90,6 +90,15 @@ def _registry_state(preflight: dict[str, Any]) -> dict[str, Any]:
                         "package_id": package_id,
                         "manifest": item["snapshot_at"],
                         "registered": str(row.get("partition_value") or ""),
+                    }
+                )
+            if str(row.get("source_period_start") or "") != str(item["transaction_date"]):
+                blockers.append(
+                    {
+                        "type": "REGISTRY_TRANSACTION_DATE_MISMATCH",
+                        "package_id": package_id,
+                        "manifest": item["transaction_date"],
+                        "registered": str(row.get("source_period_start") or ""),
                     }
                 )
             if status == "SUCCESS":
@@ -268,6 +277,7 @@ def execute_replay(
                     str(next_action["snapshot_at"]).replace("Z", "+00:00")
                 ),
                 source_kind=str(next_action["source_kind"]),
+                transaction_date=date.fromisoformat(str(next_action["transaction_date"])),
             )
 
         try:

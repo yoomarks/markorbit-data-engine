@@ -12,7 +12,8 @@ def test_ttab_replay_runs_boundary_hook_before_package_mutation(monkeypatch) -> 
         "file_name": "ttab-bulk.zip",
         "path": "/raw/us_ttab/ttab-bulk.zip",
         "snapshot_at": "2026-01-01T00:00:00.000Z",
-        "source_kind": "BULK_SNAPSHOT",
+        "source_kind": "TTAB_BULK_HISTORICAL_XML",
+        "transaction_date": "2026-01-01",
         "action": "REGISTER_AND_INGEST",
         "registry_status": "UNREGISTERED",
     }
@@ -74,7 +75,8 @@ def test_ttab_boundary_exception_prevents_registration_and_ingestion(monkeypatch
         "file_name": "ttab-bulk.zip",
         "path": "/raw/us_ttab/ttab-bulk.zip",
         "snapshot_at": "2026-01-01T00:00:00.000Z",
-        "source_kind": "BULK_SNAPSHOT",
+        "source_kind": "TTAB_BULK_HISTORICAL_XML",
+        "transaction_date": "2026-01-01",
         "action": "REGISTER_AND_INGEST",
         "registry_status": "UNREGISTERED",
     }
