@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from app.us.applicant_candidate_backfill import (
+    MAX_POINT_FETCH_ITEMS,
+    MAX_POINT_FETCH_SQL_BYTES,
     ApplicantIndexBackfillCursor,
+    _bounded_sql_batches,
+    _candidate_tuples_sql,
+    _sql_text,
     backfill_us_applicant_candidate_index,
     reconcile_us_applicant_candidate_index,
 )
@@ -202,3 +207,37 @@ def test_reconcile_tombstones_orphan_candidate_identity_even_without_missing_row
     assert "LEFT JOIN" in client.queries[2][0]
     assert "source.serial_number = target.serial_number" in client.queries[2][0]
     assert "target.party_name" not in client.queries[2][0]
+
+def test_point_fetch_batches_stay_below_query_text_budget():
+    keys = [(f"{index:064x}", f"{index:08d}", "a" * 64) for index in range(1_200)]
+    batches = list(
+        _bounded_sql_batches(
+            keys,
+            lambda item: f"({_sql_text(item[0])}, {_sql_text(item[1])}, {_sql_text(item[2])})",
+        )
+    )
+    assert len(batches) >= 3
+    assert all(len(batch) <= MAX_POINT_FETCH_ITEMS for batch in batches)
+    assert all(
+        len(_candidate_tuples_sql(batch).encode("utf-8")) <= MAX_POINT_FETCH_SQL_BYTES
+        for batch in batches
+    )
+
+
+def test_reconcile_total_mutation_bound_fails_before_insert():
+    owner = _owner_row("10000001", "a" * 64)
+    source = dict(zip(OWNER_COLUMNS, owner, strict=True))
+    missing = (
+        source["serial_number"],
+        source["owner_key"],
+        source["record_hash"],
+        source["source_rank"],
+    )
+    orphan_full = ["e" * 64, *owner]
+    orphan = ("e" * 64, source["serial_number"], source["owner_key"], source["source_rank"])
+    client = FakeClient([[missing], [owner], [], [orphan], [orphan_full]])
+
+    with pytest.raises(RuntimeError, match="total reconciliation mutations exceed bounded limit 1"):
+        reconcile_us_applicant_candidate_index(client=client, max_rows=1)
+
+    assert client.inserts == []

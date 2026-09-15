@@ -26,7 +26,8 @@ RECONCILE_READ_SETTINGS = {
     "max_bytes_before_external_sort": 268_435_456,
     "max_memory_usage": 4_294_967_296,
 }
-POINT_FETCH_BATCH_SIZE = 2_000
+MAX_POINT_FETCH_SQL_BYTES = 96_000
+MAX_POINT_FETCH_ITEMS = 500
 STALE_RECONCILE_SHARDS = 4
 
 
@@ -135,6 +136,26 @@ def backfill_us_applicant_name_lookup(
     return state
 
 
+
+
+def _bounded_sql_batches(items: list[Any], render: Callable[[Any], str]):
+    batch: list[Any] = []
+    used = 0
+    for item in items:
+        fragment = render(item)
+        size = len(fragment.encode("utf-8")) + (2 if batch else 0)
+        if size > MAX_POINT_FETCH_SQL_BYTES:
+            raise RuntimeError("US Applicant NAME point-fetch key exceeds SQL safety budget")
+        if batch and (len(batch) >= MAX_POINT_FETCH_ITEMS or used + size > MAX_POINT_FETCH_SQL_BYTES):
+            yield batch
+            batch = []
+            used = 0
+            size = len(fragment.encode("utf-8"))
+        batch.append(item)
+        used += size
+    if batch:
+        yield batch
+
 def _lookup_sql_text(value: object) -> str:
     return _sql_text(str(value))
 
@@ -157,11 +178,23 @@ def _fetch_candidate_rows(
     client: Any, keys: list[tuple[str, str, str]]
 ) -> dict[tuple[str, str, str], list[Any]]:
     result: dict[tuple[str, str, str], list[Any]] = {}
-    projection = ", ".join(APPLICANT_INDEX_COLUMNS)
-    for offset in range(0, len(keys), POINT_FETCH_BATCH_SIZE):
-        batch = keys[offset : offset + POINT_FETCH_BATCH_SIZE]
-        if not batch:
-            continue
+    columns = (
+        "candidate_key",
+        "serial_number",
+        "owner_key",
+        "source_row_hash",
+        "record_hash",
+        "source_rank",
+        "party_name_norm",
+    )
+    projection = ", ".join(columns)
+    for batch in _bounded_sql_batches(
+        keys,
+        lambda item: (
+            f"({_lookup_sql_text(item[0])}, {_lookup_sql_text(item[1])}, "
+            f"{_lookup_sql_text(item[2])})"
+        ),
+    ):
         rows = client.query(
             f"""
             SELECT {projection}
@@ -171,11 +204,8 @@ def _fetch_candidate_rows(
             """,
             settings=READ_SETTINGS,
         ).result_rows
-        candidate_index = APPLICANT_INDEX_COLUMNS.index("candidate_key")
-        serial_index = APPLICANT_INDEX_COLUMNS.index("serial_number")
-        owner_index = APPLICANT_INDEX_COLUMNS.index("owner_key")
         for row in rows:
-            result[(str(row[candidate_index]), str(row[serial_index]), str(row[owner_index]))] = list(row)
+            result[(str(row[0]), str(row[1]), str(row[2]))] = list(row)
     return result
 
 
@@ -184,10 +214,13 @@ def _fetch_lookup_rows(
 ) -> dict[tuple[str, str, str, str], list[Any]]:
     result: dict[tuple[str, str, str, str], list[Any]] = {}
     projection = ", ".join(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS)
-    for offset in range(0, len(keys), POINT_FETCH_BATCH_SIZE):
-        batch = keys[offset : offset + POINT_FETCH_BATCH_SIZE]
-        if not batch:
-            continue
+    for batch in _bounded_sql_batches(
+        keys,
+        lambda item: (
+            f"({_lookup_sql_text(item[0])}, {_lookup_sql_text(item[1])}, "
+            f"{_lookup_sql_text(item[2])}, {_lookup_sql_text(item[3])})"
+        ),
+    ):
         rows = client.query(
             f"""
             SELECT {projection}
@@ -249,20 +282,26 @@ def reconcile_us_applicant_name_lookup(
         raise RuntimeError(f"US Applicant NAME lookup reconciliation exceeds bounded limit {max_rows}")
     missing_keys = list(dict.fromkeys((str(r[0]), str(r[1]), str(r[2])) for r in missing))
     candidates = _fetch_candidate_rows(client, missing_keys)
-    record_index = APPLICANT_INDEX_COLUMNS.index("record_hash")
-    rank_index_candidate = APPLICANT_INDEX_COLUMNS.index("source_rank")
+    record_index = 4
+    rank_index_candidate = 5
     lookup_rows: list[list[Any]] = []
     for candidate_key, serial, owner_key, record_hash, source_rank in missing:
         source_row = candidates.get((str(candidate_key), str(serial), str(owner_key)))
         if source_row is None or str(source_row[record_index]) != str(record_hash) or int(source_row[rank_index_candidate]) != int(source_rank):
             raise RuntimeError("US Applicant NAME lookup source binding drifted during reconciliation")
-        lookup_row = us_applicant_name_lookup_row(dict(zip(APPLICANT_INDEX_COLUMNS, source_row, strict=True)))
-        del lookup_row[7]
-        lookup_rows.append(lookup_row)
-    for offset in range(0, len(lookup_rows), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch, serving_epoch_getter)
-        client.insert(US_APPLICANT_NAME_LOOKUP_TABLE, lookup_rows[offset : offset + MAX_BATCH_SIZE], column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS))
-
+        normalized_name = canonical_identity_text(source_row[6])
+        if not normalized_name:
+            raise RuntimeError("US Applicant NAME lookup source normalized name is empty")
+        lookup_rows.append([
+            normalized_name,
+            source_row[0],
+            source_row[1],
+            source_row[2],
+            source_row[3],
+            source_row[4],
+            source_row[5],
+            0,
+        ])
     stale: list[list[Any]] = []
     for bucket in range(STALE_RECONCILE_SHARDS):
         remaining = max_rows - len(stale)
@@ -306,8 +345,8 @@ def reconcile_us_applicant_name_lookup(
         stale.extend(bucket_rows)
     stale_keys = list(dict.fromkeys((str(r[3]), str(r[4]), str(r[5])) for r in stale))
     stale_sources = _fetch_candidate_rows(client, stale_keys)
-    source_row_hash_index = APPLICANT_INDEX_COLUMNS.index("source_row_hash")
-    party_name_index = APPLICANT_INDEX_COLUMNS.index("party_name_norm")
+    source_row_hash_index = 3
+    party_name_index = 6
     tombstones: list[list[Any]] = []
     for row in stale:
         old_normalized, old_candidate, old_rank, desired_candidate, serial, owner_key, record_hash, source_rank = row
@@ -331,10 +370,6 @@ def reconcile_us_applicant_name_lookup(
             max(int(old_rank), int(source_rank)) + 1,
             1,
         ])
-    for offset in range(0, len(tombstones), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch, serving_epoch_getter)
-        client.insert(US_APPLICANT_NAME_LOOKUP_TABLE, tombstones[offset : offset + MAX_BATCH_SIZE], column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS))
-
     orphans = list(
         client.query(
             f"""
@@ -378,8 +413,18 @@ def reconcile_us_applicant_name_lookup(
         target_row[rank_index] = int(target_row[rank_index]) + 1
         target_row[deleted_index] = 1
         orphan_tombstones.append(target_row)
-    for offset in range(0, len(orphan_tombstones), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch, serving_epoch_getter)
-        client.insert(US_APPLICANT_NAME_LOOKUP_TABLE, orphan_tombstones[offset : offset + MAX_BATCH_SIZE], column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS))
+    mutation_rows = len(lookup_rows) + len(tombstones) + len(orphan_tombstones)
+    if mutation_rows > max_rows:
+        raise RuntimeError(
+            f"US Applicant NAME lookup total reconciliation mutations exceed bounded limit {max_rows}"
+        )
+    for rows_to_insert in (lookup_rows, tombstones, orphan_tombstones):
+        for offset in range(0, len(rows_to_insert), MAX_BATCH_SIZE):
+            _assert_epoch(expected_epoch, serving_epoch_getter)
+            client.insert(
+                US_APPLICANT_NAME_LOOKUP_TABLE,
+                rows_to_insert[offset : offset + MAX_BATCH_SIZE],
+                column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
+            )
     _assert_epoch(expected_epoch, serving_epoch_getter)
-    return len(lookup_rows) + len(tombstones) + len(orphan_tombstones)
+    return mutation_rows

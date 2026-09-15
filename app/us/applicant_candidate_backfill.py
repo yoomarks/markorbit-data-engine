@@ -21,7 +21,8 @@ RECONCILE_READ_SETTINGS = {
     "max_bytes_before_external_sort": 268_435_456,
     "max_memory_usage": 4_294_967_296,
 }
-POINT_FETCH_BATCH_SIZE = 2_000
+MAX_POINT_FETCH_SQL_BYTES = 96_000
+MAX_POINT_FETCH_ITEMS = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +136,26 @@ def backfill_us_applicant_candidate_index(
     return state
 
 
+
+
+def _bounded_sql_batches(items: list[Any], render: Callable[[Any], str]):
+    batch: list[Any] = []
+    used = 0
+    for item in items:
+        fragment = render(item)
+        size = len(fragment.encode("utf-8")) + (2 if batch else 0)
+        if size > MAX_POINT_FETCH_SQL_BYTES:
+            raise RuntimeError("US Applicant point-fetch key exceeds SQL safety budget")
+        if batch and (len(batch) >= MAX_POINT_FETCH_ITEMS or used + size > MAX_POINT_FETCH_SQL_BYTES):
+            yield batch
+            batch = []
+            used = 0
+            size = len(fragment.encode("utf-8"))
+        batch.append(item)
+        used += size
+    if batch:
+        yield batch
+
 def _identity_tuples_sql(identities: list[tuple[str, str]]) -> str:
     return ", ".join(
         f"({_sql_text(serial)}, {_sql_text(owner_key)})"
@@ -152,10 +173,10 @@ def _candidate_tuples_sql(keys: list[tuple[str, str, str]]) -> str:
 def _fetch_owner_rows(client: Any, identities: list[tuple[str, str]]) -> dict[tuple[str, str], list[Any]]:
     result: dict[tuple[str, str], list[Any]] = {}
     columns_sql = ", ".join(OWNER_COLUMNS)
-    for offset in range(0, len(identities), POINT_FETCH_BATCH_SIZE):
-        batch = identities[offset : offset + POINT_FETCH_BATCH_SIZE]
-        if not batch:
-            continue
+    for batch in _bounded_sql_batches(
+        identities,
+        lambda item: f"({_sql_text(item[0])}, {_sql_text(item[1])})",
+    ):
         rows = client.query(
             f"""
             SELECT {columns_sql}
@@ -177,10 +198,10 @@ def _fetch_candidate_rows(
 ) -> dict[tuple[str, str, str], list[Any]]:
     result: dict[tuple[str, str, str], list[Any]] = {}
     columns_sql = ", ".join(APPLICANT_INDEX_COLUMNS)
-    for offset in range(0, len(keys), POINT_FETCH_BATCH_SIZE):
-        batch = keys[offset : offset + POINT_FETCH_BATCH_SIZE]
-        if not batch:
-            continue
+    for batch in _bounded_sql_batches(
+        keys,
+        lambda item: f"({_sql_text(item[0])}, {_sql_text(item[1])}, {_sql_text(item[2])})",
+    ):
         rows = client.query(
             f"""
             SELECT {columns_sql}
@@ -254,10 +275,6 @@ def reconcile_us_applicant_candidate_index(
         if owner_row is None or str(owner_row[record_index]) != str(record_hash) or int(owner_row[rank_index_owner]) != int(source_rank):
             raise RuntimeError("US Applicant candidate source binding drifted during reconciliation")
         index_rows.append(applicant_index_row(owner_row, OWNER_COLUMNS))
-    for offset in range(0, len(index_rows), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-        client.insert(APPLICANT_INDEX_TABLE, index_rows[offset : offset + MAX_BATCH_SIZE], column_names=APPLICANT_INDEX_COLUMNS)
-
     stale = list(
         client.query(
             f"""
@@ -300,10 +317,6 @@ def reconcile_us_applicant_candidate_index(
         owner_row[deleted_index_owner] = 1
         owner_row[rank_index_owner] = max(int(old_source_rank), int(owner_row[rank_index_owner])) + 1
         tombstones.append([str(old_candidate_key), *owner_row])
-    for offset in range(0, len(tombstones), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-        client.insert(APPLICANT_INDEX_TABLE, tombstones[offset : offset + MAX_BATCH_SIZE], column_names=APPLICANT_INDEX_COLUMNS)
-
     orphans = list(
         client.query(
             f"""
@@ -345,8 +358,18 @@ def reconcile_us_applicant_candidate_index(
         target_row[rank_index] = int(target_row[rank_index]) + 1
         target_row[deleted_index] = 1
         orphan_tombstones.append(target_row)
-    for offset in range(0, len(orphan_tombstones), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-        client.insert(APPLICANT_INDEX_TABLE, orphan_tombstones[offset : offset + MAX_BATCH_SIZE], column_names=APPLICANT_INDEX_COLUMNS)
+    mutation_rows = len(index_rows) + len(tombstones) + len(orphan_tombstones)
+    if mutation_rows > max_rows:
+        raise RuntimeError(
+            f"US Applicant candidate total reconciliation mutations exceed bounded limit {max_rows}"
+        )
+    for rows_to_insert in (index_rows, tombstones, orphan_tombstones):
+        for offset in range(0, len(rows_to_insert), MAX_BATCH_SIZE):
+            _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+            client.insert(
+                APPLICANT_INDEX_TABLE,
+                rows_to_insert[offset : offset + MAX_BATCH_SIZE],
+                column_names=APPLICANT_INDEX_COLUMNS,
+            )
     _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-    return len(index_rows) + len(tombstones) + len(orphan_tombstones)
+    return mutation_rows
