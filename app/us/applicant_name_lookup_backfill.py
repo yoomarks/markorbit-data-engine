@@ -132,7 +132,7 @@ def reconcile_us_applicant_name_lookup(
     expected_epoch: str | None = None,
     serving_epoch_getter: Callable[[], str] | None = None,
 ) -> int:
-    """Insert a bounded set of candidate bindings missing from NAME lookup."""
+    """Boundedly reconcile missing, superseded, and orphan NAME lookup bindings."""
     if max_rows < 1 or max_rows > MAX_RECONCILE_ROWS:
         raise ValueError(f"max_rows must be between 1 and {MAX_RECONCILE_ROWS}")
     _assert_epoch(expected_epoch, serving_epoch_getter)
@@ -171,22 +171,22 @@ def reconcile_us_applicant_name_lookup(
         raise RuntimeError(
             f"US Applicant NAME lookup reconciliation exceeds bounded limit {max_rows}"
         )
-    if not rows:
-        return 0
-    lookup_rows = []
-    for row in rows:
-        lookup_row = us_applicant_name_lookup_row(
-            dict(zip(APPLICANT_INDEX_COLUMNS, row, strict=True))
-        )
-        del lookup_row[7]
-        lookup_rows.append(lookup_row)
-    for offset in range(0, len(lookup_rows), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch, serving_epoch_getter)
-        client.insert(
-            US_APPLICANT_NAME_LOOKUP_TABLE,
-            lookup_rows[offset : offset + MAX_BATCH_SIZE],
-            column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
-        )
+    if rows:
+        lookup_rows = []
+        for row in rows:
+            lookup_row = us_applicant_name_lookup_row(
+                dict(zip(APPLICANT_INDEX_COLUMNS, row, strict=True))
+            )
+            del lookup_row[7]
+            lookup_rows.append(lookup_row)
+        for offset in range(0, len(lookup_rows), MAX_BATCH_SIZE):
+            _assert_epoch(expected_epoch, serving_epoch_getter)
+            client.insert(
+                US_APPLICANT_NAME_LOOKUP_TABLE,
+                lookup_rows[offset : offset + MAX_BATCH_SIZE],
+                column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
+            )
+
     stale_rows = list(
         client.query(
             f"""
@@ -249,5 +249,56 @@ def reconcile_us_applicant_name_lookup(
             tombstones[offset : offset + MAX_BATCH_SIZE],
             column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
         )
+
+    target_projection = ", ".join(
+        f"target.{column}" for column in US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS
+    )
+    orphan_rows = list(
+        client.query(
+            f"""
+            SELECT {target_projection}
+            FROM
+            (
+                SELECT * FROM {US_APPLICANT_NAME_LOOKUP_TABLE} FINAL
+                WHERE is_deleted = 0
+            ) AS target
+            LEFT ANTI JOIN
+            (
+                SELECT serial_number, owner_key
+                FROM markorbit_facts.us_applicant_candidate_current FINAL
+                WHERE is_deleted = 0
+            ) AS source
+              ON source.serial_number = target.serial_number
+             AND source.owner_key = target.owner_key
+            ORDER BY target.serial_number, target.owner_key,
+                     target.normalized_name, target.candidate_key
+            LIMIT {max_rows + 1}
+            """,
+            settings={
+                **READ_SETTINGS,
+                "max_rows_to_read": 100_000_000,
+                "join_algorithm": "grace_hash",
+            },
+        ).result_rows
+    )
+    if len(orphan_rows) > max_rows:
+        raise RuntimeError(
+            f"US Applicant NAME lookup orphan reconciliation exceeds bounded limit {max_rows}"
+        )
+    rank_index = list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS).index("source_rank")
+    deleted_index = list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS).index("is_deleted")
+    orphan_tombstones = []
+    for row in orphan_rows:
+        tombstone = list(row)
+        tombstone[rank_index] = int(tombstone[rank_index]) + 1
+        tombstone[deleted_index] = 1
+        orphan_tombstones.append(tombstone)
+    for offset in range(0, len(orphan_tombstones), MAX_BATCH_SIZE):
+        _assert_epoch(expected_epoch, serving_epoch_getter)
+        client.insert(
+            US_APPLICANT_NAME_LOOKUP_TABLE,
+            orphan_tombstones[offset : offset + MAX_BATCH_SIZE],
+            column_names=list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
+        )
     _assert_epoch(expected_epoch, serving_epoch_getter)
-    return len(rows)
+    return len(rows) + len(tombstones) + len(orphan_tombstones)

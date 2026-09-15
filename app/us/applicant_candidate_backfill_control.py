@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from app.db import postgres_conn
 from app.us.applicant_candidate_backfill import (
+    MAX_RECONCILE_ROWS,
     ApplicantIndexBackfillCursor,
     backfill_us_applicant_candidate_index,
     reconcile_us_applicant_candidate_index,
@@ -475,6 +476,15 @@ def applicant_name_lookup_ready_for_epoch(
     )
 
 
+def _within_reconciliation_limit(receipt: dict[str, Any], target_field: str) -> bool:
+    try:
+        source_rows = int(receipt["source_visible_rows"])
+        target_rows = int(receipt[target_field])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return abs(source_rows - target_rows) <= MAX_RECONCILE_ROWS
+
+
 def execute_backfill_run(
     run_id: str,
     *,
@@ -524,6 +534,55 @@ def execute_backfill_run(
                 "source_epoch": epoch.to_dict(),
                 "completeness": existing_completeness,
             }
+
+        bounded_existing_gap = _within_reconciliation_limit(
+            candidate_completeness, "index_visible_rows"
+        ) and _within_reconciliation_limit(name_lookup_completeness, "lookup_visible_rows")
+        if bounded_existing_gap:
+            candidate_reconciled = reconcile_us_applicant_candidate_index(
+                client=client,
+                expected_epoch=epoch.token,
+                serving_epoch_getter=lambda: serving_epoch_getter().token,
+            )
+            name_lookup_reconciled = reconcile_us_applicant_name_lookup(
+                client=client,
+                expected_epoch=epoch.token,
+                serving_epoch_getter=lambda: serving_epoch_getter().token,
+            )
+            candidate_completeness = verify_us_applicant_candidate_index(client)
+            name_lookup_completeness = verify_us_applicant_name_lookup(client)
+            reconciled_completeness = {
+                **candidate_completeness,
+                "complete": candidate_completeness.get("complete") is True
+                and name_lookup_completeness.get("complete") is True,
+                "candidate_index_complete": candidate_completeness.get("complete") is True,
+                "name_lookup_complete": name_lookup_completeness.get("complete") is True,
+                "name_lookup": name_lookup_completeness,
+                "reconciliation": {
+                    "candidate_rows": candidate_reconciled,
+                    "name_lookup_rows": name_lookup_reconciled,
+                },
+            }
+            if reconciled_completeness["complete"]:
+                final_cursor = ApplicantIndexBackfillCursor(
+                    emitted=int(candidate_completeness["index_visible_rows"])
+                )
+                final_name_cursor = ApplicantNameLookupBackfillCursor(
+                    emitted=int(name_lookup_completeness["lookup_visible_rows"])
+                )
+                complete_backfill_run(
+                    run_id,
+                    current_epoch=epoch,
+                    completeness=reconciled_completeness,
+                    connection_factory=connection_factory,
+                )
+                return {
+                    "run_id": run_id,
+                    "cursor": final_cursor.to_dict(),
+                    "name_lookup_cursor": final_name_cursor.to_dict(),
+                    "source_epoch": epoch.to_dict(),
+                    "completeness": reconciled_completeness,
+                }
 
         final_cursor = backfill_us_applicant_candidate_index(
             client=client,

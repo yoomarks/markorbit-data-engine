@@ -126,3 +126,31 @@ def test_reconcile_tombstones_superseded_lookup_identity():
     assert tombstone[-1] == 1
     assert tombstone[-2] == 101
     assert client.queries[1][1]["join_algorithm"] == "grace_hash"
+
+
+
+def test_reconcile_tombstones_orphan_lookup_identity_even_without_missing_rows():
+    candidate = _candidate_row("10000001", "a" * 64)
+    orphan = [
+        "acme llc",
+        candidate[0],
+        "10000001",
+        "a" * 64,
+        "1" * 64,
+        "2" * 64,
+        100,
+        0,
+    ]
+    client = FakeClient([[], [], [orphan]])
+
+    reconciled = reconcile_us_applicant_name_lookup(client=client, max_rows=2)
+
+    assert reconciled == 1
+    assert len(client.inserts) == 1
+    tombstone = client.inserts[0][1][0]
+    assert tombstone[0] == "acme llc"
+    assert tombstone[1] == candidate[0]
+    assert tombstone[-1] == 1
+    assert tombstone[-2] == 101
+    assert "LEFT ANTI JOIN" in client.queries[2][0]
+    assert "source.serial_number = target.serial_number" in client.queries[2][0]

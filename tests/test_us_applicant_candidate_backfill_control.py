@@ -314,6 +314,61 @@ def test_execute_accepts_already_complete_epoch_without_mutation(monkeypatch):
     assert completed[0]["complete"] is True
 
 
+def test_execute_reconciles_bounded_gap_before_full_replay(monkeypatch):
+    epoch = _epoch()
+    completed = []
+    candidate_receipts = iter(
+        [
+            {"complete": False, "source_visible_rows": 100, "index_visible_rows": 98},
+            {"complete": True, "source_visible_rows": 100, "index_visible_rows": 100},
+        ]
+    )
+    lookup_receipts = iter(
+        [
+            {"complete": False, "source_visible_rows": 100, "lookup_visible_rows": 97},
+            {"complete": True, "source_visible_rows": 100, "lookup_visible_rows": 100},
+        ]
+    )
+    monkeypatch.setattr(
+        control, "resume_backfill_run", lambda *args, **kwargs: ApplicantIndexBackfillCursor()
+    )
+    monkeypatch.setattr(
+        control,
+        "backfill_us_applicant_candidate_index",
+        lambda **kwargs: pytest.fail("candidate full replay must not run"),
+    )
+    monkeypatch.setattr(
+        control,
+        "backfill_us_applicant_name_lookup",
+        lambda **kwargs: pytest.fail("lookup full replay must not run"),
+    )
+    monkeypatch.setattr(
+        control, "verify_us_applicant_candidate_index", lambda client: next(candidate_receipts)
+    )
+    monkeypatch.setattr(
+        control, "verify_us_applicant_name_lookup", lambda client: next(lookup_receipts)
+    )
+    monkeypatch.setattr(control, "reconcile_us_applicant_candidate_index", lambda **kwargs: 2)
+    monkeypatch.setattr(control, "reconcile_us_applicant_name_lookup", lambda **kwargs: 3)
+    monkeypatch.setattr(
+        control,
+        "complete_backfill_run",
+        lambda *args, **kwargs: completed.append(kwargs["completeness"]),
+    )
+
+    result = control.execute_backfill_run(
+        "run", client=object(), serving_epoch_getter=lambda: epoch
+    )
+
+    assert result["cursor"]["emitted"] == 100
+    assert result["name_lookup_cursor"]["emitted"] == 100
+    assert result["completeness"]["reconciliation"] == {
+        "candidate_rows": 2,
+        "name_lookup_rows": 3,
+    }
+    assert completed[0]["complete"] is True
+
+
 def test_serving_epoch_accepts_newer_durable_checkpoint_than_legacy_baseline():
     cursor = FakeCursor(
         all_rows=[

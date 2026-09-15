@@ -150,3 +150,21 @@ def test_reconcile_tombstones_superseded_candidate_identity():
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("is_deleted")] == 1
     assert tombstone[APPLICANT_INDEX_COLUMNS.index("source_rank")] == 101
     assert client.queries[1][1]["join_algorithm"] == "grace_hash"
+
+
+
+def test_reconcile_tombstones_orphan_candidate_identity_even_without_missing_rows():
+    owner = _owner_row("10000001", "a" * 64)
+    orphan = ["e" * 64, *owner]
+    client = FakeClient([[], [], [orphan]])
+
+    reconciled = reconcile_us_applicant_candidate_index(client=client, max_rows=2)
+
+    assert reconciled == 1
+    assert len(client.inserts) == 1
+    tombstone = client.inserts[0][1][0]
+    assert tombstone[0] == "e" * 64
+    assert tombstone[APPLICANT_INDEX_COLUMNS.index("is_deleted")] == 1
+    assert tombstone[APPLICANT_INDEX_COLUMNS.index("source_rank")] == 101
+    assert "LEFT ANTI JOIN" in client.queries[2][0]
+    assert "source.serial_number = target.serial_number" in client.queries[2][0]

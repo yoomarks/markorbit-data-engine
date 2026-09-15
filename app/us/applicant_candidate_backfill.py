@@ -134,7 +134,7 @@ def reconcile_us_applicant_candidate_index(
     expected_epoch: str | None = None,
     serving_epoch_getter: Callable[[], str] | None = None,
 ) -> int:
-    """Insert a bounded set of source bindings missing from the derived index."""
+    """Boundedly reconcile missing, superseded, and orphan candidate bindings."""
     if max_rows < 1 or max_rows > MAX_RECONCILE_ROWS:
         raise ValueError(f"max_rows must be between 1 and {MAX_RECONCILE_ROWS}")
     _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
@@ -172,17 +172,16 @@ def reconcile_us_applicant_candidate_index(
         raise RuntimeError(
             f"US Applicant candidate reconciliation exceeds bounded limit {max_rows}"
         )
-    if not rows:
-        return 0
-    index_rows = [applicant_index_row(row, OWNER_COLUMNS) for row in rows]
-    for offset in range(0, len(index_rows), MAX_BATCH_SIZE):
-        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-        client.insert(
-            APPLICANT_INDEX_TABLE,
-            index_rows[offset : offset + MAX_BATCH_SIZE],
-            column_names=APPLICANT_INDEX_COLUMNS,
-        )
-    columns_sql = ", ".join(f"source.{column}" for column in OWNER_COLUMNS)
+    if rows:
+        index_rows = [applicant_index_row(row, OWNER_COLUMNS) for row in rows]
+        for offset in range(0, len(index_rows), MAX_BATCH_SIZE):
+            _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+            client.insert(
+                APPLICANT_INDEX_TABLE,
+                index_rows[offset : offset + MAX_BATCH_SIZE],
+                column_names=APPLICANT_INDEX_COLUMNS,
+            )
+
     stale_rows = list(
         client.query(
             f"""
@@ -235,5 +234,53 @@ def reconcile_us_applicant_candidate_index(
             tombstones[offset : offset + MAX_BATCH_SIZE],
             column_names=APPLICANT_INDEX_COLUMNS,
         )
+
+    target_projection = ", ".join(f"target.{column}" for column in APPLICANT_INDEX_COLUMNS)
+    orphan_rows = list(
+        client.query(
+            f"""
+            SELECT {target_projection}
+            FROM
+            (
+                SELECT * FROM {APPLICANT_INDEX_TABLE} FINAL
+                WHERE is_deleted = 0
+            ) AS target
+            LEFT ANTI JOIN
+            (
+                SELECT serial_number, owner_key
+                FROM markorbit_facts.us_owner_current FINAL
+                WHERE is_deleted = 0
+            ) AS source
+              ON source.serial_number = target.serial_number
+             AND source.owner_key = target.owner_key
+            ORDER BY target.serial_number, target.owner_key, target.candidate_key
+            LIMIT {max_rows + 1}
+            """,
+            settings={
+                **READ_SETTINGS,
+                "max_rows_to_read": 100_000_000,
+                "join_algorithm": "grace_hash",
+            },
+        ).result_rows
+    )
+    if len(orphan_rows) > max_rows:
+        raise RuntimeError(
+            f"US Applicant candidate orphan reconciliation exceeds bounded limit {max_rows}"
+        )
+    rank_index = APPLICANT_INDEX_COLUMNS.index("source_rank")
+    deleted_index = APPLICANT_INDEX_COLUMNS.index("is_deleted")
+    orphan_tombstones = []
+    for row in orphan_rows:
+        tombstone = list(row)
+        tombstone[rank_index] = int(tombstone[rank_index]) + 1
+        tombstone[deleted_index] = 1
+        orphan_tombstones.append(tombstone)
+    for offset in range(0, len(orphan_tombstones), MAX_BATCH_SIZE):
+        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+        client.insert(
+            APPLICANT_INDEX_TABLE,
+            orphan_tombstones[offset : offset + MAX_BATCH_SIZE],
+            column_names=APPLICANT_INDEX_COLUMNS,
+        )
     _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-    return len(rows)
+    return len(rows) + len(tombstones) + len(orphan_tombstones)
