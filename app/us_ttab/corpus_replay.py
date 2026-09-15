@@ -309,6 +309,10 @@ def execute_replay(
     }
 
 
+def _load_authority_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Deterministic manifest-driven USPTO TTAB bulk corpus replay"
@@ -318,10 +322,46 @@ def main() -> int:
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--max-packages", type=int, default=1)
     parser.add_argument("--resume-failed", action="store_true")
+    parser.add_argument("--authority-plan", type=Path, default=None)
+    parser.add_argument("--authority-receipt", type=Path, default=None)
+    parser.add_argument("--authority-control-root", type=Path, default=None)
     args = parser.parse_args()
+
+    settings = get_settings()
+    if args.apply:
+        if not args.all:
+            parser.error("--apply requires --all under production authority")
+        if (
+            args.authority_plan is None
+            or args.authority_receipt is None
+            or args.authority_control_root is None
+        ):
+            parser.error(
+                "--apply requires --authority-plan, --authority-receipt, "
+                "and --authority-control-root"
+            )
+        from app.us_ttab.production_authority import validate_runtime_start
+
+        plan = _load_authority_json(args.authority_plan)
+        receipt = _load_authority_json(args.authority_receipt)
+        active = validate_runtime_start(
+            plan,
+            receipt,
+            raw_root=settings.raw_data_root,
+            control_root=args.authority_control_root,
+        )
+        bound_manifest = (
+            args.authority_control_root.resolve()
+            / str((plan.get("manifest") or {}).get("relative_path") or "")
+        ).resolve()
+        if args.manifest.resolve() != bound_manifest:
+            parser.error("--manifest does not match the active authority plan")
+        if bool(args.resume_failed) != bool(active.get("resume_failed")):
+            parser.error("--resume-failed does not match the active authority plan")
+
     report = execute_replay(
         args.manifest,
-        get_settings().raw_data_root,
+        settings.raw_data_root,
         apply=args.apply,
         all_packages=args.all,
         max_packages=args.max_packages,
