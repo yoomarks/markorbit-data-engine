@@ -62,7 +62,7 @@
         "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
         "hard_bounds": {
           "max_pages": 100,
-          "max_results": 500
+          "max_results": 100
         },
         "read_budget": {
           "max_rows_to_read": 1000000,

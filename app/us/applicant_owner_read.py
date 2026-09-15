@@ -243,13 +243,13 @@ def discover_applicants_by_name(
         raise OwnerReadInvalid("applicant name is required")
     before = _guard_name_lookup_epoch()
     query = applicant_name_query(
-        context=context, jurisdiction="US", normalized_name=normalized_name, page_size=page_size
+        context=context, jurisdiction="US", name=name, page_size=page_size
     )
     source_version = _epoch_version(before)
     after_key, page_number, emitted_before = applicant_name_cursor_state(
         token=cursor, query=query, source_version=source_version
     )
-    remaining = max(500 - emitted_before, 0)
+    remaining = max(int(query["limits"]["max_results"]) - emitted_before, 0)
     capacity = min(page_size, remaining)
     candidate_keys = _name_candidate_keys(
         client, normalized_name=normalized_name, after_candidate_key=after_key,
@@ -284,7 +284,7 @@ def discover_applicants_by_name(
         )
     emitted = emitted_before + len(results)
     next_cursor = None
-    if has_extra and results and emitted < 500:
+    if has_extra and results and emitted < int(query["limits"]["max_results"]):
         next_cursor = next_applicant_name_cursor(
             query=query, source_version=source_version,
             last_candidate_key=page_keys[-1], page_number=page_number,

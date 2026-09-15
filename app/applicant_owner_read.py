@@ -187,23 +187,23 @@ def applicant_query(
 
 
 def applicant_name_query(
-    *, context: Mapping[str, str], jurisdiction: str, normalized_name: str, page_size: int,
+    *, context: Mapping[str, str], jurisdiction: str, name: str, page_size: int,
 ) -> dict[str, Any]:
     if jurisdiction not in {"CN", "US"}:
         raise OwnerReadInvalid("unsupported owner-read jurisdiction")
-    normalized = str(normalized_name or "").strip()
-    if not normalized or len(normalized) > 512:
-        raise OwnerReadInvalid("normalized applicant name is required")
+    requested_name = str(name or "").strip()
+    if not requested_name or len(requested_name) > 512:
+        raise OwnerReadInvalid("applicant name is required")
     if type(page_size) is not int or page_size < 1 or page_size > 100:
         raise OwnerReadInvalid("page_size must be between 1 and 100")
     body = {
         "contract_version": DISCOVERY_CONTRACT_VERSION,
         "request_context": dict(context),
         "jurisdiction": jurisdiction,
-        "input": {"kind": "EXACT_NORMALIZED_NAME", "value": normalized},
+        "input": {"kind": "NAME", "value": requested_name},
         "ordering": ["applicant_candidate_id ASC"],
         "ranking_authority": "NONE",
-        "limits": {"page_size": page_size, "max_results": 500},
+        "limits": {"page_size": page_size, "max_results": 100},
     }
     return {**body, "query_hash": query_hash(body)}
 

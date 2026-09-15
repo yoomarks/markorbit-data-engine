@@ -47,7 +47,7 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     },
                     "pagination": "bounded_keyset_cursor",
                     "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
-                    "hard_bounds": {"max_pages": 100, "max_results": 500},
+                    "hard_bounds": {"max_pages": 100, "max_results": 100},
                     "read_budget": {
                         "max_rows_to_read": 1000000,
                         "overflow_mode": "throw",

@@ -273,9 +273,10 @@ def test_us_name_discovery_is_exact_normalized_and_keeps_distinct_identities(mon
     assert result.fact_state == "observed"
     assert result.payload is not None
     assert result.payload["query"]["input"] == {
-        "kind": "EXACT_NORMALIZED_NAME", "value": "example holdings llc"
+        "kind": "NAME", "value": "Example   Holdings LLC"
     }
     assert result.payload["query"]["ranking_authority"] == "NONE"
+    assert result.payload["query"]["limits"] == {"page_size": 50, "max_results": 100}
     assert [item["applicant_candidate_id"] for item in result.payload["results"]] == [
         f"us:applicant:{row['candidate_key']}"
         for row in sorted([first, second], key=lambda row: row["candidate_key"])
@@ -305,6 +306,23 @@ def test_us_name_discovery_paginates_by_candidate_key_with_signed_cursor(monkeyp
     assert second_page.payload is not None
     assert second_page.payload["results"][0]["applicant_candidate_id"] == f"us:applicant:{rows[1]['candidate_key']}"
     assert second_page.payload["next_cursor"] is None
+
+
+def test_us_name_discovery_hard_stops_at_v1_max_results(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    rows = [
+        _us_owner_row(str(90000000 + index), address=f"{index} Main St")
+        for index in range(1, 102)
+    ]
+    result = us_owner.discover_applicants_by_name(
+        FakeClient(_us_name_discovery_responder(rows)),
+        workspace_id="ws-1", request_id="req-max-results",
+        name="Example Holdings LLC", page_size=100,
+    )
+    assert result.payload is not None
+    assert result.payload["query"]["limits"]["max_results"] == 100
+    assert len(result.payload["results"]) == 100
+    assert result.payload["next_cursor"] is None
 
 
 def test_us_name_discovery_cursor_rejects_query_change(monkeypatch):
