@@ -12,7 +12,7 @@ from app.us.applicant_name_lookup_backfill import (
     reconcile_us_applicant_name_lookup,
 )
 from app.us.applicant_candidate_index import applicant_candidate_key
-from app.us.publisher import OWNER_COLUMNS
+from app.us.publisher import APPLICANT_INDEX_COLUMNS, OWNER_COLUMNS
 
 
 class Result:
@@ -92,23 +92,43 @@ def test_cooperative_stop_happens_before_next_page():
     assert client.queries == []
 
 
+def _candidate_source(row):
+    return dict(zip(APPLICANT_INDEX_COLUMNS, row, strict=True))
+
+
+def _candidate_binding(row):
+    source = _candidate_source(row)
+    return (
+        source["candidate_key"],
+        source["serial_number"],
+        source["owner_key"],
+        source["record_hash"],
+        source["source_rank"],
+    )
+
+
 def test_reconcile_inserts_only_bounded_missing_bindings():
-    client = FakeClient([[_candidate_row("10000001", "a" * 64)]])
+    candidate = _candidate_row("10000001", "a" * 64)
+    client = FakeClient([[ _candidate_binding(candidate) ], [candidate], [], []])
 
     reconciled = reconcile_us_applicant_name_lookup(client=client, max_rows=2)
 
     assert reconciled == 1
-    assert "LEFT ANTI JOIN" in client.queries[0][0]
+    assert "LEFT JOIN" in client.queries[0][0]
+    assert "SELECT source.candidate_key, source.serial_number, source.owner_key" in client.queries[0][0]
+    assert "source.address_1" not in client.queries[0][0]
     assert "target.record_hash = source.record_hash" in client.queries[0][0]
     assert "LIMIT 3" in client.queries[0][0]
     assert client.inserts[0][0] == US_APPLICANT_NAME_LOOKUP_TABLE
     assert client.queries[0][1]["max_rows_to_read"] == 150_000_000
+    assert client.queries[0][1]["join_algorithm"] == "full_sorting_merge"
+    assert client.queries[0][1]["max_bytes_before_external_sort"] == 268_435_456
 
 
 def test_reconcile_fails_closed_above_bound():
-    client = FakeClient(
-        [[_candidate_row("10000001", "a" * 64), _candidate_row("10000002", "b" * 64)]]
-    )
+    first = _candidate_row("10000001", "a" * 64)
+    second = _candidate_row("10000002", "b" * 64)
+    client = FakeClient([[ _candidate_binding(first), _candidate_binding(second) ]])
     with pytest.raises(RuntimeError, match="exceeds bounded limit 1"):
         reconcile_us_applicant_name_lookup(client=client, max_rows=1)
     assert client.inserts == []
@@ -116,7 +136,20 @@ def test_reconcile_fails_closed_above_bound():
 
 def test_reconcile_tombstones_superseded_lookup_identity():
     candidate = _candidate_row("10000001", "a" * 64)
-    client = FakeClient([[candidate], [("old name", "f" * 64, 100, *candidate)]])
+    source = _candidate_source(candidate)
+    stale = (
+        "old name",
+        "f" * 64,
+        100,
+        source["candidate_key"],
+        source["serial_number"],
+        source["owner_key"],
+        source["record_hash"],
+        source["source_rank"],
+    )
+    client = FakeClient(
+        [[_candidate_binding(candidate)], [candidate], [stale], [], [], [], [candidate], []]
+    )
 
     reconcile_us_applicant_name_lookup(client=client, max_rows=2)
 
@@ -126,23 +159,33 @@ def test_reconcile_tombstones_superseded_lookup_identity():
     assert tombstone[1] == "f" * 64
     assert tombstone[-1] == 1
     assert tombstone[-2] == 101
-    assert client.queries[1][1]["join_algorithm"] == "grace_hash"
-
+    assert client.queries[2][1]["join_algorithm"] == "full_sorting_merge"
+    stale_queries = [item[0] for item in client.queries[2:6]]
+    assert all("cityHash64(serial_number, owner_key) % 4" in sql for sql in stale_queries)
+    assert [f"= {bucket}" in stale_queries[bucket] for bucket in range(4)] == [True] * 4
 
 
 def test_reconcile_tombstones_orphan_lookup_identity_even_without_missing_rows():
     candidate = _candidate_row("10000001", "a" * 64)
-    orphan = [
+    source = _candidate_source(candidate)
+    orphan_full = [
         "acme llc",
-        candidate[0],
-        "10000001",
-        "a" * 64,
-        "1" * 64,
-        "2" * 64,
-        100,
+        source["candidate_key"],
+        source["serial_number"],
+        source["owner_key"],
+        source["source_row_hash"],
+        source["record_hash"],
+        source["source_rank"],
         0,
     ]
-    client = FakeClient([[], [], [orphan]])
+    orphan_compact = (
+        orphan_full[0],
+        orphan_full[1],
+        orphan_full[2],
+        orphan_full[3],
+        orphan_full[6],
+    )
+    client = FakeClient([[], [], [], [], [], [orphan_compact], [orphan_full]])
 
     reconciled = reconcile_us_applicant_name_lookup(client=client, max_rows=2)
 
@@ -150,8 +193,8 @@ def test_reconcile_tombstones_orphan_lookup_identity_even_without_missing_rows()
     assert len(client.inserts) == 1
     tombstone = client.inserts[0][1][0]
     assert tombstone[0] == "acme llc"
-    assert tombstone[1] == candidate[0]
+    assert tombstone[1] == source["candidate_key"]
     assert tombstone[-1] == 1
     assert tombstone[-2] == 101
-    assert "LEFT ANTI JOIN" in client.queries[2][0]
-    assert "source.serial_number = target.serial_number" in client.queries[2][0]
+    assert "LEFT JOIN" in client.queries[5][0]
+    assert "source.serial_number = target.serial_number" in client.queries[5][0]

@@ -44,6 +44,8 @@ _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_QUERY_SETTINGS = {
     "join_algorithm",
+    "max_bytes_before_external_sort",
+    "max_memory_usage",
     "max_threads",
     "max_rows_to_read",
     "read_overflow_mode",
@@ -111,19 +113,30 @@ def _settings_sql(settings: Mapping[str, Any] | None) -> str:
     parts: list[str] = []
     for key in sorted(settings):
         value = settings[key]
-        if key in {"max_threads", "max_rows_to_read"}:
+        if key in {
+            "max_threads",
+            "max_rows_to_read",
+            "max_bytes_before_external_sort",
+            "max_memory_usage",
+        }:
             number = int(value)
             if number < 1:
                 raise ValueError(f"{key} must be positive")
+            if key == "max_bytes_before_external_sort" and number > 536_870_912:
+                raise ValueError("max_bytes_before_external_sort exceeds 512 MiB safety cap")
+            if key == "max_memory_usage" and number > 4_294_967_296:
+                raise ValueError("max_memory_usage exceeds 4 GiB safety cap")
             parts.append(f"{key} = {number}")
         elif key == "read_overflow_mode":
             if str(value) != "throw":
                 raise ValueError("read_overflow_mode must remain fail-closed at 'throw'")
             parts.append("read_overflow_mode = 'throw'")
         elif key == "join_algorithm":
-            if str(value) != "grace_hash":
-                raise ValueError("join_algorithm must remain bounded at 'grace_hash'")
-            parts.append("join_algorithm = 'grace_hash'")
+            if str(value) != "full_sorting_merge":
+                raise ValueError(
+                    "join_algorithm must remain spill-safe at 'full_sorting_merge'"
+                )
+            parts.append("join_algorithm = 'full_sorting_merge'")
     return " SETTINGS " + ", ".join(parts)
 
 

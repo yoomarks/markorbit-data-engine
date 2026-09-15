@@ -17,8 +17,11 @@ READ_SETTINGS = {
 RECONCILE_READ_SETTINGS = {
     **READ_SETTINGS,
     "max_rows_to_read": 150_000_000,
-    "join_algorithm": "grace_hash",
+    "join_algorithm": "full_sorting_merge",
+    "max_bytes_before_external_sort": 268_435_456,
+    "max_memory_usage": 4_294_967_296,
 }
+POINT_FETCH_BATCH_SIZE = 2_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +135,75 @@ def backfill_us_applicant_candidate_index(
     return state
 
 
+def _identity_tuples_sql(identities: list[tuple[str, str]]) -> str:
+    return ", ".join(
+        f"({_sql_text(serial)}, {_sql_text(owner_key)})"
+        for serial, owner_key in identities
+    )
+
+
+def _candidate_tuples_sql(keys: list[tuple[str, str, str]]) -> str:
+    return ", ".join(
+        f"({_sql_text(candidate_key)}, {_sql_text(serial)}, {_sql_text(owner_key)})"
+        for candidate_key, serial, owner_key in keys
+    )
+
+
+def _fetch_owner_rows(client: Any, identities: list[tuple[str, str]]) -> dict[tuple[str, str], list[Any]]:
+    result: dict[tuple[str, str], list[Any]] = {}
+    columns_sql = ", ".join(OWNER_COLUMNS)
+    for offset in range(0, len(identities), POINT_FETCH_BATCH_SIZE):
+        batch = identities[offset : offset + POINT_FETCH_BATCH_SIZE]
+        if not batch:
+            continue
+        rows = client.query(
+            f"""
+            SELECT {columns_sql}
+            FROM markorbit_facts.us_owner_current FINAL
+            WHERE is_deleted = 0
+              AND (serial_number, owner_key) IN ({_identity_tuples_sql(batch)})
+            """,
+            settings=READ_SETTINGS,
+        ).result_rows
+        serial_index = OWNER_COLUMNS.index("serial_number")
+        owner_index = OWNER_COLUMNS.index("owner_key")
+        for row in rows:
+            result[(str(row[serial_index]), str(row[owner_index]))] = list(row)
+    return result
+
+
+def _fetch_candidate_rows(
+    client: Any, keys: list[tuple[str, str, str]]
+) -> dict[tuple[str, str, str], list[Any]]:
+    result: dict[tuple[str, str, str], list[Any]] = {}
+    columns_sql = ", ".join(APPLICANT_INDEX_COLUMNS)
+    for offset in range(0, len(keys), POINT_FETCH_BATCH_SIZE):
+        batch = keys[offset : offset + POINT_FETCH_BATCH_SIZE]
+        if not batch:
+            continue
+        rows = client.query(
+            f"""
+            SELECT {columns_sql}
+            FROM {APPLICANT_INDEX_TABLE} FINAL
+            WHERE is_deleted = 0
+              AND (candidate_key, serial_number, owner_key) IN ({_candidate_tuples_sql(batch)})
+            """,
+            settings=READ_SETTINGS,
+        ).result_rows
+        candidate_index = APPLICANT_INDEX_COLUMNS.index("candidate_key")
+        serial_index = APPLICANT_INDEX_COLUMNS.index("serial_number")
+        owner_index = APPLICANT_INDEX_COLUMNS.index("owner_key")
+        for row in rows:
+            result[
+                (str(row[candidate_index]), str(row[serial_index]), str(row[owner_index]))
+            ] = list(row)
+    return result
+
+
+def _unique_identities(rows: list[tuple[Any, ...]], serial_index: int, owner_index: int) -> list[tuple[str, str]]:
+    return list(dict.fromkeys((str(row[serial_index]), str(row[owner_index])) for row in rows))
+
+
 def reconcile_us_applicant_candidate_index(
     *,
     client: Any,
@@ -139,23 +211,24 @@ def reconcile_us_applicant_candidate_index(
     expected_epoch: str | None = None,
     serving_epoch_getter: Callable[[], str] | None = None,
 ) -> int:
-    """Boundedly reconcile missing, superseded, and orphan candidate bindings."""
+    """Boundedly reconcile candidate bindings without carrying wide rows through large joins."""
     if max_rows < 1 or max_rows > MAX_RECONCILE_ROWS:
         raise ValueError(f"max_rows must be between 1 and {MAX_RECONCILE_ROWS}")
     _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-    columns_sql = ", ".join(f"source.{column}" for column in OWNER_COLUMNS)
-    rows = list(
+
+    missing = list(
         client.query(
             f"""
-            SELECT {columns_sql}
+            SELECT source.serial_number, source.owner_key, source.record_hash, source.source_rank
             FROM
             (
-                SELECT * FROM markorbit_facts.us_owner_current FINAL
+                SELECT serial_number, owner_key, record_hash, source_rank
+                FROM markorbit_facts.us_owner_current FINAL
                 WHERE is_deleted = 0
             ) AS source
-            LEFT ANTI JOIN
+            LEFT JOIN
             (
-                SELECT serial_number, owner_key, record_hash, source_rank
+                SELECT serial_number, owner_key, record_hash, source_rank, toUInt8(1) AS present
                 FROM {APPLICANT_INDEX_TABLE} FINAL
                 WHERE is_deleted = 0
             ) AS target
@@ -163,33 +236,37 @@ def reconcile_us_applicant_candidate_index(
              AND target.owner_key = source.owner_key
              AND target.record_hash = source.record_hash
              AND target.source_rank = source.source_rank
+            WHERE target.present = 0
             ORDER BY source.serial_number, source.owner_key
             LIMIT {max_rows + 1}
             """,
             settings=RECONCILE_READ_SETTINGS,
         ).result_rows
     )
-    if len(rows) > max_rows:
-        raise RuntimeError(
-            f"US Applicant candidate reconciliation exceeds bounded limit {max_rows}"
-        )
-    if rows:
-        index_rows = [applicant_index_row(row, OWNER_COLUMNS) for row in rows]
-        for offset in range(0, len(index_rows), MAX_BATCH_SIZE):
-            _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-            client.insert(
-                APPLICANT_INDEX_TABLE,
-                index_rows[offset : offset + MAX_BATCH_SIZE],
-                column_names=APPLICANT_INDEX_COLUMNS,
-            )
+    if len(missing) > max_rows:
+        raise RuntimeError(f"US Applicant candidate reconciliation exceeds bounded limit {max_rows}")
+    owner_rows = _fetch_owner_rows(client, _unique_identities(missing, 0, 1))
+    index_rows: list[list[Any]] = []
+    record_index = OWNER_COLUMNS.index("record_hash")
+    rank_index_owner = OWNER_COLUMNS.index("source_rank")
+    for serial, owner_key, record_hash, source_rank in missing:
+        owner_row = owner_rows.get((str(serial), str(owner_key)))
+        if owner_row is None or str(owner_row[record_index]) != str(record_hash) or int(owner_row[rank_index_owner]) != int(source_rank):
+            raise RuntimeError("US Applicant candidate source binding drifted during reconciliation")
+        index_rows.append(applicant_index_row(owner_row, OWNER_COLUMNS))
+    for offset in range(0, len(index_rows), MAX_BATCH_SIZE):
+        _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
+        client.insert(APPLICANT_INDEX_TABLE, index_rows[offset : offset + MAX_BATCH_SIZE], column_names=APPLICANT_INDEX_COLUMNS)
 
-    stale_rows = list(
+    stale = list(
         client.query(
             f"""
-            SELECT target.candidate_key, target.source_rank, {columns_sql}
+            SELECT target.candidate_key, target.source_rank,
+                   source.serial_number, source.owner_key, source.record_hash, source.source_rank
             FROM
             (
-                SELECT * FROM markorbit_facts.us_owner_current FINAL
+                SELECT serial_number, owner_key, record_hash, source_rank
+                FROM markorbit_facts.us_owner_current FINAL
                 WHERE is_deleted = 0
             ) AS source
             INNER JOIN
@@ -208,72 +285,68 @@ def reconcile_us_applicant_candidate_index(
             settings=RECONCILE_READ_SETTINGS,
         ).result_rows
     )
-    if len(stale_rows) > max_rows:
-        raise RuntimeError(
-            f"US Applicant candidate stale-binding reconciliation exceeds bounded limit {max_rows}"
-        )
-    tombstones = []
-    for row in stale_rows:
-        old_candidate_key = str(row[0])
-        old_source_rank = int(row[1])
-        owner_row = list(row[2:])
-        if old_candidate_key == applicant_index_row(owner_row, OWNER_COLUMNS)[0]:
+    if len(stale) > max_rows:
+        raise RuntimeError(f"US Applicant candidate stale-binding reconciliation exceeds bounded limit {max_rows}")
+    stale_owner_rows = _fetch_owner_rows(client, _unique_identities(stale, 2, 3))
+    tombstones: list[list[Any]] = []
+    deleted_index_owner = OWNER_COLUMNS.index("is_deleted")
+    for old_candidate_key, old_source_rank, serial, owner_key, record_hash, source_rank in stale:
+        owner_row = stale_owner_rows.get((str(serial), str(owner_key)))
+        if owner_row is None or str(owner_row[record_index]) != str(record_hash) or int(owner_row[rank_index_owner]) != int(source_rank):
+            raise RuntimeError("US Applicant candidate stale source binding drifted during reconciliation")
+        if str(old_candidate_key) == str(applicant_index_row(owner_row, OWNER_COLUMNS)[0]):
             continue
-        owner_row[OWNER_COLUMNS.index("is_deleted")] = 1
-        owner_row[OWNER_COLUMNS.index("source_rank")] = (
-            max(old_source_rank, int(owner_row[OWNER_COLUMNS.index("source_rank")])) + 1
-        )
-        tombstones.append([old_candidate_key, *owner_row])
+        owner_row = list(owner_row)
+        owner_row[deleted_index_owner] = 1
+        owner_row[rank_index_owner] = max(int(old_source_rank), int(owner_row[rank_index_owner])) + 1
+        tombstones.append([str(old_candidate_key), *owner_row])
     for offset in range(0, len(tombstones), MAX_BATCH_SIZE):
         _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-        client.insert(
-            APPLICANT_INDEX_TABLE,
-            tombstones[offset : offset + MAX_BATCH_SIZE],
-            column_names=APPLICANT_INDEX_COLUMNS,
-        )
+        client.insert(APPLICANT_INDEX_TABLE, tombstones[offset : offset + MAX_BATCH_SIZE], column_names=APPLICANT_INDEX_COLUMNS)
 
-    target_projection = ", ".join(f"target.{column}" for column in APPLICANT_INDEX_COLUMNS)
-    orphan_rows = list(
+    orphans = list(
         client.query(
             f"""
-            SELECT {target_projection}
+            SELECT target.candidate_key, target.serial_number, target.owner_key, target.source_rank
             FROM
             (
-                SELECT * FROM {APPLICANT_INDEX_TABLE} FINAL
+                SELECT candidate_key, serial_number, owner_key, source_rank
+                FROM {APPLICANT_INDEX_TABLE} FINAL
                 WHERE is_deleted = 0
             ) AS target
-            LEFT ANTI JOIN
+            LEFT JOIN
             (
-                SELECT serial_number, owner_key
+                SELECT serial_number, owner_key, toUInt8(1) AS present
                 FROM markorbit_facts.us_owner_current FINAL
                 WHERE is_deleted = 0
             ) AS source
               ON source.serial_number = target.serial_number
              AND source.owner_key = target.owner_key
+            WHERE source.present = 0
             ORDER BY target.serial_number, target.owner_key, target.candidate_key
             LIMIT {max_rows + 1}
             """,
             settings=RECONCILE_READ_SETTINGS,
         ).result_rows
     )
-    if len(orphan_rows) > max_rows:
-        raise RuntimeError(
-            f"US Applicant candidate orphan reconciliation exceeds bounded limit {max_rows}"
-        )
+    if len(orphans) > max_rows:
+        raise RuntimeError(f"US Applicant candidate orphan reconciliation exceeds bounded limit {max_rows}")
+    orphan_keys = [(str(row[0]), str(row[1]), str(row[2])) for row in orphans]
+    target_rows = _fetch_candidate_rows(client, orphan_keys)
     rank_index = APPLICANT_INDEX_COLUMNS.index("source_rank")
     deleted_index = APPLICANT_INDEX_COLUMNS.index("is_deleted")
-    orphan_tombstones = []
-    for row in orphan_rows:
-        tombstone = list(row)
-        tombstone[rank_index] = int(tombstone[rank_index]) + 1
-        tombstone[deleted_index] = 1
-        orphan_tombstones.append(tombstone)
+    orphan_tombstones: list[list[Any]] = []
+    for candidate_key, serial, owner_key, source_rank in orphans:
+        key = (str(candidate_key), str(serial), str(owner_key))
+        target_row = target_rows.get(key)
+        if target_row is None or int(target_row[rank_index]) != int(source_rank):
+            raise RuntimeError("US Applicant candidate orphan binding drifted during reconciliation")
+        target_row = list(target_row)
+        target_row[rank_index] = int(target_row[rank_index]) + 1
+        target_row[deleted_index] = 1
+        orphan_tombstones.append(target_row)
     for offset in range(0, len(orphan_tombstones), MAX_BATCH_SIZE):
         _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-        client.insert(
-            APPLICANT_INDEX_TABLE,
-            orphan_tombstones[offset : offset + MAX_BATCH_SIZE],
-            column_names=APPLICANT_INDEX_COLUMNS,
-        )
+        client.insert(APPLICANT_INDEX_TABLE, orphan_tombstones[offset : offset + MAX_BATCH_SIZE], column_names=APPLICANT_INDEX_COLUMNS)
     _assert_epoch(expected_epoch=expected_epoch, serving_epoch_getter=serving_epoch_getter)
-    return len(rows) + len(tombstones) + len(orphan_tombstones)
+    return len(index_rows) + len(tombstones) + len(orphan_tombstones)
