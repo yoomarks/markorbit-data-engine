@@ -3,6 +3,9 @@ param(
     [ValidateSet("assignment", "ttab")]
     [string]$Domain,
 
+    [ValidateSet("daily", "historical")]
+    [string]$TTABProduct = "daily",
+
     [string]$MetadataOutputPath = "",
 
     [string]$FetchReportOutputPath = ""
@@ -45,8 +48,11 @@ function Write-Utf8NoBomAtomic {
 Write-Host "Fetching authoritative USPTO ODP Product Data metadata for $Domain..."
 Write-Host "API key material is read only from the worker environment and is never printed."
 
-$jsonLines = & docker compose run --build --rm --no-deps -T worker `
-    python -m app.uspto_odp_metadata_fetch --domain $Domain
+$fetchArgs = @("-m", "app.uspto_odp_metadata_fetch", "--domain", $Domain)
+if ($Domain -eq "ttab") {
+    $fetchArgs += @("--ttab-product", $TTABProduct)
+}
+$jsonLines = & docker compose run --build --rm --no-deps -T worker python @fetchArgs
 $exitCode = $LASTEXITCODE
 $json = $jsonLines -join "`n"
 if (-not $json.Trim()) {
@@ -70,11 +76,12 @@ if (-not $report.metadata) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$nameDomain = if ($Domain -eq "ttab") { "${Domain}_${TTABProduct}" } else { $Domain }
 if (-not $MetadataOutputPath) {
-    $MetadataOutputPath = Join-Path "reports" "uspto_odp_${Domain}_metadata_$timestamp.json"
+    $MetadataOutputPath = Join-Path "reports" "uspto_odp_${nameDomain}_metadata_$timestamp.json"
 }
 if (-not $FetchReportOutputPath) {
-    $FetchReportOutputPath = Join-Path "reports" "uspto_odp_${Domain}_metadata_fetch_$timestamp.json"
+    $FetchReportOutputPath = Join-Path "reports" "uspto_odp_${nameDomain}_metadata_fetch_$timestamp.json"
 }
 
 $metadataJson = $report.metadata | ConvertTo-Json -Depth 100

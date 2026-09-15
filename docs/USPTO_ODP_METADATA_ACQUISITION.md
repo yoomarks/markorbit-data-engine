@@ -11,7 +11,8 @@ Authoritative dataset identities remain frozen as:
 | Domain | ODP dataset | Federal catalog identifier |
 | --- | --- | --- |
 | Assignment | `trtdxfag` | `EIP-5903T-OL` |
-| TTAB | `ttabtdxf` | `EIP-5904T-OL` |
+| TTAB daily/frontfile | `ttabtdxf` | `EIP-5904T-OL` |
+| TTAB historical/backfile | `ttabyr` | `EIP-5904T-OL` |
 
 Official references:
 
@@ -45,13 +46,27 @@ powershell.exe -ExecutionPolicy Bypass -File `
   -Domain assignment
 ```
 
-TTAB:
+TTAB historical/backfile:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File `
   .\scripts\fetch-uspto-odp-bulk-metadata.ps1 `
-  -Domain ttab
+  -Domain ttab `
+  -TTABProduct historical
 ```
+
+TTAB daily/frontfile:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File `
+  .\scripts\fetch-uspto-odp-bulk-metadata.ps1 `
+  -Domain ttab `
+  -TTABProduct daily
+```
+
+The current TTAB corpus uses both ODP products. The historical backfile may be physically split
+into multiple ZIP parts; those parts form one logical historical snapshot and must share the same
+authoritative `snapshot_at`. Daily files remain individually timestamped.
 
 The script writes two evidence files under `reports/` by default:
 
@@ -88,8 +103,8 @@ or:
 powershell.exe -ExecutionPolicy Bypass -File `
   .\scripts\preflight-uspto-odp-bulk-metadata.ps1 `
   -Domain ttab `
-  -MetadataPath .\reports\uspto_odp_ttab_metadata_<timestamp>.json `
-  -ExpectedFileName <exact-file-1>,<exact-file-2>
+  -MetadataPath @(.\reports\uspto_odp_ttab_historical_metadata_<timestamp>.json, .\reports\uspto_odp_ttab_daily_metadata_<timestamp>.json) `
+  -ExpectedFileName <exact-historical-part-1>,<exact-daily-file-1>
 ```
 
 Frozen chronology policy remains unchanged:
@@ -109,6 +124,16 @@ powershell.exe -ExecutionPolicy Bypass -File `
   .\scripts\build-uspto-odp-corpus-manifest.ps1 `
   -Domain assignment `
   -MetadataPath .\reports\uspto_odp_assignment_metadata_<timestamp>.json `
+  -SourceSpecPath <explicit-source-spec.json>
+```
+
+For TTAB, pass both historical and daily metadata files:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File `
+  .\scripts\build-uspto-odp-corpus-manifest.ps1 `
+  -Domain ttab `
+  -MetadataPath @(.\reports\uspto_odp_ttab_historical_metadata_<timestamp>.json, .\reports\uspto_odp_ttab_daily_metadata_<timestamp>.json) `
   -SourceSpecPath <explicit-source-spec.json>
 ```
 

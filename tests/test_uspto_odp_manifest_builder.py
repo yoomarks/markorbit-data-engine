@@ -127,19 +127,26 @@ def test_assignment_manifest_requires_exactly_one_explicit_historical_source() -
 def test_ttab_manifest_normalizes_explicit_timestamps_to_utc() -> None:
     result = build_manifest(
         domain="ttab",
-        metadata={
-            "productIdentifier": "EIP-5904T-OL",
-            "files": [
-                {
-                    "fileName": "historical.zip",
-                    "releaseDateTime": "2026-08-01T10:00:00-04:00",
-                },
-                {
-                    "fileName": "daily.zip",
-                    "releaseDateTime": "2026-08-09T20:15:30-04:00",
-                },
-            ],
-        },
+        metadata=[
+            {
+                "productIdentifier": "ttabyr",
+                "files": [
+                    {
+                        "fileName": "historical.zip",
+                        "releaseDateTime": "2026-08-01T10:00:00-04:00",
+                    }
+                ],
+            },
+            {
+                "productIdentifier": "ttabtdxf",
+                "files": [
+                    {
+                        "fileName": "daily.zip",
+                        "releaseDateTime": "2026-08-09T20:15:30-04:00",
+                    }
+                ],
+            },
+        ],
         source_specs=[
             {
                 "path": "incoming/us_ttab/historical.zip",
@@ -161,22 +168,156 @@ def test_ttab_manifest_normalizes_explicit_timestamps_to_utc() -> None:
     assert manifest["sources"][1]["snapshot_at"] == "2026-08-10T00:15:30.000Z"
 
 
-def test_generated_ttab_manifest_loads_through_frozen_parser(tmp_path: Path) -> None:
+
+def test_ttab_manifest_builds_five_part_historical_snapshot() -> None:
+    historical_files = [f"tt19511002-20251231-{index}.zip" for index in range(1, 6)]
+    snapshot_at = "2026-09-03T17:00:00-04:00"
+    result = build_manifest(
+        domain="ttab",
+        metadata=[
+            {
+                "productIdentifier": "ttabyr",
+                "files": [
+                    {"fileName": name, "releaseDateTime": snapshot_at}
+                    for name in historical_files
+                ],
+            },
+            {
+                "productIdentifier": "ttabtdxf",
+                "files": [
+                    {
+                        "fileName": "tt260904.zip",
+                        "releaseDateTime": "2026-09-04T17:00:00-04:00",
+                    }
+                ],
+            },
+        ],
+        source_specs=[
+            {
+                "path": f"incoming/us_ttab/{name}",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+            }
+            for name in historical_files
+        ]
+        + [
+            {
+                "path": "incoming/us_ttab/tt260904.zip",
+                "source_kind": "TTAB_BULK_DAILY_XML",
+            }
+        ],
+    )
+    assert result["status"] == "READY"
+    manifest = result["manifest"]
+    assert manifest["expected_historical_packages"] == 5
+    assert manifest["expected_daily_packages"] == 1
+    assert manifest["sources"][0]["snapshot_at"] == "2026-09-03T21:00:00.000Z"
+    assert [row["path"] for row in manifest["sources"][:5]] == [
+        f"incoming/us_ttab/{name}" for name in historical_files
+    ]
+
+
+def test_ttab_manifest_rejects_source_bound_to_wrong_odp_product() -> None:
+    result = build_manifest(
+        domain="ttab",
+        metadata=[
+            {
+                "productIdentifier": "ttabtdxf",
+                "files": [
+                    {
+                        "fileName": "historical.zip",
+                        "releaseDateTime": "2026-09-03T17:00:00-04:00",
+                    }
+                ],
+            },
+            {
+                "productIdentifier": "ttabyr",
+                "files": [
+                    {
+                        "fileName": "daily.zip",
+                        "releaseDateTime": "2026-09-04T17:00:00-04:00",
+                    }
+                ],
+            },
+        ],
+        source_specs=[
+            {
+                "path": "incoming/us_ttab/historical.zip",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+            },
+            {
+                "path": "incoming/us_ttab/daily.zip",
+                "source_kind": "TTAB_BULK_DAILY_XML",
+            },
+        ],
+    )
+    assert result["status"] == "NOT_READY"
+    bindings = [
+        row
+        for row in result["issues"]
+        if row["type"] == "TTAB_ODP_PRODUCT_BINDING_MISMATCH"
+    ]
+    assert {row["expected_product_identifier"] for row in bindings} == {
+        "ttabyr",
+        "ttabtdxf",
+    }
+
+
+def test_ttab_manifest_rejects_mixed_historical_part_timestamps() -> None:
     result = build_manifest(
         domain="ttab",
         metadata={
-            "productIdentifier": "ttabtdxf",
+            "productIdentifier": "ttabyr",
             "files": [
                 {
-                    "fileName": "historical.zip",
-                    "releaseDateTime": "2026-08-01T10:00:00-04:00",
+                    "fileName": "historical-1.zip",
+                    "releaseDateTime": "2026-09-03T17:00:00-04:00",
                 },
                 {
-                    "fileName": "daily.zip",
-                    "releaseDateTime": "2026-08-09T20:15:30-04:00",
+                    "fileName": "historical-2.zip",
+                    "releaseDateTime": "2026-09-03T17:01:00-04:00",
                 },
             ],
         },
+        source_specs=[
+            {
+                "path": "incoming/us_ttab/historical-1.zip",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+            },
+            {
+                "path": "incoming/us_ttab/historical-2.zip",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+            },
+        ],
+    )
+    assert result["status"] == "NOT_READY"
+    assert any(
+        row["type"] == "HISTORICAL_PART_SNAPSHOT_MISMATCH"
+        for row in result["issues"]
+    )
+
+def test_generated_ttab_manifest_loads_through_frozen_parser(tmp_path: Path) -> None:
+    result = build_manifest(
+        domain="ttab",
+        metadata=[
+            {
+                "productIdentifier": "ttabyr",
+                "files": [
+                    {
+                        "fileName": "historical.zip",
+                        "releaseDateTime": "2026-08-01T10:00:00-04:00",
+                    }
+                ],
+            },
+            {
+                "productIdentifier": "ttabtdxf",
+                "files": [
+                    {
+                        "fileName": "daily.zip",
+                        "releaseDateTime": "2026-08-09T20:15:30-04:00",
+                    }
+                ],
+            },
+        ],
         source_specs=[
             {
                 "path": "incoming/us_ttab/historical.zip",
@@ -198,7 +339,7 @@ def test_ttab_manifest_remains_not_ready_for_date_only_metadata() -> None:
     result = build_manifest(
         domain="ttab",
         metadata={
-            "productIdentifier": "ttabtdxf",
+            "productIdentifier": "ttabyr",
             "files": [
                 {"fileName": "historical.zip", "fileDate": "2026-08-01"},
             ],

@@ -22,14 +22,21 @@ def _xml(number: str) -> str:
 </prosecution-entry></prosecution-history></proceeding-entry></proceeding-information></ttab-proceedings>"""
 
 
-def _write_manifest(raw_root: Path, sources: list[dict], *, daily_count: int, daily_through: str | None) -> Path:
+def _write_manifest(
+    raw_root: Path,
+    sources: list[dict],
+    *,
+    daily_count: int,
+    daily_through: str | None,
+    historical_count: int = 1,
+) -> Path:
     path = raw_root / "manifests" / "us_ttab" / "corpus.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "manifest_version": MANIFEST_VERSION,
-                "expected_historical_packages": 1,
+                "expected_historical_packages": historical_count,
                 "expected_daily_packages": daily_count,
                 "daily_through": daily_through,
                 "sources": sources,
@@ -74,8 +81,87 @@ def test_ttab_manifest_preflight_survives_incoming_to_archive_move(tmp_path: Pat
     historical.rename(archive / historical.name)
     second = preflight_manifest(manifest, tmp_path)
     assert second["status"] == "READY"
-    assert second["plan"][0]["path"].endswith("archive/us_ttab/historical.xml")
+    assert Path(second["plan"][0]["path"]).as_posix().endswith(
+        "archive/us_ttab/historical.xml"
+    )
 
+
+
+def test_ttab_manifest_accepts_split_historical_snapshot_parts(tmp_path: Path):
+    incoming = tmp_path / "incoming" / "us_ttab"
+    incoming.mkdir(parents=True)
+    for index in range(1, 6):
+        (incoming / f"historical-{index}.xml").write_text(
+            _xml(str(90000000 + index)), encoding="utf-8"
+        )
+    (incoming / "daily.xml").write_text(_xml("97658985"), encoding="utf-8")
+    snapshot = "2026-09-03T17:00:00Z"
+    sources = [
+        {
+            "path": f"incoming/us_ttab/historical-{index}.xml",
+            "source_kind": "TTAB_BULK_HISTORICAL_XML",
+            "snapshot_at": snapshot,
+        }
+        for index in range(1, 6)
+    ]
+    sources.append(
+        {
+            "path": "incoming/us_ttab/daily.xml",
+            "source_kind": "TTAB_BULK_DAILY_XML",
+            "snapshot_at": "2026-09-04T17:00:00Z",
+        }
+    )
+    manifest = _write_manifest(
+        tmp_path,
+        sources,
+        historical_count=5,
+        daily_count=1,
+        daily_through="2026-09-04",
+    )
+
+    report = preflight_manifest(manifest, tmp_path)
+
+    assert report["status"] == "READY"
+    assert report["safe"] is True
+    assert report["expected_historical_packages"] == 5
+    assert report["historical_snapshot_at"] == "2026-09-03T17:00:00.000Z"
+    assert [row["file_name"] for row in report["plan"][:5]] == [
+        f"historical-{index}.xml" for index in range(1, 6)
+    ]
+
+
+def test_ttab_manifest_rejects_split_historical_parts_with_mixed_snapshot_at(tmp_path: Path):
+    incoming = tmp_path / "incoming" / "us_ttab"
+    incoming.mkdir(parents=True)
+    for index in (1, 2):
+        (incoming / f"historical-{index}.xml").write_text(
+            _xml(str(91000000 + index)), encoding="utf-8"
+        )
+    manifest = _write_manifest(
+        tmp_path,
+        [
+            {
+                "path": "incoming/us_ttab/historical-1.xml",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+                "snapshot_at": "2026-09-03T17:00:00Z",
+            },
+            {
+                "path": "incoming/us_ttab/historical-2.xml",
+                "source_kind": "TTAB_BULK_HISTORICAL_XML",
+                "snapshot_at": "2026-09-03T17:01:00Z",
+            },
+        ],
+        historical_count=2,
+        daily_count=0,
+        daily_through=None,
+    )
+
+    report = preflight_manifest(manifest, tmp_path)
+
+    assert report["status"] == "NOT_READY"
+    assert "HISTORICAL_PART_SNAPSHOT_MISMATCH" in {
+        item["type"] for item in report["issues"]
+    }
 
 def test_ttab_manifest_requires_timezone_aware_snapshot(tmp_path: Path):
     manifest = _write_manifest(

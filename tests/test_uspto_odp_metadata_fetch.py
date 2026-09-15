@@ -29,7 +29,55 @@ def test_product_data_url_is_bound_to_frozen_authoritative_dataset_slug() -> Non
         "https://api.uspto.gov/api/v1/datasets/products/trtdxfag"
     )
     assert product_data_url("ttab") == "https://api.uspto.gov/api/v1/datasets/products/ttabtdxf"
+    assert product_data_url("ttab", ttab_product="historical") == (
+        "https://api.uspto.gov/api/v1/datasets/products/ttabyr"
+    )
 
+
+
+
+def test_fetch_ttab_historical_product_is_exactly_bound() -> None:
+    seen: dict[str, object] = {}
+
+    def fake_open(request, timeout):
+        seen["url"] = request.full_url
+        assert timeout > 0
+        return FakeResponse(
+            {
+                "productIdentifier": "ttabyr",
+                "files": [
+                    {
+                        "fileName": "tt19511002-20251231-1.zip",
+                        "releaseDateTime": "2026-09-03T17:00:00-04:00",
+                    }
+                ],
+            }
+        )
+
+    report = fetch_product_metadata(
+        domain="ttab",
+        ttab_product="historical",
+        api_key="secret",
+        api_key_header="X-Test-Key",
+        open_url=fake_open,
+    )
+    assert seen["url"] == "https://api.uspto.gov/api/v1/datasets/products/ttabyr"
+    assert report["odp_dataset_slug"] == "ttabyr"
+    assert report["ttab_product"] == "historical"
+
+
+def test_fetch_ttab_historical_product_rejects_daily_identity() -> None:
+    with pytest.raises(MetadataFetchError) as exc_info:
+        fetch_product_metadata(
+            domain="ttab",
+            ttab_product="historical",
+            api_key="secret",
+            api_key_header="X-Test-Key",
+            open_url=lambda *_args, **_kwargs: FakeResponse(
+                {"productIdentifier": "ttabtdxf", "files": []}
+            ),
+        )
+    assert exc_info.value.code == "ODP_PRODUCT_IDENTIFIER_MISMATCH"
 
 def test_fetch_uses_explicit_api_key_header_without_exposing_secret() -> None:
     seen: dict[str, object] = {}

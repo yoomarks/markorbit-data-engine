@@ -98,12 +98,20 @@ def _parse_source_specs(domain: str, source_specs: Any) -> tuple[list[dict[str, 
         normalized.append({"path": path, "file_name": basename, "source_kind": source_kind})
 
     historical = [row for row in normalized if row["source_kind"] == policy["historical_kind"]]
-    if len(historical) != 1:
+    if domain == "assignment" and len(historical) != 1:
         issues.append(
             {
                 "type": "HISTORICAL_SOURCE_COUNT_MISMATCH",
                 "expected": 1,
                 "observed": len(historical),
+            }
+        )
+    elif domain == "ttab" and not historical:
+        issues.append(
+            {
+                "type": "HISTORICAL_SOURCE_COUNT_MISMATCH",
+                "expected_minimum": 1,
+                "observed": 0,
             }
         )
     return normalized, issues
@@ -185,9 +193,9 @@ def _build_ttab_manifest(
     by_name = {str(row["file_name"]): row for row in metadata_plan}
     rows: list[dict[str, str]] = []
     issues: list[dict[str, Any]] = []
-    seen_timestamps: dict[str, str] = {}
-    historical_at: str | None = None
+    historical_at_values: list[str] = []
     daily_at: list[str] = []
+    seen_daily: dict[str, str] = {}
 
     for spec in specs:
         metadata = by_name.get(spec["file_name"])
@@ -195,18 +203,18 @@ def _build_ttab_manifest(
             issues.append({"type": "METADATA_PLAN_SOURCE_MISSING", "file_name": spec["file_name"]})
             continue
         snapshot_at = _utc_timestamp(str(metadata["snapshot_at"]))
-        if snapshot_at in seen_timestamps:
-            issues.append(
-                {
-                    "type": "DUPLICATE_SNAPSHOT_AT_NOT_MODELED",
-                    "snapshot_at": snapshot_at,
-                    "files": sorted([seen_timestamps[snapshot_at], spec["file_name"]]),
-                }
-            )
-        seen_timestamps[snapshot_at] = spec["file_name"]
         if spec["source_kind"] == TTAB_HISTORICAL_KIND:
-            historical_at = snapshot_at
+            historical_at_values.append(snapshot_at)
         else:
+            if snapshot_at in seen_daily:
+                issues.append(
+                    {
+                        "type": "DUPLICATE_DAILY_SNAPSHOT_AT_NOT_MODELED",
+                        "snapshot_at": snapshot_at,
+                        "files": sorted([seen_daily[snapshot_at], spec["file_name"]]),
+                    }
+                )
+            seen_daily[snapshot_at] = spec["file_name"]
             daily_at.append(snapshot_at)
         rows.append(
             {
@@ -216,6 +224,15 @@ def _build_ttab_manifest(
             }
         )
 
+    historical_unique = sorted(set(historical_at_values))
+    historical_at = historical_unique[0] if len(historical_unique) == 1 else None
+    if len(historical_unique) > 1:
+        issues.append(
+            {
+                "type": "HISTORICAL_PART_SNAPSHOT_MISMATCH",
+                "timestamps": historical_unique,
+            }
+        )
     if historical_at is not None:
         invalid_daily = sorted(value for value in daily_at if value <= historical_at)
         if invalid_daily:
@@ -234,7 +251,7 @@ def _build_ttab_manifest(
     return (
         {
             "manifest_version": TTAB_MANIFEST_VERSION,
-            "expected_historical_packages": 1,
+            "expected_historical_packages": len(historical_at_values),
             "expected_daily_packages": len(daily_at),
             "daily_through": daily_through,
             "sources": rows,
@@ -243,6 +260,102 @@ def _build_ttab_manifest(
     )
 
 
+
+def _ttab_metadata_preflight(
+    specs: list[dict[str, str]], metadata: Any
+) -> dict[str, Any]:
+    payloads = metadata if isinstance(metadata, list) else [metadata]
+    identity = {
+        TTAB_HISTORICAL_KIND: "ttabyr",
+        TTAB_DAILY_KIND: "ttabtdxf",
+    }
+    plan: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    source_reports: list[dict[str, Any]] = []
+
+    for spec in specs:
+        expected_slug = identity[spec["source_kind"]]
+        product_reports: list[dict[str, Any]] = []
+        wrong_product_matches: list[list[str]] = []
+        for payload in payloads:
+            report = evaluate_metadata(
+                domain="ttab",
+                metadata=payload,
+                expected_file_names=[spec["file_name"]],
+            )
+            observed = set(report.get("metadata_product_identifiers_observed") or [])
+            if expected_slug in observed:
+                product_reports.append(report)
+            elif report.get("safe"):
+                wrong_product_matches.append(sorted(observed))
+            source_reports.append(
+                {
+                    "file_name": spec["file_name"],
+                    "source_kind": spec["source_kind"],
+                    "expected_product_identifier": expected_slug,
+                    "observed_product_identifiers": sorted(observed),
+                    "status": report.get("status"),
+                }
+            )
+
+        if len(product_reports) != 1:
+            issues.append(
+                {
+                    "type": "TTAB_ODP_PRODUCT_BINDING_NOT_UNIQUE",
+                    "file_name": spec["file_name"],
+                    "source_kind": spec["source_kind"],
+                    "expected_product_identifier": expected_slug,
+                    "match_count": len(product_reports),
+                }
+            )
+            continue
+
+        report = product_reports[0]
+        if not report.get("safe"):
+            report_issues = report.get("issues") or []
+            missing_expected = any(
+                item.get("type") == "ODP_FILE_METADATA_NOT_FOUND" for item in report_issues
+            )
+            if missing_expected and wrong_product_matches:
+                issues.append(
+                    {
+                        "type": "TTAB_ODP_PRODUCT_BINDING_MISMATCH",
+                        "file_name": spec["file_name"],
+                        "source_kind": spec["source_kind"],
+                        "expected_product_identifier": expected_slug,
+                        "observed_wrong_product_identifiers": wrong_product_matches,
+                    }
+                )
+            else:
+                issues.extend(report_issues)
+            continue
+        source_plan = report.get("plan") or []
+        if len(source_plan) != 1:
+            issues.append(
+                {
+                    "type": "TTAB_ODP_SOURCE_METADATA_NOT_UNIQUE",
+                    "file_name": spec["file_name"],
+                    "source_kind": spec["source_kind"],
+                    "match_count": len(source_plan),
+                }
+            )
+            continue
+        plan.append(source_plan[0])
+
+    safe = not issues and len(plan) == len(specs) and bool(plan)
+    return {
+        "status": "READY" if safe else "NOT_READY",
+        "safe": safe,
+        "domain": "ttab",
+        "expected_file_count": len(specs),
+        "resolved_file_count": len(plan),
+        "issues": issues,
+        "plan": plan,
+        "source_product_bindings": source_reports,
+        "source_kind_inferred_from_filename": False,
+        "source_time_inferred_from_filename": False,
+    }
+
 def build_manifest(*, domain: str, metadata: Any, source_specs: Any) -> dict[str, Any]:
     normalized_domain = domain.strip().lower()
     if normalized_domain not in DOMAIN_POLICY:
@@ -250,11 +363,14 @@ def build_manifest(*, domain: str, metadata: Any, source_specs: Any) -> dict[str
 
     specs, spec_issues = _parse_source_specs(normalized_domain, source_specs)
     expected_file_names = [row["file_name"] for row in specs]
-    metadata_preflight = evaluate_metadata(
-        domain=normalized_domain,
-        metadata=metadata,
-        expected_file_names=expected_file_names,
-    )
+    if normalized_domain == "ttab":
+        metadata_preflight = _ttab_metadata_preflight(specs, metadata)
+    else:
+        metadata_preflight = evaluate_metadata(
+            domain=normalized_domain,
+            metadata=metadata,
+            expected_file_names=expected_file_names,
+        )
     issues = list(spec_issues)
     issues.extend(metadata_preflight.get("issues") or [])
     if issues:

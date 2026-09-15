@@ -4,7 +4,7 @@ param(
     [string]$Domain,
 
     [Parameter(Mandatory = $true)]
-    [string]$MetadataPath,
+    [string[]]$MetadataPath,
 
     [Parameter(Mandatory = $true)]
     [string[]]$ExpectedFileName,
@@ -22,16 +22,19 @@ if ($worker) {
     throw "Persistent worker is running. Stop it before authoritative ODP metadata preflight."
 }
 
-if (-not (Test-Path -LiteralPath $MetadataPath -PathType Leaf)) {
-    throw "ODP metadata JSON not found: $MetadataPath"
+$metadataItems = @()
+foreach ($path in @($MetadataPath)) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "ODP metadata JSON not found: $path"
+    }
+    try {
+        $metadataItems += ,((Get-Content -LiteralPath $path -Raw -Encoding UTF8) | ConvertFrom-Json)
+    }
+    catch {
+        throw "ODP metadata file is invalid JSON: $path"
+    }
 }
-$metadataRaw = Get-Content -LiteralPath $MetadataPath -Raw -Encoding UTF8
-try {
-    $metadata = $metadataRaw | ConvertFrom-Json
-}
-catch {
-    throw "ODP metadata file is invalid JSON: $MetadataPath"
-}
+$metadata = if ($metadataItems.Count -eq 1) { $metadataItems[0] } else { @($metadataItems) }
 
 $bundle = @{
     domain = $Domain
