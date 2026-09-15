@@ -106,10 +106,22 @@ def _candidate_binding(row):
         source["source_rank"],
     )
 
+def _candidate_lookup_projection(row):
+    source = _candidate_source(row)
+    return (
+        source["candidate_key"],
+        source["serial_number"],
+        source["owner_key"],
+        source["source_row_hash"],
+        source["record_hash"],
+        source["source_rank"],
+        source["party_name_norm"],
+    )
+
 
 def test_reconcile_inserts_only_bounded_missing_bindings():
     candidate = _candidate_row("10000001", "a" * 64)
-    client = FakeClient([[ _candidate_binding(candidate) ], [candidate], [], []])
+    client = FakeClient([[_candidate_binding(candidate)], [_candidate_lookup_projection(candidate)], [], [], [], []])
 
     reconciled = reconcile_us_applicant_name_lookup(client=client, max_rows=2)
 
@@ -148,7 +160,16 @@ def test_reconcile_tombstones_superseded_lookup_identity():
         source["source_rank"],
     )
     client = FakeClient(
-        [[_candidate_binding(candidate)], [candidate], [stale], [], [], [], [candidate], []]
+        [
+            [_candidate_binding(candidate)],
+            [_candidate_lookup_projection(candidate)],
+            [stale],
+            [],
+            [],
+            [],
+            [_candidate_lookup_projection(candidate)],
+            [],
+        ]
     )
 
     reconcile_us_applicant_name_lookup(client=client, max_rows=2)
@@ -198,3 +219,36 @@ def test_reconcile_tombstones_orphan_lookup_identity_even_without_missing_rows()
     assert tombstone[-2] == 101
     assert "LEFT JOIN" in client.queries[5][0]
     assert "source.serial_number = target.serial_number" in client.queries[5][0]
+
+def test_reconcile_total_mutation_bound_fails_before_insert():
+    candidate = _candidate_row("10000001", "a" * 64)
+    source = _candidate_source(candidate)
+    stale = (
+        "old name",
+        "f" * 64,
+        100,
+        source["candidate_key"],
+        source["serial_number"],
+        source["owner_key"],
+        source["record_hash"],
+        source["source_rank"],
+    )
+    client = FakeClient(
+        [
+            [_candidate_binding(candidate)],
+            [_candidate_lookup_projection(candidate)],
+            [stale],
+            [],
+            [],
+            [],
+            [_candidate_lookup_projection(candidate)],
+            [],
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError, match="total reconciliation mutations exceed bounded limit 1"
+    ):
+        reconcile_us_applicant_name_lookup(client=client, max_rows=1)
+
+    assert client.inserts == []
