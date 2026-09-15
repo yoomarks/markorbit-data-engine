@@ -37,6 +37,26 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "admin_detail_exposed": False,
                 },
                 {
+                    "path": "/api/v1/us/applicants/by-name",
+                    "jurisdictions": ["US"],
+                    "query": {
+                        "name": {"type": "string", "required": True, "max_length": 512},
+                        "requester_workspace_id": {"type": "string", "required": True, "max_length": 512},
+                        "page_size": {"type": "integer", "default": 50, "min": 1, "max": 100},
+                        "cursor": {"type": "opaque_string", "required": False, "max_length": 8192},
+                    },
+                    "pagination": "bounded_keyset_cursor",
+                    "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
+                    "hard_bounds": {"max_pages": 100, "max_results": 500},
+                    "read_budget": {
+                        "max_rows_to_read": 1000000,
+                        "overflow_mode": "throw",
+                    },
+                    "semantics": "exact_normalized_applicant_name_discovery_no_ranking",
+                    "read_only": True,
+                    "business_state_owned_outside_data_engine": True,
+                },
+                {
                     "path": "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
                     "jurisdictions": ["CN", "US"],
                     "query": {

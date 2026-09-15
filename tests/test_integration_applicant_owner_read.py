@@ -24,6 +24,7 @@ def _request(path: str, query: str = "") -> Request:
 
 def test_owner_read_routes_are_get_only_and_g0_declared():
     paths = {
+        "/api/v1/us/applicants/by-name",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}",
@@ -34,6 +35,10 @@ def test_owner_read_routes_are_get_only_and_g0_declared():
         item["path"] for item in g0_contract_descriptor()["query_contract"]["resources"]
     }
     assert paths <= resources
+    route_order = [route.path for route in integration_api.router.routes]
+    assert route_order.index("/api/v1/us/applicants/by-name") < route_order.index(
+        "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}"
+    )
 
 
 def test_owner_read_unknown_query_field_is_rejected():
@@ -63,7 +68,7 @@ def test_us_applicant_route_delegates_and_wraps_v1_envelope(monkeypatch):
         return result
 
     sentinel = object()
-    monkeypatch.setattr(integration_api, "clickhouse_client", lambda: sentinel)
+    monkeypatch.setattr(integration_api, "accepted_us_target_read_client", lambda: sentinel)
     monkeypatch.setattr(integration_api, "us_read_applicant_exact", fake_read)
     body = integration_api.integration_applicant_owner_exact(
         request=_request("/api/v1/us/applicants/x"),
@@ -82,3 +87,50 @@ def test_us_applicant_route_delegates_and_wraps_v1_envelope(monkeypatch):
     assert body["fact_state"] == "observed"
     assert body["payload"] == {"marker": "ok"}
     assert body["legal_conclusion"] is False
+
+def test_us_applicant_name_route_delegates_and_wraps_v1_envelope(monkeypatch):
+    captured = {}
+    result = SimpleNamespace(fact_state="observed", payload={"results": [{"marker": "name"}]})
+
+    def fake_read(client, **kwargs):
+        captured["client"] = client
+        captured.update(kwargs)
+        return result
+
+    sentinel = object()
+    monkeypatch.setattr(integration_api, "accepted_us_target_read_client", lambda: sentinel)
+    monkeypatch.setattr(integration_api, "us_discover_applicants_by_name", fake_read)
+    body = integration_api.integration_us_applicants_by_name(
+        request=_request(
+            "/api/v1/us/applicants/by-name",
+            "name=Example%20Holdings%20LLC&requester_workspace_id=ws-1&page_size=25",
+        ),
+        name="Example Holdings LLC",
+        requester_workspace_id="ws-1",
+        page_size=25,
+        cursor=None,
+    )
+    assert captured["client"] is sentinel
+    assert captured["workspace_id"] == "ws-1"
+    assert captured["request_id"] == "hop-request-1"
+    assert captured["name"] == "Example Holdings LLC"
+    assert captured["page_size"] == 25
+    assert body["jurisdiction"] == "US"
+    assert body["resource_kind"] == "APPLICANT_IDENTITY_DISCOVERY"
+    assert body["fact_state"] == "observed"
+    assert body["payload"] == {"results": [{"marker": "name"}]}
+    assert body["legal_conclusion"] is False
+
+
+def test_us_applicant_name_route_rejects_unknown_query_field():
+    request = _request(
+        "/api/v1/us/applicants/by-name",
+        "name=Example&requester_workspace_id=ws-1&fuzzy=true",
+    )
+    with pytest.raises(HTTPException) as caught:
+        integration_api.integration_us_applicants_by_name(
+            request=request, name="Example", requester_workspace_id="ws-1",
+            page_size=50, cursor=None,
+        )
+    assert caught.value.status_code == 400
+    assert caught.value.detail["fields"] == ["fuzzy"]

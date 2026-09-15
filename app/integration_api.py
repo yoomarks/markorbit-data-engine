@@ -35,7 +35,9 @@ from app.integration_runtime import enforce_integration_rate_limit
 from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, health, us_case
 from app.platform_contract import platform_contract
+from app.us.accepted_target_read import accepted_us_target_read_client
 from app.us.applicant_owner_read import (
+    discover_applicants_by_name as us_discover_applicants_by_name,
     read_portfolio as us_read_applicant_portfolio,
     revalidate_applicant as us_read_applicant_exact,
     revalidate_trademark as us_read_trademark_exact,
@@ -269,6 +271,35 @@ def integration_us_ttab(
     )
 
 
+_US_APPLICANT_NAME_QUERY_FIELDS = {
+    "name", "requester_workspace_id", "page_size", "cursor",
+}
+
+
+@router.get("/us/applicants/by-name")
+def integration_us_applicants_by_name(
+    request: Request,
+    name: Annotated[str, Query(min_length=1, max_length=512)],
+    requester_workspace_id: Annotated[str, Query(min_length=1, max_length=512)],
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=8192)] = None,
+) -> dict[str, Any]:
+    reject_unknown_query(request, _US_APPLICANT_NAME_QUERY_FIELDS)
+    try:
+        result = us_discover_applicants_by_name(
+            accepted_us_target_read_client(),
+            workspace_id=requester_workspace_id,
+            request_id=request_id_from_request(request),
+            name=name, page_size=page_size, cursor=cursor,
+        )
+    except OWNER_READ_EXCEPTIONS as exc:
+        raise owner_read_http_error(exc) from exc
+    return owner_envelope(
+        jurisdiction="US", resource_kind="APPLICANT_IDENTITY_DISCOVERY",
+        fact_state=result.fact_state, payload=result.payload,
+    )
+
+
 _OWNER_APPLICANT_QUERY_FIELDS = {
     "requester_workspace_id",
     "applicant_source_id",
@@ -360,7 +391,7 @@ def integration_applicant_owner_exact(
             )
         else:
             result = us_read_applicant_exact(
-                clickhouse_client(), workspace_id=requester_workspace_id,
+                accepted_us_target_read_client(), workspace_id=requester_workspace_id,
                 request_id=request_id_from_request(request),
                 candidate_id=applicant_candidate_id, expected_source=source,
             )
@@ -404,7 +435,7 @@ def integration_applicant_owner_portfolio(
             )
         else:
             result = us_read_applicant_portfolio(
-                clickhouse_client(), workspace_id=requester_workspace_id,
+                accepted_us_target_read_client(), workspace_id=requester_workspace_id,
                 request_id=request_id_from_request(request),
                 candidate_id=applicant_candidate_id, expected_source=source,
                 page_size=page_size, cursor=cursor,
@@ -461,7 +492,7 @@ def integration_trademark_owner_exact(
             )
         else:
             result = us_read_trademark_exact(
-                clickhouse_client(), workspace_id=requester_workspace_id,
+                accepted_us_target_read_client(), workspace_id=requester_workspace_id,
                 request_id=request_id_from_request(request),
                 applicant_candidate_id=applicant_candidate_id,
                 expected_applicant_source=applicant_source,

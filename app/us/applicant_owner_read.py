@@ -6,18 +6,19 @@ from typing import Any, Mapping
 from app.applicant_owner_read import (
     APPLICANT_CANDIDATE_TYPE, TRADEMARK_CANDIDATE_TYPE,
     OwnerReadConflict, OwnerReadInvalid, OwnerReadUnavailable,
-    applicant_query, applicant_reference, applicant_revalidation_query,
-    assert_exact_source_reference, max_observed, next_portfolio_cursor,
-    page_payload, portfolio_cursor_state, request_context, sha256_ref,
-    source_reference, source_snapshot,
+    applicant_name_cursor_state, applicant_name_query, applicant_query,
+    applicant_reference, applicant_revalidation_query, assert_exact_source_reference,
+    max_observed, next_applicant_name_cursor, next_portfolio_cursor, page_payload,
+    portfolio_cursor_state, request_context, sha256_ref, source_reference, source_snapshot,
 )
+from app.applicant_name_lookup import US_APPLICANT_NAME_LOOKUP_TABLE
 from app.us.applicant_candidate_backfill_control import (
-    applicant_index_ready_for_epoch,
+    applicant_index_ready_for_epoch, applicant_name_lookup_ready_for_epoch,
     current_us_applicant_serving_epoch,
 )
 from app.us.applicant_candidate_index import (
     APPLICANT_INDEX_TABLE, APPLICANT_CANDIDATE_PREFIX, APPLICANT_SOURCE_PREFIX,
-    applicant_candidate_key,
+    applicant_candidate_id, applicant_candidate_key, canonical_identity_text,
 )
 from app.version import engine_version
 
@@ -74,6 +75,21 @@ def _assert_same_epoch(before: Any) -> None:
         raise OwnerReadUnavailable("US serving epoch changed during owner read")
 
 
+def _guard_name_lookup_epoch() -> Any:
+    epoch = _guard_epoch()
+    if not applicant_name_lookup_ready_for_epoch(epoch):
+        raise OwnerReadUnavailable(
+            "US Applicant NAME lookup is not complete for the durable serving epoch"
+        )
+    return epoch
+
+
+def _assert_same_name_lookup_epoch(before: Any) -> None:
+    after = _guard_name_lookup_epoch()
+    if after != before:
+        raise OwnerReadUnavailable("US serving epoch changed during applicant NAME discovery")
+
+
 def _candidate_rows(client: Any, candidate_key: str) -> list[dict[str, Any]]:
     result = client.query(
         f"""
@@ -128,14 +144,17 @@ def _applicant_source(candidate_key: str, rows: list[dict[str, Any]], epoch: Any
     )
 
 
-def _applicant_candidate(candidate_id: str, source: Mapping[str, Any], material: Mapping[str, Any]) -> dict[str, Any]:
+def _applicant_candidate(
+    candidate_id: str, source: Mapping[str, Any], material: Mapping[str, Any],
+    *, match_kind: str = "EXACT_SOURCE_REFERENCE",
+) -> dict[str, Any]:
     return {
         "candidate_type": APPLICANT_CANDIDATE_TYPE,
         "applicant_candidate_id": candidate_id,
         "display_name": str(material["display_name"]),
         "alternate_names": list(material["alternate_names"]),
         "source_reference": dict(source),
-        "match_kind": "EXACT_SOURCE_REFERENCE",
+        "match_kind": match_kind,
         "review_required": True,
         "verified_legal_identity": False,
         "customer_relationship_established": False,
@@ -159,6 +178,125 @@ def _validated_applicant(
     assert_exact_source_reference(expected_source, actual_source)
     material = _applicant_material(candidate_key, rows)
     return _applicant_candidate(candidate_id, actual_source, material), actual_source, rows
+
+
+def _name_candidate_keys(
+    client: Any, *, normalized_name: str, after_candidate_key: str, limit: int,
+) -> list[str]:
+    cursor_sql = (
+        f" AND candidate_key > {_sql_text(after_candidate_key)}"
+        if after_candidate_key else ""
+    )
+    result = client.query(
+        f"""
+        SELECT candidate_key
+        FROM {US_APPLICANT_NAME_LOOKUP_TABLE} FINAL
+        WHERE normalized_name = {_sql_text(normalized_name)}
+          AND is_deleted = 0{cursor_sql}
+        GROUP BY candidate_key
+        ORDER BY candidate_key ASC
+        LIMIT {limit}
+        """,
+        settings=READ_SETTINGS,
+    )
+    return [str(row[0]) for row in result.result_rows]
+
+
+def _candidate_rows_for_keys(
+    client: Any, candidate_keys: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    if not candidate_keys:
+        return {}
+    clause = ",".join(_sql_text(key) for key in candidate_keys)
+    result = client.query(
+        f"""
+        SELECT *
+        FROM {APPLICANT_INDEX_TABLE} FINAL
+        WHERE candidate_key IN ({clause})
+          AND is_deleted = 0
+        ORDER BY candidate_key ASC, serial_number ASC, owner_key ASC
+        LIMIT 1000001
+        """,
+        settings=READ_SETTINGS,
+    )
+    rows = _dict_rows(result)
+    if len(rows) > 1_000_000:
+        raise OwnerReadUnavailable("US Applicant name discovery exceeds bounded read ceiling")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("candidate_key") or ""), []).append(row)
+    return grouped
+
+
+def discover_applicants_by_name(
+    client: Any,
+    *,
+    workspace_id: str,
+    request_id: str,
+    name: str,
+    page_size: int = 50,
+    cursor: str | None = None,
+) -> OwnerReadResult:
+    context = request_context(workspace_id, request_id)
+    normalized_name = canonical_identity_text(name)
+    if not normalized_name or len(normalized_name) > 512:
+        raise OwnerReadInvalid("applicant name is required")
+    before = _guard_name_lookup_epoch()
+    query = applicant_name_query(
+        context=context, jurisdiction="US", normalized_name=normalized_name, page_size=page_size
+    )
+    source_version = _epoch_version(before)
+    after_key, page_number, emitted_before = applicant_name_cursor_state(
+        token=cursor, query=query, source_version=source_version
+    )
+    remaining = max(500 - emitted_before, 0)
+    capacity = min(page_size, remaining)
+    candidate_keys = _name_candidate_keys(
+        client, normalized_name=normalized_name, after_candidate_key=after_key,
+        limit=capacity + 1,
+    )
+    if not candidate_keys:
+        _assert_same_name_lookup_epoch(before)
+        if cursor is not None:
+            raise OwnerReadUnavailable(
+                "US Applicant NAME cursor resolved to an empty page under the same serving epoch"
+            )
+        return OwnerReadResult("not_found", None)
+    page_keys = candidate_keys[:capacity]
+    has_extra = len(candidate_keys) > capacity
+    rows_by_key = _candidate_rows_for_keys(client, page_keys)
+    results: list[dict[str, Any]] = []
+    observed_values: list[str] = []
+    for candidate_key in page_keys:
+        rows = rows_by_key.get(candidate_key, [])
+        if not rows:
+            raise OwnerReadUnavailable(
+                "US Applicant NAME lookup references a candidate missing from the current index"
+            )
+        material = _applicant_material(candidate_key, rows)
+        source = _applicant_source(candidate_key, rows, before)
+        observed_values.append(source["observed_at"])
+        results.append(
+            _applicant_candidate(
+                applicant_candidate_id(candidate_key), source, material,
+                match_kind="EXACT_NORMALIZED_NAME",
+            )
+        )
+    emitted = emitted_before + len(results)
+    next_cursor = None
+    if has_extra and results and emitted < 500:
+        next_cursor = next_applicant_name_cursor(
+            query=query, source_version=source_version,
+            last_candidate_key=page_keys[-1], page_number=page_number,
+            emitted_count=emitted,
+        )
+    snapshot = source_snapshot(source_version, max_observed(observed_values))
+    payload = page_payload(
+        query=query, snapshot=snapshot, results=results, next_cursor=next_cursor,
+        engine_version=engine_version(),
+    )
+    _assert_same_name_lookup_epoch(before)
+    return OwnerReadResult("observed", payload)
 
 
 def revalidate_applicant(

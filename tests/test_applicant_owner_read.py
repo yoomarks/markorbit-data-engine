@@ -6,6 +6,7 @@ import pytest
 import app.cn.applicant_owner_read as cn_owner
 import app.us.applicant_owner_read as us_owner
 from app.applicant_owner_read import OwnerReadConflict, OwnerReadInvalid, OwnerReadUnavailable
+from app.discovery_contract import DiscoveryCursorError
 from app.us.applicant_candidate_backfill_control import USApplicantServingEpoch
 from app.us.applicant_candidate_index import applicant_candidate_key
 
@@ -225,6 +226,7 @@ def _patch_us_epoch(monkeypatch, values=None):
         iterator = iter(values)
         monkeypatch.setattr(us_owner, "current_us_applicant_serving_epoch", lambda: next(iterator))
     monkeypatch.setattr(us_owner, "applicant_index_ready_for_epoch", lambda _epoch: True)
+    monkeypatch.setattr(us_owner, "applicant_name_lookup_ready_for_epoch", lambda _epoch: True)
 
 
 def test_us_same_name_different_address_stays_distinct_review_candidate():
@@ -232,6 +234,135 @@ def test_us_same_name_different_address_stays_distinct_review_candidate():
     second = _us_owner_row(address="2 Main St")
     assert first["party_name_norm"] == second["party_name_norm"]
     assert first["candidate_key"] != second["candidate_key"]
+
+
+def _us_name_discovery_responder(rows: list[dict]):
+    ordered = sorted(rows, key=lambda row: row["candidate_key"])
+
+    def respond(sql: str):
+        if "us_applicant_name_lookup_current" in sql:
+            after = ""
+            for row in ordered:
+                marker = f"candidate_key > '{row['candidate_key']}'"
+                if marker in sql:
+                    after = row["candidate_key"]
+                    break
+            return [
+                {"candidate_key": row["candidate_key"]}
+                for row in ordered
+                if row["candidate_key"] > after
+            ]
+        if "us_applicant_candidate_current" in sql:
+            return [row for row in ordered if row["candidate_key"] in sql]
+        return []
+
+    return respond
+
+
+def test_us_name_discovery_is_exact_normalized_and_keeps_distinct_identities(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    first = _us_owner_row("90000001", address="1 Main St")
+    second = _us_owner_row("90000002", address="2 Main St")
+    client = FakeClient(_us_name_discovery_responder([first, second]))
+
+    result = us_owner.discover_applicants_by_name(
+        client, workspace_id="ws-1", request_id="req-name-1",
+        name="  Example   Holdings LLC  ", page_size=50,
+    )
+
+    assert result.fact_state == "observed"
+    assert result.payload is not None
+    assert result.payload["query"]["input"] == {
+        "kind": "EXACT_NORMALIZED_NAME", "value": "example holdings llc"
+    }
+    assert result.payload["query"]["ranking_authority"] == "NONE"
+    assert [item["applicant_candidate_id"] for item in result.payload["results"]] == [
+        f"us:applicant:{row['candidate_key']}"
+        for row in sorted([first, second], key=lambda row: row["candidate_key"])
+    ]
+    assert {item["match_kind"] for item in result.payload["results"]} == {"EXACT_NORMALIZED_NAME"}
+    assert all(item["source_reference"]["source_version"].startswith("us-serving-epoch:") for item in result.payload["results"])
+    assert "normalized_name = 'example holdings llc'" in client.queries[0]
+    assert "GROUP BY candidate_key" in client.queries[0]
+
+
+def test_us_name_discovery_paginates_by_candidate_key_with_signed_cursor(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    rows = sorted(
+        [_us_owner_row("90000001", address="1 Main St"), _us_owner_row("90000002", address="2 Main St")],
+        key=lambda row: row["candidate_key"],
+    )
+    client = FakeClient(_us_name_discovery_responder(rows))
+    first_page = us_owner.discover_applicants_by_name(
+        client, workspace_id="ws-1", request_id="req-page",
+        name="Example Holdings LLC", page_size=1,
+    )
+    assert first_page.payload is not None and first_page.payload["next_cursor"]
+    second_page = us_owner.discover_applicants_by_name(
+        client, workspace_id="ws-1", request_id="req-page",
+        name="Example Holdings LLC", page_size=1, cursor=first_page.payload["next_cursor"],
+    )
+    assert second_page.payload is not None
+    assert second_page.payload["results"][0]["applicant_candidate_id"] == f"us:applicant:{rows[1]['candidate_key']}"
+    assert second_page.payload["next_cursor"] is None
+
+
+def test_us_name_discovery_cursor_rejects_query_change(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    rows = [_us_owner_row("90000001", address="1 Main St"), _us_owner_row("90000002", address="2 Main St")]
+    client = FakeClient(_us_name_discovery_responder(rows))
+    first = us_owner.discover_applicants_by_name(
+        client, workspace_id="ws-1", request_id="req-cursor",
+        name="Example Holdings LLC", page_size=1,
+    )
+    assert first.payload is not None and first.payload["next_cursor"]
+    with pytest.raises(DiscoveryCursorError, match="cursor/query mismatch"):
+        us_owner.discover_applicants_by_name(
+            client, workspace_id="ws-1", request_id="req-cursor",
+            name="Different Name", page_size=1, cursor=first.payload["next_cursor"],
+        )
+
+
+def test_us_name_discovery_cursor_rejects_epoch_change(monkeypatch):
+    first_epoch = _us_epoch()
+    second_epoch = USApplicantServingEpoch(
+        bulk_run_id="run-new", plan_sha256="b" * 64, checkpoint_sequence=311,
+        final_audit_version="audit-v2",
+    )
+    _patch_us_epoch(monkeypatch, [first_epoch, first_epoch, second_epoch])
+    rows = [_us_owner_row("90000001", address="1 Main St"), _us_owner_row("90000002", address="2 Main St")]
+    client = FakeClient(_us_name_discovery_responder(rows))
+    first = us_owner.discover_applicants_by_name(
+        client, workspace_id="ws-1", request_id="req-epoch",
+        name="Example Holdings LLC", page_size=1,
+    )
+    assert first.payload is not None and first.payload["next_cursor"]
+    with pytest.raises(DiscoveryCursorError, match="cursor/snapshot mismatch"):
+        us_owner.discover_applicants_by_name(
+            client, workspace_id="ws-1", request_id="req-epoch",
+            name="Example Holdings LLC", page_size=1, cursor=first.payload["next_cursor"],
+        )
+
+
+def test_us_name_discovery_not_found_is_explicit(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    result = us_owner.discover_applicants_by_name(
+        FakeClient(lambda _sql: []), workspace_id="ws-1", request_id="req-none",
+        name="Nobody Here",
+    )
+    assert result.fact_state == "not_found"
+    assert result.payload is None
+
+
+def test_us_name_discovery_requires_lookup_readiness(monkeypatch):
+    monkeypatch.setattr(us_owner, "current_us_applicant_serving_epoch", _us_epoch)
+    monkeypatch.setattr(us_owner, "applicant_index_ready_for_epoch", lambda _epoch: True)
+    monkeypatch.setattr(us_owner, "applicant_name_lookup_ready_for_epoch", lambda _epoch: False)
+    with pytest.raises(OwnerReadUnavailable, match="NAME lookup is not complete"):
+        us_owner.discover_applicants_by_name(
+            FakeClient(lambda _sql: []), workspace_id="ws-1", request_id="req-not-ready",
+            name="Example Holdings LLC",
+        )
 
 
 def test_us_exact_applicant_rejects_stale_source_fingerprint(monkeypatch):
