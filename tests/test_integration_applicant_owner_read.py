@@ -31,10 +31,11 @@ def test_owner_read_routes_are_get_only_and_g0_declared():
     }
     routes = {route.path: set(route.methods or ()) for route in integration_api.router.routes}
     assert all(routes[path] == {"GET"} for path in paths)
-    resources = {
-        item["path"] for item in g0_contract_descriptor()["query_contract"]["resources"]
-    }
+    resource_items = g0_contract_descriptor()["query_contract"]["resources"]
+    resources = {item["path"] for item in resource_items}
     assert paths <= resources
+    by_name = next(item for item in resource_items if item["path"] == "/api/v1/us/applicants/by-name")
+    assert by_name["hard_bounds"] == {"max_pages": 100, "max_results": 100}
     route_order = [route.path for route in integration_api.router.routes]
     assert route_order.index("/api/v1/us/applicants/by-name") < route_order.index(
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}"
