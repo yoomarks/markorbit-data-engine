@@ -15,7 +15,7 @@ MAX_BATCH_SIZE = 20_000
 MAX_RECONCILE_ROWS = 500_000
 READ_SETTINGS = {
     "max_threads": 1,
-    "max_rows_to_read": 50_000_000,
+    "max_rows_to_read": 100_000_000,
     "read_overflow_mode": "throw",
 }
 
