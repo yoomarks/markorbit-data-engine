@@ -193,9 +193,8 @@ def _build_ttab_manifest(
     by_name = {str(row["file_name"]): row for row in metadata_plan}
     rows: list[dict[str, str]] = []
     issues: list[dict[str, Any]] = []
-    historical_at_values: list[str] = []
-    daily_at: list[str] = []
-    seen_daily: dict[str, str] = {}
+    historical_count = 0
+    daily_count = 0
 
     for spec in specs:
         metadata = by_name.get(spec["file_name"])
@@ -204,18 +203,9 @@ def _build_ttab_manifest(
             continue
         snapshot_at = _utc_timestamp(str(metadata["snapshot_at"]))
         if spec["source_kind"] == TTAB_HISTORICAL_KIND:
-            historical_at_values.append(snapshot_at)
+            historical_count += 1
         else:
-            if snapshot_at in seen_daily:
-                issues.append(
-                    {
-                        "type": "DUPLICATE_DAILY_SNAPSHOT_AT_NOT_MODELED",
-                        "snapshot_at": snapshot_at,
-                        "files": sorted([seen_daily[snapshot_at], spec["file_name"]]),
-                    }
-                )
-            seen_daily[snapshot_at] = spec["file_name"]
-            daily_at.append(snapshot_at)
+            daily_count += 1
         rows.append(
             {
                 "path": spec["path"],
@@ -224,36 +214,19 @@ def _build_ttab_manifest(
             }
         )
 
-    historical_unique = sorted(set(historical_at_values))
-    historical_at = historical_unique[0] if len(historical_unique) == 1 else None
-    if len(historical_unique) > 1:
-        issues.append(
-            {
-                "type": "HISTORICAL_PART_SNAPSHOT_MISMATCH",
-                "timestamps": historical_unique,
-            }
-        )
-    if historical_at is not None:
-        invalid_daily = sorted(value for value in daily_at if value <= historical_at)
-        if invalid_daily:
-            issues.append(
-                {
-                    "type": "DAILY_NOT_AFTER_HISTORICAL_SNAPSHOT",
-                    "historical_snapshot_at": historical_at,
-                    "daily_snapshot_at": invalid_daily,
-                }
-            )
     if issues:
         return None, issues
 
-    rows.sort(key=lambda row: (row["snapshot_at"], row["source_kind"], row["path"]))
-    daily_through = max(daily_at)[:10] if daily_at else None
+    # Publication timestamps are provenance only. Logical TTAB replay precedence
+    # and daily_through are derived later from authoritative XML transaction-date
+    # during raw-source preflight; never infer them from publication time.
+    rows.sort(key=lambda row: (0 if row["source_kind"] == TTAB_HISTORICAL_KIND else 1, row["path"]))
     return (
         {
             "manifest_version": TTAB_MANIFEST_VERSION,
-            "expected_historical_packages": len(historical_at_values),
-            "expected_daily_packages": len(daily_at),
-            "daily_through": daily_through,
+            "expected_historical_packages": historical_count,
+            "expected_daily_packages": daily_count,
+            "daily_through": None,
             "sources": rows,
         },
         [],
@@ -414,8 +387,10 @@ def build_manifest(*, domain: str, metadata: Any, source_specs: Any) -> dict[str
         "source_kind_inferred_from_filename": False,
         "source_time_inferred_from_filename": False,
         "semantics": (
-            "Manifest chronology comes only from explicit authoritative ODP metadata. "
-            "Historical-vs-daily source kind is explicit input and is never inferred from filenames."
+            "TTAB publication timestamps come only from explicit authoritative metadata; "
+            "logical corpus precedence is verified from raw XML transaction-date during source "
+            "preflight. Historical-vs-daily source kind is explicit input and is never inferred "
+            "from filenames."
         ),
     }
 

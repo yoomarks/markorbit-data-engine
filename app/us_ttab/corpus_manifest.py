@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 import zipfile
@@ -54,6 +55,49 @@ def _xml_members(path: Path) -> list[str]:
     if not members:
         raise ValueError("TTAB ZIP contains no XML member")
     return members
+
+
+_TRANSACTION_DATE_RE = re.compile(
+    rb"<transaction-date>\s*([0-9]{8})\s*</transaction-date>", re.IGNORECASE
+)
+_TRANSACTION_DATE_HEADER_BYTES = 512 * 1024
+
+
+def _transaction_date_from_bytes(payload: bytes, *, label: str) -> date:
+    match = _TRANSACTION_DATE_RE.search(payload)
+    if match is None:
+        raise ValueError(f"{label} is missing authoritative XML transaction-date")
+    raw = match.group(1).decode("ascii")
+    try:
+        return datetime.strptime(raw, "%Y%m%d").date()
+    except ValueError as exc:
+        raise ValueError(f"{label} has invalid XML transaction-date: {raw}") from exc
+
+
+def _source_transaction_date(path: Path, members: list[str]) -> date:
+    observed: set[date] = set()
+    if path.suffix.lower() == ".xml":
+        with path.open("rb") as stream:
+            observed.add(
+                _transaction_date_from_bytes(
+                    stream.read(_TRANSACTION_DATE_HEADER_BYTES), label=path.name
+                )
+            )
+    else:
+        with zipfile.ZipFile(path) as archive:
+            for member in members:
+                with archive.open(member) as stream:
+                    observed.add(
+                        _transaction_date_from_bytes(
+                            stream.read(_TRANSACTION_DATE_HEADER_BYTES),
+                            label=f"{path.name}:{member}",
+                        )
+                    )
+    if len(observed) != 1:
+        raise ValueError(
+            "TTAB package XML members must share one authoritative transaction-date"
+        )
+    return next(iter(observed))
 
 
 def _nonnegative_int(payload: dict[str, Any], key: str) -> int:
@@ -215,64 +259,11 @@ def preflight_manifest(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
             }
         )
 
-    historical_timestamps = sorted({source.snapshot_at for source in historical})
-    historical_at = historical_timestamps[0] if len(historical_timestamps) == 1 else None
-    if len(historical_timestamps) > 1:
-        issues.append(
-            {
-                "type": "HISTORICAL_PART_SNAPSHOT_MISMATCH",
-                "timestamps": [_snapshot_text(item) for item in historical_timestamps],
-            }
-        )
-
-    daily_timestamps = [source.snapshot_at for source in dailies]
-    duplicate_daily_timestamps = sorted(
-        {value for value in daily_timestamps if daily_timestamps.count(value) > 1}
-    )
-    if duplicate_daily_timestamps:
-        issues.append(
-            {
-                "type": "DUPLICATE_DAILY_SNAPSHOT_AT_NOT_MODELED",
-                "timestamps": [_snapshot_text(item) for item in duplicate_daily_timestamps],
-            }
-        )
-
-    if historical_at is not None:
-        invalid_daily = sorted(s.snapshot_at for s in dailies if s.snapshot_at <= historical_at)
-        if invalid_daily:
-            issues.append(
-                {
-                    "type": "DAILY_NOT_AFTER_HISTORICAL_SNAPSHOT",
-                    "historical_snapshot_at": _snapshot_text(historical_at),
-                    "daily_snapshot_at": [_snapshot_text(item) for item in invalid_daily],
-                }
-            )
-
-    if manifest.expected_daily_packages == 0:
-        if manifest.daily_through is not None:
-            issues.append({"type": "DAILY_THROUGH_WITH_ZERO_DAILY_PACKAGES"})
-    else:
-        latest_daily = max((source.snapshot_at for source in dailies), default=None)
-        latest_date = latest_daily.date().isoformat() if latest_daily else None
-        if manifest.daily_through is None:
-            issues.append({"type": "DAILY_THROUGH_REQUIRED"})
-        elif latest_date != manifest.daily_through:
-            issues.append(
-                {
-                    "type": "DAILY_THROUGH_MISMATCH",
-                    "expected": manifest.daily_through,
-                    "observed": latest_date,
-                }
-            )
-
     plan: list[dict[str, Any]] = []
     seen_declared_paths: set[str] = set()
     seen_resolved_paths: set[str] = set()
     seen_sha: dict[str, str] = {}
-    for source in sorted(
-        manifest.sources,
-        key=lambda item: (item.snapshot_at, item.source_kind, item.path),
-    ):
+    for source in manifest.sources:
         try:
             if source.path in seen_declared_paths:
                 raise ValueError("Duplicate source path in manifest")
@@ -285,6 +276,7 @@ def preflight_manifest(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
             if not resolved.is_file():
                 raise FileNotFoundError(f"Source file not found: {resolved}")
             members = _xml_members(resolved)
+            transaction_date = _source_transaction_date(resolved, members)
             digest = _sha256(resolved)
             if digest in seen_sha:
                 raise ValueError(
@@ -298,6 +290,7 @@ def preflight_manifest(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
                     "file_name": resolved.name,
                     "source_kind": source.source_kind,
                     "snapshot_at": _snapshot_text(source.snapshot_at),
+                    "transaction_date": transaction_date.isoformat(),
                     "sha256": digest,
                     "size_bytes": resolved.stat().st_size,
                     "xml_members": members,
@@ -314,6 +307,51 @@ def preflight_manifest(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
                 }
             )
 
+    historical_plan = [row for row in plan if row["source_kind"] == HISTORICAL_KIND]
+    daily_plan = [row for row in plan if row["source_kind"] == DAILY_KIND]
+    historical_transaction_dates = sorted(
+        {str(row["transaction_date"]) for row in historical_plan}
+    )
+    if len(historical_transaction_dates) > 1:
+        issues.append(
+            {
+                "type": "HISTORICAL_PART_TRANSACTION_DATE_MISMATCH",
+                "transaction_dates": historical_transaction_dates,
+            }
+        )
+
+    daily_transaction_dates = [str(row["transaction_date"]) for row in daily_plan]
+    duplicate_daily_transaction_dates = sorted(
+        {value for value in daily_transaction_dates if daily_transaction_dates.count(value) > 1}
+    )
+    if duplicate_daily_transaction_dates:
+        issues.append(
+            {
+                "type": "DUPLICATE_DAILY_TRANSACTION_DATE_NOT_MODELED",
+                "transaction_dates": duplicate_daily_transaction_dates,
+            }
+        )
+
+    observed_daily_through = max(daily_transaction_dates, default=None)
+    if manifest.expected_daily_packages == 0:
+        if manifest.daily_through is not None:
+            issues.append({"type": "DAILY_THROUGH_WITH_ZERO_DAILY_PACKAGES"})
+    elif manifest.daily_through is not None and manifest.daily_through != observed_daily_through:
+        issues.append(
+            {
+                "type": "DAILY_THROUGH_MISMATCH",
+                "expected": manifest.daily_through,
+                "observed": observed_daily_through,
+            }
+        )
+
+    plan.sort(
+        key=lambda row: (
+            0 if row["source_kind"] == HISTORICAL_KIND else 1,
+            "" if row["source_kind"] == HISTORICAL_KIND else str(row["transaction_date"]),
+            str(row["manifest_path"]),
+        )
+    )
     safe = not issues and len(plan) == len(manifest.sources)
     return {
         "preflight_version": MANIFEST_VERSION,
@@ -322,13 +360,17 @@ def preflight_manifest(manifest_path: Path, raw_root: Path) -> dict[str, Any]:
         "manifest_path": str(manifest_path.resolve()),
         "expected_historical_packages": manifest.expected_historical_packages,
         "expected_daily_packages": manifest.expected_daily_packages,
-        "daily_through": manifest.daily_through,
-        "historical_snapshot_at": _snapshot_text(historical_at) if historical_at else None,
+        "daily_through": observed_daily_through,
+        "declared_daily_through": manifest.daily_through,
+        "historical_batch_transaction_date": (
+            historical_transaction_dates[0] if len(historical_transaction_dates) == 1 else None
+        ),
         "source_count": len(manifest.sources),
         "issues": issues,
         "plan": plan,
         "semantics": "USPTO_TTAB_PROCEDURAL_FACTS_NOT_OUTCOME_OR_SUBSTANTIVE_RIGHTS_CONCLUSION",
         "snapshot_at_inferred_from_filename": False,
+        "transaction_date_inferred_from_filename": False,
         "calendar_gap_inference": False,
         "deadline_validity_inference": False,
         "legal_outcome_conclusion": False,

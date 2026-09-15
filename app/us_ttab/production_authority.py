@@ -127,6 +127,7 @@ def _source_entries(
                 "file_name": str(item["file_name"]),
                 "source_kind": str(item["source_kind"]),
                 "snapshot_at": str(item["snapshot_at"]),
+                "transaction_date": str(item["transaction_date"]),
                 "sha256": str(item["sha256"]).lower(),
                 "size_bytes": int(item["size_bytes"]),
                 "xml_members": list(item.get("xml_members") or []),

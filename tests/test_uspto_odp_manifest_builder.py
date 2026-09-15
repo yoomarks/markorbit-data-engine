@@ -163,7 +163,7 @@ def test_ttab_manifest_normalizes_explicit_timestamps_to_utc() -> None:
     assert manifest["manifest_version"] == "US_TTAB_CORPUS_MANIFEST_V1"
     assert manifest["expected_historical_packages"] == 1
     assert manifest["expected_daily_packages"] == 1
-    assert manifest["daily_through"] == "2026-08-10"
+    assert manifest["daily_through"] is None
     assert manifest["sources"][0]["snapshot_at"] == "2026-08-01T14:00:00.000Z"
     assert manifest["sources"][1]["snapshot_at"] == "2026-08-10T00:15:30.000Z"
 
@@ -262,7 +262,7 @@ def test_ttab_manifest_rejects_source_bound_to_wrong_odp_product() -> None:
     }
 
 
-def test_ttab_manifest_rejects_mixed_historical_part_timestamps() -> None:
+def test_ttab_manifest_accepts_distinct_historical_publication_timestamps() -> None:
     result = build_manifest(
         domain="ttab",
         metadata={
@@ -289,11 +289,8 @@ def test_ttab_manifest_rejects_mixed_historical_part_timestamps() -> None:
             },
         ],
     )
-    assert result["status"] == "NOT_READY"
-    assert any(
-        row["type"] == "HISTORICAL_PART_SNAPSHOT_MISMATCH"
-        for row in result["issues"]
-    )
+    assert result["status"] == "READY"
+    assert result["manifest"]["expected_historical_packages"] == 2
 
 def test_generated_ttab_manifest_loads_through_frozen_parser(tmp_path: Path) -> None:
     result = build_manifest(
@@ -332,7 +329,7 @@ def test_generated_ttab_manifest_loads_through_frozen_parser(tmp_path: Path) -> 
     loaded = load_ttab_manifest(_write_manifest(tmp_path, result["manifest"]))
     assert loaded.expected_historical_packages == 1
     assert loaded.expected_daily_packages == 1
-    assert loaded.daily_through == "2026-08-10"
+    assert loaded.daily_through is None
 
 
 def test_ttab_manifest_remains_not_ready_for_date_only_metadata() -> None:
