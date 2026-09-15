@@ -64,6 +64,8 @@ def test_backfill_uses_candidate_native_key_and_checkpoints_after_insert():
     assert all(item[2] == list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS) for item in client.inserts)
     assert "(candidate_key, serial_number, owner_key) >" in client.queries[1][0]
     assert client.inserts[0][1][0][0] == "acme llc"
+    assert all(query[1]["max_rows_to_read"] == 100_000_000 for query in client.queries)
+    assert all(query[1]["read_overflow_mode"] == "throw" for query in client.queries)
 
 
 def test_epoch_drift_prevents_checkpoint():

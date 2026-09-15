@@ -74,6 +74,8 @@ def test_backfill_checkpoints_native_keyset_and_is_visible_idempotent():
     assert all(insert[2] == APPLICANT_INDEX_COLUMNS for insert in client.inserts)
     assert "(serial_number, owner_key) >" in client.queries[1][0]
     assert all(query[1]["max_threads"] == 1 for query in client.queries)
+    assert all(query[1]["max_rows_to_read"] == 100_000_000 for query in client.queries)
+    assert all(query[1]["read_overflow_mode"] == "throw" for query in client.queries)
 
 
 def test_backfill_epoch_drift_fails_before_checkpoint():
