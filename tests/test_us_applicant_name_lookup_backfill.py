@@ -102,6 +102,7 @@ def test_reconcile_inserts_only_bounded_missing_bindings():
     assert "target.record_hash = source.record_hash" in client.queries[0][0]
     assert "LIMIT 3" in client.queries[0][0]
     assert client.inserts[0][0] == US_APPLICANT_NAME_LOOKUP_TABLE
+    assert client.queries[0][1]["max_rows_to_read"] == 150_000_000
 
 
 def test_reconcile_fails_closed_above_bound():

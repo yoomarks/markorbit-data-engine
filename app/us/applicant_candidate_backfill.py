@@ -14,6 +14,11 @@ READ_SETTINGS = {
     "max_rows_to_read": 100_000_000,
     "read_overflow_mode": "throw",
 }
+RECONCILE_READ_SETTINGS = {
+    **READ_SETTINGS,
+    "max_rows_to_read": 150_000_000,
+    "join_algorithm": "grace_hash",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,11 +166,7 @@ def reconcile_us_applicant_candidate_index(
             ORDER BY source.serial_number, source.owner_key
             LIMIT {max_rows + 1}
             """,
-            settings={
-                **READ_SETTINGS,
-                "max_rows_to_read": 100_000_000,
-                "join_algorithm": "grace_hash",
-            },
+            settings=RECONCILE_READ_SETTINGS,
         ).result_rows
     )
     if len(rows) > max_rows:
@@ -204,11 +205,7 @@ def reconcile_us_applicant_candidate_index(
             ORDER BY source.serial_number, source.owner_key, target.candidate_key
             LIMIT {max_rows + 1}
             """,
-            settings={
-                **READ_SETTINGS,
-                "max_rows_to_read": 100_000_000,
-                "join_algorithm": "grace_hash",
-            },
+            settings=RECONCILE_READ_SETTINGS,
         ).result_rows
     )
     if len(stale_rows) > max_rows:
@@ -256,11 +253,7 @@ def reconcile_us_applicant_candidate_index(
             ORDER BY target.serial_number, target.owner_key, target.candidate_key
             LIMIT {max_rows + 1}
             """,
-            settings={
-                **READ_SETTINGS,
-                "max_rows_to_read": 100_000_000,
-                "join_algorithm": "grace_hash",
-            },
+            settings=RECONCILE_READ_SETTINGS,
         ).result_rows
     )
     if len(orphan_rows) > max_rows:
