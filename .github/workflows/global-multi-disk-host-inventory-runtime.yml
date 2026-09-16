@@ -3,7 +3,7 @@ name: Global Multi-Disk Host Inventory Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
+      - 'scripts/inventory-global-multi-disk-host.ps1'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'

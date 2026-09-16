@@ -3,7 +3,7 @@ name: Global Multi-Disk Ext4 Spike Preflight Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
+      - 'scripts/preflight-global-multi-disk-ext4-spike.ps1'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'

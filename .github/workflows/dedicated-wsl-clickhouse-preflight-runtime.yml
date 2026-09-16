@@ -3,7 +3,7 @@ name: Dedicated WSL ClickHouse Preflight Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
+      - 'scripts/preflight-dedicated-wsl-clickhouse-spike.ps1'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'
