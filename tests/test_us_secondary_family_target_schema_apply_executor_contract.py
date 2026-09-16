@@ -88,7 +88,18 @@ def test_create_executes_only_reviewed_fail_closed_ddl() -> None:
     assert "IF\\s+NOT\\s+EXISTS" in create_fn
     for forbidden in ("ALTER|DROP|TRUNCATE|INSERT|OPTIMIZE|MOVE",):
         assert forbidden in create_fn
-    assert "--query',$Ddl" in create_fn
+    assert "Invoke-StdinProcessText 'wsl.exe' $arguments $Ddl" in create_fn
+    assert "--query',$Ddl" not in create_fn
+
+
+def test_backtick_ddl_is_transport_over_stdin_not_argv() -> None:
+    source = text()
+    transport = source.split("function Invoke-StdinProcessText", 1)[1].split("function Invoke-TargetCreate", 1)[0]
+    assert "$psi.RedirectStandardInput=$true" in transport
+    assert "$process.StandardInput.Write($InputText)" in transport
+    assert "$psi.Arguments=$ArgumentsLine" in transport
+    assert "stdin transport did not preserve backtick DDL text" in source
+    assert "more.com" in source
 
 
 def test_each_create_verifies_policy_empty_parts_and_source_identity() -> None:
