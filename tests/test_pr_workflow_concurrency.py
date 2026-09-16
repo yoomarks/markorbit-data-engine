@@ -7,6 +7,33 @@ EXPECTED_GROUP = (
 )
 EXPECTED_CANCEL = "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
 UNSCOPED_PR_ALLOWLIST = {"ci.yml", "platformization-static-checkpoint.yml"}
+STORAGE_RUNTIME_SCRIPT_PATHS = {
+    "global-multi-disk-ext4-spike-preflight-runtime.yml": {
+        "scripts/preflight-global-multi-disk-ext4-spike.ps1",
+    },
+    "global-multi-disk-ext4-spike-runtime.yml": {
+        "scripts/run-global-multi-disk-ext4-spike.ps1",
+    },
+    "clickhouse-linux-volume-final-acceptance-runtime.yml": {
+        "scripts/finalize-clickhouse-linux-volume-acceptance.ps1",
+        "scripts/stop-idle-worker.ps1",
+    },
+    "clickhouse-linux-volume-recovery-runtime.yml": set(),
+    "wsl-ext4-tooling-distro-runtime.yml": {
+        "scripts/ensure-wsl-ext4-tooling-distro.ps1",
+    },
+    "linux-volume-us-capacity-profile-runtime.yml": {
+        "scripts/profile-linux-volume-us-capacity-target-host.ps1",
+        "scripts/assert-clickhouse-active-hot-storage-contract.ps1",
+        "scripts/profile-storage-capacity.ps1",
+    },
+    "dedicated-wsl-clickhouse-preflight-runtime.yml": {
+        "scripts/preflight-dedicated-wsl-clickhouse-spike.ps1",
+    },
+    "global-multi-disk-host-inventory-runtime.yml": {
+        "scripts/inventory-global-multi-disk-host.ps1",
+    },
+}
 
 
 def _workflow_texts() -> dict[Path, str]:
@@ -72,3 +99,19 @@ def test_domain_specific_pull_request_workflows_are_path_scoped() -> None:
         "Domain/runtime PR workflows must declare affected-scope path filters; "
         f"unscoped: {offenders}"
     )
+
+def test_storage_runtime_workflows_use_audited_script_dependencies() -> None:
+    for workflow_name, expected_scripts in STORAGE_RUNTIME_SCRIPT_PATHS.items():
+        text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
+        paths_block = text.split("    paths:\n", 1)[1].split("  push:\n", 1)[0]
+        actual_scripts = {
+            line.strip()[3:-1]
+            for line in paths_block.splitlines()
+            if line.strip().startswith("- 'scripts/")
+        }
+
+        assert "scripts/**" not in actual_scripts
+        assert actual_scripts == expected_scripts, (
+            f"{workflow_name} script trigger scope drifted: "
+            f"expected {sorted(expected_scripts)}, got {sorted(actual_scripts)}"
+        )

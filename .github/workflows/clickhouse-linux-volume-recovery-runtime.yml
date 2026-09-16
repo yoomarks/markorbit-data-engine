@@ -3,7 +3,6 @@ name: ClickHouse Linux Volume Recovery Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'

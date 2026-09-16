@@ -3,7 +3,7 @@ name: WSL Ext4 Tooling Distro Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
+      - 'scripts/ensure-wsl-ext4-tooling-distro.ps1'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'

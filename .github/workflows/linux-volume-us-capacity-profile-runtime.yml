@@ -3,7 +3,9 @@ name: Linux Volume US Capacity Profile Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
+      - 'scripts/profile-linux-volume-us-capacity-target-host.ps1'
+      - 'scripts/assert-clickhouse-active-hot-storage-contract.ps1'
+      - 'scripts/profile-storage-capacity.ps1'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'

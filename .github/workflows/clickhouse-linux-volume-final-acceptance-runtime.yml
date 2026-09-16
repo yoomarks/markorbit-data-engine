@@ -3,7 +3,8 @@ name: ClickHouse Linux Volume Final Acceptance Runtime
 on:
   pull_request:
     paths:
-      - 'scripts/**'
+      - 'scripts/finalize-clickhouse-linux-volume-acceptance.ps1'
+      - 'scripts/stop-idle-worker.ps1'
       - 'docker/**'
       - 'docker-compose*.yml'
       - '.env.example'
