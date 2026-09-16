@@ -69,6 +69,15 @@ def test_target_server_path_uses_expected_unauthenticated_auth_failure() -> None
     assert "credential_material_sent=$false" in fn
 
 
+def test_source_identity_preserves_clickhouse_order_by_without_powershell_resort() -> None:
+    source = text()
+    fn = source.split("function Get-SourceIdentityFromRows", 1)[1].split("function Get-SourceIdentityLocal", 1)[0]
+    assert "Sort-Object" not in fn
+    assert "foreach($row in @($Tables))" in fn
+    assert "foreach($row in @($Parts))" in fn
+    assert "ORDER BY name" in source
+    assert "ORDER BY table, partition_id, name" in source
+
 def test_source_identity_is_compared_local_vs_authenticated_target_view() -> None:
     source = text()
     for marker in (

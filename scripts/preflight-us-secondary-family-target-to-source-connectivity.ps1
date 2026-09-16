@@ -141,8 +141,8 @@ function Invoke-SourceRows([string]$Sql,[string]$Label){
 }
 function Get-SourceIdentityFromRows([object[]]$Tables,[object[]]$Parts){
     $lines=@()
-    foreach($row in @($Tables|Sort-Object name)){ $lines += "T|$($row.name)|$($row.engine)|$($row.sorting_key)|$($row.primary_key)|$($row.partition_key)|$($row.create_table_query)" }
-    foreach($row in @($Parts|Sort-Object table,partition_id,name)){ $lines += "P|$($row.table)|$($row.partition_id)|$($row.name)|$($row.rows)|$($row.bytes_on_disk)|$($row.disk_name)|$($row.hash_of_all_files)|$($row.hash_of_uncompressed_files)|$($row.uncompressed_hash_of_compressed_files)" }
+    foreach($row in @($Tables)){ $lines += "T|$($row.name)|$($row.engine)|$($row.sorting_key)|$($row.primary_key)|$($row.partition_key)|$($row.create_table_query)" }
+    foreach($row in @($Parts)){ $lines += "P|$($row.table)|$($row.partition_id)|$($row.name)|$($row.rows)|$($row.bytes_on_disk)|$($row.disk_name)|$($row.hash_of_all_files)|$($row.hash_of_uncompressed_files)|$($row.uncompressed_hash_of_compressed_files)" }
     return [ordered]@{
         sha256=Get-StringSha256 ($lines -join "`n")
         table_count=@($Tables).Count
