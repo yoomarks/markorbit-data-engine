@@ -144,13 +144,28 @@ function Invoke-TargetRows([string]$Sql,[string]$Label) {
     if ($probe.exit_code -ne 0) { throw "$Label failed: $($probe.lines -join [Environment]::NewLine)" }
     return @(Convert-JsonLines $probe.lines $Label)
 }
+function Invoke-StdinProcessText {
+    param([string]$FileName,[string]$ArgumentsLine,[string]$InputText,[switch]$AllowFailure)
+    $psi=New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName=$FileName; $psi.Arguments=$ArgumentsLine; $psi.UseShellExecute=$false
+    $psi.RedirectStandardInput=$true; $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true; $psi.CreateNoWindow=$true
+    $process=New-Object System.Diagnostics.Process; $process.StartInfo=$psi
+    try {
+        if(-not $process.Start()){throw "Unable to start stdin transport process: $FileName"}
+        $process.StandardInput.Write($InputText); $process.StandardInput.Close()
+        $stdout=$process.StandardOutput.ReadToEnd(); $stderr=$process.StandardError.ReadToEnd(); $process.WaitForExit(); $exitCode=$process.ExitCode
+    } finally { $process.Dispose() }
+    if(-not $AllowFailure -and $exitCode -ne 0){throw "$FileName stdin process failed with exit code ${exitCode}: $stderr$stdout"}
+    return [ordered]@{exit_code=$exitCode;stdout=$stdout;stderr=$stderr}
+}
 function Invoke-TargetCreate([string]$Ddl,[string]$Table) {
     Assert-SafeTable $Table
     if ($Ddl -notmatch '^CREATE TABLE markorbit_facts\.us_(assignment|ttab)_[a-z0-9_]+') { throw "Unsafe CREATE DDL for $Table" }
     if ($Ddl -match '(?i)IF\s+NOT\s+EXISTS|ALTER|DROP|TRUNCATE|INSERT|OPTIMIZE|MOVE') { throw "Reviewed CREATE contains forbidden fallback/mutation text: $Table" }
     Assert-TargetRuntimeReady
-    $probe=Invoke-NativeText 'wsl.exe' @('-d',$script:TargetDistro,'-u','root','--','clickhouse','client','--host',$script:TargetHost,'--port',$script:TargetPort,'--query',$Ddl) -AllowFailure
-    if ($probe.exit_code -ne 0) { throw "CREATE failed for ${Table}: $($probe.lines -join [Environment]::NewLine)" }
+    $arguments="-d $($script:TargetDistro) -u root -- clickhouse client --host $($script:TargetHost) --port $($script:TargetPort)"
+    $probe=Invoke-StdinProcessText 'wsl.exe' $arguments $Ddl -AllowFailure
+    if ($probe.exit_code -ne 0) { throw "CREATE failed for ${Table}: $($probe.stderr)$($probe.stdout)" }
 }
 function Invoke-SourceRows([string]$Sql,[string]$Label) {
     Assert-ReadOnlySelect $Sql $Label
@@ -232,6 +247,12 @@ function Invoke-ContractFixture {
     $a="CREATE TABLE markorbit_facts.us_assignment_record_history (`id` String) ENGINE = MergeTree ORDER BY id SETTINGS storage_policy = 'hot_us_only', index_granularity = 8192"
     $b="CREATE   TABLE markorbit_facts.us_assignment_record_history (`id` String) ENGINE = MergeTree ORDER BY id SETTINGS storage_policy='hot_us_only',index_granularity=8192"
     if((Normalize-DdlIdentity $a) -ne (Normalize-DdlIdentity $b)){throw 'DDL canonical-format normalization contract failed.'}
+    $stdinSample='CREATE TABLE markorbit_facts.sample (`observation_key` String) ENGINE = MergeTree ORDER BY tuple()'
+    $roundTrip=Invoke-StdinProcessText 'more.com' '' $stdinSample
+    if($roundTrip.exit_code -ne 0){throw 'stdin transport fixture process failed.'}
+    $roundTripText=($roundTrip.stdout -replace "(\r\n|\n)+$",'')
+    if($roundTripText -ne $stdinSample){throw 'stdin transport did not preserve backtick DDL text.'}
+
     $sample=[ordered]@{ plan_sha256=$sampleSha; review_sha256='b'; review_path='fixture'; plan=[ordered]@{} }
     $source=[ordered]@{ sha256='c'; rows=1; bytes=1 }; $pre=[ordered]@{ recommended_30pct_fits=$true }
     $journal=New-ApplyJournal $sample $source $pre $token
