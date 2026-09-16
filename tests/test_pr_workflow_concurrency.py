@@ -6,11 +6,18 @@ EXPECTED_GROUP = (
     "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
 )
 EXPECTED_CANCEL = "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
-UNSCOPED_PR_ALLOWLIST = {"ci.yml"}
+UNSCOPED_PR_ALLOWLIST = {"ci.yml", "platformization-static-checkpoint.yml"}
 
 
 def _workflow_texts() -> dict[Path, str]:
     return {path: path.read_text(encoding="utf-8") for path in sorted(WORKFLOW_DIR.glob("*.yml"))}
+
+
+def test_unscoped_pr_allowlist_is_exact_repository_wide_gates() -> None:
+    assert UNSCOPED_PR_ALLOWLIST == {
+        "ci.yml",
+        "platformization-static-checkpoint.yml",
+    }
 
 
 def test_every_pull_request_workflow_uses_server_side_concurrency() -> None:
