@@ -117,7 +117,9 @@ Accepted-current pointer publication remains the lifecycle commit boundary. If a
 
 ## Durable evidence
 
-The default state directory is `raw_data/ipos_sg`, which is ignored by Git.
+Production operator state is resolved fail-closed. With no explicit `-StateDir`, both `check-ipos-sg.ps1` and `run-ipos-sg.ps1` use `<RAW_DATA_PATH>\ipos_sg`, taking `RAW_DATA_PATH` first from the current process and otherwise from the repository `.env`. If neither is configured, the scripts refuse to fall back to a repo-local state directory. An explicit `-StateDir` remains available for deliberate non-production/bootstrap use.
+
+On the currently accepted MarkOrbit production host, `RAW_DATA_PATH` resolves to `F:/MarkOrbitData/raw`, so the retained Singapore state is `F:\MarkOrbitData\raw\ipos_sg`. The read-only check script never creates a missing state directory. The run script also refuses to bootstrap a missing implicitly resolved production state; a new state directory may be created only when `-StateDir` is supplied explicitly.
 
 Important files include:
 
