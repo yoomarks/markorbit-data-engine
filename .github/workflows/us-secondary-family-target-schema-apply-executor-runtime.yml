@@ -1,0 +1,69 @@
+name: US Secondary Family Target Schema Apply Executor Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/apply-us-secondary-family-target-schema.ps1'
+      - 'scripts/review-us-secondary-family-target-schema-apply.ps1'
+      - 'scripts/design-us-secondary-family-hot-migration.ps1'
+      - 'scripts/audit-us-secondary-family-hot-placement.ps1'
+      - 'tests/test_us_secondary_family_target_schema_apply_executor_contract.py'
+      - '.github/workflows/us-secondary-family-target-schema-apply-executor-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and exercise schema apply executor under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scriptPath = Join-Path $PWD 'scripts\apply-us-secondary-family-target-schema.ps1'
+          $source = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            throw 'Schema apply executor failed Windows PowerShell 5.1 parse.'
+          }
+          $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+          foreach ($required in @('ExpectedMainSha','ReviewReceiptPath','AuthorityToken','DryRun','Apply','ContractOnly')) {
+            if ($paramNames -notcontains $required) { throw "Executor missing parameter: $required" }
+          }
+          foreach ($forbidden in @('New-VHD','Resize-VHD','Mount-VHD','Dismount-VHD','Optimize-VHD')) {
+            $commands = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { $_.GetCommandName() })
+            if ($commands -contains $forbidden) { throw "Forbidden command present: $forbidden" }
+          }
+          if ($source -match '(?i)DROP\s+TABLE|TRUNCATE\s+TABLE') { throw 'Auto-destructive schema rollback surface present.' }
+          $output = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+            -ExpectedMainSha $env:GITHUB_SHA `
+            -ContractOnly
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) { throw "ContractOnly exited $exitCode." }
+          $joined = $output -join "`n"
+          if ($joined -notmatch 'US_SECONDARY_FAMILY_TARGET_SCHEMA_APPLY_EXECUTOR_CONTRACT_PASS') {
+            throw 'ContractOnly success marker missing.'
+          }
+          if ($joined -notmatch 'schema_apply_executed=False') {
+            throw 'ContractOnly mutation marker drifted.'
+          }
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Run schema apply executor contract
+        run: python -m pytest tests/test_us_secondary_family_target_schema_apply_executor_contract.py -q
