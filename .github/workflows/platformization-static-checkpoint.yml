@@ -2,20 +2,6 @@ name: M1.7 Platformization Static Checkpoint
 
 on:
   pull_request:
-    paths:
-      - 'app/platformization_checkpoint.py'
-      - 'app/platform_contract.py'
-      - 'app/component_versions.py'
-      - 'app/release_promotion.py'
-      - 'app/cn/native_cutover_completion.py'
-      - 'VERSION'
-      - 'evidence/**'
-      - 'tests/test_platformization_checkpoint.py'
-      - 'tests/test_platform_contract.py'
-      - 'tests/test_component_versions.py'
-      - 'tests/test_release_promotion.py'
-      - 'pyproject.toml'
-      - '.github/workflows/platformization-static-checkpoint.yml'
   push:
     branches:
       - main
