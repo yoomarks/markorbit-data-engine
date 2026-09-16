@@ -2,6 +2,17 @@ name: US Mark Image
 
 on:
   pull_request:
+    paths:
+      - 'app/us_mark_image/**'
+      - 'app/db.py'
+      - 'app/config.py'
+      - 'database/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_us_mark_image*'
+      - 'pyproject.toml'
+      - '.github/workflows/us-mark-image.yml'
   push:
     branches:
       - main

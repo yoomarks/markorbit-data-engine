@@ -2,6 +2,17 @@ name: Contact Country Inference Runtime
 
 on:
   pull_request:
+    paths:
+      - 'app/contact_ingest/**'
+      - 'app/db.py'
+      - 'app/config.py'
+      - 'database/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_contact_*'
+      - 'pyproject.toml'
+      - '.github/workflows/contact-country-inference-runtime.yml'
   push:
     branches:
       - main

@@ -2,6 +2,16 @@ name: ClickHouse Linux Volume Final Acceptance Runtime
 
 on:
   pull_request:
+    paths:
+      - 'scripts/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_*clickhouse*'
+      - 'tests/test_*wsl*'
+      - 'tests/test_*storage*'
+      - 'pyproject.toml'
+      - '.github/workflows/clickhouse-linux-volume-final-acceptance-runtime.yml'
   push:
     branches:
       - main

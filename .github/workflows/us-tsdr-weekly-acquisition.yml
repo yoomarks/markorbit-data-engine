@@ -2,6 +2,17 @@ name: US TSDR Weekly Acquisition
 
 on:
   pull_request:
+    paths:
+      - 'app/us_tsdr/**'
+      - 'app/db.py'
+      - 'app/config.py'
+      - 'database/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_us_tsdr*'
+      - 'pyproject.toml'
+      - '.github/workflows/us-tsdr-weekly-acquisition.yml'
   push:
     branches:
       - main

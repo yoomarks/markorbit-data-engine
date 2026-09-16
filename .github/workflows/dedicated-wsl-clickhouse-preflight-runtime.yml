@@ -2,6 +2,16 @@ name: Dedicated WSL ClickHouse Preflight Runtime
 
 on:
   pull_request:
+    paths:
+      - 'scripts/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_*clickhouse*'
+      - 'tests/test_*wsl*'
+      - 'tests/test_*storage*'
+      - 'pyproject.toml'
+      - '.github/workflows/dedicated-wsl-clickhouse-preflight-runtime.yml'
   push:
     branches:
       - main
