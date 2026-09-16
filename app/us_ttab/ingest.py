@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 import shutil
@@ -7,13 +8,14 @@ from typing import Iterator
 import uuid
 import zipfile
 
-from app.db import clickhouse_client
+from app.db import clickhouse_client, postgres_conn
 from app.repository import create_job_run, finish_job_run, get_package, update_package_status
 from app.scanner import sha256_file
 from app.us_ttab import TTAB_JURISDICTION, TTAB_SCHEMA_VERSION, TTAB_SEMANTICS
 from app.us_ttab.migrations import ensure_ttab_schema
 from app.us_ttab.model import TTABProceedingBundle
 from app.us_ttab.parser import iter_ttab_bundles
+from app.us.publisher import stable_hash
 from app.us_ttab.publisher import TABLE_COLUMNS, TTABBatchPublisher
 
 
@@ -77,37 +79,153 @@ def _snapshot_at(meta: dict[str, object]) -> datetime:
 
 
 SNAPSHOT_SLOT_BATCH_SIZE = 500
+_HISTORICAL_SOURCE_KIND = "TTAB_BULK_HISTORICAL_XML"
 
 
-def _assert_snapshot_slots_available(
+def _bundle_signature(bundle: TTABProceedingBundle) -> tuple[tuple[str, str], ...]:
+    values: list[tuple[str, str]] = [("P", stable_hash(asdict(bundle.proceeding)))]
+    values.extend(("A", stable_hash(asdict(item))) for item in bundle.parties)
+    values.extend(("R", stable_hash(asdict(item))) for item in bundle.properties)
+    values.extend(("D", stable_hash(asdict(item))) for item in bundle.docket_entries)
+    return tuple(sorted(values))
+
+
+def _historical_batch_package_ids(
+    meta: dict[str, object], package_uuid: uuid.UUID
+) -> set[uuid.UUID]:
+    if str(meta.get("package_kind") or "") != _HISTORICAL_SOURCE_KIND:
+        return set()
+    start = meta.get("source_period_start")
+    end = meta.get("source_period_end")
+    if start is None or end is None or start != end:
+        raise RuntimeError(
+            "US TTAB historical package lacks one authoritative transaction-date batch"
+        )
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT package_id
+                FROM control.source_package
+                WHERE jurisdiction = %s
+                  AND package_kind = %s
+                  AND source_period_start = %s
+                  AND source_period_end = %s
+                  AND package_id != %s
+                  AND status = 'SUCCESS'
+                """,
+                (TTAB_JURISDICTION, _HISTORICAL_SOURCE_KIND, start, end, package_uuid),
+            )
+            return {uuid.UUID(str(row["package_id"])) for row in cur.fetchall()}
+
+
+def _existing_snapshot_signatures(
     proceeding_numbers: list[str],
     snapshot_at: datetime,
     package_uuid: uuid.UUID,
-) -> None:
+    same_historical_batch: set[uuid.UUID],
+) -> dict[tuple[str, uuid.UUID], tuple[tuple[str, str], ...]]:
     if not proceeding_numbers:
-        return
+        return {}
     if any(not number.isdigit() for number in proceeding_numbers):
         raise RuntimeError("US TTAB proceeding number batch contains non-numeric identity")
     timestamp = snapshot_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:23]
     identities = ", ".join(f"'{number}'" for number in sorted(set(proceeding_numbers)))
-    rows = clickhouse_client().query(
-        f"""
-        SELECT proceeding_number
-        FROM markorbit_facts.us_ttab_proceeding_history
-        WHERE proceeding_number IN ({identities})
-          AND source_snapshot_at = toDateTime64('{timestamp}', 3, 'UTC')
-          AND source_package_id != toUUID('{package_uuid}')
-        LIMIT 1
-        """
-    ).result_rows
-    if rows:
-        proceeding_number = str(rows[0][0])
-        raise RuntimeError(
-            "A US TTAB snapshot for the same proceeding and millisecond is already present. "
-            f"Proceeding={proceeding_number} snapshot_at={snapshot_at.isoformat()}. "
-            "Sub-millisecond or registration-order precedence is not modeled; materialize "
-            "the authoritative snapshots with distinct source timestamps."
+    scopes = [f"source_snapshot_at = toDateTime64('{timestamp}', 3, 'UTC')"]
+    if same_historical_batch:
+        package_ids = ", ".join(
+            f"toUUID('{value}')" for value in sorted(same_historical_batch, key=str)
         )
+        scopes.append(f"source_package_id IN ({package_ids})")
+    scope = " OR ".join(scopes)
+    families = (
+        ("P", "us_ttab_proceeding_history"),
+        ("A", "us_ttab_party_history"),
+        ("R", "us_ttab_property_history"),
+        ("D", "us_ttab_docket_history"),
+    )
+    selects = []
+    for family, table in families:
+        selects.append(
+            f"""
+            SELECT proceeding_number, source_package_id, '{family}' AS family, record_hash
+            FROM markorbit_facts.{table}
+            WHERE proceeding_number IN ({identities})
+              AND source_package_id != toUUID('{package_uuid}')
+              AND ({scope})
+            """
+        )
+    rows = (
+        clickhouse_client()
+        .query(
+            "SELECT proceeding_number, toString(source_package_id), family, record_hash "
+            "FROM (" + " UNION ALL ".join(selects) + ") "
+            "ORDER BY proceeding_number, source_package_id, family, record_hash"
+        )
+        .result_rows
+    )
+    grouped: dict[tuple[str, uuid.UUID], list[tuple[str, str]]] = {}
+    for proceeding_number, package_id, family, record_hash in rows:
+        key = (str(proceeding_number), uuid.UUID(str(package_id)))
+        normalized_hash = (
+            bytes(record_hash).decode("ascii")
+            if isinstance(record_hash, (bytes, bytearray))
+            else str(record_hash)
+        )
+        grouped.setdefault(key, []).append((str(family), normalized_hash))
+    return {key: tuple(sorted(values)) for key, values in grouped.items()}
+
+
+def _publishable_snapshot_batch(
+    pending: list[tuple[str, TTABProceedingBundle]],
+    snapshot_at: datetime,
+    package_uuid: uuid.UUID,
+    meta: dict[str, object],
+    same_historical_batch: set[uuid.UUID],
+) -> tuple[list[tuple[str, TTABProceedingBundle]], int]:
+    signatures = _existing_snapshot_signatures(
+        [bundle.proceeding.proceeding_number for _source_file, bundle in pending],
+        snapshot_at,
+        package_uuid,
+        same_historical_batch,
+    )
+    by_proceeding: dict[str, list[tuple[uuid.UUID, tuple[tuple[str, str], ...]]]] = {}
+    for (number, existing_package_id), signature in signatures.items():
+        by_proceeding.setdefault(number, []).append((existing_package_id, signature))
+
+    publishable: list[tuple[str, TTABProceedingBundle]] = []
+    skipped = 0
+    transaction_date = str(meta.get("source_period_start") or "")
+    for source_file, bundle in pending:
+        number = bundle.proceeding.proceeding_number
+        collisions = by_proceeding.get(number, [])
+        if not collisions:
+            publishable.append((source_file, bundle))
+            continue
+        incoming_signature = _bundle_signature(bundle)
+        matched_historical_overlap = False
+        for existing_package_id, existing_signature in collisions:
+            if existing_package_id in same_historical_batch:
+                matched_historical_overlap = True
+                if existing_signature != incoming_signature:
+                    raise RuntimeError(
+                        "A US TTAB historical split batch contains conflicting content for the same "
+                        f"proceeding. Proceeding={number} transaction_date={transaction_date} "
+                        f"existing_package_id={existing_package_id} current_package_id={package_uuid}. "
+                        "Synthetic timestamp or split-order precedence is not permitted."
+                    )
+                continue
+            raise RuntimeError(
+                "A US TTAB snapshot for the same proceeding and millisecond is already present. "
+                f"Proceeding={number} snapshot_at={snapshot_at.isoformat()}. "
+                "The collision is outside one identical historical split batch; synthetic "
+                "sub-millisecond or registration-order precedence is not permitted."
+            )
+        if matched_historical_overlap:
+            skipped += 1
+        else:
+            publishable.append((source_file, bundle))
+    return publishable, skipped
 
 
 def ingest_ttab_package(
@@ -150,17 +268,19 @@ def ingest_ttab_package(
     malformed_serials: set[str] = set()
     proceeding_types: dict[str, int] = {}
     empty_docket_count = 0
+    historical_batch_duplicate_count = 0
+    same_historical_batch = _historical_batch_package_ids(meta, package_uuid)
     pending: list[tuple[str, TTABProceedingBundle]] = []
 
     def flush_pending() -> None:
+        nonlocal historical_batch_duplicate_count
         if not pending:
             return
-        _assert_snapshot_slots_available(
-            [bundle.proceeding.proceeding_number for _source_file, bundle in pending],
-            snapshot_at,
-            package_uuid,
+        publishable, skipped = _publishable_snapshot_batch(
+            pending, snapshot_at, package_uuid, meta, same_historical_batch
         )
-        for source_file, bundle in pending:
+        historical_batch_duplicate_count += skipped
+        for source_file, bundle in publishable:
             publisher.add(bundle, source_file)
         pending.clear()
 
@@ -204,6 +324,8 @@ def ingest_ttab_package(
         totals: dict[str, object] = {
             "schema_version": TTAB_SCHEMA_VERSION,
             "proceeding_count": len(seen),
+            "published_proceeding_count": len(seen) - historical_batch_duplicate_count,
+            "historical_batch_duplicate_count": historical_batch_duplicate_count,
             "xml_members": len(source_files),
             "row_counts": row_counts,
             "proceeding_types": dict(sorted(proceeding_types.items())),
