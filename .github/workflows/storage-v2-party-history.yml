@@ -2,6 +2,21 @@ name: Storage V2 Party History
 
 on:
   pull_request:
+    paths:
+      - 'app/cn/**'
+      - 'app/cn_mark_image/**'
+      - 'app/cn_qcc/**'
+      - 'app/trademark_framework/**'
+      - 'app/trademark_factory/**'
+      - 'app/db.py'
+      - 'app/config.py'
+      - 'app/component_versions.py'
+      - 'database/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'pyproject.toml'
+      - '.github/workflows/storage-v2-party-history.yml'
   push:
     branches:
       - main

@@ -2,6 +2,16 @@ name: Global Multi-Disk Ext4 Spike Preflight Runtime
 
 on:
   pull_request:
+    paths:
+      - 'scripts/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_*clickhouse*'
+      - 'tests/test_*wsl*'
+      - 'tests/test_*storage*'
+      - 'pyproject.toml'
+      - '.github/workflows/global-multi-disk-ext4-spike-preflight-runtime.yml'
   push:
     branches:
       - main

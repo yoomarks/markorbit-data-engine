@@ -2,6 +2,21 @@ name: CN Native Case Party Current
 
 on:
   pull_request:
+    paths:
+      - 'app/cn/**'
+      - 'app/cn_mark_image/**'
+      - 'app/cn_qcc/**'
+      - 'app/trademark_framework/**'
+      - 'app/trademark_factory/**'
+      - 'app/db.py'
+      - 'app/config.py'
+      - 'app/component_versions.py'
+      - 'database/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'pyproject.toml'
+      - '.github/workflows/cn-native-case-party-current.yml'
   push:
     branches:
       - main

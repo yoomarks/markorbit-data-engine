@@ -2,6 +2,16 @@ name: Global Multi-Disk Host Inventory Runtime
 
 on:
   pull_request:
+    paths:
+      - 'scripts/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_*clickhouse*'
+      - 'tests/test_*wsl*'
+      - 'tests/test_*storage*'
+      - 'pyproject.toml'
+      - '.github/workflows/global-multi-disk-host-inventory-runtime.yml'
   push:
     branches:
       - main

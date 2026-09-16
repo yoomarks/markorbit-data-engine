@@ -2,6 +2,16 @@ name: WSL Ext4 Tooling Distro Runtime
 
 on:
   pull_request:
+    paths:
+      - 'scripts/**'
+      - 'docker/**'
+      - 'docker-compose*.yml'
+      - '.env.example'
+      - 'tests/test_*clickhouse*'
+      - 'tests/test_*wsl*'
+      - 'tests/test_*storage*'
+      - 'pyproject.toml'
+      - '.github/workflows/wsl-ext4-tooling-distro-runtime.yml'
   push:
     branches:
       - main
