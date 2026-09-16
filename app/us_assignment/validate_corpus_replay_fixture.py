@@ -11,6 +11,7 @@ from app.us_assignment.corpus_manifest import MANIFEST_VERSION
 from app.us_assignment.corpus_replay import execute_replay
 from app.us_assignment.ingest import cleanup_assignment_package_outputs
 from app.us_assignment.migrations import ensure_assignment_schema
+from app.us_assignment.publisher import TABLE_COLUMNS
 from app.us_assignment.repository import list_assignment_packages
 
 
@@ -19,6 +20,68 @@ FILES = (
     "ci_assignment_manifest_daily.xml",
 )
 MANIFEST_RELATIVE = Path("manifests/us_assignment/ci_corpus.json")
+_FIXTURE_REEL_FRAMES = ("8100/0001", "8101/0001")
+
+
+def _is_fixture_source_name(name: str) -> bool:
+    for fixture in FILES:
+        item = Path(fixture)
+        if name == fixture or (name.startswith(f"{item.stem}_") and name.endswith(item.suffix)):
+            return True
+    return False
+
+
+def _fixture_package_ids() -> list[str]:
+    return [
+        str(row["package_id"])
+        for row in list_assignment_packages()
+        if str(row.get("file_name") or "") in FILES
+    ]
+
+
+def _assert_fixture_scope_isolated(raw_root: Path) -> None:
+    foreign_registry = [
+        str(row.get("file_name") or "")
+        for row in list_assignment_packages()
+        if str(row.get("file_name") or "") not in FILES
+    ]
+    foreign_raw: list[str] = []
+    for directory in (
+        raw_root / "incoming" / "us_assignment",
+        raw_root / "archive" / "us_assignment",
+    ):
+        if not directory.exists():
+            continue
+        for path in directory.iterdir():
+            if (
+                path.is_file()
+                and path.suffix.lower() in {".xml", ".zip"}
+                and not _is_fixture_source_name(path.name)
+            ):
+                foreign_raw.append(str(path))
+    if foreign_registry or foreign_raw:
+        raise RuntimeError(
+            "Refusing US Assignment runtime fixture against a non-isolated target: "
+            f"foreign_registry={foreign_registry[:5]} foreign_raw={foreign_raw[:5]}"
+        )
+
+
+def _assert_fixture_facts_isolated() -> None:
+    identities = ", ".join(f"'{value}'" for value in _FIXTURE_REEL_FRAMES)
+    client = clickhouse_client()
+    foreign: dict[str, int] = {}
+    for table in TABLE_COLUMNS:
+        count = int(
+            client.query(
+                f"SELECT count() FROM {table} WHERE reel_frame_id NOT IN ({identities})"
+            ).result_rows[0][0]
+        )
+        if count:
+            foreign[table] = count
+    if foreign:
+        raise RuntimeError(
+            f"Refusing US Assignment runtime fixture against existing non-fixture facts: {foreign}"
+        )
 
 
 def _xml(*, reel: str, frame: str, assignee: str, serial: str) -> str:
@@ -39,7 +102,9 @@ def _delete_registry(package_ids: list[str]) -> None:
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             for package_id in package_ids:
-                cur.execute("DELETE FROM control.source_package WHERE package_id = %s", (package_id,))
+                cur.execute(
+                    "DELETE FROM control.source_package WHERE package_id = %s", (package_id,)
+                )
         conn.commit()
 
 
@@ -62,8 +127,10 @@ def _remove_fixture_files(raw_root: Path) -> None:
 
 
 def main() -> None:
-    ensure_assignment_schema()
     raw_root = get_settings().raw_data_root
+    _assert_fixture_scope_isolated(raw_root)
+    ensure_assignment_schema()
+    _assert_fixture_facts_isolated()
     incoming = raw_root / "incoming" / "us_assignment"
     incoming.mkdir(parents=True, exist_ok=True)
     manifest_path = raw_root / MANIFEST_RELATIVE
@@ -114,7 +181,7 @@ def main() -> None:
         applied = execute_replay(manifest_path, raw_root, apply=True, all_packages=True)
         if applied["status"] != "COMPLETE" or applied["processed_count"] != 2:
             raise RuntimeError(f"Assignment manifest replay mismatch: {applied}")
-        package_ids = [str(row["package_id"]) for row in list_assignment_packages()]
+        package_ids = _fixture_package_ids()
         if len(package_ids) != 2:
             raise RuntimeError(f"Expected two manifest packages, found {package_ids}")
 
@@ -124,10 +191,7 @@ def main() -> None:
         if acceptance["manifest_registry"]["successful_manifest_source_count"] != 2:
             raise RuntimeError(f"Assignment manifest success coverage mismatch: {acceptance}")
 
-        archived = [
-            (raw_root / "archive" / "us_assignment" / name).is_file()
-            for name in FILES
-        ]
+        archived = [(raw_root / "archive" / "us_assignment" / name).is_file() for name in FILES]
         if archived != [True, True]:
             raise RuntimeError(f"Assignment archive movement mismatch: {archived}")
 
@@ -146,17 +210,18 @@ def main() -> None:
             )
         )
     finally:
-        if not package_ids:
-            package_ids = [str(row["package_id"]) for row in list_assignment_packages()]
-        for package_id in reversed(package_ids):
+        fixture_package_ids = _fixture_package_ids()
+        for package_id in reversed(fixture_package_ids):
             cleanup_assignment_package_outputs(uuid.UUID(package_id))
-        _delete_registry(package_ids)
+        _delete_registry(fixture_package_ids)
         _remove_fixture_files(raw_root)
         residual = int(
-            clickhouse_client().query(
+            clickhouse_client()
+            .query(
                 "SELECT count() FROM markorbit_facts.us_assignment_record_history "
                 "WHERE reel_frame_id IN ('8100/0001', '8101/0001')"
-            ).result_rows[0][0]
+            )
+            .result_rows[0][0]
         )
         if residual:
             raise RuntimeError(f"Assignment manifest fixture cleanup failed: residual={residual}")
