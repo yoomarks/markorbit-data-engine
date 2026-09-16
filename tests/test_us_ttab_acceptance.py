@@ -48,8 +48,9 @@ def _projection() -> dict[str, int]:
         "latest_source_package_count": 1,
         "latest_property_count": 1,
         "property_serial_count": 1,
+        "property_serial_sentinel_zero_count": 0,
+        "property_serial_canonical_count": 1,
         "malformed_property_serial_count": 0,
-        "property_serial_joined_to_us_case_count": 1,
         "latest_docket_count": 2,
         "due_date_observation_count": 1,
     }
@@ -78,10 +79,9 @@ def test_ttab_acceptance_passes_source_backed_integrity() -> None:
     assert result["warning_reasons"] == []
 
 
-def test_ttab_acceptance_keeps_coverage_gaps_as_warnings() -> None:
+def test_ttab_acceptance_warns_only_on_noncanonical_source_serials() -> None:
     projection = _projection()
     projection["malformed_property_serial_count"] = 1
-    projection["property_serial_joined_to_us_case_count"] = 0
     result = evaluate_acceptance(
         packages=[_package()], schema={"ready": True}, tables=_tables(),
         orphans={"us_ttab_party_history": 0, "us_ttab_property_history": 0, "us_ttab_docket_history": 0},
@@ -89,8 +89,32 @@ def test_ttab_acceptance_keeps_coverage_gaps_as_warnings() -> None:
         source_verification={"missing_count": 0, "mismatch_count": 0}, verify_sources=True,
     )
     assert result["status"] == "PASS_WITH_WARNINGS"
-    assert "malformed_ttab_property_serials_present" in result["warning_reasons"]
-    assert "some_ttab_property_serials_not_present_in_us_case_current" in result["warning_reasons"]
+    assert "noncanonical_ttab_property_serials_present" in result["warning_reasons"]
+    assert "some_ttab_property_serials_not_present_in_us_case_current" not in result["warning_reasons"]
+
+
+def test_ttab_acceptance_does_not_warn_for_source_zero_sentinel() -> None:
+    projection = _projection()
+    projection["property_serial_count"] = 2
+    projection["property_serial_sentinel_zero_count"] = 1
+    result = evaluate_acceptance(
+        packages=[_package()], schema={"ready": True}, tables=_tables(),
+        orphans={"us_ttab_party_history": 0, "us_ttab_property_history": 0, "us_ttab_docket_history": 0},
+        lineage=_lineage(), projection=projection,
+        source_verification={"missing_count": 0, "mismatch_count": 0}, verify_sources=True,
+    )
+    assert result["status"] == "PASS"
+    assert result["warning_reasons"] == []
+
+
+def test_ttab_projection_does_not_assume_colocated_us_case_runtime() -> None:
+    source = Path("app/us_ttab/audit_real_data.py").read_text(encoding="utf-8")
+    projection_section = source.split("def projection_metrics", 1)[1].split(
+        "def _resolve_source_path", 1
+    )[0]
+    assert "us_case_current" not in projection_section
+    assert "p.serial_number = '0'" in projection_section
+    assert "p.serial_number NOT IN ('', '0')" in projection_section
 
 
 def test_ttab_acceptance_fails_duplicate_or_orphan_history() -> None:

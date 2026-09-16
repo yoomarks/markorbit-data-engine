@@ -220,8 +220,16 @@ def main() -> None:
         readiness = build_readiness(raw_root=raw_root, verify_sources=True)
         if readiness["state"] != "ACCEPTED" or not readiness["ready"]:
             raise RuntimeError(f"TTAB readiness mismatch: {readiness}")
-        if audit["projection"]["property_serial_joined_to_us_case_count"] != 1:
-            raise RuntimeError(f"TTAB-US case coverage mismatch: {audit['projection']}")
+        cross_link_count = _scalar(
+            f"SELECT uniqExact(p.serial_number) "
+            f"FROM markorbit_facts.us_ttab_property_history AS p "
+            f"INNER JOIN markorbit_facts.us_case_current AS c "
+            f"ON p.serial_number = c.serial_number "
+            f"WHERE p.proceeding_number = '{PROCEEDING}' "
+            f"AND p.serial_number = '{SERIAL}' AND c.is_deleted = 0"
+        )
+        if cross_link_count != 1:
+            raise RuntimeError(f"TTAB-US fixture cross-link mismatch: {cross_link_count}")
 
         print(
             json.dumps(

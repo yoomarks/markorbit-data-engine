@@ -9,7 +9,7 @@ from app.us_ttab import TTAB_SCHEMA_VERSION, TTAB_SEMANTICS
 from app.us_ttab.repository import list_ttab_packages
 
 
-AUDIT_VERSION = "US_TTAB_M1.0_REAL_DATA_ACCEPTANCE_V1"
+AUDIT_VERSION = "US_TTAB_M1.0_REAL_DATA_ACCEPTANCE_V2"
 _TABLE_KEYS = {
     "us_ttab_proceeding_history": "observation_key",
     "us_ttab_party_history": "observation_key",
@@ -200,19 +200,19 @@ def projection_metrics() -> dict[str, int]:
             GROUP BY proceeding_number
         )
         SELECT count(), countIf(p.serial_number != ''),
-               countIf(p.serial_number != '' AND (length(p.serial_number) != 8 OR NOT match(p.serial_number, '^[0-9]{8}$'))),
-               countIf(p.serial_number != '' AND c.serial_number != '')
+               countIf(p.serial_number = '0'),
+               countIf(match(p.serial_number, '^[0-9]{8}$')),
+               countIf(
+                   p.serial_number NOT IN ('', '0')
+                   AND (
+                       length(p.serial_number) != 8
+                       OR NOT match(p.serial_number, '^[0-9]{8}$')
+                   )
+               )
         FROM markorbit_facts.us_ttab_property_history AS p
         INNER JOIN latest AS l
           ON p.proceeding_number = l.proceeding_number
          AND toString(p.source_package_id) = l.package_id
-        LEFT JOIN
-        (
-            SELECT serial_number
-            FROM markorbit_facts.us_case_current FINAL
-            WHERE is_deleted = 0
-        ) AS c
-          ON p.serial_number = c.serial_number
         """
     ).result_rows[0]
     docket = client.query(
@@ -237,8 +237,9 @@ def projection_metrics() -> dict[str, int]:
         "latest_source_package_count": _int(latest[2]),
         "latest_property_count": _int(properties[0]),
         "property_serial_count": _int(properties[1]),
-        "malformed_property_serial_count": _int(properties[2]),
-        "property_serial_joined_to_us_case_count": _int(properties[3]),
+        "property_serial_sentinel_zero_count": _int(properties[2]),
+        "property_serial_canonical_count": _int(properties[3]),
+        "malformed_property_serial_count": _int(properties[4]),
         "latest_docket_count": _int(docket[0]),
         "due_date_observation_count": _int(docket[1]),
     }
@@ -346,11 +347,7 @@ def evaluate_acceptance(
     ):
         hard.append("latest_ttab_projection_not_unique")
     if projection.get("malformed_property_serial_count", 0):
-        warnings.append("malformed_ttab_property_serials_present")
-    if projection.get("property_serial_count", 0) > projection.get(
-        "property_serial_joined_to_us_case_count", 0
-    ):
-        warnings.append("some_ttab_property_serials_not_present_in_us_case_current")
+        warnings.append("noncanonical_ttab_property_serials_present")
     if projection.get("latest_docket_count", 0) == 0 and projection.get(
         "latest_proceeding_count", 0
     ):
