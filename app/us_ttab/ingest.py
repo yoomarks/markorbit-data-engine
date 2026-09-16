@@ -76,24 +76,32 @@ def _snapshot_at(meta: dict[str, object]) -> datetime:
     return parsed
 
 
-def _assert_snapshot_slot_available(
-    proceeding_number: str,
+SNAPSHOT_SLOT_BATCH_SIZE = 500
+
+
+def _assert_snapshot_slots_available(
+    proceeding_numbers: list[str],
     snapshot_at: datetime,
     package_uuid: uuid.UUID,
 ) -> None:
+    if not proceeding_numbers:
+        return
+    if any(not number.isdigit() for number in proceeding_numbers):
+        raise RuntimeError("US TTAB proceeding number batch contains non-numeric identity")
     timestamp = snapshot_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:23]
-    count = int(
-        clickhouse_client().query(
-            f"""
-            SELECT count()
-            FROM markorbit_facts.us_ttab_proceeding_history
-            WHERE proceeding_number = '{proceeding_number}'
-              AND source_snapshot_at = toDateTime64('{timestamp}', 3, 'UTC')
-              AND source_package_id != toUUID('{package_uuid}')
-            """
-        ).result_rows[0][0]
-    )
-    if count:
+    identities = ", ".join(f"'{number}'" for number in sorted(set(proceeding_numbers)))
+    rows = clickhouse_client().query(
+        f"""
+        SELECT proceeding_number
+        FROM markorbit_facts.us_ttab_proceeding_history
+        WHERE proceeding_number IN ({identities})
+          AND source_snapshot_at = toDateTime64('{timestamp}', 3, 'UTC')
+          AND source_package_id != toUUID('{package_uuid}')
+        LIMIT 1
+        """
+    ).result_rows
+    if rows:
+        proceeding_number = str(rows[0][0])
         raise RuntimeError(
             "A US TTAB snapshot for the same proceeding and millisecond is already present. "
             f"Proceeding={proceeding_number} snapshot_at={snapshot_at.isoformat()}. "
@@ -142,6 +150,19 @@ def ingest_ttab_package(
     malformed_serials: set[str] = set()
     proceeding_types: dict[str, int] = {}
     empty_docket_count = 0
+    pending: list[tuple[str, TTABProceedingBundle]] = []
+
+    def flush_pending() -> None:
+        if not pending:
+            return
+        _assert_snapshot_slots_available(
+            [bundle.proceeding.proceeding_number for _source_file, bundle in pending],
+            snapshot_at,
+            package_uuid,
+        )
+        for source_file, bundle in pending:
+            publisher.add(bundle, source_file)
+        pending.clear()
 
     try:
         update_package_status(str(package_uuid), "PROCESSING")
@@ -156,7 +177,6 @@ def ingest_ttab_package(
             number = bundle.proceeding.proceeding_number
             if number in seen:
                 raise RuntimeError(f"Duplicate proceeding in one US TTAB package: {number}")
-            _assert_snapshot_slot_available(number, snapshot_at, package_uuid)
             seen.add(number)
             source_files.add(source_file)
             # Prefer human-readable TTABVUE display text; official bulk provides only the
@@ -173,8 +193,11 @@ def ingest_ttab_package(
                 serial = item.serial_number
                 if serial and (len(serial) != 8 or not serial.isdigit()):
                     malformed_serials.add(serial)
-            publisher.add(bundle, source_file)
+            pending.append((source_file, bundle))
+            if len(pending) >= SNAPSHOT_SLOT_BATCH_SIZE:
+                flush_pending()
 
+        flush_pending()
         if not seen:
             raise RuntimeError("US TTAB source produced no proceeding records")
         row_counts = publisher.close()
