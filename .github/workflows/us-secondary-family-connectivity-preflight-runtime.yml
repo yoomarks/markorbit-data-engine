@@ -1,0 +1,48 @@
+name: US Secondary Family Connectivity Preflight Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/preflight-us-secondary-family-target-to-source-connectivity.ps1'
+      - 'scripts/apply-us-secondary-family-target-schema.ps1'
+      - 'tests/test_us_secondary_family_connectivity_preflight_contract.py'
+      - '.github/workflows/us-secondary-family-connectivity-preflight-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run connectivity preflight ContractOnly under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            .\scripts\preflight-us-secondary-family-target-to-source-connectivity.ps1 `
+            -ExpectedMainSha '8fc783eb2b60b2341592e80953ec55007d1ad00b' `
+            -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $output -join "`n"
+          if ($text -notmatch 'US_SECONDARY_FAMILY_CONNECTIVITY_PREFLIGHT_CONTRACT_PASS') { throw 'Contract marker missing.' }
+          if ($text -notmatch 'copy_authorized=False') { throw 'Copy safety marker missing.' }
+          if ($text -notmatch 'credential_values_persisted=False') { throw 'Credential safety marker missing.' }
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+      - name: Run connectivity preflight contract tests
+        run: python -m pytest tests/test_us_secondary_family_connectivity_preflight_contract.py -q
