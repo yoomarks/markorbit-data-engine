@@ -128,6 +128,21 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "semantics": "current_official_name_facts_no_identity_resolution",
                 },
                 {
+                    "path": "/api/v1/cn/cases/{application_number}/relationships",
+                    "query": {
+                        "scope": {
+                            "type": "enum",
+                            "default": "all",
+                            "values": ["current", "historical", "all"],
+                        }
+                    },
+                    "pagination": "bounded_limit_no_cursor",
+                    "read_model": "CN_RELATIONSHIP_TIMELINE_V1",
+                    "event_ceiling": 5000,
+                    "authority": "DERIVED_FROM_OFFICIAL_HISTORY",
+                    "legal_effective_dates": False,
+                },
+                {
                     "path": "/api/v1/cn/discovery/preliminary-publications",
                     "query": {
                         "application_number_start": {"type": "string", "required": True, "semantics": "inclusive"},
