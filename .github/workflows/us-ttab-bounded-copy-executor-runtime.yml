@@ -1,0 +1,50 @@
+name: US TTAB Bounded Copy Executor Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/apply-us-ttab-bounded-copy.ps1'
+      - 'scripts/review-us-assignment-target-ttab-copy.ps1'
+      - 'tests/test_us_ttab_bounded_copy_executor_contract.py'
+      - '.github/workflows/us-ttab-bounded-copy-executor-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run bounded copy executor ContractOnly under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            .\scripts\apply-us-ttab-bounded-copy.ps1 `
+            -ExpectedMainSha '0000000000000000000000000000000000000000' `
+            -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $output -join "`n"
+          if ($text -notmatch 'US_TTAB_BOUNDED_COPY_EXECUTOR_CONTRACT_PASS') { throw 'Contract marker missing.' }
+          if ($text -notmatch 'copy_executed=False') { throw 'Copy safety marker missing.' }
+          if ($text -notmatch 'authority_consumed=False') { throw 'Authority safety marker missing.' }
+          if ($text -notmatch 'assignment_mutation_authorized=False') { throw 'TTAB safety marker missing.' }
+          if ($text -notmatch 'credential_values_persisted=False') { throw 'Credential safety marker missing.' }
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+      - name: Run bounded copy executor contract tests
+        run: python -m pytest tests/test_us_ttab_bounded_copy_executor_contract.py -q
