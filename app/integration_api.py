@@ -42,6 +42,13 @@ from app.us.applicant_owner_read import (
     revalidate_applicant as us_read_applicant_exact,
     revalidate_trademark as us_read_trademark_exact,
 )
+from app.us.natural_lapse_discovery import (
+    DEFAULT_PAGE_SIZE as US_NATURAL_LAPSE_DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE as US_NATURAL_LAPSE_MAX_PAGE_SIZE,
+    NaturalLapseDiscoveryRequest,
+    NaturalLapseUnavailable,
+    execute_page as execute_us_natural_lapse_page,
+)
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
 from app.us_assignment.api import us_assignments_for_serial
@@ -189,6 +196,67 @@ def integration_cn_preliminary_publication_discovery(
         payload=page,
     )
 
+
+_US_NATURAL_LAPSE_QUERY_FIELDS = {
+    "lapse_reason",
+    "event_date_start",
+    "event_date_end",
+    "nice_class",
+    "serial_number_start",
+    "serial_number_end",
+    "page_size",
+    "cursor",
+}
+
+
+@router.get("/us/discovery/natural-lapses")
+def integration_us_natural_lapse_discovery(
+    request: Request,
+    lapse_reason: str = Query(..., min_length=1, max_length=128),
+    event_date_start: date = Query(...),
+    event_date_end: date = Query(...),
+    nice_class: int | None = Query(default=None, ge=1, le=45),
+    serial_number_start: str | None = Query(default=None, min_length=1, max_length=128),
+    serial_number_end: str | None = Query(default=None, min_length=1, max_length=128),
+    page_size: int = Query(
+        default=US_NATURAL_LAPSE_DEFAULT_PAGE_SIZE,
+        ge=1,
+        le=US_NATURAL_LAPSE_MAX_PAGE_SIZE,
+    ),
+    cursor: str | None = Query(default=None, min_length=1, max_length=8192),
+) -> dict[str, Any]:
+    reject_unknown_query(request, _US_NATURAL_LAPSE_QUERY_FIELDS)
+    try:
+        page = execute_us_natural_lapse_page(
+            NaturalLapseDiscoveryRequest(
+                lapse_reason=lapse_reason,
+                event_date_start=event_date_start,
+                event_date_end=event_date_end,
+                nice_class=nice_class,
+                serial_number_start=serial_number_start,
+                serial_number_end=serial_number_end,
+                page_size=page_size,
+                cursor=cursor,
+            ),
+            client=accepted_us_target_read_client(),
+        )
+    except NaturalLapseUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_NATURAL_LAPSE_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+                "result_state": "UNAVAILABLE",
+            },
+        ) from exc
+    except DiscoveryContractError as exc:
+        raise _discovery_http_error(exc) from exc
+    return _envelope(
+        jurisdiction="US",
+        resource_kind="NATURAL_LAPSE_SOURCE_FACT_DISCOVERY",
+        payload=page,
+    )
 
 @router.get("/us/cases/{serial_number}")
 def integration_us_case(serial_number: str) -> dict[str, Any]:
