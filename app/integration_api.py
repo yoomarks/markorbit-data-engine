@@ -10,6 +10,12 @@ from app.cn.applicant_owner_read import (
     read_portfolio as cn_read_applicant_portfolio,
     read_trademark_exact as cn_read_trademark_exact,
 )
+from app.cn.agent_name_lookup import (
+    AgentNameLookupInvalid,
+    AgentNameLookupScopeExceeded,
+    AgentNameLookupUnavailable,
+    agents_by_name,
+)
 from app.cn.discovery_preliminary_publication import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -195,6 +201,49 @@ def integration_cn_case(application_number: str) -> dict[str, Any]:
     return _envelope(
         jurisdiction="CN", resource_kind="TRADEMARK_CASE", payload=cn_case(application_number)
     )
+
+
+@router.get("/cn/agents/by-name")
+def integration_cn_agents_by_name(
+    name: Annotated[str, Query(min_length=1, max_length=512)],
+) -> dict[str, Any]:
+    try:
+        payload = agents_by_name(clickhouse_client(), name)
+    except AgentNameLookupInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_AGENT_NAME_LOOKUP_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except AgentNameLookupScopeExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "DATA_ENGINE_AGENT_NAME_LOOKUP_SCOPE_EXCEEDED",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except AgentNameLookupUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_AGENT_NAME_LOOKUP_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    result = _envelope(
+        jurisdiction="CN",
+        resource_kind="AGENT_NAME_FACT_MATCHES",
+        payload=payload,
+    )
+    if payload["match_count"] == 0:
+        result["fact_state"] = "not_found"
+    return result
 
 
 @router.get("/cn/discovery/preliminary-publications")

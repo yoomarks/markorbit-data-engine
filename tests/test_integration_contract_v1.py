@@ -48,6 +48,7 @@ def test_main_registers_stable_integration_routes_outside_admin_plane():
     expected = {
         "/api/v1/contract",
         "/api/v1/cn/cases/{application_number}",
+        "/api/v1/cn/agents/by-name",
         "/api/v1/us/cases/{serial_number}",
         "/api/v1/us/cases/{serial_number}/events",
         "/api/v1/us/attorneys/by-name",
@@ -78,6 +79,26 @@ def test_cn_case_wrapper_preserves_owner_and_delegates(monkeypatch):
     assert result["resource_kind"] == "TRADEMARK_CASE"
     assert result["legal_conclusion"] is False
     assert result["payload"]["case"]["application_number"] == "123456"
+
+
+def test_cn_agent_name_wrapper_preserves_fact_boundary(monkeypatch):
+    monkeypatch.setattr(integration_api, "clickhouse_client", lambda: object())
+    monkeypatch.setattr(
+        integration_api,
+        "agents_by_name",
+        lambda _client, name: {
+            "input_name": name,
+            "normalized_name": "示例代理事务所",
+            "match_count": 1,
+            "matches": [{"agent_code": "A100", "agent_name": name}],
+        },
+    )
+
+    result = integration_api.integration_cn_agents_by_name("示例代理事务所")
+
+    assert result["resource_kind"] == "AGENT_NAME_FACT_MATCHES"
+    assert result["legal_conclusion"] is False
+    assert result["payload"]["matches"][0]["agent_code"] == "A100"
 
 
 def test_change_feed_wrapper_preserves_cursor_payload(monkeypatch):
