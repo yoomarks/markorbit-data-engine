@@ -355,6 +355,19 @@
         "pagination": "none"
       },
       {
+        "path": "/api/v1/us/cases/{serial_number}/events",
+        "query": {
+          "limit": {
+            "type": "integer",
+            "default": 500,
+            "min": 1,
+            "max": 5000
+          }
+        },
+        "pagination": "bounded_limit_no_cursor",
+        "read_model": "US_EVENT_SERIAL_LOOKUP_V1"
+      },
+      {
         "path": "/api/v1/us/registrations/{registration_number}",
         "query": {},
         "pagination": "bounded_exact_lookup",

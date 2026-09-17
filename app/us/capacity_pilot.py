@@ -15,6 +15,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 # Keep this aligned with app.us.ingest.OUTPUT_PACKAGE_COLUMNS.
 APPLICATION_OUTPUT_TABLES = {
     "us_case_current",
+    "us_event_serial_history",
     "us_registration_candidate_lookup",
     "us_owner_current",
     "us_applicant_candidate_current",
@@ -35,6 +36,8 @@ def _family(table: str) -> str:
     if table == "us_case_current":
         return "case_core"
     if table == "us_registration_candidate_lookup":
+        return "serving_lookup"
+    if table == "us_event_serial_history":
         return "serving_lookup"
     if table in {"us_owner_current", "us_correspondent_current"}:
         return "party_contact"

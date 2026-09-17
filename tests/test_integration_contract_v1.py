@@ -49,6 +49,7 @@ def test_main_registers_stable_integration_routes_outside_admin_plane():
         "/api/v1/contract",
         "/api/v1/cn/cases/{application_number}",
         "/api/v1/us/cases/{serial_number}",
+        "/api/v1/us/cases/{serial_number}/events",
         "/api/v1/us/registrations/{registration_number}",
         "/api/v1/us/cases/{serial_number}/360",
         "/api/v1/us/cases/{serial_number}/history",
@@ -128,3 +129,22 @@ def test_registration_wrapper_preserves_fact_boundary(monkeypatch):
     assert result["fact_state"] == "observed"
     assert result["legal_conclusion"] is False
     assert result["payload"]["trademarks"][0]["serial_number"] == "90000001"
+
+
+def test_event_timeline_wrapper_preserves_fact_boundary(monkeypatch):
+    monkeypatch.setattr(integration_api, "accepted_us_target_read_client", lambda: object())
+    monkeypatch.setattr(
+        integration_api,
+        "events_for_serial",
+        lambda _client, serial, limit: {
+            "serial_number": serial,
+            "event_count": 1,
+            "events": [{"event_code": "DOCK"}],
+        },
+    )
+
+    result = integration_api.integration_us_case_events("90000001", limit=20)
+
+    assert result["resource_kind"] == "TRADEMARK_EVENT_TIMELINE"
+    assert result["legal_conclusion"] is False
+    assert result["payload"]["events"][0]["event_code"] == "DOCK"

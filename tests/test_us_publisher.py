@@ -4,6 +4,7 @@ import uuid
 
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, USBatchPublisher, bundle_rows, case_id
+from app.us.event_serial_lookup import US_EVENT_SERIAL_LOOKUP_TABLE
 from app.us.registration_lookup import US_REGISTRATION_LOOKUP_TABLE
 
 
@@ -43,6 +44,7 @@ def test_bundle_rows_have_deterministic_identity_and_lineage() -> None:
     assert lookup_values["registration_number"] == "7123456"
     assert lookup_values["serial_number"] == "97123456"
     assert lookup_values["source_package_id"] == package_id
+    assert rows[US_EVENT_SERIAL_LOOKUP_TABLE] == rows["markorbit_facts.us_event_history"]
 
 
 def test_batch_publisher_emits_populated_legacy_fixture_families() -> None:
@@ -65,6 +67,7 @@ def test_batch_publisher_emits_populated_legacy_fixture_families() -> None:
         "markorbit_facts.us_owner_current",
         "markorbit_facts.us_classification_current",
         "markorbit_facts.us_event_history",
+        US_EVENT_SERIAL_LOOKUP_TABLE,
         "markorbit_facts.us_statement_current",
         US_REGISTRATION_LOOKUP_TABLE,
     }

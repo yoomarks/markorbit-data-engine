@@ -44,6 +44,12 @@ from app.us.applicant_owner_read import (
     revalidate_applicant as us_read_applicant_exact,
     revalidate_trademark as us_read_trademark_exact,
 )
+from app.us.event_serial_lookup import (
+    EventSerialLookupInvalid,
+    EventSerialLookupScopeExceeded,
+    EventSerialLookupUnavailable,
+    events_for_serial,
+)
 from app.us.natural_lapse_discovery import (
     DEFAULT_PAGE_SIZE as US_NATURAL_LAPSE_DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE as US_NATURAL_LAPSE_MAX_PAGE_SIZE,
@@ -274,6 +280,49 @@ def integration_us_natural_lapse_discovery(
 def integration_us_case(serial_number: str) -> dict[str, Any]:
     return _envelope(
         jurisdiction="US", resource_kind="TRADEMARK_CASE", payload=us_case(serial_number)
+    )
+
+
+@router.get("/us/cases/{serial_number}/events")
+def integration_us_case_events(
+    serial_number: str,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+) -> dict[str, Any]:
+    try:
+        payload = events_for_serial(
+            accepted_us_target_read_client(), serial_number, limit=limit
+        )
+    except EventSerialLookupInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_EVENT_TIMELINE_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except EventSerialLookupScopeExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "DATA_ENGINE_EVENT_TIMELINE_SCOPE_EXCEEDED",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except EventSerialLookupUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_EVENT_TIMELINE_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    return _envelope(
+        jurisdiction="US",
+        resource_kind="TRADEMARK_EVENT_TIMELINE",
+        payload=payload,
     )
 
 
