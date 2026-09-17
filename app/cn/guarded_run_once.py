@@ -10,6 +10,7 @@ from app.cn.goods_lifecycle import ensure_m16_goods_replay_boundary, ensure_m16_
 from app.cn.package_meta import infer_package_descriptor
 from app.cn.preflight_m16_real_data import build_preflight
 from app.cn.replay_plan import collect_incoming_packages, evaluate_replay_plan
+from app.cn.replay_readiness import SUPPORTED_ENGINE_VERSIONS
 from app.config import get_settings
 from app.db import postgres_conn
 from app.jobs import scan_and_ingest_cn
@@ -139,11 +140,13 @@ def build_execution_guard() -> dict[str, Any]:
         incoming_dir,
         registered_partitions=registered,
     )
-    if engine_version() != "M1.6":
+    current_engine_version = engine_version()
+    if current_engine_version not in SUPPORTED_ENGINE_VERSIONS:
         policy_issues.append(
             {
                 "type": "UNEXPECTED_ENGINE_VERSION",
-                "engine_version": engine_version(),
+                "engine_version": current_engine_version,
+                "supported_engine_versions": sorted(SUPPORTED_ENGINE_VERSIONS),
             }
         )
 

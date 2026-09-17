@@ -133,6 +133,48 @@ def test_registered_continuation_checks_m16_replay_boundary(tmp_path: Path, monk
     assert called == ["schema", "boundary"]
 
 
+def test_registered_continuation_accepts_supported_m17_engine(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "incoming" / "cn").mkdir(parents=True)
+    called: list[str] = []
+    monkeypatch.setattr(guard_module, "get_settings", lambda: SimpleNamespace(raw_data_root=tmp_path))
+    monkeypatch.setattr(
+        guard_module,
+        "_registered_partitions",
+        lambda: [_registered("2026_8.zip", "UPDATE_MONTH", "2026-08")],
+    )
+    monkeypatch.setattr(guard_module, "_retry_required_packages", lambda: [])
+    monkeypatch.setattr(guard_module, "engine_version", lambda: "M1.7")
+    monkeypatch.setattr(guard_module, "ensure_m16_goods_schema", lambda: called.append("schema"))
+    monkeypatch.setattr(
+        guard_module,
+        "ensure_m16_goods_replay_boundary",
+        lambda: called.append("boundary"),
+    )
+
+    guard = guard_module.build_execution_guard()
+    assert guard["allowed"] is True
+    assert guard["mode"] == "REGISTERED_REPLAY_CONTINUATION"
+    assert called == ["schema", "boundary"]
+
+
+def test_guard_rejects_unsupported_engine_version(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "incoming" / "cn").mkdir(parents=True)
+    monkeypatch.setattr(guard_module, "get_settings", lambda: SimpleNamespace(raw_data_root=tmp_path))
+    monkeypatch.setattr(guard_module, "_registered_partitions", lambda: [])
+    monkeypatch.setattr(guard_module, "engine_version", lambda: "M1.8")
+
+    guard = guard_module.build_execution_guard()
+    assert guard["allowed"] is False
+    assert guard["mode"] == "INPUT_POLICY_BLOCKED"
+    assert guard["issues"] == [
+        {
+            "type": "UNEXPECTED_ENGINE_VERSION",
+            "engine_version": "M1.8",
+            "supported_engine_versions": ["M1.6", "M1.7"],
+        }
+    ]
+
+
 def test_failed_package_blocks_normal_replay_until_retry(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "incoming" / "cn").mkdir(parents=True)
     monkeypatch.setattr(guard_module, "get_settings", lambda: SimpleNamespace(raw_data_root=tmp_path))
