@@ -35,6 +35,8 @@ from app.integration_runtime import enforce_integration_rate_limit
 from app.integration_security import integration_security_contract, require_integration_auth
 from app.main_core import cn_case, health, us_case
 from app.platform_contract import platform_contract
+from app.read_query_capability import read_query_capability_contract
+from app.temporal_relationship_contract import temporal_relationship_contract
 from app.us.accepted_target_read import accepted_us_target_read_client
 from app.us.applicant_owner_read import (
     discover_applicants_by_name as us_discover_applicants_by_name,
@@ -162,6 +164,10 @@ def integration_contract() -> dict[str, Any]:
         "stable_resources": [
             resource["path"] for resource in descriptor["query_contract"]["resources"]
         ],
+        "foundation_contracts": {
+            "temporal_relationship": temporal_relationship_contract(),
+            "read_query_capability": read_query_capability_contract(),
+        },
         "g0_contract": descriptor,
     }
 

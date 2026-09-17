@@ -15,6 +15,7 @@ from app.read_performance_baseline import (
     run_benchmark_case,
     run_benchmark_suite,
 )
+from app.read_query_capability import read_query_capability_contract
 
 
 CAPABILITY_REGISTRY = Path("docs/integrations/markorbit/READ_QUERY_CAPABILITY_V1.json")
@@ -136,3 +137,4 @@ def test_capability_registry_freezes_budget_and_required_query_shapes() -> None:
         "max_threads": DEFAULT_QUERY_BUDGET["max_threads"],
     }
     assert required <= {capability["id"] for capability in registry["capabilities"]}
+    assert registry == read_query_capability_contract()
