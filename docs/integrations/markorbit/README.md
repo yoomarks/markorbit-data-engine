@@ -13,6 +13,8 @@ Canonical contract ID: `MARKORBIT_DATA_ENGINE_INTEGRATION_V1`.
 
 Runtime self-description is `GET /api/v1/contract`. Consumers must not depend on Data Engine PostgreSQL, ClickHouse, raw-file layout, or internal table names.
 
+The additive `foundation_contracts` section publishes the temporal relationship vocabulary and the production-benchmarked read-query capability allowlist. A capability marked unsupported must fail closed; consumers must not translate it into arbitrary SQL or infer that a missing result is a factual negative.
+
 `MO-DE-006` has real cross-repository acceptance evidence against Data Engine runtime SHA `42637eec302b1e2feeb6825e4f7b5208f4d00b9e` and MarkOrbit G1 merge `20bd9710e4af02e92fcfaa737ef67a9e58479145`. The provider ledger records the exact acceptance workflow and matrix. Global G1 closeout still requires the MarkOrbit consumer ledger to reference the final provider evidence state.
 
 `MO-DE-007` and `MO-DE-008` remain deferred decisions and are not implemented by G1. No production deployment or live worker operation is authorized by these integration records.

@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+READ_QUERY_CAPABILITY_VERSION = "READ_QUERY_CAPABILITY_V1"
+
+
+def read_query_capability_contract() -> dict[str, Any]:
+    return {
+        "contract_version": READ_QUERY_CAPABILITY_VERSION,
+        "arbitrary_sql": False,
+        "pagination": "KEYSET_CURSOR_BOUND_TO_QUERY_AND_SNAPSHOT",
+        "unsupported_behavior": "CAPABILITY_ERROR_FAIL_CLOSED",
+        "default_budget": {
+            "max_execution_time_seconds": 3,
+            "max_rows_to_read": 1_000_000,
+            "max_bytes_to_read": 268_435_456,
+            "max_result_rows": 201,
+            "max_threads": 1,
+        },
+        "required_metrics": [
+            "p50_ms",
+            "p95_ms",
+            "read_rows",
+            "read_bytes",
+            "result_count",
+            "query_cache_hit",
+            "query_plan",
+            "uses_final",
+            "uses_offset",
+            "uses_exact_count",
+            "budget_rejection",
+        ],
+        "candidate_slos_ms": {
+            "exact_trademark": 150,
+            "indexed_current_first_page": 300,
+            "indexed_subsequent_cursor_page": 200,
+            "entity_name_resolve": 300,
+            "indexed_historical_relationship_page": 400,
+        },
+        "capabilities": [
+            {
+                "id": "exact_trademark_application",
+                "jurisdictions": ["CN", "US"],
+                "state": "SUPPORTED_INDEXED",
+                "key": "application_number_or_serial_number",
+                "notes": ("Primary-key equality; exact registration-number lookup is separate."),
+            },
+            {
+                "id": "exact_trademark_registration",
+                "jurisdictions": ["CN", "US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": "Current case tables are not ordered by registration number.",
+            },
+            {
+                "id": "applicant_owner_name_resolve",
+                "jurisdictions": ["CN", "US"],
+                "state": "SUPPORTED_INDEXED_EXACT_NAME",
+                "notes": (
+                    "Only canonical exact-name paging is frozen; contains/fuzzy search is not implied."
+                ),
+            },
+            {
+                "id": "applicant_owner_name_resolve_cursor_page",
+                "jurisdictions": ["CN", "US"],
+                "state": "SUPPORTED_INDEXED",
+                "notes": (
+                    "Cursor position follows the complete lookup sort key and remains query/snapshot bound."
+                ),
+            },
+            {
+                "id": "agent_attorney_name_resolve",
+                "jurisdictions": ["CN", "US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": (
+                    "CN is ordered by agent_code and US correspondent facts by serial_number."
+                ),
+            },
+            {
+                "id": "current_entity_portfolio",
+                "jurisdictions": ["US"],
+                "state": "SUPPORTED_INDEXED",
+                "notes": "US applicant candidate projection is ordered by candidate key.",
+            },
+            {
+                "id": "current_entity_portfolio_cursor_page",
+                "jurisdictions": ["US"],
+                "state": "SUPPORTED_INDEXED",
+                "notes": "Cursor position follows candidate_key, serial_number, owner_key.",
+            },
+            {
+                "id": "current_entity_portfolio",
+                "jurisdictions": ["CN"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": (
+                    "CN current party facts are ordered by application number, not entity_id."
+                ),
+            },
+            {
+                "id": "historical_entity_portfolio",
+                "jurisdictions": ["CN", "US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": (
+                    "CN party relation history is empty and Assignment party names have no entity-first lookup."
+                ),
+            },
+            {
+                "id": "filing_date_range",
+                "jurisdictions": ["CN", "US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": "Current case sort keys are application/serial numbers.",
+            },
+            {
+                "id": "status_class_filtered_list",
+                "jurisdictions": ["CN", "US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": ("No list projection is ordered for status/class plus cursor identity."),
+            },
+            {
+                "id": "relationship_timeline",
+                "jurisdictions": ["CN", "US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": (
+                    "CN observed events and US event history are ordered by event hashes, not trademark identity."
+                ),
+            },
+            {
+                "id": "trademark_360",
+                "jurisdictions": ["CN", "US"],
+                "state": "DEGRADED_UNBOUNDED_TIMELINE",
+                "notes": (
+                    "Exact current families are mostly identity-keyed; event expansion is not."
+                ),
+            },
+            {
+                "id": "assignment_lookup",
+                "jurisdictions": ["US"],
+                "state": "UNSUPPORTED_REQUIRES_LATEST_STATE_READ_MODEL",
+                "notes": (
+                    "Property lookup is serial-keyed, but the current API rebuilds latest record state corpus-wide."
+                ),
+            },
+            {
+                "id": "ttab_lookup",
+                "jurisdictions": ["US"],
+                "state": "UNSUPPORTED_REQUIRES_LATEST_STATE_READ_MODEL",
+                "notes": (
+                    "Property lookup is serial-keyed, but the current API rebuilds latest proceeding state corpus-wide."
+                ),
+            },
+        ],
+    }

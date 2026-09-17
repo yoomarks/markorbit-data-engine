@@ -19,6 +19,13 @@ def test_integration_contract_freezes_service_and_write_boundaries():
     assert contract["security"]["required_mode"] == "required"
     assert contract["security"]["fail_closed_when_required"] is True
     assert contract["planes"]["admin"]["part_of_consumer_contract"] is False
+    assert contract["foundation_contracts"]["temporal_relationship"]["contract_version"] == (
+        "MARKORBIT_TEMPORAL_RELATIONSHIP_V1"
+    )
+    assert contract["foundation_contracts"]["read_query_capability"]["contract_version"] == (
+        "READ_QUERY_CAPABILITY_V1"
+    )
+    assert contract["foundation_contracts"]["read_query_capability"]["arbitrary_sql"] is False
 
 
 def test_every_versioned_integration_route_is_read_only_and_authenticated():
