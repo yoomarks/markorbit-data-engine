@@ -16,6 +16,12 @@ from app.cn.agent_name_lookup import (
     AgentNameLookupUnavailable,
     agents_by_name,
 )
+from app.cn.relationship_timeline import (
+    RelationshipTimelineInvalid,
+    RelationshipTimelineScopeExceeded,
+    RelationshipTimelineUnavailable,
+    relationships_for_trademark,
+)
 from app.cn.discovery_preliminary_publication import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -244,6 +250,49 @@ def integration_cn_agents_by_name(
     if payload["match_count"] == 0:
         result["fact_state"] = "not_found"
     return result
+
+
+@router.get("/cn/cases/{application_number}/relationships")
+def integration_cn_case_relationships(
+    application_number: str,
+    scope: Annotated[str, Query(pattern="^(current|historical|all)$")] = "all",
+) -> dict[str, Any]:
+    try:
+        payload = relationships_for_trademark(
+            clickhouse_client(), application_number, scope=scope
+        )
+    except RelationshipTimelineInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_RELATIONSHIP_TIMELINE_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except RelationshipTimelineScopeExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "DATA_ENGINE_RELATIONSHIP_TIMELINE_SCOPE_EXCEEDED",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except RelationshipTimelineUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_RELATIONSHIP_TIMELINE_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    return _envelope(
+        jurisdiction="CN",
+        resource_kind="TRADEMARK_RELATIONSHIP_TIMELINE",
+        payload=payload,
+    )
 
 
 @router.get("/cn/discovery/preliminary-publications")

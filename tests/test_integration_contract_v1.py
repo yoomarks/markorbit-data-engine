@@ -49,6 +49,7 @@ def test_main_registers_stable_integration_routes_outside_admin_plane():
         "/api/v1/contract",
         "/api/v1/cn/cases/{application_number}",
         "/api/v1/cn/agents/by-name",
+        "/api/v1/cn/cases/{application_number}/relationships",
         "/api/v1/us/cases/{serial_number}",
         "/api/v1/us/cases/{serial_number}/events",
         "/api/v1/us/attorneys/by-name",
@@ -99,6 +100,30 @@ def test_cn_agent_name_wrapper_preserves_fact_boundary(monkeypatch):
     assert result["resource_kind"] == "AGENT_NAME_FACT_MATCHES"
     assert result["legal_conclusion"] is False
     assert result["payload"]["matches"][0]["agent_code"] == "A100"
+
+
+def test_cn_relationship_timeline_wrapper_preserves_fact_boundary(monkeypatch):
+    monkeypatch.setattr(integration_api, "clickhouse_client", lambda: object())
+    monkeypatch.setattr(
+        integration_api,
+        "relationships_for_trademark",
+        lambda _client, application, scope: {
+            "application_number": application,
+            "scope": scope,
+            "relationship_count": 1,
+            "relationships": [{"edge": {"relationship_type": "FORMER_OWNER"}}],
+        },
+    )
+
+    result = integration_api.integration_cn_case_relationships(
+        "12345678", scope="historical"
+    )
+
+    assert result["resource_kind"] == "TRADEMARK_RELATIONSHIP_TIMELINE"
+    assert result["legal_conclusion"] is False
+    assert result["payload"]["relationships"][0]["edge"]["relationship_type"] == (
+        "FORMER_OWNER"
+    )
 
 
 def test_change_feed_wrapper_preserves_cursor_payload(monkeypatch):

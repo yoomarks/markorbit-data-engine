@@ -147,11 +147,18 @@ def read_query_capability_contract() -> dict[str, Any]:
             },
             {
                 "id": "relationship_timeline",
-                "jurisdictions": ["CN", "US"],
-                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "jurisdictions": ["CN"],
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
                 "notes": (
-                    "Generic temporal relationship edges are not yet materialized by trademark identity."
+                    "OWNER/CO_OWNER/AGENT observation history is application-keyed and "
+                    "deterministically derives current/former edges; production remains fail-closed."
                 ),
+            },
+            {
+                "id": "relationship_timeline",
+                "jurisdictions": ["US"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": "Generic temporal relationship edges are not yet materialized by trademark identity.",
             },
             {
                 "id": "trademark_360",
