@@ -11,6 +11,7 @@ from app.repository import create_job_run, finish_job_run, get_package, update_p
 from app.scanner import sha256_file
 from app.us.applicant_candidate_index import APPLICANT_INDEX_TABLE
 from app.us.change_history import CASE_OBSERVATION_TABLE
+from app.us.event_serial_lookup import US_EVENT_SERIAL_LOOKUP_TABLE
 from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import USCaseBundle
 from app.us.parser import iter_case_bundles, iter_case_bundles_fragmented
@@ -24,6 +25,7 @@ LARGE_XML_FRAGMENT_THRESHOLD_BYTES = 2_000_000_000
 
 OUTPUT_PACKAGE_COLUMNS = {
     "markorbit_facts.us_case_current": "last_source_package_id",
+    US_EVENT_SERIAL_LOOKUP_TABLE: "source_package_id",
     US_REGISTRATION_LOOKUP_TABLE: "source_package_id",
     "markorbit_facts.us_owner_current": "last_source_package_id",
     APPLICANT_INDEX_TABLE: "last_source_package_id",

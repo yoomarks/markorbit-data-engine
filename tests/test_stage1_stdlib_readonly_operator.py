@@ -17,7 +17,7 @@ from app.us.target_canary import APPLICATION_CANARY_TABLES
 from app.us.replay_executor import build_replay_plan
 from app.us.target_canary_review import FINAL_READY_DECISION
 from app.us.target_canary_stage1_plan import build_stage1_replay_plan
-assert len(APPLICATION_CANARY_TABLES) == 13
+assert len(APPLICATION_CANARY_TABLES) == 14
 assert "markorbit_facts.us_applicant_candidate_current" not in APPLICATION_CANARY_TABLES
 assert callable(build_replay_plan)
 assert callable(build_stage1_replay_plan)

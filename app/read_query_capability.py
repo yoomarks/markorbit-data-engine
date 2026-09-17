@@ -127,11 +127,20 @@ def read_query_capability_contract() -> dict[str, Any]:
                 "notes": ("No list projection is ordered for status/class plus cursor identity."),
             },
             {
+                "id": "trademark_event_timeline",
+                "jurisdictions": ["US"],
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "notes": (
+                    "Official event facts are serial-keyed in a bounded serving projection; "
+                    "production remains fail-closed until its projection backfill is accepted."
+                ),
+            },
+            {
                 "id": "relationship_timeline",
                 "jurisdictions": ["CN", "US"],
                 "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
                 "notes": (
-                    "CN observed events and US event history are ordered by event hashes, not trademark identity."
+                    "Generic temporal relationship edges are not yet materialized by trademark identity."
                 ),
             },
             {

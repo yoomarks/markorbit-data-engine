@@ -14,6 +14,10 @@ from app.applicant_name_lookup import (
     US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS,
 )
 from app.us.model import USCaseBundle
+from app.us.event_serial_lookup import (
+    US_EVENT_SERIAL_LOOKUP_TABLE,
+    US_EVENT_SERIAL_LOOKUP_WRITE_COLUMNS,
+)
 from app.us.registration_lookup import (
     US_REGISTRATION_LOOKUP_TABLE,
     US_REGISTRATION_LOOKUP_WRITE_COLUMNS,
@@ -281,6 +285,7 @@ MADRID_EVENT_COLUMNS = [
 
 TABLE_COLUMNS = {
     "markorbit_facts.us_case_current": CASE_COLUMNS,
+    US_EVENT_SERIAL_LOOKUP_TABLE: list(US_EVENT_SERIAL_LOOKUP_WRITE_COLUMNS),
     US_REGISTRATION_LOOKUP_TABLE: list(US_REGISTRATION_LOOKUP_WRITE_COLUMNS),
     "markorbit_facts.us_owner_current": OWNER_COLUMNS,
     APPLICANT_INDEX_TABLE: APPLICANT_INDEX_COLUMNS,
@@ -529,6 +534,9 @@ def bundle_rows(
                 package_id,
                 source_rank,
             ]
+        )
+        rows[US_EVENT_SERIAL_LOOKUP_TABLE].append(
+            list(rows["markorbit_facts.us_event_history"][-1])
         )
 
     for statement in bundle.statements:

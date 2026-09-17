@@ -36,6 +36,19 @@ def test_clickhouse_hot_cold_policy_maps_default_to_hot_and_sata_to_cold() -> No
     assert float(storage.findtext("policies/hot_cold/move_factor") or "0") == 0.10
 
 
+def test_default_compose_defines_portable_hot_us_policy() -> None:
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert (
+        "default-hot-us-policy.xml:/etc/clickhouse-server/config.d/default-hot-us-policy.xml:ro"
+        in compose
+    )
+
+    config = ROOT / "database" / "clickhouse" / "config" / "default-hot-us-policy.xml"
+    storage = ET.parse(config).getroot().find("storage_configuration")
+    assert storage is not None
+    assert storage.findtext("policies/hot_us_only/volumes/hot/disk") == "default"
+
+
 def test_env_example_documents_current_windows_drive_assignment() -> None:
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
 
