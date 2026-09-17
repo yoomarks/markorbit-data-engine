@@ -236,6 +236,30 @@ def test_us_same_name_different_address_stays_distinct_review_candidate():
     assert first["candidate_key"] != second["candidate_key"]
 
 
+def test_us_candidate_materialization_fails_closed_above_contribution_ceiling():
+    rows = [_us_owner_row()] * (us_owner.MAX_APPLICANT_CONTRIBUTION_ROWS + 1)
+    client = FakeClient(lambda _sql: rows)
+
+    with pytest.raises(OwnerReadUnavailable, match="contribution row ceiling"):
+        us_owner._candidate_rows(client, rows[0]["candidate_key"])
+
+    assert (
+        f"LIMIT {us_owner.MAX_APPLICANT_CONTRIBUTION_ROWS + 1}" in client.queries[0]
+    )
+
+
+def test_us_name_materialization_fails_closed_above_contribution_ceiling():
+    rows = [_us_owner_row()] * (us_owner.MAX_APPLICANT_CONTRIBUTION_ROWS + 1)
+    client = FakeClient(lambda _sql: rows)
+
+    with pytest.raises(OwnerReadUnavailable, match="contribution row ceiling"):
+        us_owner._candidate_rows_for_keys(client, [rows[0]["candidate_key"]])
+
+    assert (
+        f"LIMIT {us_owner.MAX_APPLICANT_CONTRIBUTION_ROWS + 1}" in client.queries[0]
+    )
+
+
 def _us_name_discovery_responder(rows: list[dict]):
     ordered = sorted(rows, key=lambda row: row["candidate_key"])
 

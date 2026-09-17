@@ -25,6 +25,7 @@ from app.version import engine_version
 TRADEMARK_PREFIX = "us:trademark:"
 TRADEMARK_SOURCE_PREFIX = "US_TRADEMARK:"
 READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 1_000_000, "read_overflow_mode": "throw"}
+MAX_APPLICANT_CONTRIBUTION_ROWS = 10_000
 
 @dataclass(frozen=True, slots=True)
 class OwnerReadResult:
@@ -98,13 +99,13 @@ def _candidate_rows(client: Any, candidate_key: str) -> list[dict[str, Any]]:
         WHERE candidate_key = {_sql_text(candidate_key)}
           AND is_deleted = 0
         ORDER BY serial_number ASC, owner_key ASC
-        LIMIT 1000001
+        LIMIT {MAX_APPLICANT_CONTRIBUTION_ROWS + 1}
         """,
         settings=READ_SETTINGS,
     )
     rows = _dict_rows(result)
-    if len(rows) > 1_000_000:
-        raise OwnerReadUnavailable("US Applicant candidate exceeds bounded read ceiling")
+    if len(rows) > MAX_APPLICANT_CONTRIBUTION_ROWS:
+        raise OwnerReadUnavailable("US Applicant candidate exceeds contribution row ceiling")
     return rows
 
 
@@ -215,13 +216,15 @@ def _candidate_rows_for_keys(
         WHERE candidate_key IN ({clause})
           AND is_deleted = 0
         ORDER BY candidate_key ASC, serial_number ASC, owner_key ASC
-        LIMIT 1000001
+        LIMIT {MAX_APPLICANT_CONTRIBUTION_ROWS + 1}
         """,
         settings=READ_SETTINGS,
     )
     rows = _dict_rows(result)
-    if len(rows) > 1_000_000:
-        raise OwnerReadUnavailable("US Applicant name discovery exceeds bounded read ceiling")
+    if len(rows) > MAX_APPLICANT_CONTRIBUTION_ROWS:
+        raise OwnerReadUnavailable(
+            "US Applicant name discovery exceeds contribution row ceiling"
+        )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row.get("candidate_key") or ""), []).append(row)
