@@ -166,13 +166,19 @@ def cached_contact_directory_list(
     offset: int = 0,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
+    normalized_offset = max(0, int(offset))
+    if normalized_offset > runtime_source.MAX_CONTACT_DIRECTORY_OFFSET:
+        raise ValueError(
+            "contact directory offset exceeds bounded ceiling "
+            f"{runtime_source.MAX_CONTACT_DIRECTORY_OFFSET}"
+        )
     normalized = (
         country.strip().upper(),
         segment.strip().upper(),
         channel.strip().upper(),
         query.strip(),
         max(1, min(int(limit), 500)),
-        max(0, int(offset)),
+        normalized_offset,
     )
     return _get_or_load(
         ("directory", *normalized),
