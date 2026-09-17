@@ -1,0 +1,48 @@
+name: US Assignment Target TTAB Copy Review Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/review-us-assignment-target-ttab-copy.ps1'
+      - 'tests/test_us_assignment_target_ttab_copy_review_contract.py'
+      - '.github/workflows/us-assignment-target-ttab-copy-review-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Assignment target + TTAB copy review ContractOnly under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            .\scripts\review-us-assignment-target-ttab-copy.ps1 `
+            -ExpectedMainSha 'a81d0dd1af056aded650a411fa2eca5c3cc01fa8' `
+            -AssignmentSuccessReceiptPath 'CONTRACT_ONLY_NOT_READ.json' `
+            -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $output -join "`n"
+          if ($text -notmatch 'US_ASSIGNMENT_TARGET_TTAB_COPY_REVIEW_CONTRACT_PASS') { throw 'Contract marker missing.' }
+          if ($text -notmatch 'ttab_copy_authorized=False') { throw 'TTAB copy safety marker missing.' }
+          if ($text -notmatch 'credential_values_persisted=False') { throw 'Credential safety marker missing.' }
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+      - name: Run Assignment target + TTAB copy review contract tests
+        run: python -m pytest tests/test_us_assignment_target_ttab_copy_review_contract.py -q
