@@ -1,0 +1,49 @@
+name: US Assignment Bounded Copy Review Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/review-us-assignment-bounded-copy.ps1'
+      - 'scripts/preflight-us-secondary-family-target-to-source-connectivity.ps1'
+      - 'tests/test_us_assignment_bounded_copy_review_contract.py'
+      - '.github/workflows/us-assignment-bounded-copy-review-runtime.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Assignment copy review ContractOnly under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            .\scripts\review-us-assignment-bounded-copy.ps1 `
+            -ExpectedMainSha '680a304952cb24411f7e4981faf2e6ef47dea95a' `
+            -ConnectivityReceiptPath 'CONTRACT_ONLY_NOT_READ.json' `
+            -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $output -join "`n"
+          if ($text -notmatch 'US_ASSIGNMENT_BOUNDED_COPY_REVIEW_CONTRACT_PASS') { throw 'Contract marker missing.' }
+          if ($text -notmatch 'copy_authorized=False') { throw 'Copy safety marker missing.' }
+          if ($text -notmatch 'credential_values_persisted=False') { throw 'Credential safety marker missing.' }
+
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+      - name: Run Assignment copy review contract tests
+        run: python -m pytest tests/test_us_assignment_bounded_copy_review_contract.py -q
