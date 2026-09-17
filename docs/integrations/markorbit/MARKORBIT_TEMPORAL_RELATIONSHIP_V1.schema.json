@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://markorbit.local/contracts/MARKORBIT_TEMPORAL_RELATIONSHIP_V1.schema.json",
+  "title": "MarkOrbit Temporal Relationship V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "edge_id",
+    "fingerprint",
+    "jurisdiction",
+    "relationship_type",
+    "source",
+    "target",
+    "temporal",
+    "evidence",
+    "provenance",
+    "serving_authority",
+    "legal_conclusion"
+  ],
+  "properties": {
+    "contract_version": { "const": "MARKORBIT_TEMPORAL_RELATIONSHIP_V1" },
+    "edge_id": { "type": "string", "pattern": "^rel_[0-9a-f]{32}$" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "jurisdiction": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "relationship_type": {
+      "enum": [
+        "CURRENT_OWNER",
+        "FORMER_OWNER",
+        "CURRENT_APPLICANT",
+        "FORMER_APPLICANT",
+        "CURRENT_AGENT",
+        "FORMER_AGENT",
+        "ATTORNEY",
+        "CORRESPONDENT",
+        "ASSIGNOR",
+        "ASSIGNEE",
+        "ASSIGNMENT_PROPERTY",
+        "OPPOSITION_PLAINTIFF",
+        "OPPOSITION_DEFENDANT",
+        "CANCELLATION_PETITIONER",
+        "CANCELLATION_RESPONDENT",
+        "EX_PARTE_APPEAL_PARTY",
+        "PROCEEDING_PROPERTY",
+        "TRADEMARK_GOODS",
+        "TRADEMARK_CLASS",
+        "CITED_AS_REFERENCE_FOR_REFUSAL"
+      ]
+    },
+    "source": { "$ref": "#/$defs/resource" },
+    "target": { "$ref": "#/$defs/resource" },
+    "temporal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid_from", "valid_to", "observed_at", "event_at", "is_current"],
+      "properties": {
+        "valid_from": { "type": ["string", "null"] },
+        "valid_to": { "type": ["string", "null"] },
+        "observed_at": { "type": "string" },
+        "event_at": { "type": ["string", "null"] },
+        "is_current": { "type": "boolean" }
+      }
+    },
+    "evidence": { "$ref": "#/$defs/evidence" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_level", "derivation"],
+      "properties": {
+        "authority_level": {
+          "enum": ["DIRECT_OFFICIAL", "DERIVED_FROM_OFFICIAL_HISTORY", "INFERRED"]
+        },
+        "derivation": {
+          "oneOf": [{ "$ref": "#/$defs/derivation" }, { "type": "null" }]
+        }
+      }
+    },
+    "serving_authority": {
+      "enum": ["DATA_ENGINE_FACT_READ_MODEL", "METHOD_OUTPUT_ONLY"]
+    },
+    "legal_conclusion": { "const": false }
+  },
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resource_type", "resource_id"],
+      "properties": {
+        "resource_type": {
+          "enum": [
+            "TRADEMARK",
+            "ENTITY",
+            "APPLICANT",
+            "OWNER",
+            "AGENT",
+            "ATTORNEY",
+            "CORRESPONDENT",
+            "ASSIGNMENT",
+            "PROCEEDING",
+            "EVENT",
+            "GOODS",
+            "CLASS",
+            "CITATION",
+            "REFERENCE"
+          ]
+        },
+        "resource_id": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_kind",
+        "source_authority",
+        "source_domain",
+        "source_record_id",
+        "source_package_id",
+        "source_uri",
+        "source_hash",
+        "source_document_id",
+        "source_document_version",
+        "evidence_locator"
+      ],
+      "properties": {
+        "evidence_kind": { "enum": ["STRUCTURED_SOURCE", "OFFICIAL_DOCUMENT"] },
+        "source_authority": { "type": "string", "minLength": 1 },
+        "source_domain": { "type": "string", "minLength": 1 },
+        "source_record_id": { "type": ["string", "null"] },
+        "source_package_id": { "type": ["string", "null"] },
+        "source_uri": { "type": ["string", "null"] },
+        "source_hash": { "type": ["string", "null"] },
+        "source_document_id": { "type": ["string", "null"] },
+        "source_document_version": { "type": ["string", "null"] },
+        "evidence_locator": { "type": ["string", "null"] }
+      }
+    },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivation_kind", "identity", "version"],
+      "properties": {
+        "derivation_kind": {
+          "enum": [
+            "DIRECT_MAPPING",
+            "HISTORY_DERIVATION",
+            "DOCUMENT_EXTRACTION",
+            "METHOD_INFERENCE"
+          ]
+        },
+        "identity": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    }
+  }
+}

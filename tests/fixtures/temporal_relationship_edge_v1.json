@@ -1,0 +1,35 @@
+{
+  "authority_level": "DIRECT_OFFICIAL",
+  "derivation": {
+    "derivation_kind": "DOCUMENT_EXTRACTION",
+    "identity": "us-citation-extraction",
+    "version": "1.0.0"
+  },
+  "evidence": {
+    "evidence_kind": "OFFICIAL_DOCUMENT",
+    "evidence_locator": "page=2;paragraph=3",
+    "source_authority": "USPTO",
+    "source_document_id": "doc_uspto_123",
+    "source_document_version": "sha256:document-version",
+    "source_domain": "US_TSDR",
+    "source_hash": "sha256:raw-artifact",
+    "source_package_id": null,
+    "source_record_id": "90000001",
+    "source_uri": "https://tsdr.uspto.gov/documentviewer?caseId=90000001"
+  },
+  "event_at": "2026-01-15",
+  "is_current": false,
+  "jurisdiction": "US",
+  "observed_at": "2026-09-18T00:00:00Z",
+  "relationship_type": "CITED_AS_REFERENCE_FOR_REFUSAL",
+  "source": {
+    "resource_id": "US:90000001",
+    "resource_type": "TRADEMARK"
+  },
+  "target": {
+    "resource_id": "US:1234567",
+    "resource_type": "TRADEMARK"
+  },
+  "valid_from": null,
+  "valid_to": null
+}
