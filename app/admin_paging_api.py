@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from functools import cache
-import math
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.admin_api import (
     JURISDICTION_BY_DOMAIN,
+    RAW_INVENTORY_SCAN_LIMIT,
     _domain_for_jurisdiction,
     _job_domain,
     _raw_inventory,
@@ -21,6 +21,7 @@ from app.db import postgres_conn
 
 
 router = APIRouter(prefix="/api/admin/v2", tags=["admin-v2"])
+MAX_ADMIN_PAGE = 100
 
 CN_STAGE_CHECKPOINT_MAX_AGE_HOURS = int(CHECKPOINT_MAX_AGE.total_seconds() // 3600)
 _CN_STAGE_RESUME_CANDIDATE_SQL = f"""
@@ -42,20 +43,39 @@ def _ensure_stage_checkpoint_schema_once() -> None:
 
 
 def _page_result(
-    items: list[dict[str, Any]], *, page: int, page_size: int, total: int
+    items: list[dict[str, Any]], *, page: int, page_size: int, has_more: bool
 ) -> dict[str, Any]:
-    pages = max(1, math.ceil(total / page_size)) if total else 0
+    if page > 1 and not items:
+        raise HTTPException(
+            status_code=422,
+            detail="page has no results; restart bounded paging from page 1",
+        )
+    if page == MAX_ADMIN_PAGE and has_more:
+        raise HTTPException(
+            status_code=422,
+            detail="result exceeds bounded admin paging; narrow filters or use an indexed export",
+        )
+    offset = (page - 1) * page_size
+    total = offset + len(items) + (1 if has_more else 0)
     return {
         "items": items,
         "page": page,
         "page_size": page_size,
         "total": total,
-        "pages": pages,
+        "pages": page + 1 if has_more else (page if total else 0),
+        "has_more": has_more,
+        "total_is_exact": not has_more,
+        "total_semantics": "EXACT" if not has_more else "LOWER_BOUND",
     }
 
 
 def _normalize_page(page: int, page_size: int) -> tuple[int, int, int]:
     page = max(1, int(page))
+    if page > MAX_ADMIN_PAGE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"page exceeds bounded admin paging ceiling {MAX_ADMIN_PAGE}",
+        )
     page_size = max(10, min(int(page_size), 200))
     return page, page_size, (page - 1) * page_size
 
@@ -65,7 +85,7 @@ def admin_packages_page(
     domain: str = "",
     status: str = "",
     q: str = "",
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1, le=MAX_ADMIN_PAGE),
     page_size: int = Query(default=50, ge=10, le=200),
 ):
     # Existing Postgres volumes do not replay docker init scripts after an upgrade.
@@ -94,7 +114,6 @@ def admin_packages_page(
         params.extend([pattern] * 4)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
 
-    count_sql = f"SELECT count(*) AS total FROM control.source_package AS sp {where}"
     list_sql = f"""
         SELECT sp.package_id, sp.package_sequence, sp.jurisdiction, sp.file_name,
                sp.file_size, sp.sha256, sp.package_kind, sp.partition_dimension,
@@ -120,19 +139,19 @@ def admin_packages_page(
         LEFT JOIN control.cn_package_stage_checkpoint AS csc
           ON csc.package_id = sp.package_id
         {where}
-        ORDER BY sp.source_rank DESC, sp.package_sequence DESC
+        ORDER BY sp.source_rank DESC, sp.package_sequence DESC, sp.package_id DESC
         LIMIT %s OFFSET %s
     """
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(count_sql, params)
-            total = int(cur.fetchone()["total"] or 0)
-            cur.execute(list_sql, [*params, page_size, offset])
-            items = [dict(row) for row in cur.fetchall()]
+            cur.execute(list_sql, [*params, page_size + 1, offset])
+            rows = [dict(row) for row in cur.fetchall()]
+    has_more = len(rows) > page_size
+    items = rows[:page_size]
     for item in items:
         item["domain"] = _domain_for_jurisdiction(item.get("jurisdiction"))
         item["cn_stage_resume_candidate"] = bool(item.get("cn_stage_resume_candidate"))
-    return _page_result(items, page=page, page_size=page_size, total=total)
+    return _page_result(items, page=page, page_size=page_size, has_more=has_more)
 
 
 @router.get("/cn-recovery")
@@ -198,7 +217,7 @@ def admin_jobs_page(
     domain: str = "",
     status: str = "",
     q: str = "",
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1, le=MAX_ADMIN_PAGE),
     page_size: int = Query(default=50, ge=10, le=200),
 ):
     page, page_size, offset = _normalize_page(page, page_size)
@@ -230,23 +249,22 @@ def admin_jobs_page(
             FROM control.job_run
         )
     """
-    count_sql = base + f"SELECT count(*) AS total FROM base {where}"
     list_sql = base + f"""
         SELECT * FROM base
         {where}
-        ORDER BY started_at DESC
+        ORDER BY started_at DESC, run_id DESC
         LIMIT %s OFFSET %s
     """
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(count_sql, params)
-            total = int(cur.fetchone()["total"] or 0)
-            cur.execute(list_sql, [*params, page_size, offset])
-            items = [dict(row) for row in cur.fetchall()]
+            cur.execute(list_sql, [*params, page_size + 1, offset])
+            rows = [dict(row) for row in cur.fetchall()]
+    has_more = len(rows) > page_size
+    items = rows[:page_size]
     for item in items:
         item["duration_seconds"] = float(item.get("duration_seconds") or 0)
         item["domain"] = _job_domain(str(item.get("job_type") or ""))
-    return _page_result(items, page=page, page_size=page_size, total=total)
+    return _page_result(items, page=page, page_size=page_size, has_more=has_more)
 
 
 @router.get("/raw")
@@ -254,37 +272,35 @@ def admin_raw_page(
     domain: str = "",
     area: str = "",
     q: str = "",
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1, le=MAX_ADMIN_PAGE),
     page_size: int = Query(default=50, ge=10, le=200),
 ):
     page, page_size, offset = _normalize_page(page, page_size)
-    inventory = _raw_inventory(limit=1_000_000)
-    normalized_domain = domain.strip().upper()
-    normalized_area = area.strip().lower()
-    query = q.strip().casefold()
-    items = []
-    for item in inventory["files"]:
-        if (
-            normalized_domain
-            and str(item.get("domain") or "").upper() != normalized_domain
-        ):
-            continue
-        if normalized_area and str(item.get("area") or "").lower() != normalized_area:
-            continue
-        if query:
-            haystack = " ".join(
-                str(item.get(key) or "")
-                for key in ("file_name", "relative_path", "raw_class", "suffix")
-            ).casefold()
-            if query not in haystack:
-                continue
-        items.append(item)
-    total = len(items)
+    try:
+        inventory = _raw_inventory(
+            limit=page_size + 1,
+            offset=offset,
+            domain=domain,
+            area_filter=area,
+            query=q,
+            scan_limit=RAW_INVENTORY_SCAN_LIMIT,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "RAW_INVENTORY_INDEX_REQUIRED",
+                "message": str(exc),
+            },
+        ) from exc
+    rows = inventory["files"]
+    has_more = len(rows) > page_size
+    items = rows[:page_size]
     return _page_result(
-        items[offset : offset + page_size],
+        items,
         page=page,
         page_size=page_size,
-        total=total,
+        has_more=has_more,
     ) | {
         "total_files_all": int(inventory["total_files"]),
         "total_bytes_all": int(inventory["total_bytes"]),
@@ -296,7 +312,7 @@ def admin_raw_page(
 def admin_contact_tasks_page(
     status: str = "",
     q: str = "",
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1, le=MAX_ADMIN_PAGE),
     page_size: int = Query(default=50, ge=10, le=200),
 ):
     page, page_size, offset = _normalize_page(page, page_size)
@@ -313,7 +329,6 @@ def admin_contact_tasks_page(
         )
         params.extend([pattern] * 3)
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
-    count_sql = f"SELECT count(*) AS total FROM contact.ingest_task {where}"
     list_sql = f"""
         SELECT task_id, source_sha256, file_name, file_path, file_size,
                file_modified_at, file_type, ingest_version, status, detected_profile,
@@ -321,13 +336,12 @@ def admin_contact_tasks_page(
                started_at, finished_at, archived_path
         FROM contact.ingest_task
         {where}
-        ORDER BY discovered_at DESC, file_name
+        ORDER BY discovered_at DESC, file_name, task_id
         LIMIT %s OFFSET %s
     """
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(count_sql, params)
-            total = int(cur.fetchone()["total"] or 0)
-            cur.execute(list_sql, [*params, page_size, offset])
-            items = [dict(row) for row in cur.fetchall()]
-    return _page_result(items, page=page, page_size=page_size, total=total)
+            cur.execute(list_sql, [*params, page_size + 1, offset])
+            rows = [dict(row) for row in cur.fetchall()]
+    has_more = len(rows) > page_size
+    return _page_result(rows[:page_size], page=page, page_size=page_size, has_more=has_more)
