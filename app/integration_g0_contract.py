@@ -223,6 +223,21 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "read_model": "US_EVENT_SERIAL_LOOKUP_V1",
                 },
                 {
+                    "path": "/api/v1/us/attorneys/by-name",
+                    "query": {
+                        "name": {
+                            "type": "string",
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 512,
+                        }
+                    },
+                    "pagination": "bounded_exact_lookup",
+                    "read_model": "US_ATTORNEY_NAME_LOOKUP_V1",
+                    "candidate_ceiling": 500,
+                    "semantics": "current_official_name_facts_no_identity_resolution",
+                },
+                {
                     "path": "/api/v1/us/registrations/{registration_number}",
                     "query": {},
                     "pagination": "bounded_exact_lookup",

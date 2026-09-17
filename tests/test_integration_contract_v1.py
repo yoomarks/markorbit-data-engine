@@ -50,6 +50,7 @@ def test_main_registers_stable_integration_routes_outside_admin_plane():
         "/api/v1/cn/cases/{application_number}",
         "/api/v1/us/cases/{serial_number}",
         "/api/v1/us/cases/{serial_number}/events",
+        "/api/v1/us/attorneys/by-name",
         "/api/v1/us/registrations/{registration_number}",
         "/api/v1/us/cases/{serial_number}/360",
         "/api/v1/us/cases/{serial_number}/history",
@@ -148,3 +149,23 @@ def test_event_timeline_wrapper_preserves_fact_boundary(monkeypatch):
     assert result["resource_kind"] == "TRADEMARK_EVENT_TIMELINE"
     assert result["legal_conclusion"] is False
     assert result["payload"]["events"][0]["event_code"] == "DOCK"
+
+
+def test_attorney_name_wrapper_preserves_fact_boundary(monkeypatch):
+    monkeypatch.setattr(integration_api, "accepted_us_target_read_client", lambda: object())
+    monkeypatch.setattr(
+        integration_api,
+        "attorneys_by_name",
+        lambda _client, name: {
+            "input_name": name,
+            "normalized_name": name.lower(),
+            "match_count": 1,
+            "matches": [{"serial_number": "90000001", "attorney_name": name}],
+        },
+    )
+
+    result = integration_api.integration_us_attorneys_by_name("Jane Q. Attorney")
+
+    assert result["resource_kind"] == "ATTORNEY_NAME_FACT_MATCHES"
+    assert result["legal_conclusion"] is False
+    assert result["payload"]["matches"][0]["serial_number"] == "90000001"

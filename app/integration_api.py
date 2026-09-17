@@ -38,6 +38,12 @@ from app.platform_contract import platform_contract
 from app.read_query_capability import read_query_capability_contract
 from app.temporal_relationship_contract import temporal_relationship_contract
 from app.us.accepted_target_read import accepted_us_target_read_client
+from app.us.attorney_name_lookup import (
+    AttorneyNameLookupInvalid,
+    AttorneyNameLookupScopeExceeded,
+    AttorneyNameLookupUnavailable,
+    attorneys_by_name,
+)
 from app.us.applicant_owner_read import (
     discover_applicants_by_name as us_discover_applicants_by_name,
     read_portfolio as us_read_applicant_portfolio,
@@ -324,6 +330,49 @@ def integration_us_case_events(
         resource_kind="TRADEMARK_EVENT_TIMELINE",
         payload=payload,
     )
+
+
+@router.get("/us/attorneys/by-name")
+def integration_us_attorneys_by_name(
+    name: Annotated[str, Query(min_length=1, max_length=512)],
+) -> dict[str, Any]:
+    try:
+        payload = attorneys_by_name(accepted_us_target_read_client(), name)
+    except AttorneyNameLookupInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_ATTORNEY_NAME_LOOKUP_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except AttorneyNameLookupScopeExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "DATA_ENGINE_ATTORNEY_NAME_LOOKUP_SCOPE_EXCEEDED",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except AttorneyNameLookupUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_ATTORNEY_NAME_LOOKUP_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    result = _envelope(
+        jurisdiction="US",
+        resource_kind="ATTORNEY_NAME_FACT_MATCHES",
+        payload=payload,
+    )
+    if payload["match_count"] == 0:
+        result["fact_state"] = "not_found"
+    return result
 
 
 @router.get("/us/registrations/{registration_number}")
