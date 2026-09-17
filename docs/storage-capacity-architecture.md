@@ -2,6 +2,56 @@
 
 Status: P0 foundation. This document does **not** authorize a live-volume migration.
 
+## Storage Topology V2
+
+`DATA_ENGINE_STORAGE_TOPOLOGY_V2` is the machine-readable placement and capacity
+governance contract. Print it without probing or changing the host:
+
+```powershell
+python -m app.storage_topology_v2
+```
+
+Evaluate a captured JSON inventory without probing or mutating storage:
+
+```powershell
+python -m app.storage_topology_v2 --inventory .\inventory.json
+```
+
+The inventory object contains `physical_drives` with exact `D`, `E`, and `F`
+entries plus zero or more named `vhdx_disks`; each entry supplies integer
+`total_bytes` and `free_bytes`. Optional `e_allocations` records measured,
+reviewed byte budgets for every governed E placement.
+
+The V2 roles are intentionally asymmetric:
+
+- D NVMe owns primary `hot_cn` and `hot_us` serving;
+- E NVMe owns `hot_global` and all Warm growth (`warm_cn`, `warm_us`,
+  `warm_global`);
+- F HDD is the authority for immutable Raw, backup/recovery, and original visual
+  assets, and is not primary MergeTree serving storage.
+
+Every physical drive and every named Hot/Warm VHDX retains a 30% recommended
+free-space reserve and a 20% hard floor. E allocation is calculated only after
+the recommended physical reserve. The contract deliberately does not guess
+equal or percentage splits: byte budgets for `warm_cn`, `hot_global`, `warm_us`,
+and `warm_global` must come from measured, reviewed workload evidence, must
+conserve the allocatable pool, and cannot overcommit E. A dedicated future-
+jurisdiction disk must be carved from the matching Global budget.
+
+CN and US route to their named Hot/Warm placements. Every other jurisdiction
+defaults to `hot_global` / `warm_global`. A jurisdiction becomes eligible for a
+separate reviewed placement only when regulatory isolation requires it, its
+measured 180-day projection exceeds the remaining Global budget, or an observed
+query SLO breach is attributable to that jurisdiction's contention. Eligibility
+never provisions or promotes a disk: capacity fit and a separate reviewed plan
+remain mandatory.
+
+The contract and its evaluators are read-only. They do not authorize VHDX
+mutation, source movement/deletion, or ClickHouse `MOVE`, `ALTER`, `TTL`, or
+`OPTIMIZE` operations. Capacity evaluation emits `BELOW_RECOMMENDED_RESERVE`
+warnings and `BLOCKED_BELOW_HARD_RESERVE` critical alerts independently for
+physical drives and VHDX disks; it never performs automatic remediation.
+
 ## Why this exists
 
 The accepted CN corpus has reached production scale. Operator evidence on the current target host showed roughly 2.95 billion active ClickHouse fact rows and roughly 679 GB of active ClickHouse data, while Docker Desktop storage was already close to 0.8 TB against a roughly 1 TB virtual-disk ceiling. Continuing US and additional jurisdiction imports with the database data plane inside Docker Desktop's managed virtual disk would leave insufficient headroom for ClickHouse merges, temporary spill, and normal growth.
