@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from app.db import clickhouse_client
+from app.read_performance_baseline import DEFAULT_QUERY_BUDGET
 from app.us_ttab import TTAB_SCHEMA_VERSION, TTAB_SEMANTICS
+
+
+MAX_SERIAL_CANDIDATES = 500
+
+
+class TTABQueryScopeExceeded(RuntimeError):
+    pass
 
 
 def _normalize_value(value: object) -> object:
@@ -20,10 +28,14 @@ def _normalize_value(value: object) -> object:
     return value
 
 
-def _rows(sql: str) -> list[dict[str, Any]]:
-    result = clickhouse_client().query(sql)
+def _rows(sql: str, *, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    client = clickhouse_client()
+    result = client.query(sql, settings=settings) if settings is not None else client.query(sql)
     return [
-        {name: _normalize_value(value) for name, value in zip(result.column_names, row, strict=True)}
+        {
+            name: _normalize_value(value)
+            for name, value in zip(result.column_names, row, strict=True)
+        }
         for row in result.result_rows
     ]
 
@@ -40,6 +52,10 @@ def validate_serial_number(value: str) -> str:
     if not (value.isdigit() and len(value) == 8):
         raise ValueError("serial_number must contain exactly 8 digits")
     return value
+
+
+def _sql_literal(value: object) -> str:
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def latest_proceeding_record(proceeding_number: str) -> dict[str, Any] | None:
@@ -130,43 +146,73 @@ def proceedings_for_serial(serial_number: str, limit: int = 100) -> list[dict[st
     serial = validate_serial_number(serial_number)
     if not 1 <= limit <= 500:
         raise ValueError("limit must be between 1 and 500")
-    rows = _rows(
+    budget = {**DEFAULT_QUERY_BUDGET, "max_result_rows": MAX_SERIAL_CANDIDATES + 1}
+    candidates = _rows(
         f"""
-        WITH latest AS
-        (
-            SELECT proceeding_number,
-                   argMax(toString(source_package_id), tuple(source_rank, toString(source_package_id))) AS package_id
-            FROM markorbit_facts.us_ttab_proceeding_history
-            GROUP BY proceeding_number
+        SELECT proceeding_number,
+               groupArray(tuple(
+                   toString(source_package_id), party_side, registration_number,
+                   application_status, application_status_code, mark_explanation
+               )) AS property_versions
+        FROM markorbit_facts.us_ttab_property_history
+        WHERE serial_number = '{serial}'
+        GROUP BY proceeding_number
+        ORDER BY proceeding_number
+        LIMIT {MAX_SERIAL_CANDIDATES + 1}
+        """,
+        settings=budget,
+    )
+    if len(candidates) > MAX_SERIAL_CANDIDATES:
+        raise TTABQueryScopeExceeded(
+            f"serial resolves to more than {MAX_SERIAL_CANDIDATES} TTAB proceedings"
         )
-        SELECT p.proceeding_number AS proceeding_number, p.party_side AS party_side,
-               p.registration_number AS registration_number,
-               p.application_status AS application_status,
-               p.application_status_code AS application_status_code,
-               p.mark_explanation AS mark_explanation,
-               r.proceeding_type AS proceeding_type,
-               r.proceeding_type_code AS proceeding_type_code,
-               r.filing_date AS filing_date, r.status_text AS status_text,
-               r.status_code AS status_code, r.status_date AS status_date,
-               r.source_snapshot_at AS source_snapshot_at, r.source_rank AS source_rank,
-               toString(r.source_package_id) AS source_package_id
-        FROM markorbit_facts.us_ttab_property_history AS p
-        INNER JOIN latest AS l
-          ON p.proceeding_number = l.proceeding_number
-         AND toString(p.source_package_id) = l.package_id
-        INNER JOIN markorbit_facts.us_ttab_proceeding_history AS r
-          ON r.proceeding_number = p.proceeding_number
-         AND r.source_package_id = p.source_package_id
-        WHERE p.serial_number = '{serial}'
-        ORDER BY r.filing_date DESC NULLS LAST, r.source_rank DESC, p.proceeding_number DESC
-        LIMIT {int(limit)}
-        """
+    if not candidates:
+        return []
+
+    candidates_by_number = {str(row["proceeding_number"]): row for row in candidates}
+    proceeding_numbers = ", ".join(_sql_literal(value) for value in candidates_by_number)
+    proceedings = _rows(
+        f"""
+        SELECT proceeding_number, proceeding_type, proceeding_type_code,
+               filing_date, status_text, status_code, status_date,
+               source_snapshot_at, source_rank,
+               toString(source_package_id) AS source_package_id
+        FROM markorbit_facts.us_ttab_proceeding_history
+        WHERE proceeding_number IN ({proceeding_numbers})
+        ORDER BY source_rank DESC, source_package_id DESC
+        LIMIT 1 BY proceeding_number
+        """,
+        settings=budget,
     )
     result: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in rows:
-        number = str(row["proceeding_number"])
-        if number not in seen:
-            seen.add(number)
-            result.append(row)
-    return result
+    for proceeding in proceedings:
+        candidate = candidates_by_number[str(proceeding["proceeding_number"])]
+        current_package = str(proceeding["source_package_id"])
+        current_properties = [
+            version
+            for version in candidate["property_versions"]
+            if str(version[0]) == current_package
+        ]
+        if not current_properties:
+            continue
+        property_version = current_properties[0]
+        result.append(
+            {
+                **proceeding,
+                "party_side": property_version[1],
+                "registration_number": property_version[2],
+                "application_status": property_version[3],
+                "application_status_code": property_version[4],
+                "mark_explanation": property_version[5],
+            }
+        )
+    result.sort(
+        key=lambda row: (
+            row.get("filing_date") is not None,
+            str(row.get("filing_date") or ""),
+            int(row["source_rank"]),
+            str(row["proceeding_number"]),
+        ),
+        reverse=True,
+    )
+    return result[:limit]

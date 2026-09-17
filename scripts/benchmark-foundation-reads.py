@@ -154,6 +154,24 @@ def us_cases(args: argparse.Namespace) -> list[QueryBenchmarkCase]:
     name = _literal(args.normalized_name)
     attorney = _literal(args.attorney_name)
     serial_sql = _literal(serial)
+    assignment_serial = _literal(
+        _identifier(args.assignment_serial, "US assignment serial number", r"[0-9]{8}")
+    )
+    assignment_records = [
+        _identifier(value, "US assignment reel/frame", r"[0-9]+/[0-9]+")
+        for value in args.assignment_records.split(",")
+        if value
+    ]
+    ttab_serial = _literal(_identifier(args.ttab_serial, "US TTAB serial number", r"[0-9]{8}"))
+    ttab_proceedings = [
+        _identifier(value, "US TTAB proceeding number", r"[0-9]{6,8}")
+        for value in args.ttab_proceedings.split(",")
+        if value
+    ]
+    if not assignment_records or not ttab_proceedings:
+        raise ValueError("assignment and TTAB benchmark identities are required")
+    assignment_record_sql = ", ".join(_literal(value) for value in assignment_records)
+    ttab_proceeding_sql = ", ".join(_literal(value) for value in ttab_proceedings)
     return [
         _case(
             "exact_trademark_application",
@@ -257,19 +275,37 @@ def us_cases(args: argparse.Namespace) -> list[QueryBenchmarkCase]:
         _case(
             "assignment_lookup",
             "US",
-            "current API serial lookup with corpus-wide latest-record aggregation",
-            f"WITH latest_record AS (SELECT reel_frame_id, argMax(toString(source_package_id), tuple(source_rank, toString(source_package_id))) AS package_id FROM markorbit_facts.us_assignment_record_history GROUP BY reel_frame_id), linked AS (SELECT DISTINCT p.reel_frame_id FROM markorbit_facts.us_assignment_property_history AS p INNER JOIN latest_record AS lr ON p.reel_frame_id = lr.reel_frame_id AND toString(p.source_package_id) = lr.package_id WHERE p.serial_number = {serial_sql}) SELECT r.reel_frame_id, r.recorded_date FROM markorbit_facts.us_assignment_record_history AS r INNER JOIN latest_record AS lr ON r.reel_frame_id = lr.reel_frame_id AND toString(r.source_package_id) = lr.package_id INNER JOIN linked AS l ON r.reel_frame_id = l.reel_frame_id ORDER BY r.recorded_date DESC NULLS LAST, r.source_rank DESC, r.reel_frame_id DESC LIMIT 101",
-            "BUDGET_REJECTED",
-            None,
+            "serial-keyed Assignment candidate resolution",
+            f"SELECT reel_frame_id, groupUniqArray(toString(source_package_id)) AS package_ids FROM markorbit_facts.us_assignment_property_history WHERE serial_number = {assignment_serial} GROUP BY reel_frame_id ORDER BY reel_frame_id LIMIT 501",
+            "SUCCESS",
+            400,
+            args.repetitions,
+        ),
+        _case(
+            "assignment_lookup",
+            "US",
+            "bounded latest Assignment records for resolved identities",
+            f"SELECT reel_frame_id, recorded_date, source_rank, toString(source_package_id) AS source_package_id FROM markorbit_facts.us_assignment_record_history WHERE reel_frame_id IN ({assignment_record_sql}) ORDER BY source_rank DESC, source_package_id DESC LIMIT 1 BY reel_frame_id",
+            "SUCCESS",
+            400,
             args.repetitions,
         ),
         _case(
             "ttab_lookup",
             "US",
-            "current API serial lookup with corpus-wide latest-proceeding aggregation",
-            f"WITH latest AS (SELECT proceeding_number, argMax(toString(source_package_id), tuple(source_rank, toString(source_package_id))) AS package_id FROM markorbit_facts.us_ttab_proceeding_history GROUP BY proceeding_number) SELECT p.proceeding_number, r.proceeding_type, r.filing_date, r.status_code FROM markorbit_facts.us_ttab_property_history AS p INNER JOIN latest AS l ON p.proceeding_number = l.proceeding_number AND toString(p.source_package_id) = l.package_id INNER JOIN markorbit_facts.us_ttab_proceeding_history AS r ON r.proceeding_number = p.proceeding_number AND r.source_package_id = p.source_package_id WHERE p.serial_number = {serial_sql} ORDER BY r.filing_date DESC NULLS LAST, r.source_rank DESC, p.proceeding_number DESC LIMIT 101",
-            "BUDGET_REJECTED",
-            None,
+            "serial-keyed TTAB candidate resolution",
+            f"SELECT proceeding_number, groupArray(tuple(toString(source_package_id), party_side, registration_number, application_status, application_status_code, mark_explanation)) AS property_versions FROM markorbit_facts.us_ttab_property_history WHERE serial_number = {ttab_serial} GROUP BY proceeding_number ORDER BY proceeding_number LIMIT 501",
+            "SUCCESS",
+            400,
+            args.repetitions,
+        ),
+        _case(
+            "ttab_lookup",
+            "US",
+            "bounded latest TTAB proceedings for resolved identities",
+            f"SELECT proceeding_number, proceeding_type, filing_date, status_code, source_rank, toString(source_package_id) AS source_package_id FROM markorbit_facts.us_ttab_proceeding_history WHERE proceeding_number IN ({ttab_proceeding_sql}) ORDER BY source_rank DESC, source_package_id DESC LIMIT 1 BY proceeding_number",
+            "SUCCESS",
+            400,
             args.repetitions,
         ),
     ]
@@ -295,6 +331,13 @@ def parser() -> argparse.ArgumentParser:
         default="00c913dcb2b50551dd82b25d13c31bff8c48d2db37d8a8947871f0333b7a9e55",
     )
     result.add_argument("--attorney-name", default="Kathryn E. Smith")
+    result.add_argument("--assignment-serial", default="71614627")
+    result.add_argument(
+        "--assignment-records",
+        default="1/0058,3321/0221,3322/0133,3363/0866,3366/0815,3626/0402,393/0562,4523/0929",
+    )
+    result.add_argument("--ttab-serial", default="79412016")
+    result.add_argument("--ttab-proceedings", default="79412016")
     return result
 
 

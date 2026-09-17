@@ -5,7 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 from app.us_ttab import TTAB_SCHEMA_VERSION, TTAB_SEMANTICS
-from app.us_ttab.read_model import proceeding_snapshot, proceedings_for_serial
+from app.us_ttab.read_model import (
+    TTABQueryScopeExceeded,
+    proceeding_snapshot,
+    proceedings_for_serial,
+)
 from app.us_ttab.timeline import build_ttab_timeline
 
 
@@ -34,6 +38,11 @@ def us_ttab_by_serial(
 ):
     try:
         records = proceedings_for_serial(serial_number, limit)
+    except TTABQueryScopeExceeded as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "US_TTAB_QUERY_SCOPE_EXCEEDED", "error": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
