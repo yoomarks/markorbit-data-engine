@@ -55,3 +55,14 @@ def test_secret_values_are_not_persisted_or_printed() -> None:
     assert "credential_values_persisted=false" in source
     assert "write-host $password" not in source
     assert "password=$password" not in source
+
+
+def test_ps51_ordered_plan_totals_do_not_use_measure_object_properties() -> None:
+    source = text()
+    assert "function Get-AssignmentPlanTotals" in source
+    assert "foreach($plan in @($Plans))" in source
+    assert "$plan.source_rows" in source
+    assert "$plan.source_bytes" in source
+    assert "Measure-Object source_rows" not in source
+    assert "Measure-Object source_bytes" not in source
+    assert "PS5 ordered-plan aggregation contract failed." in source
