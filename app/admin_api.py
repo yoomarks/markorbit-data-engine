@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+import heapq
 from pathlib import Path
 import re
 from typing import Any
@@ -30,6 +31,7 @@ RAW_FOLDER_DOMAINS = {
 }
 SUPPORTED_DOMAINS = tuple(JURISDICTION_BY_DOMAIN)
 RAW_SUFFIXES = {".zip", ".xml", ".csv", ".xls", ".xlsx", ".json"}
+RAW_INVENTORY_SCAN_LIMIT = 100_000
 _US_HISTORY_RE = re.compile(r"^apc\d{8}-\d{8}-\d{2}\.zip$", re.I)
 _US_DAILY_RE = re.compile(r"^apc\d{6}\.zip$", re.I)
 _CN_MONTH_RE = re.compile(r"^\d{4}_\d{1,2}\.zip$", re.I)
@@ -87,12 +89,25 @@ def _raw_class(domain: str, relative_path: Path) -> str:
     return "OTHER"
 
 
-def _raw_inventory(limit: int = 500) -> dict[str, Any]:
+def _raw_inventory(
+    limit: int = 500,
+    *,
+    offset: int = 0,
+    domain: str = "",
+    area_filter: str = "",
+    query: str = "",
+    scan_limit: int | None = None,
+) -> dict[str, Any]:
     raw_root = get_settings().raw_data_root
-    files: list[dict[str, Any]] = []
+    retained: list[tuple[int, str, dict[str, Any]]] = []
     buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
     total_files = 0
     total_bytes = 0
+    matched_files = 0
+    normalized_domain = domain.strip().upper()
+    normalized_area = area_filter.strip().lower()
+    normalized_query = query.strip().casefold()
+    retain_limit = max(0, int(offset)) + max(0, int(limit))
 
     for area in ("incoming", "archive", "quarantine"):
         area_root = raw_root / area
@@ -101,6 +116,10 @@ def _raw_inventory(limit: int = 500) -> dict[str, Any]:
         for path in area_root.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in RAW_SUFFIXES:
                 continue
+            if scan_limit is not None and total_files >= scan_limit:
+                raise RuntimeError(
+                    f"raw inventory scan exceeds the bounded limit of {scan_limit} files"
+                )
             stat = path.stat()
             relative = path.relative_to(raw_root)
             domain = _raw_domain(relative)
@@ -121,22 +140,39 @@ def _raw_inventory(limit: int = 500) -> dict[str, Any]:
             )
             bucket["file_count"] += 1
             bucket["bytes"] += size
-            files.append(
-                {
-                    "domain": domain,
-                    "area": area,
-                    "raw_class": raw_class,
-                    "file_name": path.name,
-                    "relative_path": str(relative).replace("\\", "/"),
-                    "suffix": path.suffix.lower(),
-                    "file_size": size,
-                    "modified_at": datetime.fromtimestamp(
-                        stat.st_mtime, tz=timezone.utc
-                    ).isoformat(),
-                }
-            )
+            relative_path = str(relative).replace("\\", "/")
+            item = {
+                "domain": domain,
+                "area": area,
+                "raw_class": raw_class,
+                "file_name": path.name,
+                "relative_path": relative_path,
+                "suffix": path.suffix.lower(),
+                "file_size": size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            }
+            if normalized_domain and domain != normalized_domain:
+                continue
+            if normalized_area and area != normalized_area:
+                continue
+            if normalized_query:
+                haystack = " ".join(
+                    str(item.get(key) or "")
+                    for key in ("file_name", "relative_path", "raw_class", "suffix")
+                ).casefold()
+                if normalized_query not in haystack:
+                    continue
+            matched_files += 1
+            if retain_limit == 0:
+                continue
+            entry = (stat.st_mtime_ns, relative_path, item)
+            if len(retained) < retain_limit:
+                heapq.heappush(retained, entry)
+            elif entry[:2] > retained[0][:2]:
+                heapq.heapreplace(retained, entry)
 
-    files.sort(key=lambda item: (item["modified_at"], item["relative_path"]), reverse=True)
+    files = [entry[2] for entry in sorted(retained, reverse=True)]
+    page_files = files[offset : offset + limit]
     return {
         "raw_root": str(raw_root),
         "classification_semantics": "PATH_AND_FILENAME_INVENTORY_ONLY_NOT_SOURCE_PRECEDENCE",
@@ -146,8 +182,9 @@ def _raw_inventory(limit: int = 500) -> dict[str, Any]:
             buckets.values(),
             key=lambda item: (item["domain"], item["area"], item["raw_class"]),
         ),
-        "files": files[:limit],
-        "files_returned": min(len(files), limit),
+        "matched_files": matched_files,
+        "files": page_files,
+        "files_returned": len(page_files),
     }
 
 

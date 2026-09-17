@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from app.admin_paging_api import _normalize_page, _page_result
+from fastapi import HTTPException
+import pytest
+
+from app.admin_paging_api import MAX_ADMIN_PAGE, _normalize_page, _page_result
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,14 +67,31 @@ def test_admin_v1_pages_share_shell_and_keep_lists_separate() -> None:
 def test_admin_v1_pagination_contract_is_uniform() -> None:
     assert _normalize_page(0, 500) == (1, 200, 0)
     assert _normalize_page(3, 50) == (3, 50, 100)
-    result = _page_result([{"id": 1}], page=3, page_size=50, total=121)
+    with pytest.raises(HTTPException, match="bounded admin paging ceiling"):
+        _normalize_page(MAX_ADMIN_PAGE + 1, 50)
+    result = _page_result([{"id": 1}], page=3, page_size=50, has_more=True)
     assert result == {
         "items": [{"id": 1}],
         "page": 3,
         "page_size": 50,
-        "total": 121,
-        "pages": 3,
+        "total": 102,
+        "pages": 4,
+        "has_more": True,
+        "total_is_exact": False,
+        "total_semantics": "LOWER_BOUND",
     }
+    with pytest.raises(HTTPException, match="page has no results"):
+        _page_result([], page=2, page_size=50, has_more=False)
+    with pytest.raises(HTTPException, match="narrow filters"):
+        _page_result([{"id": 1}], page=MAX_ADMIN_PAGE, page_size=50, has_more=True)
+
+
+def test_admin_v2_paging_uses_bounded_lookahead_without_exact_counts() -> None:
+    source = (ROOT / "app" / "admin_paging_api.py").read_text(encoding="utf-8")
+    assert "limit=1_000_000" not in source
+    assert "count_sql" not in source
+    assert source.count("page_size + 1") >= 4
+    assert "le=MAX_ADMIN_PAGE" in source
 
 
 def test_admin_jobs_query_avoids_literal_percent_placeholder_conflicts() -> None:
