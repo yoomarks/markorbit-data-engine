@@ -80,11 +80,18 @@ def read_query_capability_contract() -> dict[str, Any]:
             },
             {
                 "id": "agent_attorney_name_resolve",
-                "jurisdictions": ["CN", "US"],
-                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "jurisdictions": ["US"],
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
                 "notes": (
-                    "CN is ordered by agent_code and US correspondent facts by serial_number."
+                    "Exact normalized attorney-name facts are indexed; production remains "
+                    "fail-closed until its projection backfill is accepted."
                 ),
+            },
+            {
+                "id": "agent_attorney_name_resolve",
+                "jurisdictions": ["CN"],
+                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "notes": "CN Agent facts remain ordered by agent_code.",
             },
             {
                 "id": "current_entity_portfolio",
