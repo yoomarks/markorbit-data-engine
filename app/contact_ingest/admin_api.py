@@ -13,6 +13,7 @@ from app.contact_ingest.directory_cached import (
     cached_contact_directory_countries,
     cached_contact_directory_list,
 )
+from app.contact_ingest.directory_runtime import MAX_CONTACT_DIRECTORY_OFFSET
 from app.contact_ingest.directory_indexes import ensure_contact_directory_indexes
 from app.contact_ingest.task_queue import (
     apply_contact_task,
@@ -84,7 +85,7 @@ def admin_contact_directory(
     channel: str = "",
     q: str = "",
     limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_CONTACT_DIRECTORY_OFFSET),
     refresh: bool = False,
 ):
     return cached_contact_directory_list(

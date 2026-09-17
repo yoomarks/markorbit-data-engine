@@ -5,6 +5,7 @@ from typing import Any
 from app.contact_ingest.directory_api import _PAGE_HYDRATION_SQL
 from app.db import postgres_conn
 
+MAX_CONTACT_DIRECTORY_OFFSET = 20_000
 
 # The directory must stay contact-index driven. The historical rollup grouped the
 # entire trademark mention corpus before LIMIT/OFFSET, so CN replay growth could
@@ -197,6 +198,10 @@ def contact_directory_list(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     page_limit = max(1, min(int(limit), 500))
     page_offset = max(0, int(offset))
+    if page_offset > MAX_CONTACT_DIRECTORY_OFFSET:
+        raise ValueError(
+            f"contact directory offset exceeds bounded ceiling {MAX_CONTACT_DIRECTORY_OFFSET}"
+        )
     sql = _CONTACT_ENTITIES_CTE + f"""
 SELECT
     entity_id,
@@ -209,18 +214,19 @@ SELECT
     city,
     is_agent,
     is_direct,
-    count(*) OVER() AS filtered_total
 FROM contact_base
 {where}
 ORDER BY country_code = '', country_code, lower(entity_name), entity_id
 LIMIT %s OFFSET %s
 """
-    params.extend([page_limit, page_offset])
+    params.extend([page_limit + 1, page_offset])
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
-            rows = [dict(row) for row in cur.fetchall()]
+            fetched_rows = [dict(row) for row in cur.fetchall()]
+            has_more = len(fetched_rows) > page_limit
+            rows = fetched_rows[:page_limit]
             entity_ids = [str(row["entity_id"]) for row in rows]
             hydrated: dict[str, dict[str, Any]] = {}
             evidence: dict[str, dict[str, Any]] = {}
@@ -236,9 +242,7 @@ LIMIT %s OFFSET %s
                     for item in cur.fetchall()
                 }
 
-    total = int(rows[0].pop("filtered_total")) if rows else 0
     for row in rows:
-        row.pop("filtered_total", None)
         key = str(row["entity_id"])
         details = hydrated.get(key, {})
         proof = evidence.get(key, {})
@@ -283,8 +287,20 @@ LIMIT %s OFFSET %s
         else:
             row["segment"] = "UNKNOWN"
 
+    if has_more:
+        total = page_offset + len(rows) + 1
+        total_semantics = "LOWER_BOUND"
+    elif rows or page_offset == 0:
+        total = page_offset + len(rows)
+        total_semantics = "EXACT"
+    else:
+        total = page_offset
+        total_semantics = "UPPER_BOUND"
     return {
         "total": total,
+        "has_more": has_more,
+        "total_is_exact": total_semantics == "EXACT",
+        "total_semantics": total_semantics,
         "limit": page_limit,
         "offset": page_offset,
         "rows": rows,

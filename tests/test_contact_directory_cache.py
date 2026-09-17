@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.contact_ingest import directory_cached as cached
 
 
@@ -86,6 +88,14 @@ def test_directory_cache_key_includes_filters_and_page(monkeypatch) -> None:
     assert b["_cache"]["hit"] is False
     assert page2["_cache"]["hit"] is False
     assert len(calls) == 3
+
+
+def test_directory_cache_rejects_deep_offset(monkeypatch) -> None:
+    _reset(monkeypatch)
+    with pytest.raises(ValueError, match="bounded ceiling"):
+        cached.cached_contact_directory_list(
+            offset=cached.runtime_source.MAX_CONTACT_DIRECTORY_OFFSET + 1
+        )
 
 
 def test_manual_invalidation_clears_local_cache(monkeypatch) -> None:

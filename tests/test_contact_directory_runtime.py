@@ -54,7 +54,6 @@ def test_runtime_directory_pages_before_trademark_evidence(monkeypatch) -> None:
                 "city": "Los Angeles",
                 "is_agent": True,
                 "is_direct": False,
-                "filtered_total": 23,
             }
         ],
         [
@@ -93,17 +92,53 @@ def test_runtime_directory_pages_before_trademark_evidence(monkeypatch) -> None:
     first_sql, first_params = cursor.executions[0]
     assert "FROM contact_base" in first_sql
     assert "entity.entity_mention" not in first_sql
-    assert "count(*) OVER()" in first_sql
+    assert "count(*) OVER()" not in first_sql
     assert "fc.channel_type IN ('EMAIL')" in first_sql
-    assert first_params == ["US", "%Jane%", "%Jane%", "%Jane%", "%Jane%", 50, 10]
+    assert first_params == ["US", "%Jane%", "%Jane%", "%Jane%", "%Jane%", 51, 10]
 
     assert "array_agg" in cursor.executions[1][0]
     assert "entity.entity_mention" in cursor.executions[2][0]
     assert "JOIN requested" in cursor.executions[2][0]
-    assert result["total"] == 23
+    assert result["total"] == 11
+    assert result["has_more"] is False
+    assert result["total_is_exact"] is True
     assert result["rows"][0]["segment"] == "AGENT"
     assert result["rows"][0]["agent_mentions"] == 5
     assert result["rows"][0]["people"] == ["Jane Example"]
+
+
+def test_runtime_directory_lookahead_hydrates_only_returned_page(monkeypatch) -> None:
+    rows = [
+        {
+            "entity_id": entity_id,
+            "entity_name": name,
+            "entity_type": "ORGANIZATION",
+            "country_code": "US",
+            "country_source": "SOURCE_ENTITY",
+            "inferred_country_confidence": 0,
+            "region_code": "",
+            "city": "",
+            "is_agent": False,
+            "is_direct": True,
+        }
+        for entity_id, name in (
+            ("11111111-1111-1111-1111-111111111111", "Alpha"),
+            ("22222222-2222-2222-2222-222222222222", "Beta"),
+        )
+    ]
+    cursor = _FakeCursor([rows, [], []])
+    monkeypatch.setattr(directory_runtime, "postgres_conn", lambda: _FakeConn(cursor))
+
+    result = directory_runtime.contact_directory_list(limit=1, offset=0)
+
+    assert cursor.executions[0][1] == [2, 0]
+    assert cursor.executions[1][1] == [[rows[0]["entity_id"]]]
+    assert cursor.executions[2][1] == [[rows[0]["entity_id"]]]
+    assert [row["entity_id"] for row in result["rows"]] == [rows[0]["entity_id"]]
+    assert result["total"] == 2
+    assert result["has_more"] is True
+    assert result["total_is_exact"] is False
+    assert result["total_semantics"] == "LOWER_BOUND"
 
 
 def test_runtime_country_selector_avoids_trademark_rollup(monkeypatch) -> None:
