@@ -1,0 +1,78 @@
+name: US Natural Lapse Discovery Contract
+
+on:
+  pull_request:
+    paths:
+      - "app/us/natural_lapse_discovery.py"
+      - "app/us/natural_lapse_projection_operator.py"
+      - "app/integration_api.py"
+      - "app/integration_g0_contract.py"
+      - "docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json"
+      - "database/clickhouse/init/014_us_natural_lapse_discovery.sql"
+      - "tests/test_*natural_lapse*.py"
+      - ".github/workflows/us-natural-lapse-discovery.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "app/us/natural_lapse_discovery.py"
+      - "app/us/natural_lapse_projection_operator.py"
+      - "app/integration_api.py"
+      - "app/integration_g0_contract.py"
+      - "docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json"
+      - "database/clickhouse/init/014_us_natural_lapse_discovery.sql"
+      - "tests/test_*natural_lapse*.py"
+      - ".github/workflows/us-natural-lapse-discovery.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+
+      - name: Static checks
+        run: >-
+          python -m ruff check app/us/natural_lapse_discovery.py
+          app/us/natural_lapse_projection_operator.py app/integration_api.py
+          app/integration_g0_contract.py tests/test_integration_natural_lapse_discovery.py
+          tests/test_us_natural_lapse_discovery.py tests/test_us_natural_lapse_projection_operator.py
+
+      - name: Contract tests
+        run: >-
+          python -m pytest -q
+          tests/test_integration_natural_lapse_discovery.py
+          tests/test_us_natural_lapse_discovery.py
+          tests/test_us_natural_lapse_projection_operator.py
+          tests/test_discovery_contract.py
+          tests/test_integration_applicant_owner_read.py
+          tests/test_applicant_owner_read.py
+          tests/test_mo_de_g0_contract.py
+
+      - name: Safety invariant
+        run: >-
+          python -c "from pathlib import Path;
+          text='\n'.join(Path(p).read_text(encoding='utf-8') for p in
+          ['app/us/natural_lapse_discovery.py','app/us/natural_lapse_projection_operator.py',
+          'database/clickhouse/init/014_us_natural_lapse_discovery.sql']);
+          assert 'status_code = \'900\'' not in text;
+          assert 'TRUNCATE TABLE' not in text.upper();
+          assert 'DROP TABLE' not in text.upper();
+          assert 'DELETE FROM' not in text.upper();
+          assert 'ALTER TABLE' not in text.upper()"

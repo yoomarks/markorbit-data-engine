@@ -261,6 +261,95 @@
         "business_state_owned_outside_data_engine": true
       },
       {
+        "path": "/api/v1/us/discovery/natural-lapses",
+        "jurisdictions": [
+          "US"
+        ],
+        "query": {
+          "lapse_reason": {
+            "type": "enum",
+            "required": true,
+            "values": [
+              "REGISTRATION_MAINTENANCE_LAPSE"
+            ]
+          },
+          "event_date_start": {
+            "type": "date",
+            "required": true,
+            "semantics": "inclusive"
+          },
+          "event_date_end": {
+            "type": "date",
+            "required": true,
+            "semantics": "exclusive",
+            "max_span_days": 366
+          },
+          "nice_class": {
+            "type": "integer",
+            "required": false,
+            "min": 1,
+            "max": 45
+          },
+          "serial_number_start": {
+            "type": "string",
+            "required": false,
+            "semantics": "inclusive",
+            "max_length": 128
+          },
+          "serial_number_end": {
+            "type": "string",
+            "required": false,
+            "semantics": "exclusive",
+            "max_length": 128
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "min": 1,
+            "max": 100
+          },
+          "cursor": {
+            "type": "opaque_string",
+            "required": false,
+            "max_length": 8192
+          }
+        },
+        "pagination": "bounded_keyset_cursor",
+        "snapshot": "US_NATURAL_LAPSE_PROJECTION_SNAPSHOT",
+        "hard_bounds": {
+          "max_pages": 10,
+          "max_results": 1000
+        },
+        "read_budget": {
+          "max_rows_to_read": 250000,
+          "max_bytes_to_read": 268435456,
+          "overflow_mode": "throw"
+        },
+        "result_states": [
+          "RESULTS",
+          "EMPTY",
+          "NOT_OBSERVED",
+          "NOT_COVERED",
+          "UNAVAILABLE"
+        ],
+        "source_event_mapping": {
+          "event_code": "CAEX",
+          "event_type_code": "O",
+          "description_text": "CANCELLED SEC. 8 (10-YR)/EXPIRED SECTION 9"
+        },
+        "unsupported_v1": [
+          "exact_mark_without_dedicated_index",
+          "prefix",
+          "fuzzy",
+          "semantic_similarity",
+          "ranking",
+          "registration_number_range"
+        ],
+        "semantics": "source_proven_natural_lapse_fact_only_no_availability_conclusion",
+        "read_only": true,
+        "business_state_owned_outside_data_engine": true
+      },
+      {
         "path": "/api/v1/us/cases/{serial_number}",
         "query": {},
         "pagination": "none"
