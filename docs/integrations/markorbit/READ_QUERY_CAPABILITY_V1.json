@@ -125,8 +125,8 @@
     {
       "id": "relationship_timeline",
       "jurisdictions": ["US"],
-      "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
-      "notes": "Generic temporal relationship edges are not yet materialized by trademark identity."
+      "state": "SUPPORTED_BOUNDED_TWO_STAGE_RECORDED_HISTORY",
+      "notes": "Serial-keyed Assignment and TTAB facts map to direct official historical edges without inferring current ownership, proceeding outcome, or substantive rights."
     },
     {
       "id": "trademark_360",
