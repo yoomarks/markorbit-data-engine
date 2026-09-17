@@ -1,0 +1,13 @@
+<clickhouse>
+    <storage_configuration>
+        <policies>
+            <hot_us_only>
+                <volumes>
+                    <hot>
+                        <disk>default</disk>
+                    </hot>
+                </volumes>
+            </hot_us_only>
+        </policies>
+    </storage_configuration>
+</clickhouse>

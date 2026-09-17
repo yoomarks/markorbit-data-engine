@@ -32,6 +32,7 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
       - ./database/clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./database/clickhouse/config/default-hot-us-policy.xml:/etc/clickhouse-server/config.d/default-hot-us-policy.xml:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 5s
