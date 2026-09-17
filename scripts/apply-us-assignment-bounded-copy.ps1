@@ -275,6 +275,9 @@ function Redact-Secrets([string]$Text,[string]$User,[string]$Password){
     foreach($secret in @($Password,$User)){ if(-not [string]::IsNullOrEmpty($secret)){ $value=$value.Replace($secret,'[REDACTED]') } }
     return $value
 }
+function Convert-ToWslLfText([string]$Text){
+    return $Text.Replace("`r`n","`n").Replace("`r","`n")
+}
 function Invoke-WslScriptWithSourceCredentials([string]$ScriptText,[string]$User,[string]$Password,[switch]$AllowFailure){
     $oldUser=$env:MO_SRC_CH_USER; $oldPassword=$env:MO_SRC_CH_PASSWORD; $oldWslEnv=$env:WSLENV
     try {
@@ -286,7 +289,8 @@ function Invoke-WslScriptWithSourceCredentials([string]$ScriptText,[string]$User
         $psi.UseShellExecute=$false; $psi.RedirectStandardInput=$true; $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true; $psi.CreateNoWindow=$true
         $process=New-Object Diagnostics.Process; $process.StartInfo=$psi
         if(-not $process.Start()){ throw 'Unable to start target-WSL bash transport.' }
-        $process.StandardInput.Write($ScriptText); $process.StandardInput.Close()
+        $normalizedScript=Convert-ToWslLfText $ScriptText
+        $process.StandardInput.Write($normalizedScript); $process.StandardInput.Close()
         $stdout=$process.StandardOutput.ReadToEnd(); $stderr=$process.StandardError.ReadToEnd(); $process.WaitForExit(); $code=$process.ExitCode; $process.Dispose()
         $safeOut=Redact-Secrets $stdout $User $Password; $safeErr=Redact-Secrets $stderr $User $Password
         if(-not $AllowFailure -and $code -ne 0){ throw "Target-WSL source transport failed with exit code ${code}: $safeErr$safeOut" }
@@ -468,6 +472,8 @@ function Invoke-ContractFixture {
     if($token -ne "GO #704 US Assignment bounded table copy $sampleSha"){ throw 'Authority token format drifted.' }
     if((Get-RequiredAuthorityToken $script:SupersededPlanSha) -notmatch '^GO #704 '){ throw 'Issue binding drifted.' }
     $pipe=Get-NativePipeScript 'us_assignment_record_history' '172.19.32.1'
+    $lfFixture=Convert-ToWslLfText "set -euo pipefail`r`necho ok`r`n"
+    if($lfFixture.Contains("`r") -or $lfFixture -ne "set -euo pipefail`necho ok`n"){ throw 'WSL LF normalization contract drifted.' }
     if($pipe -notmatch '/dev/fd/3' -or $pipe -match '(?i)--password|us_ttab_'){ throw 'Native pipe credential/scope contract drifted.' }
     if($pipe -notmatch 'MO_SRC_CH_USER' -or $pipe -notmatch 'MO_SRC_CH_PASSWORD'){ throw 'Native pipe runtime env bridge drifted.' }
     if($pipe -notmatch 'FORMAT Native' -or $pipe -notmatch 'INSERT INTO markorbit_facts.us_assignment_record_history'){ throw 'Native pipe SQL contract drifted.' }

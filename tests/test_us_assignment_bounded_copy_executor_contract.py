@@ -132,3 +132,13 @@ def test_fresh_connectivity_requires_target_source_version_match() -> None:
     block = source.split("function Assert-FreshConnectivity", 1)[1].split("function Get-NativePipeScript", 1)[0]
     assert "targetVersion[0].version -ne $remoteVersion" in block
     assert "Target/source ClickHouse version drifted." in block
+
+
+def test_wsl_bash_stdin_is_normalized_to_lf_before_execution() -> None:
+    source = text()
+    assert "function Convert-ToWslLfText" in source
+    assert '.Replace("`r`n","`n").Replace("`r","`n")' in source
+    transport = source.split("function Invoke-WslScriptWithSourceCredentials", 1)[1].split("function Resolve-TargetGateway", 1)[0]
+    assert "$normalizedScript=Convert-ToWslLfText $ScriptText" in transport
+    assert "$process.StandardInput.Write($normalizedScript)" in transport
+    assert "$process.StandardInput.Write($ScriptText)" not in transport
