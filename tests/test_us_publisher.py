@@ -4,6 +4,7 @@ import uuid
 
 from app.us.parser import iter_case_bundles
 from app.us.publisher import TABLE_COLUMNS, USBatchPublisher, bundle_rows, case_id
+from app.us.registration_lookup import US_REGISTRATION_LOOKUP_TABLE
 
 
 FIXTURE = Path("tests/fixtures/us_m1_daily.xml")
@@ -37,6 +38,11 @@ def test_bundle_rows_have_deterministic_identity_and_lineage() -> None:
     assert values["last_source_package_id"] == package_id
     assert values["source_rank"] == 123
     assert len(str(values["record_hash"])) == 64
+    lookup = rows[US_REGISTRATION_LOOKUP_TABLE][0]
+    lookup_values = dict(zip(TABLE_COLUMNS[US_REGISTRATION_LOOKUP_TABLE], lookup, strict=True))
+    assert lookup_values["registration_number"] == "7123456"
+    assert lookup_values["serial_number"] == "97123456"
+    assert lookup_values["source_package_id"] == package_id
 
 
 def test_batch_publisher_emits_populated_legacy_fixture_families() -> None:
@@ -60,6 +66,7 @@ def test_batch_publisher_emits_populated_legacy_fixture_families() -> None:
         "markorbit_facts.us_classification_current",
         "markorbit_facts.us_event_history",
         "markorbit_facts.us_statement_current",
+        US_REGISTRATION_LOOKUP_TABLE,
     }
     assert counts["markorbit_facts.us_case_current"] == 2
     assert counts["markorbit_facts.us_owner_current"] == 2

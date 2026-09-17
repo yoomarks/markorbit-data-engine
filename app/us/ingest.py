@@ -15,6 +15,7 @@ from app.us.migrations import US_SCHEMA_VERSION, ensure_us_m1_schema
 from app.us.model import USCaseBundle
 from app.us.parser import iter_case_bundles, iter_case_bundles_fragmented
 from app.us.publisher_m12 import SnapshotAwareUSBatchPublisher
+from app.us.registration_lookup import US_REGISTRATION_LOOKUP_TABLE
 from app.us.repository import list_us_replay_registry
 
 
@@ -23,6 +24,7 @@ LARGE_XML_FRAGMENT_THRESHOLD_BYTES = 2_000_000_000
 
 OUTPUT_PACKAGE_COLUMNS = {
     "markorbit_facts.us_case_current": "last_source_package_id",
+    US_REGISTRATION_LOOKUP_TABLE: "source_package_id",
     "markorbit_facts.us_owner_current": "last_source_package_id",
     APPLICANT_INDEX_TABLE: "last_source_package_id",
     "markorbit_facts.us_classification_current": "last_source_package_id",

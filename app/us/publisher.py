@@ -14,6 +14,11 @@ from app.applicant_name_lookup import (
     US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS,
 )
 from app.us.model import USCaseBundle
+from app.us.registration_lookup import (
+    US_REGISTRATION_LOOKUP_TABLE,
+    US_REGISTRATION_LOOKUP_WRITE_COLUMNS,
+    registration_candidate_row,
+)
 
 
 CASE_COLUMNS = [
@@ -276,6 +281,7 @@ MADRID_EVENT_COLUMNS = [
 
 TABLE_COLUMNS = {
     "markorbit_facts.us_case_current": CASE_COLUMNS,
+    US_REGISTRATION_LOOKUP_TABLE: list(US_REGISTRATION_LOOKUP_WRITE_COLUMNS),
     "markorbit_facts.us_owner_current": OWNER_COLUMNS,
     APPLICANT_INDEX_TABLE: APPLICANT_INDEX_COLUMNS,
     US_APPLICANT_NAME_LOOKUP_TABLE: list(US_APPLICANT_NAME_LOOKUP_WRITE_COLUMNS),
@@ -427,6 +433,10 @@ def bundle_rows(
             0,
         ]
     )
+    case_row = rows["markorbit_facts.us_case_current"][-1]
+    lookup_row = registration_candidate_row(dict(zip(CASE_COLUMNS, case_row, strict=True)))
+    if lookup_row is not None:
+        rows[US_REGISTRATION_LOOKUP_TABLE].append(lookup_row)
 
     for owner in bundle.owners:
         record_hash = stable_hash(asdict(owner))

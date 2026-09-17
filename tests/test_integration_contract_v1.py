@@ -49,6 +49,7 @@ def test_main_registers_stable_integration_routes_outside_admin_plane():
         "/api/v1/contract",
         "/api/v1/cn/cases/{application_number}",
         "/api/v1/us/cases/{serial_number}",
+        "/api/v1/us/registrations/{registration_number}",
         "/api/v1/us/cases/{serial_number}/360",
         "/api/v1/us/cases/{serial_number}/history",
         "/api/v1/us/cases/{serial_number}/assignments",
@@ -102,3 +103,28 @@ def test_change_feed_wrapper_preserves_cursor_payload(monkeypatch):
         "source_rank": 11,
         "serial_number": "99278031",
     }
+
+
+def test_registration_wrapper_preserves_fact_boundary(monkeypatch):
+    monkeypatch.setattr(
+        integration_api,
+        "accepted_us_target_read_client",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        integration_api,
+        "lookup_registration",
+        lambda _client, registration: {
+            "registration_number": registration,
+            "candidate_count": 1,
+            "match_count": 1,
+            "trademarks": [{"serial_number": "90000001"}],
+        },
+    )
+
+    result = integration_api.integration_us_registration("7265548")
+
+    assert result["resource_kind"] == "TRADEMARK_CASE_BY_REGISTRATION"
+    assert result["fact_state"] == "observed"
+    assert result["legal_conclusion"] is False
+    assert result["payload"]["trademarks"][0]["serial_number"] == "90000001"

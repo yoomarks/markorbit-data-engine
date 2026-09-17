@@ -355,6 +355,13 @@
         "pagination": "none"
       },
       {
+        "path": "/api/v1/us/registrations/{registration_number}",
+        "query": {},
+        "pagination": "bounded_exact_lookup",
+        "read_model": "US_REGISTRATION_CANDIDATE_LOOKUP_V1",
+        "candidate_ceiling": 500
+      },
+      {
         "path": "/api/v1/us/cases/{serial_number}/360",
         "query": {
           "as_of": {
