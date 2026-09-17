@@ -28,8 +28,10 @@ def _normalize_value(value: object) -> object:
     return value
 
 
-def _rows(sql: str, *, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    client = clickhouse_client()
+def _rows(
+    sql: str, *, settings: dict[str, Any] | None = None, client: Any | None = None
+) -> list[dict[str, Any]]:
+    client = client or clickhouse_client()
     result = client.query(sql, settings=settings) if settings is not None else client.query(sql)
     return [
         {
@@ -142,7 +144,9 @@ def proceeding_snapshot(proceeding_number: str) -> dict[str, Any] | None:
     }
 
 
-def proceedings_for_serial(serial_number: str, limit: int = 100) -> list[dict[str, Any]]:
+def proceedings_for_serial(
+    serial_number: str, limit: int = 100, *, client: Any | None = None
+) -> list[dict[str, Any]]:
     serial = validate_serial_number(serial_number)
     if not 1 <= limit <= 500:
         raise ValueError("limit must be between 1 and 500")
@@ -161,6 +165,7 @@ def proceedings_for_serial(serial_number: str, limit: int = 100) -> list[dict[st
         LIMIT {MAX_SERIAL_CANDIDATES + 1}
         """,
         settings=budget,
+        client=client,
     )
     if len(candidates) > MAX_SERIAL_CANDIDATES:
         raise TTABQueryScopeExceeded(
@@ -183,6 +188,7 @@ def proceedings_for_serial(serial_number: str, limit: int = 100) -> list[dict[st
         LIMIT 1 BY proceeding_number
         """,
         settings=budget,
+        client=client,
     )
     result: list[dict[str, Any]] = []
     for proceeding in proceedings:

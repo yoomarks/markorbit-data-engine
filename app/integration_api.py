@@ -81,6 +81,12 @@ from app.us.registration_lookup import (
     RegistrationLookupUnavailable,
     lookup_registration,
 )
+from app.us.relationship_timeline import (
+    USRelationshipTimelineInvalid,
+    USRelationshipTimelineScopeExceeded,
+    USRelationshipTimelineUnavailable,
+    relationships_for_trademark as us_relationships_for_trademark,
+)
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
 from app.us_assignment.api import us_assignments_for_serial
@@ -585,6 +591,37 @@ def integration_us_ttab(
         jurisdiction="US",
         resource_kind="TTAB_PROCEEDING_FACTS",
         payload=us_ttab_by_serial(serial_number, limit=limit),
+    )
+
+
+@router.get("/us/cases/{serial_number}/relationships")
+def integration_us_case_relationships(
+    serial_number: str,
+    scope: Annotated[str, Query(pattern="^(current|historical|all)$")] = "all",
+) -> dict[str, Any]:
+    try:
+        payload = us_relationships_for_trademark(
+            clickhouse_client(), serial_number, scope=scope
+        )
+    except USRelationshipTimelineInvalid as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "US_RELATIONSHIP_TIMELINE_INPUT_INVALID", "error": str(exc)},
+        ) from exc
+    except USRelationshipTimelineScopeExceeded as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "US_RELATIONSHIP_TIMELINE_SCOPE_EXCEEDED", "error": str(exc)},
+        ) from exc
+    except USRelationshipTimelineUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "US_RELATIONSHIP_TIMELINE_UNAVAILABLE", "error": str(exc)},
+        ) from exc
+    return _envelope(
+        jurisdiction="US",
+        resource_kind="TRADEMARK_RELATIONSHIP_TIMELINE",
+        payload=payload,
     )
 
 

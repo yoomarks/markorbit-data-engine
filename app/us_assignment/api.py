@@ -13,9 +13,11 @@ SEMANTICS = "USPTO_RECORDED_ASSIGNMENT_FACTS_NOT_LEGAL_TITLE_CONCLUSION"
 MAX_SERIAL_CANDIDATES = 500
 
 
-def _query(sql: str, *, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def _query(
+    sql: str, *, settings: dict[str, Any] | None = None, client: Any | None = None
+) -> list[dict[str, Any]]:
     try:
-        client = clickhouse_client()
+        client = client or clickhouse_client()
         result = client.query(sql, settings=settings) if settings is not None else client.query(sql)
     except Exception as exc:
         raise HTTPException(
@@ -98,7 +100,9 @@ def _bundle_for_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _assignments_for_serial(serial: str, limit: int) -> list[dict[str, Any]]:
+def _assignments_for_serial(
+    serial: str, limit: int, *, client: Any | None = None
+) -> list[dict[str, Any]]:
     # Resolve the serial through the property table's leading sort key before
     # reading record history. A fixed candidate ceiling keeps this read bounded.
     budget = {**DEFAULT_QUERY_BUDGET, "max_result_rows": MAX_SERIAL_CANDIDATES + 1}
@@ -112,6 +116,7 @@ def _assignments_for_serial(serial: str, limit: int) -> list[dict[str, Any]]:
         LIMIT {MAX_SERIAL_CANDIDATES + 1}
         """,
         settings=budget,
+        client=client,
     )
     if len(candidates) > MAX_SERIAL_CANDIDATES:
         raise HTTPException(
@@ -138,6 +143,7 @@ def _assignments_for_serial(serial: str, limit: int) -> list[dict[str, Any]]:
         LIMIT 1 BY reel_frame_id
         """,
         settings=budget,
+        client=client,
     )
     eligible = [
         record
