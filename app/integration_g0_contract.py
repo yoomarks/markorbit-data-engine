@@ -113,6 +113,21 @@ def g0_contract_descriptor() -> dict[str, Any]:
                 },
                 {"path": "/api/v1/cn/cases/{application_number}", "query": {}, "pagination": "none"},
                 {
+                    "path": "/api/v1/cn/agents/by-name",
+                    "query": {
+                        "name": {
+                            "type": "string",
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 512,
+                        }
+                    },
+                    "pagination": "bounded_exact_lookup",
+                    "read_model": "CN_AGENT_NAME_LOOKUP_V1",
+                    "candidate_ceiling": 500,
+                    "semantics": "current_official_name_facts_no_identity_resolution",
+                },
+                {
                     "path": "/api/v1/cn/discovery/preliminary-publications",
                     "query": {
                         "application_number_start": {"type": "string", "required": True, "semantics": "inclusive"},
