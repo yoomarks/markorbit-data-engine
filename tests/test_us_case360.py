@@ -107,6 +107,18 @@ def test_case_360_schema_freezes_source_boundaries() -> None:
     assert "ttab_procedural_facts" in schema["source_domains"]
 
 
+def test_assignment_domain_reuses_bounded_serial_read(monkeypatch) -> None:
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        case360,
+        "_bounded_assignment_records",
+        lambda serial, limit: calls.append((serial, limit)) or [{"reel_frame_id": "1/2"}],
+    )
+
+    assert case360._assignment_records("90000001", 25) == [{"reel_frame_id": "1/2"}]
+    assert calls == [("90000001", 25)]
+
+
 def test_case_360_composes_existing_domains_without_collapsing_semantics(monkeypatch) -> None:
     _patch_domains(monkeypatch)
     report = case360.build_case_360(

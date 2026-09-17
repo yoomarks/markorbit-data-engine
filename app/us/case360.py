@@ -10,6 +10,7 @@ from app.us.change_history import build_case_timeline
 from app.us.deadline_evidence import resolve_case_deadline_evidence
 from app.us.maintenance import calculate_maintenance_schedule
 from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
+from app.us_assignment.api import _assignments_for_serial as _bounded_assignment_records
 from app.us_ttab import TTAB_SCHEMA_VERSION, TTAB_SEMANTICS
 from app.us_ttab.read_model import proceedings_for_serial
 
@@ -157,37 +158,7 @@ def _application_snapshot(serial: str) -> dict[str, Any] | None:
 
 
 def _assignment_records(serial: str, limit: int) -> list[dict[str, Any]]:
-    return _query(
-        f"""
-        WITH latest_record AS
-        (
-            SELECT reel_frame_id,
-                   argMax(
-                       toString(source_package_id),
-                       tuple(source_rank, toString(source_package_id))
-                   ) AS package_id
-            FROM markorbit_facts.us_assignment_record_history
-            GROUP BY reel_frame_id
-        ),
-        linked AS
-        (
-            SELECT DISTINCT p.reel_frame_id
-            FROM markorbit_facts.us_assignment_property_history AS p
-            INNER JOIN latest_record AS lr
-              ON p.reel_frame_id = lr.reel_frame_id
-             AND toString(p.source_package_id) = lr.package_id
-            WHERE p.serial_number = '{serial}'
-        )
-        SELECT r.*
-        FROM markorbit_facts.us_assignment_record_history AS r
-        INNER JOIN latest_record AS lr
-          ON r.reel_frame_id = lr.reel_frame_id
-         AND toString(r.source_package_id) = lr.package_id
-        INNER JOIN linked AS l ON r.reel_frame_id = l.reel_frame_id
-        ORDER BY r.recorded_date DESC NULLS LAST, r.source_rank DESC, r.reel_frame_id DESC
-        LIMIT {int(limit)}
-        """
-    )
+    return _bounded_assignment_records(serial, limit)
 
 
 def _normalize_name(value: str) -> str:
