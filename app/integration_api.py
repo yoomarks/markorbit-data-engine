@@ -16,6 +16,12 @@ from app.cn.agent_name_lookup import (
     AgentNameLookupUnavailable,
     agents_by_name,
 )
+from app.cn.entity_trademark_portfolio import (
+    EntityPortfolioInvalid,
+    EntityPortfolioRequest,
+    EntityPortfolioUnavailable,
+    execute_page as execute_cn_entity_portfolio_page,
+)
 from app.cn.relationship_timeline import (
     RelationshipTimelineInvalid,
     RelationshipTimelineScopeExceeded,
@@ -256,6 +262,52 @@ def integration_cn_agents_by_name(
     if payload["match_count"] == 0:
         result["fact_state"] = "not_found"
     return result
+
+
+@router.get("/cn/entities/{entity_id}/trademarks")
+def integration_cn_entity_trademarks(
+    entity_id: str,
+    role: Annotated[str | None, Query(pattern="^(OWNER|CO_OWNER|AGENT)$")] = None,
+    scope: Annotated[str, Query(pattern="^(current|historical|all)$")] = "all",
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=8192)] = None,
+) -> dict[str, Any]:
+    try:
+        payload = execute_cn_entity_portfolio_page(
+            EntityPortfolioRequest(
+                entity_id=entity_id,
+                role=role,
+                scope=scope,
+                page_size=page_size,
+                cursor=cursor,
+            ),
+            client=clickhouse_client(),
+        )
+    except EntityPortfolioInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_ENTITY_PORTFOLIO_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except EntityPortfolioUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_ENTITY_PORTFOLIO_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    except DiscoveryContractError as exc:
+        raise _discovery_http_error(exc) from exc
+    return _envelope(
+        jurisdiction="CN",
+        resource_kind="ENTITY_TRADEMARK_PORTFOLIO",
+        payload=payload,
+    )
 
 
 @router.get("/cn/cases/{application_number}/relationships")

@@ -111,17 +111,28 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "current_entity_portfolio",
                 "jurisdictions": ["CN"],
-                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
                 "notes": (
-                    "CN current party facts are ordered by application number, not entity_id."
+                    "Entity/role/application summary is indexed by entity_id and remains fail-closed "
+                    "until the governed relationship-history backfill is accepted."
                 ),
             },
             {
                 "id": "historical_entity_portfolio",
-                "jurisdictions": ["CN", "US"],
+                "jurisdictions": ["CN"],
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "notes": (
+                    "OWNER/CO_OWNER/AGENT former relationships are served from the same entity-keyed "
+                    "summary after governed production backfill/READY acceptance."
+                ),
+            },
+            {
+                "id": "historical_entity_portfolio",
+                "jurisdictions": ["US"],
                 "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
                 "notes": (
-                    "CN party relation history is empty and Assignment party names have no entity-first lookup."
+                    "Recorded Assignment/TTAB history is trademark-keyed; entity/party-first lookup "
+                    "still requires an indexed serving model."
                 ),
             },
             {
