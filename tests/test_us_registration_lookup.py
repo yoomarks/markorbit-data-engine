@@ -101,7 +101,7 @@ def test_lookup_fails_closed_until_backfill_is_accepted() -> None:
 
 
 def test_schema_is_registration_ordered_without_implicit_data_backfill() -> None:
-    sql = Path("database/clickhouse/init/016_us_registration_candidate_lookup.sql").read_text(
+    sql = Path("database/clickhouse/init/014_registration_candidate_lookup.sql").read_text(
         encoding="utf-8"
     )
 
