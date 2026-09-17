@@ -5,15 +5,18 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import clickhouse_client
+from app.read_performance_baseline import DEFAULT_QUERY_BUDGET
 
 
 router = APIRouter(prefix="/api/us", tags=["US assignment facts"])
 SEMANTICS = "USPTO_RECORDED_ASSIGNMENT_FACTS_NOT_LEGAL_TITLE_CONCLUSION"
+MAX_SERIAL_CANDIDATES = 500
 
 
-def _query(sql: str) -> list[dict[str, Any]]:
+def _query(sql: str, *, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     try:
-        result = clickhouse_client().query(sql)
+        client = clickhouse_client()
+        result = client.query(sql, settings=settings) if settings is not None else client.query(sql)
     except Exception as exc:
         raise HTTPException(
             status_code=503,
@@ -29,7 +32,9 @@ def _query(sql: str) -> list[dict[str, Any]]:
 def _strict_serial(serial_number: str) -> str:
     serial = serial_number.strip()
     if len(serial) != 8 or not serial.isdigit():
-        raise HTTPException(status_code=400, detail="USPTO serial number must contain exactly 8 digits")
+        raise HTTPException(
+            status_code=400, detail="USPTO serial number must contain exactly 8 digits"
+        )
     return serial
 
 
@@ -38,6 +43,10 @@ def _safe_component(value: str, label: str) -> str:
     if not cleaned or len(cleaned) > 32 or not all(ch.isalnum() or ch in "-_" for ch in cleaned):
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
     return cleaned
+
+
+def _sql_literal(value: object) -> str:
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _latest_record(reel_no: str, frame_no: str) -> dict[str, Any] | None:
@@ -90,38 +99,61 @@ def _bundle_for_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _assignments_for_serial(serial: str, limit: int) -> list[dict[str, Any]]:
-    # Only properties from the latest observation of each reel/frame are eligible.
-    # This prevents a property removed by a later source correction from surviving
-    # merely because the historical property row is append-only.
-    rows = _query(
+    # Resolve the serial through the property table's leading sort key before
+    # reading record history. A fixed candidate ceiling keeps this read bounded.
+    budget = {**DEFAULT_QUERY_BUDGET, "max_result_rows": MAX_SERIAL_CANDIDATES + 1}
+    candidates = _query(
         f"""
-        WITH latest_record AS
-        (
-            SELECT reel_frame_id,
-                   argMax(toString(source_package_id), tuple(source_rank, toString(source_package_id))) AS package_id
-            FROM markorbit_facts.us_assignment_record_history
-            GROUP BY reel_frame_id
-        ),
-        linked AS
-        (
-            SELECT DISTINCT p.reel_frame_id
-            FROM markorbit_facts.us_assignment_property_history AS p
-            INNER JOIN latest_record AS lr
-              ON p.reel_frame_id = lr.reel_frame_id
-             AND toString(p.source_package_id) = lr.package_id
-            WHERE p.serial_number = '{serial}'
-        )
-        SELECT r.*
-        FROM markorbit_facts.us_assignment_record_history AS r
-        INNER JOIN latest_record AS lr
-          ON r.reel_frame_id = lr.reel_frame_id
-         AND toString(r.source_package_id) = lr.package_id
-        INNER JOIN linked AS l ON r.reel_frame_id = l.reel_frame_id
-        ORDER BY r.recorded_date DESC NULLS LAST, r.source_rank DESC, r.reel_frame_id DESC
-        LIMIT {int(limit)}
-        """
+        SELECT reel_frame_id, groupUniqArray(toString(source_package_id)) AS package_ids
+        FROM markorbit_facts.us_assignment_property_history
+        WHERE serial_number = '{serial}'
+        GROUP BY reel_frame_id
+        ORDER BY reel_frame_id
+        LIMIT {MAX_SERIAL_CANDIDATES + 1}
+        """,
+        settings=budget,
     )
-    return rows
+    if len(candidates) > MAX_SERIAL_CANDIDATES:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "US_ASSIGNMENT_QUERY_SCOPE_EXCEEDED",
+                "max_candidates": MAX_SERIAL_CANDIDATES,
+            },
+        )
+    if not candidates:
+        return []
+
+    packages_by_record = {
+        str(candidate["reel_frame_id"]): {str(value) for value in candidate["package_ids"]}
+        for candidate in candidates
+    }
+    record_ids = ", ".join(_sql_literal(value) for value in packages_by_record)
+    records = _query(
+        f"""
+        SELECT *
+        FROM markorbit_facts.us_assignment_record_history
+        WHERE reel_frame_id IN ({record_ids})
+        ORDER BY source_rank DESC, source_package_id DESC
+        LIMIT 1 BY reel_frame_id
+        """,
+        settings=budget,
+    )
+    eligible = [
+        record
+        for record in records
+        if str(record["source_package_id"]) in packages_by_record[str(record["reel_frame_id"])]
+    ]
+    eligible.sort(
+        key=lambda record: (
+            record.get("recorded_date") is not None,
+            str(record.get("recorded_date") or ""),
+            int(record["source_rank"]),
+            str(record["reel_frame_id"]),
+        ),
+        reverse=True,
+    )
+    return eligible[:limit]
 
 
 @router.get("/assignments/reel-frame/{reel_no}/{frame_no}")

@@ -77,6 +77,8 @@ No measured benchmark query used `OFFSET` or exact `count(*)`. The supported con
 
 ## Frozen decision
 
+Follow-up: the bounded two-stage repair recorded in `FOUNDATION-BOUNDED-ASSIGNMENT-TTAB-READS-2026-09-18.md` supersedes the unsupported state for Assignment and TTAB serial lookup only. The original measurements below remain the before-change evidence.
+
 `READ_QUERY_CAPABILITY_V1.json` is the Phase 2 allowlist. Only shapes marked `SUPPORTED_INDEXED` or `SUPPORTED_INDEXED_EXACT_NAME` may be exposed as bounded generic reads. All other filters fail closed with a capability error. Low latency alone does not qualify a query when its plan scans the whole current corpus.
 
 Phase 3 should add the smallest read models required by the rejected shapes: registration lookup; normalized representative lookup; CN entity-first current edges; current and historical temporal edges; date/status/class case summaries; trademark-first timelines; and latest Assignment/TTAB parent projections. Those structures must preserve append/history truth and must not introduce Product or Workspace semantics.

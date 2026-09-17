@@ -136,17 +136,19 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "assignment_lookup",
                 "jurisdictions": ["US"],
-                "state": "UNSUPPORTED_REQUIRES_LATEST_STATE_READ_MODEL",
+                "state": "SUPPORTED_BOUNDED_TWO_STAGE",
                 "notes": (
-                    "Property lookup is serial-keyed, but the current API rebuilds latest record state corpus-wide."
+                    "Resolve at most 500 reel/frame candidates through the serial-keyed property facts, "
+                    "then read latest state only for those identities; fail closed above the ceiling."
                 ),
             },
             {
                 "id": "ttab_lookup",
                 "jurisdictions": ["US"],
-                "state": "UNSUPPORTED_REQUIRES_LATEST_STATE_READ_MODEL",
+                "state": "SUPPORTED_BOUNDED_TWO_STAGE",
                 "notes": (
-                    "Property lookup is serial-keyed, but the current API rebuilds latest proceeding state corpus-wide."
+                    "Resolve at most 500 proceeding candidates through the serial-keyed property facts, "
+                    "then read latest state only for those identities; fail closed above the ceiling."
                 ),
             },
         ],
