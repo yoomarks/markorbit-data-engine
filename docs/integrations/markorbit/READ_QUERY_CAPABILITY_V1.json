@@ -40,9 +40,15 @@
     },
     {
       "id": "exact_trademark_registration",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": ["US"],
+      "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+      "notes": "Registration-keyed candidates are verified against serial-keyed current facts; production remains fail-closed until its projection backfill is accepted."
+    },
+    {
+      "id": "exact_trademark_registration",
+      "jurisdictions": ["CN"],
       "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
-      "notes": "Current case tables are not ordered by registration number."
+      "notes": "No canonical CN domestic registration lookup field is frozen yet."
     },
     {
       "id": "applicant_owner_name_resolve",

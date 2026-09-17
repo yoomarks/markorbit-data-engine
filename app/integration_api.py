@@ -51,6 +51,12 @@ from app.us.natural_lapse_discovery import (
     NaturalLapseUnavailable,
     execute_page as execute_us_natural_lapse_page,
 )
+from app.us.registration_lookup import (
+    RegistrationLookupInvalid,
+    RegistrationLookupScopeExceeded,
+    RegistrationLookupUnavailable,
+    lookup_registration,
+)
 from app.us.case360_api import us_case_360
 from app.us.change_history_api import us_case_history, us_change_feed
 from app.us_assignment.api import us_assignments_for_serial
@@ -269,6 +275,47 @@ def integration_us_case(serial_number: str) -> dict[str, Any]:
     return _envelope(
         jurisdiction="US", resource_kind="TRADEMARK_CASE", payload=us_case(serial_number)
     )
+
+
+@router.get("/us/registrations/{registration_number}")
+def integration_us_registration(registration_number: str) -> dict[str, Any]:
+    try:
+        payload = lookup_registration(accepted_us_target_read_client(), registration_number)
+    except RegistrationLookupInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_REGISTRATION_LOOKUP_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except RegistrationLookupScopeExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "DATA_ENGINE_REGISTRATION_LOOKUP_SCOPE_EXCEEDED",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except RegistrationLookupUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_REGISTRATION_LOOKUP_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    result = _envelope(
+        jurisdiction="US",
+        resource_kind="TRADEMARK_CASE_BY_REGISTRATION",
+        payload=payload,
+    )
+    if payload["match_count"] == 0:
+        result["fact_state"] = "not_found"
+    return result
 
 
 @router.get("/us/cases/{serial_number}/360")

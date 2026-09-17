@@ -215,6 +215,13 @@ def g0_contract_descriptor() -> dict[str, Any]:
                 },
                 {"path": "/api/v1/us/cases/{serial_number}", "query": {}, "pagination": "none"},
                 {
+                    "path": "/api/v1/us/registrations/{registration_number}",
+                    "query": {},
+                    "pagination": "bounded_exact_lookup",
+                    "read_model": "US_REGISTRATION_CANDIDATE_LOOKUP_V1",
+                    "candidate_ceiling": 500,
+                },
+                {
                     "path": "/api/v1/us/cases/{serial_number}/360",
                     "query": {
                         "as_of": {"type": "date", "required": False},
