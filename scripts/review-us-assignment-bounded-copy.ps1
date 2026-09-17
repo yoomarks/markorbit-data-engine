@@ -186,12 +186,23 @@ function Get-AssignmentTablePlan([string]$Table,[object]$Source,[object]$Target)
         target_policy=$script:TargetPolicy; target_empty_before_copy=$true
     }
 }
+function Get-AssignmentPlanTotals([object[]]$Plans){
+    [int64]$rows=0
+    [int64]$bytes=0
+    foreach($plan in @($Plans)){
+        $rows += [int64]$plan.source_rows
+        $bytes += [int64]$plan.source_bytes
+    }
+    return [ordered]@{rows=$rows;bytes=$bytes}
+}
 function Invoke-ContractFixture {
     if(($script:AssignmentTables -join '|') -ne 'us_assignment_record_history|us_assignment_assignor_history|us_assignment_assignee_history|us_assignment_property_history'){ throw 'Assignment copy order drifted.' }
     if($script:ChecksumDefinition -ne 'NULL_SAFE_JSON_TUPLE_CITYHASH64_V2'){ throw 'Checksum definition drifted.' }
     if($script:RowHashExpression -ne 'cityHash64(toJSONString(tuple(*)))'){ throw 'NULL-safe row hash expression drifted.' }
     if($script:TransferStrategy -ne 'TARGET_WSL_CLICKHOUSE_NETWORK_PULL_FROM_ACCEPTED_DOCKER_CLICKHOUSE'){ throw 'Accepted transfer strategy drifted.' }
     if($script:CopyPrimitive -ne 'TARGET_WSL_DUAL_CLICKHOUSE_CLIENT_NATIVE_PIPE_V1'){ throw 'Copy primitive drifted.' }
+    $fixtureTotals=Get-AssignmentPlanTotals @([ordered]@{source_rows=2;source_bytes=3},[ordered]@{source_rows=5;source_bytes=7})
+    if([int64]$fixtureTotals.rows -ne 7 -or [int64]$fixtureTotals.bytes -ne 10){ throw 'PS5 ordered-plan aggregation contract failed.' }
     Write-Host 'US_ASSIGNMENT_BOUNDED_COPY_REVIEW_CONTRACT_PASS'
     Write-Host "checksum_definition=$($script:ChecksumDefinition)"
     Write-Host "copy_primitive=$($script:CopyPrimitive)"
@@ -241,7 +252,9 @@ try {
     }
     $byteOrder=@($tablePlans|Sort-Object @{Expression={[int64]$_.source_bytes}}, @{Expression={[string]$_.table}}|ForEach-Object {$_.table})
     if(($byteOrder -join '|') -ne ($script:AssignmentTables -join '|')){ throw "Assignment source-byte order drifted: $($byteOrder -join ',')" }
-    $assignmentBytes=[int64](($tablePlans|Measure-Object source_bytes -Sum).Sum)
+    $assignmentTotals=Get-AssignmentPlanTotals $tablePlans
+    $assignmentRows=[int64]$assignmentTotals.rows
+    $assignmentBytes=[int64]$assignmentTotals.bytes
     $floor=[int64][Math]::Ceiling([double]$target.total_space*0.30)
     $projected=[int64]$target.free_space-$assignmentBytes
     if($projected -lt $floor){ throw 'Assignment equal-byte copy would violate 30% hot_us reserve.' }
@@ -321,7 +334,7 @@ try {
         accepted_connectivity_receipt_sha256=$connectivitySha
         source_identity_sha256=[string]$source.sha256
         assignment_table_count=4
-        assignment_rows=[int64](($tablePlans|Measure-Object source_rows -Sum).Sum)
+        assignment_rows=$assignmentRows
         assignment_bytes=$assignmentBytes
         checksum_definition=$script:ChecksumDefinition
         copy_authorized=$false
