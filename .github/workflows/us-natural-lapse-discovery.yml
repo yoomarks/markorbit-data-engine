@@ -7,6 +7,7 @@ on:
       - "app/us/natural_lapse_projection_operator.py"
       - "app/integration_api.py"
       - "app/integration_g0_contract.py"
+      - "docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json"
       - "database/clickhouse/init/014_us_natural_lapse_discovery.sql"
       - "tests/test_*natural_lapse*.py"
       - ".github/workflows/us-natural-lapse-discovery.yml"
@@ -18,6 +19,7 @@ on:
       - "app/us/natural_lapse_projection_operator.py"
       - "app/integration_api.py"
       - "app/integration_g0_contract.py"
+      - "docs/integrations/markorbit/MARKORBIT_DATA_ENGINE_INTEGRATION_V1.json"
       - "database/clickhouse/init/014_us_natural_lapse_discovery.sql"
       - "tests/test_*natural_lapse*.py"
       - ".github/workflows/us-natural-lapse-discovery.yml"
@@ -61,6 +63,7 @@ jobs:
           tests/test_discovery_contract.py
           tests/test_integration_applicant_owner_read.py
           tests/test_applicant_owner_read.py
+          tests/test_mo_de_g0_contract.py
 
       - name: Safety invariant
         run: >-
