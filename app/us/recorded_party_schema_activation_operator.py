@@ -206,6 +206,8 @@ def apply_schema(
     authority_token: str,
     receipt_path: Path,
     client: Any | None = None,
+    main_sha_getter: Callable[[], str] = current_main_sha,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     plan = load_plan(plan_path, plan_sha)
     expected = f"GO #741 US recorded party schema activation {plan_sha.lower()}"
@@ -214,8 +216,14 @@ def apply_schema(
             "fresh exact US recorded party schema authority token is required"
         )
     target = client or clickhouse_client()
-    validate_live_plan(plan, client=target)
-    sql_path = _repo_root() / str(plan["sql_relative_path"])
+    validate_live_plan(
+        plan,
+        client=target,
+        main_sha_getter=main_sha_getter,
+        repo_root=repo_root,
+    )
+    root = repo_root or _repo_root()
+    sql_path = root / str(plan["sql_relative_path"])
     try:
         for statement in _split_sql(sql_path.read_text(encoding="utf-8")):
             target.command(statement)
