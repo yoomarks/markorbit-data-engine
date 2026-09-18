@@ -15,7 +15,7 @@ from app.discovery_contract import (
 from app.read_performance_baseline import DEFAULT_QUERY_BUDGET
 from app.version import engine_version
 
-SCHEMA_VERSION = "US_RECORDED_PARTY_HISTORY_SCHEMA_V1"
+SCHEMA_VERSION = "US_RECORDED_PARTY_HISTORY_SCHEMA_V2"
 READY_VERSION = "US_RECORDED_PARTY_HISTORY_READY_V1"
 SOURCE_TABLE = "markorbit_facts.us_recorded_party_relationship_event"
 READINESS_TABLE = "markorbit_facts.us_recorded_party_history_readiness"

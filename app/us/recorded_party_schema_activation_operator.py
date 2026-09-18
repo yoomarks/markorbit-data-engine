@@ -16,7 +16,7 @@ from app.db import clickhouse_client
 
 PLAN_VERSION = "US_RECORDED_PARTY_SCHEMA_ACTIVATION_PLAN_V1"
 RECEIPT_VERSION = "US_RECORDED_PARTY_SCHEMA_ACTIVATION_RECEIPT_V1"
-SCHEMA_VERSION = "US_RECORDED_PARTY_HISTORY_SCHEMA_V1"
+SCHEMA_VERSION = "US_RECORDED_PARTY_HISTORY_SCHEMA_V2"
 SQL_RELATIVE_PATH = Path("database/clickhouse/init/021_us_recorded_party_history.sql")
 TARGET_OBJECTS = (
     "us_recorded_party_relationship_event",
