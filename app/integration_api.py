@@ -81,6 +81,12 @@ from app.us.natural_lapse_discovery import (
     NaturalLapseUnavailable,
     execute_page as execute_us_natural_lapse_page,
 )
+from app.us.recorded_party_history import (
+    RecordedPartyHistoryInvalid,
+    RecordedPartyHistoryRequest,
+    RecordedPartyHistoryUnavailable,
+    execute_page as execute_us_recorded_party_history_page,
+)
 from app.us.registration_lookup import (
     RegistrationLookupInvalid,
     RegistrationLookupScopeExceeded,
@@ -529,6 +535,56 @@ def integration_us_attorneys_by_name(
     if payload["match_count"] == 0:
         result["fact_state"] = "not_found"
     return result
+
+
+@router.get("/us/recorded-parties/by-name")
+def integration_us_recorded_parties_by_name(
+    name: Annotated[str, Query(min_length=1, max_length=512)],
+    source_domain: Annotated[
+        str, Query(pattern="^(ALL|US_ASSIGNMENT|US_TTAB)$")
+    ] = "ALL",
+    relationship_type: Annotated[
+        str | None, Query(min_length=1, max_length=64)
+    ] = None,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=8192)] = None,
+) -> dict[str, Any]:
+    try:
+        payload = execute_us_recorded_party_history_page(
+            RecordedPartyHistoryRequest(
+                name=name,
+                source_domain=source_domain,
+                relationship_type=relationship_type,
+                page_size=page_size,
+                cursor=cursor,
+            ),
+            client=clickhouse_client(),
+        )
+    except RecordedPartyHistoryInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_US_RECORDED_PARTY_HISTORY_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except RecordedPartyHistoryUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_US_RECORDED_PARTY_HISTORY_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    except DiscoveryContractError as exc:
+        raise _discovery_http_error(exc) from exc
+    return _envelope(
+        jurisdiction="US",
+        resource_kind="RECORDED_PARTY_RELATIONSHIP_HISTORY",
+        payload=payload,
+    )
 
 
 @router.get("/us/registrations/{registration_number}")
