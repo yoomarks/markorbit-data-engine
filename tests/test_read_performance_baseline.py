@@ -18,7 +18,7 @@ from app.read_performance_baseline import (
 from app.read_query_capability import read_query_capability_contract
 
 
-CAPABILITY_REGISTRY = Path("docs/integrations/markorbit/READ_QUERY_CAPABILITY_V1.json")
+CAPABILITY_REGISTRY = Path("docs/integrations/markorbit/READ_QUERY_CAPABILITY_V2.json")
 
 
 class FakeClient:
