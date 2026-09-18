@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -43,11 +43,12 @@ def test_entity_projection_is_application_bounded_and_lifecycle_ordered() -> Non
     assert "GROUP BY entity_id" not in sql
 
 
-def test_source_snapshot_can_be_revalidated_to_frozen_rank() -> None:
+def test_ready_relationship_snapshot_can_be_revalidated_to_frozen_rank() -> None:
     client = FakeQueryClient()
-    stats = op.relationship_source_stats(client, max_source_rank=77)
+    stats = op.relationship_timeline_stats(client, max_source_rank=77)
     assert stats["row_count"] == 12
     assert stats["max_source_rank"] == 77
+    assert "FROM markorbit_facts.cn_trademark_relationship_event FINAL" in client.sql[0]
     assert "source_rank <= 77" in client.sql[0]
 
 
