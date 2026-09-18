@@ -107,6 +107,10 @@ class Settings(BaseSettings):
     integration_auth_mode: str = "disabled"
     integration_api_keys: str = ""
 
+    # Governed Fact Candidate admission uses separate owner-plane credentials.
+    # Unlike the read-only integration API, admission never has a disabled mode.
+    fact_admission_api_keys: str = ""
+
     # MO-DE-005 backpressure is opt-in so G0 changes no live runtime defaults.
     # When enabled, the default envelope is 120 requests per 60 seconds for each
     # source IP as observed by a provider process; consumers must honor 429 and
