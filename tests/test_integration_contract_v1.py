@@ -23,7 +23,7 @@ def test_integration_contract_freezes_service_and_write_boundaries():
         "MARKORBIT_TEMPORAL_RELATIONSHIP_V1"
     )
     assert contract["foundation_contracts"]["read_query_capability"]["contract_version"] == (
-        "READ_QUERY_CAPABILITY_V1"
+        "READ_QUERY_CAPABILITY_V2"
     )
     assert contract["foundation_contracts"]["read_query_capability"]["arbitrary_sql"] is False
 
