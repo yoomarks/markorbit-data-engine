@@ -1,25 +1,17 @@
 CREATE TABLE IF NOT EXISTS markorbit_facts.cn_admitted_citation_relation
 (
-    relation_id UUID,
+    edge_id String,
     candidate_id String,
     candidate_fingerprint_sha256 FixedString(64),
-    relation_type LowCardinality(String),
-    subject_application_number String,
-    subject_registration_number String,
-    object_application_number String,
-    object_registration_number String,
-    event_date Date32,
-    source_id String,
-    source_document_id String,
-    source_document_version UInt32,
-    source_document_sha256 FixedString(64),
-    source_uri String,
-    evidence_locator_json String,
-    extraction_method_id String,
-    extraction_method_version String,
-    confidence_score_basis_points UInt16,
-    admitted_at DateTime64(3, 'UTC'),
-    record_hash FixedString(64)
+    contract_version LowCardinality(String),
+    relationship_type LowCardinality(String),
+    source_resource_id String,
+    target_resource_id String,
+    event_date Nullable(Date32),
+    evidence_json String,
+    provenance_json String,
+    edge_fingerprint String,
+    admitted_at DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(admitted_at)
 ORDER BY candidate_fingerprint_sha256;

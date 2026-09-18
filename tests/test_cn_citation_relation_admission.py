@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from hashlib import sha256
-import json
 
 import pytest
 
@@ -12,17 +10,15 @@ from app.cn.citation_relation_admission import (
     TARGET_TABLE,
     admit_cn_citation_relation,
 )
+from app.fact_candidate_admission import fact_candidate_fingerprint_sha256_v1
+from app.temporal_relationship_contract import TEMPORAL_RELATIONSHIP_CONTRACT_VERSION
 
 
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def candidate(*, status="VALIDATED", object_application=None, object_registration="12345678"):
+def candidate(*, status="VALIDATED", candidate_id="fac_01ARZ3NDEKTSV4RRFFQ69G5FAY"):
     value = {
         "contractVersion": "MARKORBIT_FACT_CANDIDATE_V1",
         "objectType": "FACT_CANDIDATE",
-        "candidateId": "fac_01ARZ3NDEKTSV4RRFFQ69G5FAY",
+        "candidateId": candidate_id,
         "factType": "CITED_AS_REFERENCE_FOR_REFUSAL",
         "jurisdiction": "CN",
         "subject": {
@@ -32,8 +28,8 @@ def candidate(*, status="VALIDATED", object_application=None, object_registratio
         },
         "object": {
             "resourceType": "TRADEMARK",
-            "applicationNumber": object_application,
-            "registrationNumber": object_registration,
+            "applicationNumber": None,
+            "registrationNumber": "12345678",
         },
         "eventDate": "2026-08-21",
         "effectiveDate": None,
@@ -80,26 +76,7 @@ def candidate(*, status="VALIDATED", object_application=None, object_registratio
         "producedAt": "2026-09-18T15:50:00.000Z",
         "legalConclusion": False,
     }
-    material = {
-        key: value[key]
-        for key in (
-            "contractVersion",
-            "objectType",
-            "factType",
-            "jurisdiction",
-            "subject",
-            "object",
-            "eventDate",
-            "effectiveDate",
-            "sourceDocument",
-            "evidenceLocator",
-            "sourceAuthority",
-            "extractionMethod",
-            "confidence",
-            "legalConclusion",
-        )
-    }
-    value["candidateFingerprintSha256"] = sha256(canonical(material).encode()).hexdigest()
+    value["candidateFingerprintSha256"] = fact_candidate_fingerprint_sha256_v1(value)
     return value
 
 
@@ -114,13 +91,20 @@ class Client:
         self.inserts = []
 
     def query(self, _sql, *, parameters):
-        fingerprint = parameters["fingerprint"]
-        candidate_id = parameters["candidate_id"]
-        matches = [
-            (row["candidate_id"], stored_fingerprint)
-            for stored_fingerprint, row in self.rows.items()
-            if stored_fingerprint == fingerprint or row["candidate_id"] == candidate_id
-        ]
+        matches = []
+        for fingerprint, row in self.rows.items():
+            if (
+                fingerprint == parameters["fingerprint"]
+                or row["candidate_id"] == parameters["candidate_id"]
+            ):
+                matches.append(
+                    (
+                        row["candidate_id"],
+                        fingerprint,
+                        row["edge_id"],
+                        row["contract_version"],
+                    )
+                )
         return Result(matches[:2])
 
     def insert(self, table, rows, *, column_names):
@@ -130,7 +114,7 @@ class Client:
         self.rows[data["candidate_fingerprint_sha256"]] = data
 
 
-def test_admits_validated_cn_citation_once_and_replays_stable_identity():
+def test_admits_foundation_temporal_edge_once_and_replays_stable_identity():
     client = Client()
     value = candidate()
     now = datetime(2026, 9, 18, 17, 0, tzinfo=timezone.utc)
@@ -138,26 +122,22 @@ def test_admits_validated_cn_citation_once_and_replays_stable_identity():
     first = admit_cn_citation_relation(value, client=client, now=now)
     replay = admit_cn_citation_relation(value, client=client, now=now)
 
-    assert first.data_engine_contract_version == ADMISSION_CONTRACT_VERSION
-    assert first.data_engine_fact_id.startswith("cn_citation_")
+    assert ADMISSION_CONTRACT_VERSION == TEMPORAL_RELATIONSHIP_CONTRACT_VERSION
+    assert first.data_engine_fact_id.startswith("rel_")
+    assert first.data_engine_contract_version == TEMPORAL_RELATIONSHIP_CONTRACT_VERSION
     assert first.replayed is False
-    assert replay == type(first)(first.data_engine_fact_id, ADMISSION_CONTRACT_VERSION, True)
+    assert replay == type(first)(
+        first.data_engine_fact_id,
+        TEMPORAL_RELATIONSHIP_CONTRACT_VERSION,
+        True,
+    )
     assert len(client.inserts) == 1
     stored = client.rows[value["candidateFingerprintSha256"]]
-    assert stored["object_application_number"] == ""
-    assert stored["object_registration_number"] == "12345678"
-    assert stored["extraction_method_id"] == "cn-trademark-citation-extraction"
-
-
-def test_accepts_explicit_cited_application_number():
-    client = Client()
-    value = candidate(object_application="202355555555.5", object_registration=None)
-
-    admit_cn_citation_relation(value, client=client)
-
-    stored = client.rows[value["candidateFingerprintSha256"]]
-    assert stored["object_application_number"] == "202355555555.5"
-    assert stored["object_registration_number"] == ""
+    assert stored["relationship_type"] == "CITED_AS_REFERENCE_FOR_REFUSAL"
+    assert stored["source_resource_id"] == "CN:202312345678.9"
+    assert stored["target_resource_id"] == "CN:12345678"
+    assert '"source_authority":"CNIPA"' in stored["evidence_json"]
+    assert '"derivation_kind":"DOCUMENT_EXTRACTION"' in stored["provenance_json"]
 
 
 def test_rejects_proposed_candidate_before_persistence():
@@ -171,7 +151,7 @@ def test_rejects_fingerprint_mismatch_before_persistence():
     client = Client()
     value = candidate()
     value["candidateFingerprintSha256"] = "f" * 64
-    with pytest.raises(CitationRelationAdmissionError, match="fingerprint mismatch"):
+    with pytest.raises(CitationRelationAdmissionError, match="fingerprint"):
         admit_cn_citation_relation(value, client=client)
     assert client.inserts == []
 
@@ -180,18 +160,18 @@ def test_rejects_business_or_unknown_fields_fail_closed():
     client = Client()
     value = candidate()
     value["workspaceId"] = "workspace-should-never-be-admitted"
-    with pytest.raises(CitationRelationAdmissionError, match="shape is invalid"):
+    with pytest.raises(CitationRelationAdmissionError, match="fields are invalid"):
         admit_cn_citation_relation(value, client=client)
     assert client.inserts == []
 
 
 def test_same_fact_fingerprint_replays_even_with_new_candidate_id():
     client = Client()
-    value = candidate()
-    first = admit_cn_citation_relation(value, client=client)
+    first_value = candidate()
+    first = admit_cn_citation_relation(first_value, client=client)
 
-    replay_value = candidate()
-    replay_value["candidateId"] = "fac_01ARZ3NDEKTSV4RRFFQ69G5FAA"
+    replay_value = candidate(candidate_id="fac_01ARZ3NDEKTSV4RRFFQ69G5FAA")
+    assert replay_value["candidateFingerprintSha256"] == first_value["candidateFingerprintSha256"]
     replay = admit_cn_citation_relation(replay_value, client=client)
 
     assert replay.data_engine_fact_id == first.data_engine_fact_id
@@ -202,10 +182,24 @@ def test_same_fact_fingerprint_replays_even_with_new_candidate_id():
 def test_replay_detects_candidate_identity_fingerprint_conflict():
     client = Client()
     value = candidate()
-    different = candidate(object_application="202355555555.5", object_registration=None)
-    client.rows[different["candidateFingerprintSha256"]] = {
-        "candidate_id": value["candidateId"]
+    other = candidate()
+    other["object"]["registrationNumber"] = "87654321"
+    other["candidateFingerprintSha256"] = fact_candidate_fingerprint_sha256_v1(other)
+    client.rows[other["candidateFingerprintSha256"]] = {
+        "candidate_id": value["candidateId"],
+        "edge_id": "rel_other",
+        "contract_version": TEMPORAL_RELATIONSHIP_CONTRACT_VERSION,
     }
 
     with pytest.raises(CitationRelationAdmissionError, match="fingerprint conflict"):
+        admit_cn_citation_relation(value, client=client)
+
+
+def test_rejects_non_cn_candidate_on_cn_owner_endpoint():
+    client = Client()
+    value = candidate()
+    value["jurisdiction"] = "US"
+    value["candidateFingerprintSha256"] = fact_candidate_fingerprint_sha256_v1(value)
+
+    with pytest.raises(CitationRelationAdmissionError, match="only CN"):
         admit_cn_citation_relation(value, client=client)
