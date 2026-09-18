@@ -14,6 +14,11 @@ from app.us.recorded_party_activation_operator_v2 import (
     load_progress,
 )
 
+from app.us.recorded_party_schema_activation_operator import (
+    PLAN_VERSION as SCHEMA_PLAN_VERSION,
+    apply_schema,
+)
+
 
 def test_batch_action_distinguishes_recover_insert_and_mismatch():
     expected = {"row_count": 10, "row_hash_xor": 7}
@@ -73,5 +78,22 @@ def test_apply_requires_exact_authority_before_client_access(tmp_path: Path):
             authority_token="NO",
             progress_path=tmp_path / "progress.json",
             receipt_path=tmp_path / "receipt.json",
+            client=TrapClient(),
+        )
+
+
+def test_schema_apply_requires_independent_exact_authority_before_client_access(
+    tmp_path: Path,
+):
+    plan = {"version": SCHEMA_PLAN_VERSION}
+    envelope = {"plan": plan, "plan_sha256": _sha256(plan)}
+    path = tmp_path / "schema-plan.json"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+    with pytest.raises(PermissionError, match="schema authority"):
+        apply_schema(
+            path,
+            plan_sha=envelope["plan_sha256"],
+            authority_token="GO #741 US recorded party history activation " + envelope["plan_sha256"],
+            receipt_path=tmp_path / "schema-receipt.json",
             client=TrapClient(),
         )
