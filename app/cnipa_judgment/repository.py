@@ -7,6 +7,7 @@ from typing import Sequence
 
 from app.db import postgres_conn
 
+from .migrations import ensure_cnipa_judgment_schema
 from .model import CnipaJudgmentListFact, CnipaJudgmentWindowObservation
 
 
@@ -170,6 +171,7 @@ def ingest_cnipa_judgment_window(
     current_updates = 0
 
     with postgres_conn() as conn:
+        ensure_cnipa_judgment_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """
