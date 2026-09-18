@@ -18,7 +18,7 @@ from app.version import engine_version
 
 SCHEMA_VERSION = "CN_ENTITY_TRADEMARK_PORTFOLIO_SCHEMA_V1"
 READY_VERSION = "CN_ENTITY_TRADEMARK_PORTFOLIO_READY_V1"
-SOURCE_TABLE = "markorbit_facts.cn_entity_trademark_relationship_history"
+SOURCE_TABLE = "markorbit_facts.cn_entity_trademark_relationship_event"
 READINESS_TABLE = "markorbit_facts.cn_entity_trademark_portfolio_readiness"
 STREAM_ID = "cn_entity_trademark_portfolio"
 CANDIDATE_TYPE = "ENTITY_TRADEMARK_RELATIONSHIP"
@@ -186,14 +186,14 @@ def _page_sql(
                 relation_key,
                 argMax(
                     toUInt8(action = 'OBSERVED_CURRENT'),
-                    tuple(source_rank, history_hash)
+                    tuple(source_rank, event_hash)
                 ) AS is_current,
                 max(toUInt8(action = 'SUPERSEDED')) AS has_former,
                 min(observed_at) AS first_observed_at,
                 max(observed_at) AS last_observed_at,
-                argMax(source_rank, tuple(source_rank, history_hash)) AS latest_source_rank,
-                argMax(source_package_id, tuple(source_rank, history_hash)) AS latest_source_package_id,
-                argMax(history_hash, tuple(source_rank, history_hash)) AS latest_source_record_hash
+                argMax(source_rank, tuple(source_rank, event_hash)) AS latest_source_rank,
+                argMax(source_package_id, tuple(source_rank, event_hash)) AS latest_source_package_id,
+                argMax(event_hash, tuple(source_rank, event_hash)) AS latest_event_hash
             FROM {SOURCE_TABLE} FINAL
             WHERE entity_id = toUUID({_sql_text(request.normalized_entity_id)})
               AND source_rank <= {int(max_source_rank)}
@@ -211,16 +211,16 @@ def _page_sql(
                 max(last_observed_at) AS last_observed_at,
                 argMax(
                     latest_source_rank,
-                    tuple(latest_source_rank, latest_source_record_hash)
+                    tuple(latest_source_rank, latest_event_hash)
                 ) AS latest_source_rank,
                 argMax(
                     latest_source_package_id,
-                    tuple(latest_source_rank, latest_source_record_hash)
+                    tuple(latest_source_rank, latest_event_hash)
                 ) AS latest_source_package_id,
                 argMax(
-                    latest_source_record_hash,
-                    tuple(latest_source_rank, latest_source_record_hash)
-                ) AS latest_source_record_hash
+                    latest_event_hash,
+                    tuple(latest_source_rank, latest_event_hash)
+                ) AS latest_event_hash
             FROM lifecycle
             GROUP BY role, application_number
         )
@@ -234,7 +234,7 @@ def _page_sql(
             last_observed_at,
             latest_source_rank,
             toString(latest_source_package_id) AS latest_source_package_id,
-            toString(latest_source_record_hash) AS latest_source_record_hash
+            toString(latest_event_hash) AS latest_event_hash
         FROM portfolio
         WHERE {_scope_clause(request.normalized_scope)}
           {cursor_clause}
@@ -287,7 +287,7 @@ def _candidate(
         "last_observed_at": str(row.get("last_observed_at") or ""),
         "latest_source_rank": int(row.get("latest_source_rank") or 0),
         "latest_source_package_id": str(row.get("latest_source_package_id") or ""),
-        "latest_source_record_hash": str(row.get("latest_source_record_hash") or ""),
+        "latest_event_hash": str(row.get("latest_event_hash") or ""),
         "legal_conclusion": False,
         "identity_resolution_claimed": False,
     }

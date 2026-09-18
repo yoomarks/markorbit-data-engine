@@ -1,11 +1,11 @@
-CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_history
+CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_event
 (
     entity_id UUID,
     role LowCardinality(String),
     application_number String,
     relation_key FixedString(64),
     action LowCardinality(String),
-    effective_date Nullable(Date32),
+    event_date Nullable(Date32),
     observed_at DateTime64(3, 'UTC'),
     source_package_id UUID,
     source_package_kind LowCardinality(String),
@@ -14,21 +14,30 @@ CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_hist
     source_last_line UInt64,
     source_row_hash FixedString(64),
     source_rank UInt64,
-    history_hash FixedString(64)
+    event_hash FixedString(64)
 )
 ENGINE = ReplacingMergeTree(source_rank)
-ORDER BY (entity_id, role, application_number, relation_key, history_hash);
+ORDER BY (entity_id, role, application_number, relation_key, event_hash);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_history_mv
-TO markorbit_facts.cn_entity_trademark_relationship_history
+CREATE MATERIALIZED VIEW IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_event_mv
+TO markorbit_facts.cn_entity_trademark_relationship_event
 AS
+WITH
+    position(event_type, 'SUPERSEDED') > 0 AS is_superseded,
+    if(is_superseded, old_value_compact, new_value_compact) AS fact_json,
+    JSONExtractString(fact_json, 'entity_id') AS entity_id_text,
+    JSONExtractString(fact_json, 'relation_key') AS relation_key_text
 SELECT
-    assumeNotNull(entity_id) AS entity_id,
-    role,
+    toUUID(entity_id_text) AS entity_id,
+    multiIf(
+        startsWith(event_type, 'CO_OWNER_'), 'CO_OWNER',
+        startsWith(event_type, 'OWNER_'), 'OWNER',
+        'AGENT'
+    ) AS role,
     application_number,
-    relation_key,
-    action,
-    effective_date,
+    relation_key_text AS relation_key,
+    if(is_superseded, 'SUPERSEDED', 'OBSERVED_CURRENT') AS action,
+    event_date,
     observed_at,
     source_package_id,
     source_package_kind,
@@ -37,11 +46,19 @@ SELECT
     source_last_line,
     source_row_hash,
     source_rank,
-    history_hash
-FROM markorbit_facts.cn_case_party_relation_history
-WHERE entity_id IS NOT NULL
-  AND role IN ('OWNER', 'CO_OWNER', 'AGENT')
-  AND action IN ('OBSERVED_CURRENT', 'SUPERSEDED');
+    event_hash
+FROM markorbit_facts.cn_observed_event
+WHERE event_type IN
+(
+    'OWNER_RELATION_OBSERVED',
+    'OWNER_RELATION_SUPERSEDED_OBSERVED',
+    'CO_OWNER_RELATION_OBSERVED',
+    'CO_OWNER_RELATION_SUPERSEDED_OBSERVED',
+    'AGENT_RELATION_OBSERVED',
+    'AGENT_RELATION_SUPERSEDED_OBSERVED'
+)
+  AND entity_id_text != ''
+  AND relation_key_text != '';
 
 CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_portfolio_readiness
 (
