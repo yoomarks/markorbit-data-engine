@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 from typing import Any, Mapping
 
@@ -93,6 +93,8 @@ def admit_cn_citation_relation(
 
     temporal = fact["temporal"]
     event_at = temporal["event_at"]
+    event_date = date.fromisoformat(event_at) if event_at is not None else None
+    admitted_at = datetime.fromisoformat(decided_at.replace("Z", "+00:00"))
     client.insert(
         TARGET_TABLE,
         [[
@@ -103,11 +105,11 @@ def admit_cn_citation_relation(
             fact["relationship_type"],
             fact["source"]["resource_id"],
             fact["target"]["resource_id"],
-            event_at,
+            event_date,
             _json(fact["evidence"]),
             _json(fact["provenance"]),
             fact["fingerprint"],
-            decided_at,
+            admitted_at,
         ]],
         column_names=[
             "edge_id",
