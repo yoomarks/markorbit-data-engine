@@ -35,6 +35,8 @@ PROGRESS_VERSION = "US_RECORDED_PARTY_HISTORY_ACTIVATION_PROGRESS_V2"
 RECEIPT_VERSION = "US_RECORDED_PARTY_HISTORY_ACTIVATION_RECEIPT_V1"
 DEFAULT_BATCH_SERIALS = 100_000
 MAX_BATCH_SERIALS = 500_000
+PREPARE_MIN_FREE_BYTES = 30 * 1024**3
+APPLY_MIN_FREE_BYTES = 15 * 1024**3
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,37 @@ class ActivationProgress:
             raise ValueError("US recorded party activation stage is invalid")
         if len(self.plan_sha256) != 64:
             raise ValueError("US recorded party activation plan SHA is invalid")
+
+
+def free_disk_bytes(client: Any) -> int:
+    rows = _query_rows(
+        client,
+        """
+        SELECT free_space
+        FROM system.disks
+        WHERE name = 'default'
+        LIMIT 1
+        """,
+        settings={"max_threads": 1},
+    )
+    if len(rows) != 1:
+        raise RuntimeError("US recorded party disk capacity is unavailable")
+    return int(rows[0][0] or 0)
+
+
+def require_free_disk(
+    client: Any,
+    *,
+    minimum_bytes: int,
+    stage: str,
+) -> int:
+    free = free_disk_bytes(client)
+    if free < int(minimum_bytes):
+        raise RuntimeError(
+            "US recorded party disk headroom is below the guarded minimum: "
+            f"stage={stage} free_bytes={free} minimum_bytes={int(minimum_bytes)}"
+        )
+    return free
 
 
 def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
@@ -74,6 +107,11 @@ def prepare_activation_plan(
     if not 1 <= batch_serials <= MAX_BATCH_SERIALS:
         raise ValueError("batch serial count is outside accepted bounds")
     target = client or clickhouse_client()
+    prepare_free_bytes = require_free_disk(
+        target,
+        minimum_bytes=PREPARE_MIN_FREE_BYTES,
+        stage="PREPARE",
+    )
     if target_schema_state(target) != EXPECTED_SCHEMA:
         raise RuntimeError("US recorded party target schema is incomplete")
     if readiness_rows(target):
@@ -95,6 +133,11 @@ def prepare_activation_plan(
         "target_schema": target_schema_state(target),
         "target_pre_state": current_target,
         "batch_serials": batch_serials,
+        "capacity_gate": {
+            "prepare_min_free_bytes": PREPARE_MIN_FREE_BYTES,
+            "apply_min_free_bytes": APPLY_MIN_FREE_BYTES,
+            "prepare_observed_free_bytes": prepare_free_bytes,
+        },
         "assignment_max_rank": frozen_sources[
             "us_assignment_property_history"
         ]["max_source_rank"],
@@ -142,6 +185,16 @@ def validate_live_plan(
         raise RuntimeError("US recorded party frozen source snapshot drifted")
     if readiness_rows(client):
         raise RuntimeError("US recorded party readiness unexpectedly exists")
+    capacity = dict(plan.get("capacity_gate") or {})
+    if capacity.get("prepare_min_free_bytes") != PREPARE_MIN_FREE_BYTES:
+        raise RuntimeError("US recorded party prepare disk gate drifted")
+    if capacity.get("apply_min_free_bytes") != APPLY_MIN_FREE_BYTES:
+        raise RuntimeError("US recorded party apply disk gate drifted")
+    require_free_disk(
+        client,
+        minimum_bytes=APPLY_MIN_FREE_BYTES,
+        stage="APPLY_START",
+    )
 
 
 def load_progress(
@@ -565,6 +618,11 @@ def execute_activation_plan(
                     f"expected={expected!r} actual={actual!r}"
                 )
             if action == "INSERT":
+                require_free_disk(
+                    target,
+                    minimum_bytes=APPLY_MIN_FREE_BYTES,
+                    stage=f"{stage}_BEFORE_INSERT",
+                )
                 insert_batch(
                     target,
                     stage=stage,

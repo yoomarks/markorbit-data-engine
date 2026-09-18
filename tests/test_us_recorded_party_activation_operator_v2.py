@@ -12,6 +12,7 @@ from app.us.recorded_party_activation_operator_v2 import (
     _batch_action,
     execute_activation_plan,
     load_progress,
+    require_free_disk,
 )
 
 from app.us.recorded_party_schema_activation_operator import (
@@ -97,3 +98,35 @@ def test_schema_apply_requires_independent_exact_authority_before_client_access(
             receipt_path=tmp_path / "schema-receipt.json",
             client=TrapClient(),
         )
+
+
+class DiskClient:
+    def __init__(self, free_bytes: int) -> None:
+        self.free_bytes = free_bytes
+
+    def query(self, sql, *, settings):
+        return type(
+            "Result",
+            (),
+            {
+                "result_rows": [(self.free_bytes,)],
+                "column_names": ["free_space"],
+            },
+        )()
+
+
+def test_disk_headroom_gate_fails_closed():
+    with pytest.raises(RuntimeError, match="disk headroom"):
+        require_free_disk(
+            DiskClient(1024),
+            minimum_bytes=2048,
+            stage="TEST",
+        )
+    assert (
+        require_free_disk(
+            DiskClient(4096),
+            minimum_bytes=2048,
+            stage="TEST",
+        )
+        == 4096
+    )
