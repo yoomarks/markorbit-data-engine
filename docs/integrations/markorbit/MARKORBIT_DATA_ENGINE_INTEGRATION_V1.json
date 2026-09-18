@@ -237,6 +237,51 @@
         "semantics": "current_official_name_facts_no_identity_resolution"
       },
       {
+        "path": "/api/v1/cn/entities/{entity_id}/trademarks",
+        "query": {
+          "role": {
+            "type": "enum",
+            "required": false,
+            "values": [
+              "OWNER",
+              "CO_OWNER",
+              "AGENT"
+            ]
+          },
+          "scope": {
+            "type": "enum",
+            "default": "all",
+            "values": [
+              "current",
+              "historical",
+              "all"
+            ]
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "min": 1,
+            "max": 100
+          },
+          "cursor": {
+            "type": "opaque_string",
+            "required": false,
+            "max_length": 8192
+          }
+        },
+        "pagination": "bounded_keyset_cursor",
+        "snapshot": "CN_ENTITY_PORTFOLIO_ACCEPTED_BACKFILL",
+        "hard_bounds": {
+          "max_pages": 100,
+          "max_results": 10000
+        },
+        "read_model": "CN_ENTITY_TRADEMARK_PORTFOLIO_SCHEMA_V1",
+        "state": "implemented_requires_production_backfill",
+        "semantics": "entity_role_current_and_former_trademark_relationship_summary",
+        "read_only": true,
+        "business_state_owned_outside_data_engine": true
+      },
+      {
         "path": "/api/v1/cn/cases/{application_number}/relationships",
         "query": {
           "scope": {

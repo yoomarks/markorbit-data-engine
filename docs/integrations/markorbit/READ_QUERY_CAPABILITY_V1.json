@@ -33,116 +33,168 @@
   "capabilities": [
     {
       "id": "exact_trademark_application",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN",
+        "US"
+      ],
       "state": "SUPPORTED_INDEXED",
       "key": "application_number_or_serial_number",
       "notes": "Primary-key equality; exact registration-number lookup is separate."
     },
     {
       "id": "exact_trademark_registration",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
       "notes": "Registration-keyed candidates are verified against serial-keyed current facts; production remains fail-closed until its projection backfill is accepted."
     },
     {
       "id": "exact_trademark_registration",
-      "jurisdictions": ["CN"],
+      "jurisdictions": [
+        "CN"
+      ],
       "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
       "notes": "No canonical CN domestic registration lookup field is frozen yet."
     },
     {
       "id": "applicant_owner_name_resolve",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN",
+        "US"
+      ],
       "state": "SUPPORTED_INDEXED_EXACT_NAME",
       "notes": "Only canonical exact-name paging is frozen; contains/fuzzy search is not implied."
     },
     {
       "id": "applicant_owner_name_resolve_cursor_page",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN",
+        "US"
+      ],
       "state": "SUPPORTED_INDEXED",
       "notes": "Cursor position follows the complete lookup sort key and remains query/snapshot bound."
     },
     {
       "id": "agent_attorney_name_resolve",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
       "notes": "Exact normalized attorney-name facts are indexed; production remains fail-closed until its projection backfill is accepted."
     },
     {
       "id": "agent_attorney_name_resolve",
-      "jurisdictions": ["CN"],
+      "jurisdictions": [
+        "CN"
+      ],
       "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
       "notes": "Exact normalized Agent-name facts are indexed; production remains fail-closed until its projection backfill is accepted."
     },
     {
       "id": "current_entity_portfolio",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "SUPPORTED_INDEXED",
       "notes": "US applicant candidate projection is ordered by candidate key."
     },
     {
       "id": "current_entity_portfolio_cursor_page",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "SUPPORTED_INDEXED",
       "notes": "Cursor position follows candidate_key, serial_number, owner_key."
     },
     {
       "id": "current_entity_portfolio",
-      "jurisdictions": ["CN"],
-      "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
-      "notes": "CN current party facts are ordered by application number, not entity_id."
+      "jurisdictions": [
+        "CN"
+      ],
+      "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+      "notes": "Entity/role/application summary is indexed by entity_id and remains fail-closed until the governed relationship-history backfill is accepted."
     },
     {
       "id": "historical_entity_portfolio",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN"
+      ],
+      "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+      "notes": "OWNER/CO_OWNER/AGENT former relationships are served from the same entity-keyed summary after governed production backfill/READY acceptance."
+    },
+    {
+      "id": "historical_entity_portfolio",
+      "jurisdictions": [
+        "US"
+      ],
       "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
-      "notes": "CN party relation history is empty and Assignment party names have no entity-first lookup."
+      "notes": "Recorded Assignment/TTAB history is trademark-keyed; entity/party-first lookup still requires an indexed serving model."
     },
     {
       "id": "filing_date_range",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN",
+        "US"
+      ],
       "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
       "notes": "Current case sort keys are application/serial numbers."
     },
     {
       "id": "status_class_filtered_list",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN",
+        "US"
+      ],
       "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
       "notes": "No list projection is ordered for status/class plus cursor identity."
     },
     {
       "id": "trademark_event_timeline",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
       "notes": "Official event facts are serial-keyed in a bounded serving projection; production remains fail-closed until its projection backfill is accepted."
     },
     {
       "id": "relationship_timeline",
-      "jurisdictions": ["CN"],
+      "jurisdictions": [
+        "CN"
+      ],
       "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
       "notes": "OWNER/CO_OWNER/AGENT observation history is application-keyed and deterministically derives current/former edges; production remains fail-closed."
     },
     {
       "id": "relationship_timeline",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "SUPPORTED_BOUNDED_TWO_STAGE_RECORDED_HISTORY",
       "notes": "Serial-keyed Assignment and TTAB facts map to direct official historical edges without inferring current ownership, proceeding outcome, or substantive rights."
     },
     {
       "id": "trademark_360",
-      "jurisdictions": ["CN", "US"],
+      "jurisdictions": [
+        "CN",
+        "US"
+      ],
       "state": "DEGRADED_UNBOUNDED_TIMELINE",
       "notes": "Exact current families are mostly identity-keyed; event expansion is not."
     },
     {
       "id": "assignment_lookup",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "SUPPORTED_BOUNDED_TWO_STAGE",
       "notes": "Resolve at most 500 reel/frame candidates through the serial-keyed property facts, then read latest state only for those identities; fail closed above the ceiling."
     },
     {
       "id": "ttab_lookup",
-      "jurisdictions": ["US"],
+      "jurisdictions": [
+        "US"
+      ],
       "state": "SUPPORTED_BOUNDED_TWO_STAGE",
       "notes": "Resolve at most 500 proceeding candidates through the serial-keyed property facts, then read latest state only for those identities; fail closed above the ceiling."
     }
