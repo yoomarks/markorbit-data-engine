@@ -30,7 +30,6 @@ def _result(columns: list[str], rows: list[tuple[object, ...]]) -> SimpleNamespa
 
 
 ENTITY_ID = "20000000-0000-0000-0000-000000000002"
-
 READINESS_COLUMNS = [
     "ready_version",
     "source_watermark",
@@ -39,7 +38,6 @@ READINESS_COLUMNS = [
     "accepted_at",
 ]
 PORTFOLIO_COLUMNS = [
-    "entity_id",
     "role",
     "application_number",
     "has_current",
@@ -49,7 +47,7 @@ PORTFOLIO_COLUMNS = [
     "last_observed_at",
     "latest_source_rank",
     "latest_source_package_id",
-    "latest_event_hash",
+    "latest_source_record_hash",
 ]
 
 
@@ -77,7 +75,6 @@ def _portfolio_row(
     rank: int = 10,
 ) -> tuple[object, ...]:
     return (
-        ENTITY_ID,
         role,
         application,
         current,
@@ -125,9 +122,12 @@ def test_entity_portfolio_reads_current_and_historical_states() -> None:
     assert page["results"][0]["mark_name_raw"] == "MARK-10000001"
     query = client.queries[1][0]
     assert "entity_id = toUUID" in query
+    assert "source_rank <= 123" in query
     assert "role = 'AGENT'" in query
+    assert "GROUP BY role, application_number, relation_key" in query
+    assert "action = 'SUPERSEDED'" in query
     assert "(has_current = 1 OR has_former = 1)" in query
-    assert "ORDER BY entity_id, role, application_number" in query
+    assert "ORDER BY role, application_number" in query
 
 
 def test_entity_portfolio_cursor_is_snapshot_and_query_bound() -> None:
@@ -150,7 +150,6 @@ def test_entity_portfolio_cursor_is_snapshot_and_query_bound() -> None:
         runtime_engine_version="M1.7",
     )
     assert first_page["next_cursor"]
-
     second = FakeClient(
         [
             _ready(),
@@ -203,12 +202,16 @@ def test_entity_portfolio_validates_input() -> None:
         EntityPortfolioRequest(entity_id=ENTITY_ID, scope="former")
 
 
-def test_entity_portfolio_schema_is_entity_keyed_without_implicit_backfill() -> None:
+def test_entity_portfolio_schema_is_entity_keyed_and_incremental() -> None:
     sql = Path("database/clickhouse/init/020_cn_entity_trademark_portfolio.sql").read_text(
         encoding="utf-8"
     )
-    assert "CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_portfolio" in sql
-    assert "ORDER BY (entity_id, role, application_number)" in sql
+    assert (
+        "CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_history" in sql
+    )
+    assert "cn_entity_trademark_relationship_history_mv" in sql
+    assert "ORDER BY (entity_id, role, application_number, relation_key, history_hash)" in sql
+    assert "FROM markorbit_facts.cn_case_party_relation_history" in sql
     assert "cn_entity_trademark_portfolio_readiness" in sql
     assert "CN_ENTITY_TRADEMARK_PORTFOLIO_SCHEMA_V1" in sql
-    assert "INSERT INTO markorbit_facts.cn_entity_trademark_portfolio\nSELECT" not in sql
+    assert "INSERT INTO markorbit_facts.cn_entity_trademark_relationship_history\nSELECT" not in sql

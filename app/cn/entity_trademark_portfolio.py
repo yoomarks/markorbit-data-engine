@@ -18,7 +18,7 @@ from app.version import engine_version
 
 SCHEMA_VERSION = "CN_ENTITY_TRADEMARK_PORTFOLIO_SCHEMA_V1"
 READY_VERSION = "CN_ENTITY_TRADEMARK_PORTFOLIO_READY_V1"
-SOURCE_TABLE = "markorbit_facts.cn_entity_trademark_portfolio"
+SOURCE_TABLE = "markorbit_facts.cn_entity_trademark_relationship_history"
 READINESS_TABLE = "markorbit_facts.cn_entity_trademark_portfolio_readiness"
 STREAM_ID = "cn_entity_trademark_portfolio"
 CANDIDATE_TYPE = "ENTITY_TRADEMARK_RELATIONSHIP"
@@ -115,7 +115,8 @@ def _readiness(client: Any) -> dict[str, Any]:
         rows = _dict_rows(
             client.query(
                 f"""
-                SELECT ready_version, source_watermark, source_max_rank, implementation_sha, accepted_at
+                SELECT ready_version, source_watermark, source_max_rank,
+                       implementation_sha, accepted_at
                 FROM {READINESS_TABLE} FINAL
                 ORDER BY accepted_at DESC
                 LIMIT 1
@@ -131,8 +132,9 @@ def _readiness(client: Any) -> dict[str, Any]:
         )
     row = rows[0]
     watermark = str(row.get("source_watermark") or "").strip()
-    if not watermark:
-        raise EntityPortfolioUnavailable("CN entity portfolio readiness watermark is missing")
+    max_rank = int(row.get("source_max_rank") or 0)
+    if not watermark or max_rank <= 0:
+        raise EntityPortfolioUnavailable("CN entity portfolio readiness watermark is invalid")
     return row
 
 
@@ -163,27 +165,80 @@ def _page_sql(
     *,
     position: Sequence[Any] | None,
     fetch_limit: int,
+    max_source_rank: int,
 ) -> str:
-    conditions = [
-        f"entity_id = toUUID({_sql_text(request.normalized_entity_id)})",
-        _scope_clause(request.normalized_scope),
-    ]
+    role_clause = ""
     if request.normalized_role is not None:
-        conditions.append(f"role = {_sql_text(request.normalized_role)}")
+        role_clause = f"AND role = {_sql_text(request.normalized_role)}"
+    cursor_clause = ""
     if position is not None:
         role, application = _validate_position(position)
-        conditions.append(
-            f"tuple(role, application_number) > tuple({_sql_text(role)}, {_sql_text(application)})"
+        cursor_clause = (
+            "AND tuple(role, application_number) > "
+            f"tuple({_sql_text(role)}, {_sql_text(application)})"
         )
-    where = "\n          AND ".join(conditions)
     return f"""
-        SELECT toString(entity_id) AS entity_id, role, application_number,
-               has_current, has_former, relation_count,
-               first_observed_at, last_observed_at,
-               latest_source_rank, latest_source_package_id, latest_event_hash
-        FROM {SOURCE_TABLE} FINAL
-        WHERE {where}
-        ORDER BY entity_id, role, application_number
+        WITH lifecycle AS
+        (
+            SELECT
+                role,
+                application_number,
+                relation_key,
+                argMax(
+                    toUInt8(action = 'OBSERVED_CURRENT'),
+                    tuple(source_rank, history_hash)
+                ) AS is_current,
+                max(toUInt8(action = 'SUPERSEDED')) AS has_former,
+                min(observed_at) AS first_observed_at,
+                max(observed_at) AS last_observed_at,
+                argMax(source_rank, tuple(source_rank, history_hash)) AS latest_source_rank,
+                argMax(source_package_id, tuple(source_rank, history_hash)) AS latest_source_package_id,
+                argMax(history_hash, tuple(source_rank, history_hash)) AS latest_source_record_hash
+            FROM {SOURCE_TABLE} FINAL
+            WHERE entity_id = toUUID({_sql_text(request.normalized_entity_id)})
+              AND source_rank <= {int(max_source_rank)}
+              {role_clause}
+            GROUP BY role, application_number, relation_key
+        ), portfolio AS
+        (
+            SELECT
+                role,
+                application_number,
+                max(is_current) AS has_current,
+                max(has_former) AS has_former,
+                count() AS relation_count,
+                min(first_observed_at) AS first_observed_at,
+                max(last_observed_at) AS last_observed_at,
+                argMax(
+                    latest_source_rank,
+                    tuple(latest_source_rank, latest_source_record_hash)
+                ) AS latest_source_rank,
+                argMax(
+                    latest_source_package_id,
+                    tuple(latest_source_rank, latest_source_record_hash)
+                ) AS latest_source_package_id,
+                argMax(
+                    latest_source_record_hash,
+                    tuple(latest_source_rank, latest_source_record_hash)
+                ) AS latest_source_record_hash
+            FROM lifecycle
+            GROUP BY role, application_number
+        )
+        SELECT
+            role,
+            application_number,
+            has_current,
+            has_former,
+            relation_count,
+            first_observed_at,
+            last_observed_at,
+            latest_source_rank,
+            toString(latest_source_package_id) AS latest_source_package_id,
+            toString(latest_source_record_hash) AS latest_source_record_hash
+        FROM portfolio
+        WHERE {_scope_clause(request.normalized_scope)}
+          {cursor_clause}
+        ORDER BY role, application_number
         LIMIT {int(fetch_limit)}
     """
 
@@ -209,7 +264,9 @@ def _case_rows(client: Any, applications: list[str]) -> dict[str, dict[str, Any]
     return {str(row["application_number"]): row for row in rows}
 
 
-def _candidate(row: Mapping[str, Any], case: Mapping[str, Any] | None) -> dict[str, Any]:
+def _candidate(
+    *, entity_id: str, row: Mapping[str, Any], case: Mapping[str, Any] | None
+) -> dict[str, Any]:
     states: list[str] = []
     role = str(row["role"])
     normalized_role = "OWNER" if role == "CO_OWNER" else role
@@ -219,7 +276,7 @@ def _candidate(row: Mapping[str, Any], case: Mapping[str, Any] | None) -> dict[s
         states.append(f"FORMER_{normalized_role}")
     return {
         "candidate_type": CANDIDATE_TYPE,
-        "entity_id": str(row["entity_id"]),
+        "entity_id": entity_id,
         "role": role,
         "application_number": str(row["application_number"]),
         "relationship_states": states,
@@ -230,7 +287,7 @@ def _candidate(row: Mapping[str, Any], case: Mapping[str, Any] | None) -> dict[s
         "last_observed_at": str(row.get("last_observed_at") or ""),
         "latest_source_rank": int(row.get("latest_source_rank") or 0),
         "latest_source_package_id": str(row.get("latest_source_package_id") or ""),
-        "latest_event_hash": str(row.get("latest_event_hash") or ""),
+        "latest_source_record_hash": str(row.get("latest_source_record_hash") or ""),
         "legal_conclusion": False,
         "identity_resolution_claimed": False,
     }
@@ -246,7 +303,7 @@ def execute_page(
     query = request.query_identity
     snapshot = build_snapshot_ref(
         snapshot_id=f"{READY_VERSION}:{ready['source_watermark']}",
-        snapshot_kind="CN_ENTITY_PORTFOLIO_ACCEPTED_BACKFILL",
+        snapshot_kind="CN_ENTITY_PORTFOLIO_ACCEPTED_WATERMARK",
         watermark=str(ready["source_watermark"]),
         source_version=READY_VERSION,
     )
@@ -264,7 +321,6 @@ def execute_page(
         emitted_before = int(decoded["emitted_count"])
         position = decoded["position"]
         _validate_position(position)
-
     remaining = request.limits.max_results - emitted_before
     if remaining <= 0:
         raise DiscoveryCursorError("CN entity portfolio hard result bound is exhausted")
@@ -272,7 +328,12 @@ def execute_page(
     try:
         raw = _dict_rows(
             client.query(
-                _page_sql(request, position=position, fetch_limit=capacity + 1),
+                _page_sql(
+                    request,
+                    position=position,
+                    fetch_limit=capacity + 1,
+                    max_source_rank=int(ready["source_max_rank"]),
+                ),
                 settings=READ_SETTINGS,
             )
         )
@@ -280,7 +341,14 @@ def execute_page(
         raise EntityPortfolioUnavailable(str(exc)) from exc
     page_rows = raw[:capacity]
     cases = _case_rows(client, [str(row["application_number"]) for row in page_rows])
-    results = [_candidate(row, cases.get(str(row["application_number"]))) for row in page_rows]
+    results = [
+        _candidate(
+            entity_id=request.normalized_entity_id,
+            row=row,
+            case=cases.get(str(row["application_number"])),
+        )
+        for row in page_rows
+    ]
     emitted = emitted_before + len(results)
     has_extra = len(raw) > capacity
     next_cursor = None
