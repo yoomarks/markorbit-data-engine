@@ -12,6 +12,13 @@ ADMISSION_CONTRACT_VERSION = "CN_CITATION_RELATION_ADMISSION_V1"
 TARGET_TABLE = "markorbit_facts.cn_admitted_citation_relation"
 _FACT_TYPE = "CITED_AS_REFERENCE_FOR_REFUSAL"
 _SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_CANDIDATE_ID = re.compile(r"^fac_[0-9A-HJKMNP-TV-Z]{26}$")
+_SOURCE_ID = re.compile(r"^src_[0-9A-HJKMNP-TV-Z]{26}$")
+_DOCUMENT_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,127}$")
+_RESOURCE_NUMBER = re.compile(r"^[A-Z0-9][A-Z0-9./-]{0,63}$")
+_COMPONENT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+_INSTANT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$")
 
 
 class CitationRelationAdmissionError(ValueError):
@@ -23,6 +30,7 @@ class CitationRelationAdmissionReceipt:
     data_engine_fact_id: str
     data_engine_contract_version: str
     replayed: bool
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "outcome": "ADMITTED",
@@ -47,6 +55,23 @@ def _text(value: Any, label: str, maximum: int = 1000) -> str:
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
         raise CitationRelationAdmissionError(f"{label} is invalid")
     return value.strip()
+
+
+def _pattern(value: Any, pattern: re.Pattern[str], label: str, maximum: int = 1000) -> str:
+    text = _text(value, label, maximum)
+    if not pattern.fullmatch(text):
+        raise CitationRelationAdmissionError(f"{label} is invalid")
+    return text
+
+
+def _instant(value: Any, label: str) -> datetime:
+    text = _pattern(value, _INSTANT, label, 64)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CitationRelationAdmissionError(f"{label} is invalid") from exc
+
+
 def _sha(value: Any, label: str) -> str:
     text = _text(value, label, 64)
     if not _SHA256.fullmatch(text):
@@ -62,14 +87,19 @@ def _trademark_ref(value: Any, label: str) -> tuple[str, str]:
     application = item.get("applicationNumber")
     registration = item.get("registrationNumber")
     if application is not None:
-        application = _text(application, f"{label}.applicationNumber", 64)
+        application = _pattern(
+            application, _RESOURCE_NUMBER, f"{label}.applicationNumber", 64
+        )
     if registration is not None:
-        registration = _text(registration, f"{label}.registrationNumber", 64)
+        registration = _pattern(
+            registration, _RESOURCE_NUMBER, f"{label}.registrationNumber", 64
+        )
     if application is None and registration is None:
         raise CitationRelationAdmissionError(
             f"{label} requires an application or registration number"
         )
     return str(application or ""), str(registration or "")
+
 
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -121,6 +151,7 @@ def _validate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     _exact(candidate, required, "Fact Candidate")
     if candidate["contractVersion"] != "MARKORBIT_FACT_CANDIDATE_V1":
         raise CitationRelationAdmissionError("unsupported Fact Candidate contract")
+    candidate_id = _pattern(candidate["candidateId"], _CANDIDATE_ID, "candidateId", 64)
     if candidate["objectType"] != "FACT_CANDIDATE" or candidate["factType"] != _FACT_TYPE:
         raise CitationRelationAdmissionError("unsupported fact type")
     if candidate["jurisdiction"] != "CN":
@@ -138,16 +169,36 @@ def _validate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         {"outcome", "validatorId", "validatorVersion", "decidedAt", "reasonCode"},
         "ingestion.validation",
     )
-    if validation.get("outcome") != "ACCEPTED":
+    if validation.get("outcome") != "ACCEPTED" or validation.get("reasonCode") is not None:
         raise CitationRelationAdmissionError("candidate must be VALIDATED and accepted")
+    _pattern(
+        validation.get("validatorId"), _COMPONENT_ID, "ingestion.validation.validatorId", 128
+    )
+    _pattern(
+        validation.get("validatorVersion"), _SEMVER, "ingestion.validation.validatorVersion", 128
+    )
+    validation_decided_at = _instant(
+        validation.get("decidedAt"), "ingestion.validation.decidedAt"
+    )
     if ingestion.get("admission") is not None:
         raise CitationRelationAdmissionError("candidate is already admission-finalized")
+
+    produced_at = _instant(candidate["producedAt"], "producedAt")
+    if validation_decided_at < produced_at:
+        raise CitationRelationAdmissionError("validation cannot predate candidate production")
+    effective_date = candidate["effectiveDate"]
+    if effective_date is not None:
+        effective_date = _text(effective_date, "effectiveDate", 10)
+        try:
+            date.fromisoformat(effective_date)
+        except ValueError as exc:
+            raise CitationRelationAdmissionError("effectiveDate must use a real YYYY-MM-DD date") from exc
 
     subject_app, subject_reg = _trademark_ref(candidate["subject"], "subject")
     object_app, object_reg = _trademark_ref(candidate["object"], "object")
     event_date_text = _text(candidate["eventDate"], "eventDate", 10)
     try:
-        event_date = date.fromisoformat(event_date_text)
+        date.fromisoformat(event_date_text)
     except ValueError as exc:
         raise CitationRelationAdmissionError("eventDate must use a real YYYY-MM-DD date") from exc
 
@@ -159,8 +210,10 @@ def _validate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     )
     if source.get("owner") != "MARKORBIT_KNOWLEDGE":
         raise CitationRelationAdmissionError("sourceDocument owner must be MARKORBIT_KNOWLEDGE")
-    source_id = _text(source.get("sourceId"), "sourceDocument.sourceId", 128)
-    document_id = _text(source.get("documentId"), "sourceDocument.documentId", 128)
+    source_id = _pattern(source.get("sourceId"), _SOURCE_ID, "sourceDocument.sourceId", 128)
+    document_id = _pattern(
+        source.get("documentId"), _DOCUMENT_ID, "sourceDocument.documentId", 128
+    )
     document_version = source.get("documentVersion")
     if (
         not isinstance(document_version, int)
@@ -177,8 +230,12 @@ def _validate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     _exact(method, {"owner", "methodId", "methodVersion"}, "extractionMethod")
     if method.get("owner") != "MARKORBIT_BRAIN_METHOD":
         raise CitationRelationAdmissionError("extractionMethod owner is invalid")
-    method_id = _text(method.get("methodId"), "extractionMethod.methodId", 128)
-    method_version = _text(method.get("methodVersion"), "extractionMethod.methodVersion", 128)
+    method_id = _pattern(
+        method.get("methodId"), _COMPONENT_ID, "extractionMethod.methodId", 128
+    )
+    method_version = _pattern(
+        method.get("methodVersion"), _SEMVER, "extractionMethod.methodVersion", 128
+    )
 
     confidence = _record(candidate["confidence"], "confidence")
     _exact(confidence, {"scoreBasisPoints", "evidenceLevel"}, "confidence")
@@ -198,7 +255,7 @@ def _validate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         raise CitationRelationAdmissionError("candidate fingerprint mismatch")
 
     return {
-        "candidate_id": _text(candidate["candidateId"], "candidateId", 128),
+        "candidate_id": candidate_id,
         "fingerprint": fingerprint,
         "subject_application_number": subject_app,
         "subject_registration_number": subject_reg,
@@ -215,6 +272,7 @@ def _validate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "method_version": method_version,
         "confidence_score_basis_points": score,
     }
+
 
 def _fact_id(fingerprint: str) -> str:
     return f"cn_citation_{fingerprint[:32]}"
