@@ -47,7 +47,7 @@ PORTFOLIO_COLUMNS = [
     "last_observed_at",
     "latest_source_rank",
     "latest_source_package_id",
-    "latest_source_record_hash",
+    "latest_event_hash",
 ]
 
 
@@ -207,11 +207,11 @@ def test_entity_portfolio_schema_is_entity_keyed_and_incremental() -> None:
         encoding="utf-8"
     )
     assert (
-        "CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_history" in sql
+        "CREATE TABLE IF NOT EXISTS markorbit_facts.cn_entity_trademark_relationship_event" in sql
     )
-    assert "cn_entity_trademark_relationship_history_mv" in sql
-    assert "ORDER BY (entity_id, role, application_number, relation_key, history_hash)" in sql
-    assert "FROM markorbit_facts.cn_case_party_relation_history" in sql
+    assert "cn_entity_trademark_relationship_event_mv" in sql
+    assert "ORDER BY (entity_id, role, application_number, relation_key, event_hash)" in sql
+    assert "FROM markorbit_facts.cn_observed_event" in sql
     assert "cn_entity_trademark_portfolio_readiness" in sql
     assert "CN_ENTITY_TRADEMARK_PORTFOLIO_SCHEMA_V1" in sql
-    assert "INSERT INTO markorbit_facts.cn_entity_trademark_relationship_history\nSELECT" not in sql
+    assert "INSERT INTO markorbit_facts.cn_entity_trademark_relationship_event\nSELECT" not in sql
