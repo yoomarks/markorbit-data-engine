@@ -1,38 +1,10 @@
-CREATE TABLE IF NOT EXISTS markorbit_facts.us_recorded_party_relationship_event
-(
-    normalized_name String,
-    source_domain LowCardinality(String),
-    relationship_type LowCardinality(String),
-    party_key FixedString(64),
-    party_name String,
-    party_side LowCardinality(String),
-    source_role String,
-    serial_number String,
-    registration_number String,
-    resource_type LowCardinality(String),
-    resource_id String,
-    event_date Nullable(Date32),
-    observed_at DateTime64(3, 'UTC'),
-    source_file String,
-    source_package_id UUID,
-    source_rank UInt64,
-    party_observation_key FixedString(64),
-    resource_observation_key FixedString(64),
-    relationship_observation_hash FixedString(64)
-)
-ENGINE = ReplacingMergeTree(source_rank)
-ORDER BY
-(
-    normalized_name,
-    source_domain,
-    relationship_type,
-    serial_number,
-    resource_id,
-    party_key,
-    relationship_observation_hash
-);
+DROP TABLE IF EXISTS markorbit_facts.us_assignment_recorded_party_relationship_mv;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS markorbit_facts.us_assignment_recorded_party_relationship_mv
+DROP TABLE IF EXISTS markorbit_facts.us_ttab_recorded_party_relationship_mv;
+
+TRUNCATE TABLE markorbit_facts.us_recorded_party_relationship_event;
+
+CREATE MATERIALIZED VIEW markorbit_facts.us_assignment_recorded_party_relationship_mv
 TO markorbit_facts.us_recorded_party_relationship_event
 AS
 SELECT
@@ -86,7 +58,7 @@ INNER JOIN markorbit_facts.us_assignment_record_history AS rec
    AND rec.source_package_id = prop.source_package_id
 WHERE normalized_name != '';
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS markorbit_facts.us_ttab_recorded_party_relationship_mv
+CREATE MATERIALIZED VIEW markorbit_facts.us_ttab_recorded_party_relationship_mv
 TO markorbit_facts.us_recorded_party_relationship_event
 AS
 SELECT
@@ -141,24 +113,5 @@ INNER JOIN markorbit_facts.us_ttab_proceeding_history AS proceeding
    AND proceeding.source_package_id = prop.source_package_id
 WHERE normalized_name != '';
 
-CREATE TABLE IF NOT EXISTS markorbit_facts.us_recorded_party_history_readiness
-(
-    ready_version String,
-    assignment_max_rank UInt64,
-    ttab_max_rank UInt64,
-    implementation_sha FixedString(40),
-    accepted_at DateTime64(3, 'UTC'),
-    acceptance_hash FixedString(64)
-)
-ENGINE = ReplacingMergeTree(accepted_at)
-ORDER BY ready_version;
-
 INSERT INTO markorbit_facts.schema_version (component, version)
-SELECT 'US_RECORDED_PARTY_HISTORY', 'US_RECORDED_PARTY_HISTORY_SCHEMA_V2'
-WHERE NOT EXISTS
-(
-    SELECT 1
-    FROM markorbit_facts.schema_version FINAL
-    WHERE component = 'US_RECORDED_PARTY_HISTORY'
-      AND version = 'US_RECORDED_PARTY_HISTORY_SCHEMA_V2'
-);
+VALUES ('US_RECORDED_PARTY_HISTORY', 'US_RECORDED_PARTY_HISTORY_SCHEMA_V2');

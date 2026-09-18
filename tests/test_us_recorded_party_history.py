@@ -142,4 +142,7 @@ def test_recorded_party_history_schema_is_name_first_and_incremental():
     assert "FROM markorbit_facts.us_assignment_property_history AS prop" in sql
     assert "us_ttab_recorded_party_relationship_mv" in sql
     assert "FROM markorbit_facts.us_ttab_property_history AS prop" in sql
-    assert "US_RECORDED_PARTY_HISTORY_SCHEMA_V1" in sql
+    assert "US_RECORDED_PARTY_HISTORY_SCHEMA_V2" in sql
+    assert "toString(p.observation_key)" in sql
+    assert "toString(prop.observation_key)" in sql
+    assert "toString(party.observation_key)" in sql
