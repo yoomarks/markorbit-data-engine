@@ -19,26 +19,15 @@ from app.cn.entity_trademark_portfolio import READY_VERSION
 from app.cn.relationship_timeline import RELATIONSHIP_TIMELINE_READY_VERSION
 from app.db import clickhouse_client
 
-PLAN_VERSION = "CN_ENTITY_PORTFOLIO_ACTIVATION_PLAN_V2"
-PROGRESS_VERSION = "CN_ENTITY_PORTFOLIO_ACTIVATION_PROGRESS_V1"
+PLAN_VERSION = "CN_ENTITY_PORTFOLIO_ACTIVATION_PLAN_V3"
+PROGRESS_VERSION = "CN_ENTITY_PORTFOLIO_ACTIVATION_PROGRESS_V2"
 RECEIPT_VERSION = "CN_ENTITY_PORTFOLIO_ACTIVATION_RECEIPT_V1"
 RELATIONSHIP_TABLE = "markorbit_facts.cn_trademark_relationship_event"
 ENTITY_TABLE = "markorbit_facts.cn_entity_trademark_relationship_event"
 READINESS_TABLE = "markorbit_facts.cn_entity_trademark_portfolio_readiness"
-SOURCE_TABLE = "markorbit_facts.cn_observed_event"
-RELATIONSHIP_EVENT_TYPES = (
-    "OWNER_RELATION_OBSERVED",
-    "OWNER_RELATION_SUPERSEDED_OBSERVED",
-    "CO_OWNER_RELATION_OBSERVED",
-    "CO_OWNER_RELATION_SUPERSEDED_OBSERVED",
-    "AGENT_RELATION_OBSERVED",
-    "AGENT_RELATION_SUPERSEDED_OBSERVED",
-)
 EXPECTED_RELATIONSHIP_SORTING_KEY = "application_number, event_hash"
 EXPECTED_ENTITY_SORTING_KEY = "entity_id, role, application_number, relation_key, event_hash"
-DEFAULT_RELATIONSHIP_BATCH_EVENTS = 250_000
 DEFAULT_ENTITY_BATCH_APPLICATIONS = 5_000
-MAX_RELATIONSHIP_BATCH_EVENTS = 1_000_000
 MAX_ENTITY_BATCH_APPLICATIONS = 20_000
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -47,15 +36,13 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 @dataclass(frozen=True, slots=True)
 class ActivationProgress:
     plan_sha256: str
-    stage: str = "RELATIONSHIP"
-    after_event_hash: str = ""
+    stage: str = "ENTITY"
     after_application_number: str = ""
-    relationship_rows_verified: int = 0
     entity_rows_verified: int = 0
     entity_batches_verified: int = 0
 
     def __post_init__(self) -> None:
-        if self.stage not in {"RELATIONSHIP", "ENTITY", "COMPLETE"}:
+        if self.stage not in {"ENTITY", "COMPLETE"}:
             raise ValueError("activation stage is invalid")
         if not HEX64.fullmatch(self.plan_sha256):
             raise ValueError("progress plan SHA-256 is invalid")
@@ -92,10 +79,6 @@ def current_main_sha(repo_root: Path | None = None) -> str:
     if branch != "main" or not HEX40.fullmatch(sha):
         raise RuntimeError("CN entity activation must run from exact local main")
     return sha
-
-
-def _event_type_sql() -> str:
-    return ", ".join("'" + item + "'" for item in RELATIONSHIP_EVENT_TYPES)
 
 
 def _query_rows(client: Any, sql: str, *, settings: Mapping[str, Any] | None = None) -> list[tuple[Any, ...]]:
@@ -146,11 +129,27 @@ def target_schema_state(client: Any) -> dict[str, Any]:
     return tables
 
 
-def relationship_source_stats(
+def relationship_timeline_readiness(client: Any) -> dict[str, str]:
+    rows = _query_rows(
+        client,
+        """
+        SELECT component, version
+        FROM markorbit_facts.schema_version FINAL
+        WHERE component = 'CN_RELATIONSHIP_TIMELINE'
+        LIMIT 1
+        """,
+        settings={"max_threads": 1},
+    )
+    if len(rows) != 1 or str(rows[0][1]) != RELATIONSHIP_TIMELINE_READY_VERSION:
+        raise RuntimeError("CN relationship timeline is not accepted READY")
+    return {"component": str(rows[0][0]), "version": str(rows[0][1])}
+
+
+def relationship_timeline_stats(
     client: Any, *, max_source_rank: int | None = None
 ) -> dict[str, Any]:
     rank_clause = (
-        f"AND source_rank <= {int(max_source_rank)}"
+        f"WHERE source_rank <= {int(max_source_rank)}"
         if max_source_rank is not None
         else ""
     )
@@ -163,14 +162,13 @@ def relationship_source_stats(
             max(toString(event_hash)) AS max_event_hash,
             max(application_number) AS max_application_number,
             groupBitXor(cityHash64(event_hash)) AS event_hash_xor
-        FROM {SOURCE_TABLE} FINAL
-        WHERE event_type IN ({_event_type_sql()})
-          {rank_clause}
+        FROM {RELATIONSHIP_TABLE} FINAL
+        {rank_clause}
         """,
         settings={"max_threads": 1},
     )
     if len(rows) != 1:
-        raise RuntimeError("CN relationship source statistics are unavailable")
+        raise RuntimeError("CN relationship timeline statistics are unavailable")
     row = rows[0]
     stats = {
         "row_count": int(row[0] or 0),
@@ -180,15 +178,13 @@ def relationship_source_stats(
         "event_hash_xor": int(row[4] or 0),
     }
     if stats["row_count"] <= 0 or stats["max_source_rank"] <= 0:
-        raise RuntimeError("CN relationship source statistics are empty")
+        raise RuntimeError("CN relationship timeline is empty")
     if len(stats["max_event_hash"]) != 64 or not stats["max_application_number"]:
-        raise RuntimeError("CN relationship source watermark is malformed")
+        raise RuntimeError("CN relationship timeline watermark is malformed")
     return stats
 
 
-def _validate_batch_sizes(relationship_batch_events: int, entity_batch_applications: int) -> None:
-    if not 1 <= relationship_batch_events <= MAX_RELATIONSHIP_BATCH_EVENTS:
-        raise ValueError("relationship batch size is outside accepted bounds")
+def _validate_batch_size(entity_batch_applications: int) -> None:
     if not 1 <= entity_batch_applications <= MAX_ENTITY_BATCH_APPLICATIONS:
         raise ValueError("entity application batch size is outside accepted bounds")
 
@@ -196,13 +192,12 @@ def _validate_batch_sizes(relationship_batch_events: int, entity_batch_applicati
 def prepare_activation_plan(
     output_path: Path,
     *,
-    relationship_batch_events: int = DEFAULT_RELATIONSHIP_BATCH_EVENTS,
     entity_batch_applications: int = DEFAULT_ENTITY_BATCH_APPLICATIONS,
     client: Any | None = None,
     epoch_getter: Callable[[], CNApplicantServingEpoch] = current_cn_applicant_serving_epoch,
     main_sha_getter: Callable[[], str] = current_main_sha,
 ) -> dict[str, Any]:
-    _validate_batch_sizes(relationship_batch_events, entity_batch_applications)
+    _validate_batch_size(entity_batch_applications)
     target = client or clickhouse_client()
     implementation_sha = main_sha_getter().lower()
     if not HEX40.fullmatch(implementation_sha):
@@ -212,13 +207,13 @@ def prepare_activation_plan(
         "expected_main": implementation_sha,
         "implementation_sha": implementation_sha,
         "source_epoch": epoch_getter().to_dict(),
-        "source_stats": relationship_source_stats(target),
+        "upstream_readiness": relationship_timeline_readiness(target),
+        "source_stats": relationship_timeline_stats(target),
         "target_schema": target_schema_state(target),
-        "relationship_batch_events": relationship_batch_events,
         "entity_batch_applications": entity_batch_applications,
         "mutation_scope": {
-            "insert_only_tables": [RELATIONSHIP_TABLE, ENTITY_TABLE, READINESS_TABLE],
-            "readiness_marker": RELATIONSHIP_TIMELINE_READY_VERSION,
+            "insert_only_tables": [ENTITY_TABLE, READINESS_TABLE],
+            "upstream_readiness_marker": RELATIONSHIP_TIMELINE_READY_VERSION,
             "destructive_operations": False,
         },
     }
@@ -259,12 +254,11 @@ def validate_live_plan(
         raise RuntimeError("CN activation target schema drifted from plan")
     frozen_stats = dict(plan.get("source_stats") or {})
     max_source_rank = int(frozen_stats.get("max_source_rank") or 0)
-    if relationship_source_stats(client, max_source_rank=max_source_rank) != frozen_stats:
-        raise RuntimeError("CN frozen relationship source snapshot drifted from plan")
-    _validate_batch_sizes(
-        int(plan.get("relationship_batch_events") or 0),
-        int(plan.get("entity_batch_applications") or 0),
-    )
+    if relationship_timeline_readiness(client) != dict(plan.get("upstream_readiness") or {}):
+        raise RuntimeError("CN relationship timeline readiness drifted from plan")
+    if relationship_timeline_stats(client, max_source_rank=max_source_rank) != frozen_stats:
+        raise RuntimeError("CN frozen relationship timeline snapshot drifted from plan")
+    _validate_batch_size(int(plan.get("entity_batch_applications") or 0))
     return epoch
 
 
@@ -294,99 +288,6 @@ def save_progress(path: Path, progress: ActivationProgress) -> None:
 def _sql_text(value: str) -> str:
     return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
-
-def _relationship_range_clause(after_hash: str, boundary_hash: str, max_source_rank: int) -> str:
-    clauses = [
-        f"event_type IN ({_event_type_sql()})",
-        f"source_rank <= {int(max_source_rank)}",
-        f"event_hash <= {_sql_text(boundary_hash)}",
-    ]
-    if after_hash:
-        clauses.append(f"event_hash > {_sql_text(after_hash)}")
-    return " AND ".join(clauses)
-
-
-def relationship_boundary(
-    client: Any, *, after_hash: str, max_source_rank: int, batch_size: int
-) -> str | None:
-    after = f"AND event_hash > {_sql_text(after_hash)}" if after_hash else ""
-    rows = _query_rows(
-        client,
-        f"""
-        SELECT max(toString(event_hash))
-        FROM
-        (
-            SELECT event_hash
-            FROM {SOURCE_TABLE} FINAL
-            WHERE event_type IN ({_event_type_sql()})
-              AND source_rank <= {int(max_source_rank)}
-              {after}
-            ORDER BY event_hash
-            LIMIT {int(batch_size)}
-        )
-        """,
-        settings={"max_threads": 1},
-    )
-    if len(rows) != 1:
-        raise RuntimeError("CN relationship backfill boundary query failed")
-    boundary = _text(rows[0][0]).strip()
-    return boundary or None
-
-
-def relationship_batch_stats(
-    client: Any,
-    *,
-    table: str,
-    after_hash: str,
-    boundary_hash: str,
-    max_source_rank: int,
-    final: bool,
-) -> dict[str, int]:
-    if table not in {SOURCE_TABLE, RELATIONSHIP_TABLE}:
-        raise ValueError("unsupported relationship statistics table")
-    if table == SOURCE_TABLE:
-        where = _relationship_range_clause(after_hash, boundary_hash, max_source_rank)
-    else:
-        clauses = [
-            f"source_rank <= {int(max_source_rank)}",
-            f"event_hash <= {_sql_text(boundary_hash)}",
-        ]
-        if after_hash:
-            clauses.append(f"event_hash > {_sql_text(after_hash)}")
-        where = " AND ".join(clauses)
-    rows = _query_rows(
-        client,
-        f"""
-        SELECT count(), groupBitXor(cityHash64(event_hash)), max(source_rank)
-        FROM {table}{' FINAL' if final else ''}
-        WHERE {where}
-        """,
-        settings={"max_threads": 1},
-    )
-    if len(rows) != 1:
-        raise RuntimeError("CN relationship batch statistics query failed")
-    return {
-        "row_count": int(rows[0][0] or 0),
-        "event_hash_xor": int(rows[0][1] or 0),
-        "max_source_rank": int(rows[0][2] or 0),
-    }
-
-
-def insert_relationship_batch(
-    client: Any, *, after_hash: str, boundary_hash: str, max_source_rank: int
-) -> None:
-    where = _relationship_range_clause(after_hash, boundary_hash, max_source_rank)
-    client.command(
-        f"""
-        INSERT INTO {RELATIONSHIP_TABLE}
-        SELECT event_id, application_number, event_type, event_date, observed_at,
-               field_name, old_value_compact, new_value_compact, evidence_level,
-               source_package_id, source_package_kind, source_file,
-               source_first_line, source_last_line, source_row_hash, source_rank, event_hash
-        FROM {SOURCE_TABLE} FINAL
-        WHERE {where}
-        """
-    )
 
 
 def entity_application_boundary(
@@ -631,12 +532,6 @@ def _write_readiness(
         )
         """
     )
-    client.command(
-        f"""
-        INSERT INTO markorbit_facts.schema_version (component, version)
-        VALUES ('CN_RELATIONSHIP_TIMELINE', {_sql_text(RELATIONSHIP_TIMELINE_READY_VERSION)})
-        """
-    )
 
 
 def execute_activation_plan(
@@ -663,56 +558,8 @@ def execute_activation_plan(
     source_stats = dict(plan["source_stats"])
     max_source_rank = int(source_stats["max_source_rank"])
     progress = load_progress(progress_path, plan_sha.lower())
-    relationship_batch_events = int(plan["relationship_batch_events"])
     entity_batch_applications = int(plan["entity_batch_applications"])
     try:
-        while progress.stage == "RELATIONSHIP":
-            boundary = relationship_boundary(
-                target,
-                after_hash=progress.after_event_hash,
-                max_source_rank=max_source_rank,
-                batch_size=relationship_batch_events,
-            )
-            if boundary is None:
-                progress = ActivationProgress(
-                    plan_sha256=progress.plan_sha256,
-                    stage="ENTITY",
-                    after_event_hash=progress.after_event_hash,
-                    relationship_rows_verified=progress.relationship_rows_verified,
-                )
-                save_progress(progress_path, progress)
-                break
-            expected = relationship_batch_stats(
-                target,
-                table=SOURCE_TABLE,
-                after_hash=progress.after_event_hash,
-                boundary_hash=boundary,
-                max_source_rank=max_source_rank,
-                final=True,
-            )
-            insert_relationship_batch(
-                target,
-                after_hash=progress.after_event_hash,
-                boundary_hash=boundary,
-                max_source_rank=max_source_rank,
-            )
-            actual = relationship_batch_stats(
-                target,
-                table=RELATIONSHIP_TABLE,
-                after_hash=progress.after_event_hash,
-                boundary_hash=boundary,
-                max_source_rank=max_source_rank,
-                final=True,
-            )
-            _verified_equal("relationship batch", expected, actual)
-            progress = ActivationProgress(
-                plan_sha256=progress.plan_sha256,
-                stage="RELATIONSHIP",
-                after_event_hash=boundary,
-                relationship_rows_verified=progress.relationship_rows_verified + expected["row_count"],
-            )
-            save_progress(progress_path, progress)
-
         while progress.stage == "ENTITY":
             boundary = entity_application_boundary(
                 target,
@@ -724,9 +571,7 @@ def execute_activation_plan(
                 progress = ActivationProgress(
                     plan_sha256=progress.plan_sha256,
                     stage="COMPLETE",
-                    after_event_hash=progress.after_event_hash,
                     after_application_number=progress.after_application_number,
-                    relationship_rows_verified=progress.relationship_rows_verified,
                     entity_rows_verified=progress.entity_rows_verified,
                     entity_batches_verified=progress.entity_batches_verified,
                 )
@@ -754,9 +599,7 @@ def execute_activation_plan(
             progress = ActivationProgress(
                 plan_sha256=progress.plan_sha256,
                 stage="ENTITY",
-                after_event_hash=progress.after_event_hash,
                 after_application_number=boundary,
-                relationship_rows_verified=progress.relationship_rows_verified,
                 entity_rows_verified=progress.entity_rows_verified + expected["row_count"],
                 entity_batches_verified=progress.entity_batches_verified + 1,
             )
@@ -764,8 +607,6 @@ def execute_activation_plan(
 
         if progress.stage != "COMPLETE":
             raise RuntimeError("CN entity activation did not reach COMPLETE")
-        if progress.relationship_rows_verified != int(source_stats["row_count"]):
-            raise RuntimeError("verified relationship row count does not match frozen source")
         benchmark = benchmark_entity_lookup(target, max_source_rank=max_source_rank)
         implementation_sha = str(plan["implementation_sha"])
         _write_readiness(
@@ -810,7 +651,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser("prepare")
     prepare.add_argument("--output", type=Path)
-    prepare.add_argument("--relationship-batch-events", type=int, default=DEFAULT_RELATIONSHIP_BATCH_EVENTS)
     prepare.add_argument("--entity-batch-applications", type=int, default=DEFAULT_ENTITY_BATCH_APPLICATIONS)
     apply = sub.add_parser("apply")
     apply.add_argument("--plan", type=Path, required=True)
@@ -823,7 +663,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         path = args.output or _default_output("production_cn_entity_portfolio_activation_plan")
         result = prepare_activation_plan(
             path,
-            relationship_batch_events=args.relationship_batch_events,
             entity_batch_applications=args.entity_batch_applications,
         )
         print(json.dumps({"plan_path": str(path), **result}, indent=2, sort_keys=True))
