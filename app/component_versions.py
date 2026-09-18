@@ -51,7 +51,8 @@ from app.us_assignment import ASSIGNMENT_SCHEMA_VERSION
 from app.us_mark_image import SOURCE_VERSION as US_MARK_IMAGE_SOURCE_VERSION
 from app.us_ttab import TTAB_SCHEMA_VERSION
 from app.us_tsdr.adapter import TSDR_SOURCE_VERSION
-from app.us_tsdr.policy import POLICY_VERSION as TSDR_ACQUISITION_POLICY_VERSION
+from app.us_tsdr.intent import INTENT_CONTRACT_VERSION as TSDR_ACQUISITION_INTENT_VERSION
+from app.us_tsdr.policy import POLICY_VERSION as TSDR_LEGACY_WEEKLY_POLICY_VERSION
 from app.version import engine_version
 
 
@@ -85,7 +86,8 @@ def component_versions() -> dict[str, Any]:
             "us_ttab": {"schema_version": TTAB_SCHEMA_VERSION},
             "us_tsdr": {
                 "source_version": TSDR_SOURCE_VERSION,
-                "acquisition_policy_version": TSDR_ACQUISITION_POLICY_VERSION,
+                "acquisition_intent_version": TSDR_ACQUISITION_INTENT_VERSION,
+                "legacy_weekly_policy_version": TSDR_LEGACY_WEEKLY_POLICY_VERSION,
             },
             "us_mark_image": {"source_version": US_MARK_IMAGE_SOURCE_VERSION},
             "us_alert_engine": {"version": ALERT_ENGINE_VERSION},

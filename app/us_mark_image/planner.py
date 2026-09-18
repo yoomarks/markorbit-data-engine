@@ -166,6 +166,7 @@ def _upsert_candidates(
                         ),
                         standard_character_claimed = EXCLUDED.standard_character_claimed,
                         state = CASE
+                            WHEN acquisition.us_mark_image_coverage.state = 'SUCCESS' THEN 'SUCCESS'
                             WHEN EXCLUDED.standard_character_claimed THEN 'NOT_APPLICABLE'
                             WHEN acquisition.us_mark_image_coverage.standard_character_claimed
                                 THEN 'QUEUED'
