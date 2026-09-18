@@ -191,9 +191,9 @@ def _page_sql(
                 max(toUInt8(action = 'SUPERSEDED')) AS has_former,
                 min(observed_at) AS first_observed_at,
                 max(observed_at) AS last_observed_at,
-                argMax(source_rank, tuple(source_rank, event_hash)) AS latest_source_rank,
-                argMax(source_package_id, tuple(source_rank, event_hash)) AS latest_source_package_id,
-                argMax(event_hash, tuple(source_rank, event_hash)) AS latest_event_hash
+                argMax(source_rank, tuple(source_rank, event_hash)) AS lifecycle_latest_source_rank,
+                argMax(source_package_id, tuple(source_rank, event_hash)) AS lifecycle_latest_source_package_id,
+                argMax(event_hash, tuple(source_rank, event_hash)) AS lifecycle_latest_event_hash
             FROM {SOURCE_TABLE} FINAL
             WHERE entity_id = toUUID({_sql_text(request.normalized_entity_id)})
               AND source_rank <= {int(max_source_rank)}
@@ -210,16 +210,16 @@ def _page_sql(
                 min(first_observed_at) AS first_observed_at,
                 max(last_observed_at) AS last_observed_at,
                 argMax(
-                    latest_source_rank,
-                    tuple(latest_source_rank, latest_event_hash)
+                    lifecycle_latest_source_rank,
+                    tuple(lifecycle_latest_source_rank, lifecycle_latest_event_hash)
                 ) AS latest_source_rank,
                 argMax(
-                    latest_source_package_id,
-                    tuple(latest_source_rank, latest_event_hash)
+                    lifecycle_latest_source_package_id,
+                    tuple(lifecycle_latest_source_rank, lifecycle_latest_event_hash)
                 ) AS latest_source_package_id,
                 argMax(
-                    latest_event_hash,
-                    tuple(latest_source_rank, latest_event_hash)
+                    lifecycle_latest_event_hash,
+                    tuple(lifecycle_latest_source_rank, lifecycle_latest_event_hash)
                 ) AS latest_event_hash
             FROM lifecycle
             GROUP BY role, application_number

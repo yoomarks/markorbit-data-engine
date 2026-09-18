@@ -128,6 +128,9 @@ def test_entity_portfolio_reads_current_and_historical_states() -> None:
     assert "action = 'SUPERSEDED'" in query
     assert "(has_current = 1 OR has_former = 1)" in query
     assert "ORDER BY role, application_number" in query
+    assert "AS lifecycle_latest_source_rank" in query
+    assert "AS lifecycle_latest_event_hash" in query
+    assert "argMax(\n                    lifecycle_latest_source_rank" in query
 
 
 def test_entity_portfolio_cursor_is_snapshot_and_query_bound() -> None:
