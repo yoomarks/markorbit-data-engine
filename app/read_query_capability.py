@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-READ_QUERY_CAPABILITY_VERSION = "READ_QUERY_CAPABILITY_V1"
+READ_QUERY_CAPABILITY_VERSION = "READ_QUERY_CAPABILITY_V2"
 
 
 def read_query_capability_contract() -> dict[str, Any]:
@@ -50,10 +50,10 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "exact_trademark_registration",
                 "jurisdictions": ["US"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "Registration-keyed candidates are verified against serial-keyed current facts; "
-                    "production remains fail-closed until its projection backfill is accepted."
+                    "Registration-keyed candidates are production-backfilled and verified against "
+                    "serial-keyed current facts under READY_V1."
                 ),
             },
             {
@@ -81,19 +81,19 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "agent_attorney_name_resolve",
                 "jurisdictions": ["US"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED_EXACT_NAME",
                 "notes": (
-                    "Exact normalized attorney-name facts are indexed; production remains "
-                    "fail-closed until its projection backfill is accepted."
+                    "Exact normalized attorney-name facts are production-backfilled under READY_V1; "
+                    "no fuzzy identity resolution is implied."
                 ),
             },
             {
                 "id": "agent_attorney_name_resolve",
                 "jurisdictions": ["CN"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED_EXACT_NAME",
                 "notes": (
-                    "Exact normalized Agent-name facts are indexed; production remains "
-                    "fail-closed until its projection backfill is accepted."
+                    "Exact normalized Agent-name facts are production-backfilled under READY_V1; "
+                    "no fuzzy identity resolution is implied."
                 ),
             },
             {
@@ -111,19 +111,19 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "current_entity_portfolio",
                 "jurisdictions": ["CN"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "Entity/role/application summary is indexed by entity_id and remains fail-closed "
-                    "until the governed relationship-history backfill is accepted."
+                    "Entity/role/application summary is production-backfilled under "
+                    "CN_ENTITY_TRADEMARK_PORTFOLIO_READY_V1."
                 ),
             },
             {
                 "id": "historical_entity_portfolio",
                 "jurisdictions": ["CN"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "OWNER/CO_OWNER/AGENT former relationships are served from the same entity-keyed "
-                    "summary after governed production backfill/READY acceptance."
+                    "OWNER/CO_OWNER/AGENT former relationships are served from the production-accepted "
+                    "entity-keyed READY_V1 summary."
                 ),
             },
             {
@@ -150,19 +150,19 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "trademark_event_timeline",
                 "jurisdictions": ["US"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "Official event facts are serial-keyed in a bounded serving projection; "
-                    "production remains fail-closed until its projection backfill is accepted."
+                    "Official event facts are production-backfilled in the bounded serial-keyed "
+                    "US_EVENT_SERIAL_LOOKUP_READY_V1 projection."
                 ),
             },
             {
                 "id": "relationship_timeline",
                 "jurisdictions": ["CN"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "OWNER/CO_OWNER/AGENT observation history is application-keyed and "
-                    "deterministically derives current/former edges; production remains fail-closed."
+                    "OWNER/CO_OWNER/AGENT observation history is production-accepted under "
+                    "CN_RELATIONSHIP_TIMELINE_READY_V2 and deterministically derives current/former edges."
                 ),
             },
             {
