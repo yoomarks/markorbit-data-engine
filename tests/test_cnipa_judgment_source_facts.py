@@ -244,14 +244,24 @@ class _Connection:
 
 
 def _fake_postgres(monkeypatch):
-    store = {"windows": {}, "observations": {}, "current": {}}
+    store = {
+        "windows": {},
+        "observations": {},
+        "current": {},
+        "schema_ensures": 0,
+    }
     connection = _Connection(store)
 
     @contextmanager
     def connect():
         yield connection
 
+    def ensure_schema(conn):
+        assert conn is connection
+        store["schema_ensures"] += 1
+
     monkeypatch.setattr(repository, "postgres_conn", connect)
+    monkeypatch.setattr(repository, "ensure_cnipa_judgment_schema", ensure_schema)
     return store, connection
 
 
@@ -313,6 +323,7 @@ def test_replay_is_idempotent_and_provenance_survives_current_projection(monkeyp
     assert current["source_row_sha256"] == "a" * 64
     assert current["source_artifact_ref"] == ARTIFACT
     assert connection.commits == 2
+    assert store["schema_ensures"] == 2
 
 
 def test_older_replay_enters_history_without_replacing_current(monkeypatch):
@@ -381,6 +392,13 @@ def test_migration_has_append_only_history_current_projection_and_no_document_st
     lowered = SCHEMA_SQL.lower()
     for fragment in forbidden:
         assert fragment not in lowered
+
+    migration_source = (
+        Path(__file__).parents[1] / "app" / "cnipa_judgment" / "migrations.py"
+    ).read_text(encoding="utf-8")
+    assert "database/postgres/init/019_cnipa_judgment_source_fact.sql" in migration_source
+    assert "Path(" not in migration_source
+    assert "CNIPA_JUDGMENT_LIST_FACT_V1" in migration_source
 
 
 def test_repository_source_contains_no_business_or_detail_queue_state():
