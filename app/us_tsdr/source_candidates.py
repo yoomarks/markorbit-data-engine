@@ -139,7 +139,7 @@ def load_candidate_pool(
     capacity: int,
     backfill_bucket: int,
 ) -> CandidatePool:
-    """Build a bounded weekly candidate pool from current US Application facts."""
+    """Legacy V1 auto-discovery pool; not an opportunity or acquisition-need authority."""
     if capacity < 1:
         raise ValueError("capacity must be positive")
     rank, watermark_serial = source_watermark

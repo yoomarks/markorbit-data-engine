@@ -13,6 +13,11 @@ from app.us_tsdr.source_candidates import load_candidate_pool
 
 
 def _plan(args) -> dict[str, object]:
+    if not bool(getattr(args, "allow_legacy_autodiscovery", False)):
+        raise RuntimeError(
+            "legacy TSDR auto-discovery is disabled by default; "
+            "submit an explicit sparse acquisition intent instead"
+        )
     state = planner_state()
     watermark = (
         int(state["source_rank_watermark"] or 0),
@@ -39,6 +44,14 @@ def main() -> None:
 
     plan = sub.add_parser("plan", help="plan one bounded weekly TSDR batch")
     plan.add_argument("--capacity", type=int, default=DEFAULT_WEEKLY_CAPACITY)
+    plan.add_argument(
+        "--allow-legacy-autodiscovery",
+        action="store_true",
+        help=(
+            "explicit compatibility escape hatch for the deprecated V1 candidate policy; "
+            "new production flows must supply sparse acquisition intents"
+        ),
+    )
     plan.add_argument(
         "--backfill-bucket",
         type=int,
