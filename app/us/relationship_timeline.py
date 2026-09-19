@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import json
 from typing import Any, Mapping
 
 from app.read_performance_baseline import DEFAULT_QUERY_BUDGET
@@ -334,6 +335,50 @@ def _ttab_items(client: Any, serial: str) -> tuple[list[dict[str, Any]], int]:
     return items, unmapped
 
 
+def _citation_items(client: Any, serial: str) -> list[dict[str, Any]]:
+    rows = _rows(
+        client,
+        f"""
+        SELECT candidate_id, candidate_fingerprint_sha256, fact_json, admitted_at
+        FROM markorbit_facts.us_admitted_citation_relation FINAL
+        WHERE source_resource_id = {_sql_literal(f"US:{serial}")}
+        ORDER BY admitted_at, candidate_fingerprint_sha256
+        LIMIT {MAX_RELATIONSHIP_EDGES + 1}
+        """,
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            edge = json.loads(_text(row["fact_json"]))
+        except (TypeError, ValueError) as exc:
+            raise USRelationshipTimelineUnavailable(
+                "admitted citation fact_json is invalid"
+            ) from exc
+        if (
+            not isinstance(edge, dict)
+            or edge.get("jurisdiction") != "US"
+            or edge.get("relationship_type") != "CITED_AS_REFERENCE_FOR_REFUSAL"
+            or edge.get("source", {}).get("resource_id") != f"US:{serial}"
+        ):
+            raise USRelationshipTimelineUnavailable(
+                "admitted citation edge identity drifted"
+            )
+        items.append(
+            {
+                "edge": edge,
+                "source_fact": {
+                    "source_domain": "US_TSDR",
+                    "candidate_id": _text(row["candidate_id"]),
+                    "candidate_fingerprint_sha256": _text(
+                        row["candidate_fingerprint_sha256"]
+                    ),
+                    "admitted_at": _iso_timestamp(row["admitted_at"]),
+                },
+            }
+        )
+    return items
+
+
 def relationships_for_trademark(
     client: Any, serial_number: str, *, scope: str = "all"
 ) -> dict[str, Any]:
@@ -347,11 +392,12 @@ def relationships_for_trademark(
     try:
         assignments = _assignment_items(client, serial)
         ttab, unmapped = _ttab_items(client, serial)
+        citations = _citation_items(client, serial)
     except USRelationshipTimelineUnavailable:
         raise
     except Exception as exc:
         raise USRelationshipTimelineUnavailable(str(exc)) from exc
-    items = assignments + ttab
+    items = assignments + ttab + citations
     if len(items) > MAX_RELATIONSHIP_EDGES:
         raise USRelationshipTimelineScopeExceeded(
             f"trademark resolves to more than {MAX_RELATIONSHIP_EDGES} relationship edges"
@@ -365,7 +411,8 @@ def relationships_for_trademark(
         "relationships": sorted(items, key=lambda item: str(item["edge"]["edge_id"])),
         "unmapped_ttab_party_count": unmapped,
         "semantics": (
-            "USPTO_RECORDED_ASSIGNMENT_AND_TTAB_PROCEDURAL_HISTORY; "
+            "USPTO_RECORDED_ASSIGNMENT_TTAB_AND_ADMITTED_DOCUMENT_CITATION_HISTORY; "
+            "CITATIONS_REQUIRE_DIRECT_OFFICIAL_DOCUMENT_EVIDENCE; "
             "NOT_LEGAL_TITLE_OUTCOME_OR_SUBSTANTIVE_RIGHTS_CONCLUSION"
         ),
         "current_relationship_inference": False,
