@@ -14,6 +14,9 @@ from app.us.citation_relation_admission import (
 )
 
 
+NOW = datetime(2026, 9, 20, 6, 1, tzinfo=timezone.utc)
+
+
 def candidate(*, status="VALIDATED", candidate_id="fac_01ARZ3NDEKTSV4RRFFQ69G5FAY"):
     value = {
         "contractVersion": "MARKORBIT_FACT_CANDIDATE_V1",
@@ -57,7 +60,7 @@ def candidate(*, status="VALIDATED", candidate_id="fac_01ARZ3NDEKTSV4RRFFQ69G5FA
         "extractionMethod": {
             "owner": "MARKORBIT_BRAIN_METHOD",
             "methodId": "us-trademark-citation-extraction",
-            "methodVersion": "1.0.0",
+            "methodVersion": "1.1.0",
         },
         "confidence": {
             "scoreBasisPoints": 9900,
@@ -126,10 +129,8 @@ class Client:
 def test_admits_us_temporal_edge_once_and_replays_stable_identity():
     client = Client()
     value = candidate()
-    now = datetime(2026, 9, 20, 6, 1, tzinfo=timezone.utc)
-
-    first = admit_us_citation_relation(value, client=client, now=now)
-    replay = admit_us_citation_relation(value, client=client, now=now)
+    first = admit_us_citation_relation(value, client=client, now=NOW)
+    replay = admit_us_citation_relation(value, client=client, now=NOW)
 
     assert ADMISSION_CONTRACT_VERSION == TEMPORAL_RELATIONSHIP_CONTRACT_VERSION
     assert first.data_engine_fact_id.startswith("rel_")
@@ -179,11 +180,11 @@ def test_rejects_business_or_unknown_fields_fail_closed():
 def test_same_fact_fingerprint_replays_even_with_new_candidate_id():
     client = Client()
     first_value = candidate()
-    first = admit_us_citation_relation(first_value, client=client)
+    first = admit_us_citation_relation(first_value, client=client, now=NOW)
 
     replay_value = candidate(candidate_id="fac_01ARZ3NDEKTSV4RRFFQ69G5FAA")
     assert replay_value["candidateFingerprintSha256"] == first_value["candidateFingerprintSha256"]
-    replay = admit_us_citation_relation(replay_value, client=client)
+    replay = admit_us_citation_relation(replay_value, client=client, now=NOW)
 
     assert replay.data_engine_fact_id == first.data_engine_fact_id
     assert replay.replayed is True
@@ -203,7 +204,7 @@ def test_replay_detects_candidate_identity_fingerprint_conflict():
     }
 
     with pytest.raises(CitationRelationAdmissionError, match="fingerprint conflict"):
-        admit_us_citation_relation(value, client=client)
+        admit_us_citation_relation(value, client=client, now=NOW)
 
 
 def test_rejects_non_us_candidate_on_us_owner_endpoint():
