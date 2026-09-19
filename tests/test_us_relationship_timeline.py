@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +48,7 @@ def test_relationship_timeline_maps_recorded_assignment_and_ttab_facts(monkeypat
         "_assignments_for_serial",
         lambda _serial, _limit, **_kwargs: [_assignment_record()],
     )
+    monkeypatch.setattr(timeline, "_citation_items", lambda _client, _serial: [])
     monkeypatch.setattr(
         timeline,
         "proceedings_for_serial",
@@ -177,6 +179,7 @@ def test_relationship_timeline_maps_recorded_assignment_and_ttab_facts(monkeypat
 def test_current_scope_does_not_infer_live_recorded_relationships(monkeypatch) -> None:
     monkeypatch.setattr(timeline, "_assignments_for_serial", lambda _serial, _limit, **_kwargs: [])
     monkeypatch.setattr(timeline, "proceedings_for_serial", lambda _serial, _limit, **_kwargs: [])
+    monkeypatch.setattr(timeline, "_citation_items", lambda _client, _serial: [])
 
     result = timeline.relationships_for_trademark(FakeClient([]), "99026361", scope="current")
 
@@ -186,6 +189,7 @@ def test_current_scope_does_not_infer_live_recorded_relationships(monkeypatch) -
 
 def test_unmapped_ttab_party_role_is_counted_not_invented(monkeypatch) -> None:
     monkeypatch.setattr(timeline, "_assignments_for_serial", lambda _serial, _limit, **_kwargs: [])
+    monkeypatch.setattr(timeline, "_citation_items", lambda _client, _serial: [])
     monkeypatch.setattr(
         timeline,
         "proceedings_for_serial",
@@ -245,5 +249,75 @@ def test_invalid_scope_and_edge_ceiling_fail_closed(monkeypatch) -> None:
         lambda _client, _serial: [{"edge": {}}] * (timeline.MAX_RELATIONSHIP_EDGES + 1),
     )
     monkeypatch.setattr(timeline, "_ttab_items", lambda _client, _serial: ([], 0))
+    monkeypatch.setattr(timeline, "_citation_items", lambda _client, _serial: [])
     with pytest.raises(timeline.USRelationshipTimelineScopeExceeded):
         timeline.relationships_for_trademark(FakeClient([]), "99026361")
+
+
+def test_relationship_timeline_serves_admitted_us_citation(monkeypatch) -> None:
+    monkeypatch.setattr(timeline, "_assignments_for_serial", lambda _serial, _limit, **_kwargs: [])
+    monkeypatch.setattr(timeline, "proceedings_for_serial", lambda _serial, _limit, **_kwargs: [])
+
+    edge = {
+        "contract_version": "MARKORBIT_TEMPORAL_RELATIONSHIP_V1",
+        "jurisdiction": "US",
+        "relationship_type": "CITED_AS_REFERENCE_FOR_REFUSAL",
+        "source": {"resource_type": "TRADEMARK", "resource_id": "US:99047647"},
+        "target": {"resource_type": "TRADEMARK", "resource_id": "US:7265161"},
+        "temporal": {
+            "valid_from": None,
+            "valid_to": None,
+            "observed_at": "2026-09-20T06:01:00.000Z",
+            "event_at": "2026-07-22",
+            "is_current": False,
+        },
+        "evidence": {
+            "evidence_kind": "OFFICIAL_DOCUMENT",
+            "source_authority": "USPTO",
+            "source_domain": "US_TSDR",
+            "source_record_id": "US:99047647",
+            "source_package_id": "src_01M2X01CES1FAEVW3GWCC075J6",
+            "source_uri": "https://tsdrsec.uspto.gov/example.pdf",
+            "source_hash": "sha256:" + "e" * 64,
+            "source_document_id": "art_01M2XWP58XJ8SXW7XYBR3BA55Q",
+            "source_document_version": "v1",
+            "evidence_locator": "PAGE_TEXT_RANGE:page=3;start=0;end=128;text_sha256=" + "d" * 64,
+        },
+        "provenance": {
+            "authority_level": "DIRECT_OFFICIAL",
+            "derivation": {
+                "derivation_kind": "DOCUMENT_EXTRACTION",
+                "identity": "us-trademark-citation-extraction",
+                "version": "1.0.0",
+            },
+        },
+        "serving_authority": "DATA_ENGINE_FACT_READ_MODEL",
+        "legal_conclusion": False,
+        "edge_id": "rel_0123456789abcdef0123456789abcdef",
+        "fingerprint": "sha256:" + "f" * 64,
+    }
+    client = FakeClient(
+        [
+            _result(
+                ["candidate_id", "candidate_fingerprint_sha256", "fact_json", "admitted_at"],
+                [
+                    (
+                        "fac_01ARZ3NDEKTSV4RRFFQ69G5FAY",
+                        "a" * 64,
+                        json.dumps(edge, sort_keys=True),
+                        datetime(2026, 9, 20, 6, 1),
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = timeline.relationships_for_trademark(client, "99047647")
+
+    assert result["relationship_count"] == 1
+    item = result["relationships"][0]
+    assert item["edge"] == edge
+    assert item["source_fact"]["source_domain"] == "US_TSDR"
+    assert item["source_fact"]["candidate_id"] == "fac_01ARZ3NDEKTSV4RRFFQ69G5FAY"
+    assert "us_admitted_citation_relation" in client.queries[0][0]
+    assert result["current_relationship_inference"] is False

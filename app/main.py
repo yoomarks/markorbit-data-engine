@@ -17,6 +17,7 @@ from app.integration_transport import install_integration_transport
 from app.us.alert_api import router as us_alert_router
 from app.us.case360_api import router as us_case_360_router
 from app.us.change_history_api import router as us_change_history_router
+from app.us.citation_relation_admission_api import router as us_citation_relation_admission_router
 from app.us.deadline_docket_api import router as us_deadline_docket_router
 from app.us_assignment.api import router as us_assignment_router
 from app.us_assignment.audit_api import router as us_assignment_audit_router
@@ -43,6 +44,7 @@ _core.app.include_router(us_alert_router)
 _core.app.include_router(us_case_360_router)
 _core.app.include_router(us_deadline_docket_router)
 _core.app.include_router(us_change_history_router)
+_core.app.include_router(us_citation_relation_admission_router)
 _core.app.include_router(us_assignment_audit_router)
 _core.app.include_router(us_assignment_router)
 _core.app.include_router(us_ttab_audit_router)
