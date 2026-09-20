@@ -11,10 +11,7 @@ def test_production_ready_capability_states_are_current():
     assert contract["contract_version"] == "READ_QUERY_CAPABILITY_V2"
     caps = contract["capabilities"]
     assert _capability(caps, "exact_trademark_registration", "US")["state"] == "SUPPORTED_INDEXED"
-    assert (
-        _capability(caps, "agent_attorney_name_resolve", "US")["state"]
-        == "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL"
-    )
+    assert _capability(caps, "agent_attorney_name_resolve", "US")["state"] == "SUPPORTED_INDEXED_EXACT_NAME"
     assert _capability(caps, "agent_attorney_name_resolve", "CN")["state"] == "SUPPORTED_INDEXED_EXACT_NAME"
     assert _capability(caps, "current_entity_portfolio", "CN")["state"] == "SUPPORTED_INDEXED"
     assert _capability(caps, "historical_entity_portfolio", "CN")["state"] == "SUPPORTED_INDEXED"
