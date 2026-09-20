@@ -50,6 +50,16 @@ def _json(value: Any) -> str:
     )
 
 
+def _text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8").rstrip("\x00")
+    if isinstance(value, bytearray):
+        return bytes(value).decode("utf-8").rstrip("\x00")
+    if isinstance(value, memoryview):
+        return value.tobytes().decode("utf-8").rstrip("\x00")
+    return str(value)
+
+
 def admit_us_citation_relation(
     candidate: Mapping[str, Any],
     *,
@@ -104,7 +114,7 @@ def admit_us_citation_relation(
     ).result_rows
     if identity_rows:
         _, stored_fingerprint, _, _ = identity_rows[0]
-        if str(stored_fingerprint) != fingerprint:
+        if _text(stored_fingerprint) != fingerprint:
             raise CitationRelationAdmissionError("candidate identity fingerprint conflict")
         raise CitationRelationAdmissionError("candidate replay identity lookup drifted")
 
