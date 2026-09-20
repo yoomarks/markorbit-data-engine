@@ -81,7 +81,8 @@ def test_resume_uses_daemon_pidfile_and_requires_live_pid() -> None:
     value = resume_text()
     assert "--daemon --pid-file='$($script:pidpath)'" in value
     assert "test -s '$($script:pidpath)' && cat '$($script:pidpath)'" in value
-    assert "kill -0 '$pid'" in value
+    assert "kill -0 '$serverpidvalue'" in value
+    assert "$pid =" not in value
     assert "accepted target daemon exited immediately" in value
     assert "nohup clickhouse server" not in value
     assert "echo $!" not in value
@@ -113,3 +114,12 @@ def test_resume_accepts_only_empty_or_whitespace_failed_pidfile() -> None:
     assert "tr -d '[:space:]'" in value
     assert "@('empty','whitespace_only')" in value
     assert "empty/whitespace pidfile" in value
+
+
+def test_runtime_validators_are_policy_aware_and_avoid_readonly_pid_variable() -> None:
+    for value in (recovery_text(), resume_text()):
+        assert "$pid =" not in value
+        assert "t.storage_policy='hot_us_only' and p.disk_name!='hot_us'" in value
+        assert "t.storage_policy='warm_cn_only' and p.disk_name!='warm_cn'" in value
+        assert "t.storage_policy='default' and p.disk_name!='default'" in value
+        assert "placement_mismatches=0" in value

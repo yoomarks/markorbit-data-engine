@@ -102,8 +102,8 @@ function Get-KeeperFact {
     Require ([bool]$journal.hot_us_mounted -and [bool]$journal.warm_cn_mounted) 'Prior journal does not prove both mounts.'
     Require ([bool]$journal.server_started -and -not [bool]$journal.validated) 'Prior journal is not at server-attempt boundary.'
     Require ([string]$journal.last_error -eq 'Accepted target did not become healthy.') 'Prior journal failure reason drifted.'
-    [int]$pid = $journal.keeper_host_pid
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction SilentlyContinue
+    [int]$keeperHostPid = $journal.keeper_host_pid
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$keeperHostPid" -ErrorAction SilentlyContinue
     Require ($null -ne $process) 'Accepted runtime keeper process is absent.'
     Require ([string]$process.Name -match '^wsl(\.exe)?$') 'Keeper PID is no longer a wsl process.'
 
@@ -122,7 +122,7 @@ function Get-KeeperFact {
         Require ($commandLine -match 'tail\s+-f\s+/dev/null') 'Keeper command line drifted.'
     }
     return [ordered]@{
-        host_pid=$pid
+        host_pid=$keeperHostPid
         process_name=[string]$process.Name
         command_line_visible=$commandLineVisible
         command_line=if ($commandLineVisible) { $commandLine } else { $null }
@@ -191,11 +191,11 @@ function Start-TargetServer {
     $command = "set -eu; rm -f '$($script:PidPath)'; clickhouse server --config-file='$($script:ConfigPath)' --daemon --pid-file='$($script:PidPath)'"
     $r = Invoke-Runtime $command
     Require ($r.exit_code -eq 0) 'Accepted target daemon launch failed.'
-    $pid = Runtime-SingleLine "test -s '$($script:PidPath)' && cat '$($script:PidPath)'" 'accepted target server pid'
-    Require ($pid -match '^[0-9]+$') 'Accepted target server pid is invalid.'
-    $alive = Invoke-Runtime "kill -0 '$pid'" -AllowFailure
+    $serverPidValue = Runtime-SingleLine "test -s '$($script:PidPath)' && cat '$($script:PidPath)'" 'accepted target server pid'
+    Require ($serverPidValue -match '^[0-9]+$') 'Accepted target server pid is invalid.'
+    $alive = Invoke-Runtime "kill -0 '$serverPidValue'" -AllowFailure
     Require ($alive.exit_code -eq 0) 'Accepted target daemon exited immediately.'
-    return [int]$pid
+    return [int]$serverPidValue
 }
 
 function Query-Target([string]$Sql) {
@@ -213,10 +213,11 @@ function Validate-Target {
     $policies = Query-Target "SELECT policy_name,arrayStringConcat(disks, ',') FROM system.storage_policies WHERE policy_name IN ('hot_us_only','warm_cn_only') ORDER BY policy_name FORMAT TSV"
     Require ($policies -match 'hot_us_only\s+hot_us') 'hot_us_only policy drifted.'
     Require ($policies -match 'warm_cn_only\s+warm_cn') 'warm_cn_only policy drifted.'
-    $placement = Query-Target "SELECT disk_name,count(),sum(rows),sum(bytes_on_disk) FROM system.parts WHERE active AND database='markorbit_facts' GROUP BY disk_name ORDER BY disk_name FORMAT TSV"
-    $unexpected = Query-Target "SELECT count() FROM system.parts WHERE active AND database='markorbit_facts' AND disk_name NOT IN ('hot_us','warm_cn')"
-    Require ([int64]$unexpected -eq 0) 'Unexpected accepted-target active-part placement.'
-    return [ordered]@{ health=$health; disks=$disks; policies=$policies; placement=$placement; unexpected_parts=0 }
+    $placement = Query-Target "SELECT t.storage_policy,p.disk_name,count(),sum(p.rows),sum(p.bytes_on_disk) FROM system.parts AS p INNER JOIN system.tables AS t ON p.database=t.database AND p.table=t.name WHERE p.active AND p.database='$($script:Database)' GROUP BY t.storage_policy,p.disk_name ORDER BY t.storage_policy,p.disk_name FORMAT TSV"
+    $mismatchSql = "SELECT count() FROM system.parts AS p INNER JOIN system.tables AS t ON p.database=t.database AND p.table=t.name WHERE p.active AND p.database='$($script:Database)' AND ((t.storage_policy='hot_us_only' AND p.disk_name!='hot_us') OR (t.storage_policy='warm_cn_only' AND p.disk_name!='warm_cn') OR (t.storage_policy='default' AND p.disk_name!='default'))"
+    $mismatches = Query-Target $mismatchSql
+    Require ([int64]$mismatches -eq 0) 'Accepted-target active-part placement does not match table storage policies.'
+    return [ordered]@{ health=$health; disks=$disks; policies=$policies; placement=$placement; placement_mismatches=0 }
 }
 if ($ContractOnly) {
     Write-Host 'ACCEPTED_TARGET_RUNTIME_RESUME_CONTRACT_OK'
