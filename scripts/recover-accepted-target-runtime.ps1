@@ -147,11 +147,14 @@ function Start-Keeper {
 }
 
 function Start-TargetServer {
-    $prefix = "set -eu; rm -f /opt/markorbit-clickhouse-production/server.pid; "
-    $run = "nohup clickhouse server --config-file='$($script:ConfigPath)' >/opt/markorbit-clickhouse-production/stdout.log 2>/opt/markorbit-clickhouse-production/stderr.log & echo "
-    $suffix = '$!' + " >/opt/markorbit-clickhouse-production/server.pid"
-    $r = Invoke-Runtime ($prefix + $run + $suffix)
+    $pidFile = '/opt/markorbit-clickhouse-production/server.pid'
+    $command = "set -eu; rm -f '$pidFile'; clickhouse server --config-file='$($script:ConfigPath)' --daemon --pid-file='$pidFile'"
+    $r = Invoke-Runtime $command
     Require ($r.exit_code -eq 0) 'Accepted target server start failed.'
+    $pid = Runtime-SingleLine "test -s '$pidFile' && cat '$pidFile'" 'accepted target server pid'
+    Require ($pid -match '^[0-9]+$') 'Accepted target server pid is invalid.'
+    $alive = Invoke-Runtime "kill -0 '$pid'" -AllowFailure
+    Require ($alive.exit_code -eq 0) 'Accepted target server exited immediately after daemon launch.'
 }
 function Query-Target([string]$Sql) {
     $escaped = [uri]::EscapeDataString($Sql)
