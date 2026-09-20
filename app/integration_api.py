@@ -770,6 +770,9 @@ _OWNER_APPLICANT_QUERY_FIELDS = {
     "applicant_observed_at",
 }
 _OWNER_PORTFOLIO_QUERY_FIELDS = _OWNER_APPLICANT_QUERY_FIELDS | {"page_size", "cursor"}
+_US_APPLICANT_RECORDED_HISTORY_QUERY_FIELDS = _OWNER_APPLICANT_QUERY_FIELDS | {
+    "source_domain", "relationship_type", "page_size", "cursor",
+}
 _OWNER_TRADEMARK_QUERY_FIELDS = _OWNER_APPLICANT_QUERY_FIELDS | {
     "trademark_source_id",
     "trademark_source_version",
@@ -907,6 +910,118 @@ def integration_applicant_owner_portfolio(
     return owner_envelope(
         jurisdiction=code, resource_kind="APPLICANT_PORTFOLIO_DISCOVERY",
         fact_state=result.fact_state, payload=result.payload,
+    )
+
+
+@router.get("/us/applicants/{applicant_candidate_id}/recorded-history")
+def integration_us_applicant_recorded_history(
+    request: Request,
+    applicant_candidate_id: str,
+    requester_workspace_id: Annotated[str, Query(min_length=1, max_length=512)],
+    applicant_source_id: Annotated[str, Query(min_length=1, max_length=1000)],
+    applicant_source_version: Annotated[str, Query(min_length=1, max_length=512)],
+    applicant_source_fingerprint_sha256: Annotated[str, Query(min_length=1, max_length=128)],
+    applicant_observed_at: Annotated[str, Query(min_length=1, max_length=128)],
+    source_domain: Annotated[str, Query(pattern="^(ALL|US_ASSIGNMENT|US_TTAB)$")] = "ALL",
+    relationship_type: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=8192)] = None,
+) -> dict[str, Any]:
+    reject_unknown_query(request, _US_APPLICANT_RECORDED_HISTORY_QUERY_FIELDS)
+    source = _applicant_source_query(
+        jurisdiction="US",
+        source_id=applicant_source_id,
+        source_version=applicant_source_version,
+        source_fingerprint_sha256=applicant_source_fingerprint_sha256,
+        observed_at=applicant_observed_at,
+    )
+    try:
+        current = us_read_applicant_exact(
+            accepted_us_target_read_client(),
+            workspace_id=requester_workspace_id,
+            request_id=request_id_from_request(request),
+            candidate_id=applicant_candidate_id,
+            expected_source=source,
+        )
+    except OWNER_READ_EXCEPTIONS as exc:
+        raise owner_read_http_error(exc) from exc
+    if current.fact_state != "observed" or not current.payload:
+        return owner_envelope(
+            jurisdiction="US",
+            resource_kind="APPLICANT_RECORDED_RELATIONSHIP_DISCOVERY",
+            fact_state=current.fact_state,
+            payload=current.payload,
+        )
+    candidates = list(current.payload.get("results") or [])
+    if len(candidates) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_OWNER_READ_UNAVAILABLE",
+                "message": "Exact US Applicant revalidation did not return one candidate.",
+                "retryable": True,
+            },
+        )
+    applicant = candidates[0]
+    try:
+        history = execute_us_recorded_party_history_page(
+            RecordedPartyHistoryRequest(
+                name=str(applicant["display_name"]),
+                source_domain=source_domain,
+                relationship_type=relationship_type,
+                page_size=page_size,
+                cursor=cursor,
+            ),
+            client=clickhouse_client(),
+        )
+    except RecordedPartyHistoryInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_US_RECORDED_PARTY_HISTORY_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except RecordedPartyHistoryUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_US_RECORDED_PARTY_HISTORY_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    except DiscoveryContractError as exc:
+        raise _discovery_http_error(exc) from exc
+    payload = {
+        "current_applicant_candidate": applicant,
+        "current_source_snapshot": current.payload.get("source_snapshot"),
+        "recorded_relationship_history": history,
+        "historical_match_state": (
+            "observed" if int(history.get("result_count") or 0) > 0 else "not_found"
+        ),
+        "identity_resolution_claimed": False,
+        "review_required": True,
+        "legal_conclusion": False,
+        "semantics": (
+            "CURRENT_APPLICANT_CANDIDATE_NAME_TO_EXACT_NORMALIZED_RECORDED_RELATIONSHIP_DISCOVERY;"
+            "NOT_CROSS_SOURCE_IDENTITY_RESOLUTION_OR_LEGAL_TITLE_CONCLUSION"
+        ),
+        "authority_consequences": {
+            "verifiedLegalIdentityEstablished": False,
+            "historicalOwnershipEstablished": False,
+            "historicalRepresentationEstablished": False,
+            "customerRelationshipEstablished": False,
+            "legalConclusionCreated": False,
+            "externalActionAuthorized": False,
+        },
+    }
+    return owner_envelope(
+        jurisdiction="US",
+        resource_kind="APPLICANT_RECORDED_RELATIONSHIP_DISCOVERY",
+        fact_state="observed",
+        payload=payload,
     )
 
 

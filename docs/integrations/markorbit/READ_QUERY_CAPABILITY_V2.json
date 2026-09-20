@@ -128,8 +128,8 @@
       "jurisdictions": [
         "US"
       ],
-      "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
-      "notes": "Recorded Assignment/TTAB history is trademark-keyed; entity/party-first lookup still requires an indexed serving model."
+      "state": "SUPPORTED_INDEXED",
+      "notes": "A revalidated current Applicant candidate can navigate to production-accepted exact normalized-name Assignment/TTAB relationship history. The bridge is candidate-first discovery only: review is required and no cross-source identity, historical ownership, representation, legal-title, or substantive-rights conclusion is created."
     },
     {
       "id": "filing_date_range",

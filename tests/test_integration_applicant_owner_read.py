@@ -27,6 +27,7 @@ def test_owner_read_routes_are_get_only_and_g0_declared():
         "/api/v1/us/applicants/by-name",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
+        "/api/v1/us/applicants/{applicant_candidate_id}/recorded-history",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}",
     }
     routes = {route.path: set(route.methods or ()) for route in integration_api.router.routes}
@@ -135,3 +136,82 @@ def test_us_applicant_name_route_rejects_unknown_query_field():
         )
     assert caught.value.status_code == 400
     assert caught.value.detail["fields"] == ["fuzzy"]
+
+
+def test_us_applicant_recorded_history_bridges_without_identity_claim(monkeypatch):
+    current_client = object()
+    history_client = object()
+    current = SimpleNamespace(
+        fact_state="observed",
+        payload={
+            "results": [{
+                "candidate_type": "APPLICANT_IDENTITY",
+                "applicant_candidate_id": "us:applicant:" + "a" * 64,
+                "display_name": "Example Holdings LLC",
+                "review_required": True,
+                "verified_legal_identity": False,
+            }],
+            "source_snapshot": {"source_version": "epoch-1", "observed_at": "2026-09-01T00:00:00Z"},
+        },
+    )
+    captured = {}
+
+    def fake_current(client, **kwargs):
+        assert client is current_client
+        captured["current"] = kwargs
+        return current
+
+    def fake_history(request, *, client):
+        assert client is history_client
+        captured["history_request"] = request
+        return {
+            "results": [{"serial_number": "90000001", "identity_resolution_claimed": False}],
+            "result_count": 1,
+            "next_cursor": None,
+            "semantics": "EXACT_NORMALIZED_NAME;NOT_CROSS_SOURCE_IDENTITY_RESOLUTION",
+        }
+
+    monkeypatch.setattr(integration_api, "accepted_us_target_read_client", lambda: current_client)
+    monkeypatch.setattr(integration_api, "clickhouse_client", lambda: history_client)
+    monkeypatch.setattr(integration_api, "us_read_applicant_exact", fake_current)
+    monkeypatch.setattr(
+        integration_api, "execute_us_recorded_party_history_page", fake_history
+    )
+
+    body = integration_api.integration_us_applicant_recorded_history(
+        request=_request("/api/v1/us/applicants/x/recorded-history"),
+        applicant_candidate_id="us:applicant:" + "a" * 64,
+        requester_workspace_id="ws-1",
+        applicant_source_id="US_APPLICANT:" + "a" * 64,
+        applicant_source_version="us-serving-epoch:" + "e" * 64,
+        applicant_source_fingerprint_sha256="sha256:" + "f" * 64,
+        applicant_observed_at="2026-09-01T00:00:00Z",
+        source_domain="US_ASSIGNMENT",
+        relationship_type="ASSIGNEE",
+        page_size=25,
+        cursor=None,
+    )
+    history_request = captured["history_request"]
+    assert history_request.name == "Example Holdings LLC"
+    assert history_request.source_domain == "US_ASSIGNMENT"
+    assert history_request.relationship_type == "ASSIGNEE"
+    assert history_request.page_size == 25
+
+    assert captured["current"]["candidate_id"] == "us:applicant:" + "a" * 64
+    assert body["resource_kind"] == "APPLICANT_RECORDED_RELATIONSHIP_DISCOVERY"
+    assert body["fact_state"] == "observed"
+    assert body["legal_conclusion"] is False
+    payload = body["payload"]
+    assert payload["historical_match_state"] == "observed"
+    assert payload["identity_resolution_claimed"] is False
+    assert payload["review_required"] is True
+    assert payload["legal_conclusion"] is False
+    assert payload["authority_consequences"] == {
+        "verifiedLegalIdentityEstablished": False,
+        "historicalOwnershipEstablished": False,
+        "historicalRepresentationEstablished": False,
+        "customerRelationshipEstablished": False,
+        "legalConclusionCreated": False,
+        "externalActionAuthorized": False,
+    }
+    assert "NOT_CROSS_SOURCE_IDENTITY_RESOLUTION" in payload["semantics"]
