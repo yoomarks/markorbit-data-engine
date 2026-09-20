@@ -94,3 +94,13 @@ def test_resume_writes_separate_receipt_and_never_rewrites_prior_journal() -> No
     assert "accepted_target_runtime_recovery_receipt.json" in value
     assert "automatic_unmount_or_rollback_performed=false" in value
     assert "decision='accepted_target_runtime_recovered'" in value
+
+
+def test_keeper_command_line_is_optional_when_windows_hides_it() -> None:
+    value = resume_text()
+    assert "command_line_visible" in value
+    assert "if ($commandlinevisible)" in value
+    assert "--list','--running','--quiet" in value
+    assert "accepted target distro is not currently running" in value
+    assert "process_name=[string]$process.name" in value
+    assert "target_distro_running=$true" in value

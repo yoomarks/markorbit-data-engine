@@ -106,10 +106,28 @@ function Get-KeeperFact {
     $process = Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction SilentlyContinue
     Require ($null -ne $process) 'Accepted runtime keeper process is absent.'
     Require ([string]$process.Name -match '^wsl(\.exe)?$') 'Keeper PID is no longer a wsl process.'
+
+    $running = Invoke-Native 'wsl.exe' @('--list','--running','--quiet')
+    $runningDistros = @(
+        $running.lines |
+            ForEach-Object { $_.Replace([string][char]0, '').Trim() } |
+            Where-Object { $_ }
+    )
+    Require ($runningDistros -contains $script:Distro) 'Accepted target distro is not currently running.'
+
     $commandLine = [string]$process.CommandLine
-    Require ($commandLine -match 'MarkOrbit-ClickHouse') 'Keeper command line no longer targets accepted distro.'
-    Require ($commandLine -match 'tail\s+-f\s+/dev/null') 'Keeper command line drifted.'
-    return [ordered]@{ host_pid=$pid; command_line=$commandLine }
+    $commandLineVisible = -not [string]::IsNullOrWhiteSpace($commandLine)
+    if ($commandLineVisible) {
+        Require ($commandLine -match 'MarkOrbit-ClickHouse') 'Keeper command line no longer targets accepted distro.'
+        Require ($commandLine -match 'tail\s+-f\s+/dev/null') 'Keeper command line drifted.'
+    }
+    return [ordered]@{
+        host_pid=$pid
+        process_name=[string]$process.Name
+        command_line_visible=$commandLineVisible
+        command_line=if ($commandLineVisible) { $commandLine } else { $null }
+        target_distro_running=$true
+    }
 }
 
 function Get-TargetHealth {
