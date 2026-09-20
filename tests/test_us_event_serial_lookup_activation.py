@@ -186,6 +186,44 @@ def test_backfill_sql_is_single_threaded() -> None:
     assert "SETTINGS max_threads = 1, max_insert_threads = 1" in sql
 
 
+def test_remaining_capacity_waits_for_reclaimable_inactive_parts(monkeypatch) -> None:
+    free_states = iter([(100, 200), (130, 200)])
+    sleeps: list[float] = []
+    monkeypatch.setattr(gate, "_live_free", lambda _client: next(free_states))
+    monkeypatch.setattr(gate, "_inactive_lookup_bytes", lambda _client: (4, 40))
+    monkeypatch.setattr(gate.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    gate._assert_remaining_capacity(
+        object(),
+        plan_capacity={
+            "hot_us_total_bytes": 200,
+            "estimated_lookup_bytes_ceiling": 60,
+        },
+        remaining_rows=100,
+        total_rows=100,
+    )
+
+    assert sleeps == [gate.CAPACITY_RECLAIM_POLL_SECONDS]
+
+
+def test_remaining_capacity_refuses_when_inactive_parts_cannot_cover_shortfall(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(gate, "_live_free", lambda _client: (100, 200))
+    monkeypatch.setattr(gate, "_inactive_lookup_bytes", lambda _client: (2, 10))
+
+    with pytest.raises(RuntimeError, match="projected reserve fell below 30%"):
+        gate._assert_remaining_capacity(
+            object(),
+            plan_capacity={
+                "hot_us_total_bytes": 200,
+                "estimated_lookup_bytes_ceiling": 60,
+            },
+            remaining_rows=100,
+            total_rows=100,
+        )
+
+
 def test_prepare_accepts_exact_completed_prefix_for_recovery(
     tmp_path: Path, monkeypatch
 ) -> None:
