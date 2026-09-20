@@ -148,8 +148,10 @@ function Get-ServerProcessCount {
     return @($r.lines | Where-Object { $_.Trim() }).Count
 }
 function Get-PidFileState {
-    $line = Runtime-SingleLine "if [ -s '$($script:PidPath)' ]; then printf 'NONEMPTY:'; cat '$($script:PidPath)'; else printf 'EMPTY'; fi" 'pidfile state'
-    return $line
+    $command = "if [ ! -e '$($script:PidPath)' ] || [ ! -s '$($script:PidPath)' ]; then printf 'EMPTY'; " +
+        "elif tr -d '[:space:]' < '$($script:PidPath)' | grep -q .; then printf 'NONEMPTY_DATA'; " +
+        "else printf 'WHITESPACE_ONLY'; fi"
+    return Runtime-SingleLine $command 'pidfile state'
 }
 
 function Assert-PortsFree {
@@ -176,7 +178,7 @@ function Validate-CurrentBoundary {
     Require (-not (Get-TargetHealth).ready) 'Accepted target is already healthy.'
     Assert-PortsFree
     $pidState = Get-PidFileState
-    Require ($pidState -eq 'EMPTY') 'Expected failed server attempt to leave an empty pidfile.'
+    Require ($pidState -in @('EMPTY','WHITESPACE_ONLY')) 'Expected failed server attempt to leave only an empty/whitespace pidfile.'
 
     return [ordered]@{
         keeper=$keeper; hot_us=$hot; warm_cn=$warm;
