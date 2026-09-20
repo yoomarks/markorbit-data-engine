@@ -50,11 +50,11 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "exact_trademark_registration",
                 "jurisdictions": ["US"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "The registration-number read model is implemented, but the accepted US target "
-                    "has not yet completed governed backfill, READY acceptance, and production "
-                    "benchmark. Runtime fails closed until that gate completes."
+                    "Registration-keyed candidates are production-backfilled and accepted under "
+                    "US_REGISTRATION_CANDIDATE_LOOKUP_READY_V1, then verified against serial-keyed "
+                    "current facts before serving."
                 ),
             },
             {
