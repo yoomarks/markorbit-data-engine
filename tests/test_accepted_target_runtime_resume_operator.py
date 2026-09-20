@@ -33,7 +33,7 @@ def test_resume_binds_exact_partial_recovery_boundary() -> None:
     assert "mounts_accepted_server_absent" in value
     assert "accepted target server already exists" in value
     assert "accepted target ports are already listening" in value
-    assert "expected failed server attempt to leave an empty pidfile" in value
+    assert "expected failed server attempt to leave only an empty/whitespace pidfile" in value
 
 
 def test_resume_revalidates_exact_mounts_and_config_before_server_start() -> None:
@@ -104,3 +104,12 @@ def test_keeper_command_line_is_optional_when_windows_hides_it() -> None:
     assert "accepted target distro is not currently running" in value
     assert "process_name=[string]$process.name" in value
     assert "target_distro_running=$true" in value
+
+
+def test_resume_accepts_only_empty_or_whitespace_failed_pidfile() -> None:
+    value = resume_text()
+    assert "whitespace_only" in value
+    assert "nonempty_data" in value
+    assert "tr -d '[:space:]'" in value
+    assert "@('empty','whitespace_only')" in value
+    assert "empty/whitespace pidfile" in value
