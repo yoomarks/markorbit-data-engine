@@ -81,10 +81,12 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "agent_attorney_name_resolve",
                 "jurisdictions": ["US"],
-                "state": "SUPPORTED_INDEXED_EXACT_NAME",
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
                 "notes": (
-                    "Exact normalized attorney-name facts are production-backfilled under READY_V1; "
-                    "no fuzzy identity resolution is implied."
+                    "The exact normalized attorney-name read model is implemented, but the accepted "
+                    "US target has not yet completed the governed lookup backfill, READY acceptance, "
+                    "and production benchmark. Runtime fails closed until that gate completes; no "
+                    "fuzzy identity resolution is implied."
                 ),
             },
             {
