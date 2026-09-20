@@ -215,3 +215,31 @@ def test_rejects_non_us_candidate_on_us_owner_endpoint():
 
     with pytest.raises(CitationRelationAdmissionError, match="only US"):
         admit_us_citation_relation(value, client=client)
+
+
+def test_identity_fallback_normalizes_clickhouse_fixedstring_bytes():
+    value = candidate()
+
+    class FixedStringIdentityClient:
+        def query(self, _sql, *, parameters):
+            if "fingerprint" in parameters:
+                return Result([])
+            return Result(
+                [
+                    (
+                        value["candidateId"],
+                        value["candidateFingerprintSha256"].encode("utf-8"),
+                        "rel_same",
+                        TEMPORAL_RELATIONSHIP_CONTRACT_VERSION,
+                    )
+                ]
+            )
+
+        def insert(self, *_args, **_kwargs):
+            raise AssertionError("identity fallback must not insert")
+
+    with pytest.raises(
+        CitationRelationAdmissionError,
+        match="candidate replay identity lookup drifted",
+    ):
+        admit_us_citation_relation(value, client=FixedStringIdentityClient(), now=NOW)
