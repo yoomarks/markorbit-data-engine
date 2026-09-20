@@ -17,4 +17,4 @@ def test_production_ready_capability_states_are_current():
     assert _capability(caps, "historical_entity_portfolio", "CN")["state"] == "SUPPORTED_INDEXED"
     assert _capability(caps, "trademark_event_timeline", "US")["state"] == "SUPPORTED_INDEXED"
     assert _capability(caps, "relationship_timeline", "CN")["state"] == "SUPPORTED_INDEXED"
-    assert _capability(caps, "historical_entity_portfolio", "US")["state"] == "UNSUPPORTED_REQUIRES_READ_MODEL"
+    assert _capability(caps, "historical_entity_portfolio", "US")["state"] == "SUPPORTED_INDEXED"

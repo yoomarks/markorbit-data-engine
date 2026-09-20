@@ -92,6 +92,33 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "business_state_owned_outside_data_engine": True,
                 },
                 {
+                    "path": "/api/v1/us/applicants/{applicant_candidate_id}/recorded-history",
+                    "jurisdictions": ["US"],
+                    "query": {
+                        "requester_workspace_id": {"type": "string", "required": True, "max_length": 512},
+                        "applicant_source_id": {"type": "string", "required": True, "max_length": 1000},
+                        "applicant_source_version": {"type": "string", "required": True, "max_length": 512},
+                        "applicant_source_fingerprint_sha256": {"type": "sha256_reference", "required": True},
+                        "applicant_observed_at": {"type": "iso_timestamp", "required": True},
+                        "source_domain": {
+                            "type": "enum", "default": "ALL",
+                            "values": ["ALL", "US_ASSIGNMENT", "US_TTAB"],
+                        },
+                        "relationship_type": {"type": "string", "required": False, "max_length": 64},
+                        "page_size": {"type": "integer", "default": 50, "min": 1, "max": 100},
+                        "cursor": {"type": "opaque_string", "required": False, "max_length": 8192},
+                    },
+                    "pagination": "bounded_keyset_cursor",
+                    "snapshot": "CURRENT_APPLICANT_EPOCH_PLUS_US_RECORDED_PARTY_READY_V1",
+                    "hard_bounds": {"max_pages": 100, "max_results": 10000},
+                    "semantics": (
+                        "current_applicant_candidate_to_exact_name_recorded_relationship_discovery;"
+                        "review_required_no_cross_source_identity_resolution_or_legal_title_conclusion"
+                    ),
+                    "read_only": True,
+                    "business_state_owned_outside_data_engine": True,
+                },
+                {
                     "path": "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}",
                     "jurisdictions": ["CN", "US"],
                     "query": {

@@ -129,10 +129,13 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "historical_entity_portfolio",
                 "jurisdictions": ["US"],
-                "state": "UNSUPPORTED_REQUIRES_READ_MODEL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "Recorded Assignment/TTAB history is trademark-keyed; entity/party-first lookup "
-                    "still requires an indexed serving model."
+                    "A revalidated current Applicant candidate can navigate to production-accepted "
+                    "exact normalized-name Assignment/TTAB relationship history. The bridge is "
+                    "candidate-first discovery only: review is required and no cross-source identity, "
+                    "historical ownership, representation, legal-title, or substantive-rights "
+                    "conclusion is created."
                 ),
             },
             {
