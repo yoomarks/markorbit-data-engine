@@ -202,18 +202,18 @@ $targetRunning = $runningDistros -contains $script:Distro
 $hotVisible = Test-NamedMountVisible $script:HotMount $runningDistros
 $warmVisible = Test-NamedMountVisible $script:WarmMount $runningDistros
 $health = Get-TargetHealth
-$hotMount = $null
-$warmMount = $null
+$hotMountFact = $null
+$warmMountFact = $null
 if ($targetRunning) {
-    $hotMount = Get-MountFact $script:HotMount
-    $warmMount = Get-MountFact $script:WarmMount
+    $hotMountFact = Get-MountFact $script:HotMount
+    $warmMountFact = Get-MountFact $script:WarmMount
 }
-$state = if ($health.ready -and $targetRunning -and $hotMount -and $warmMount) { 'HEALTHY_ALREADY' }
+$state = if ($health.ready -and $targetRunning -and $hotMountFact -and $warmMountFact) { 'HEALTHY_ALREADY' }
     elseif (-not $health.ready -and -not $hotVisible -and -not $warmVisible) { 'OFFLINE_UNMOUNTED' }
     else { 'PARTIAL_REVIEW_REQUIRED' }
 if ($state -eq 'HEALTHY_ALREADY') {
-    Validate-Mount $hotMount $script:HotUuid $script:HotBytes 'hot_us'
-    Validate-Mount $warmMount $script:WarmUuid $script:WarmBytes 'warm_cn'
+    Validate-Mount $hotMountFact $script:HotUuid $script:HotBytes 'hot_us'
+    Validate-Mount $warmMountFact $script:WarmUuid $script:WarmBytes 'warm_cn'
     $null = Validate-Target
 }
 
