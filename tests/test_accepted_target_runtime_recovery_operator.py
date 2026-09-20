@@ -118,3 +118,13 @@ def test_review_never_starts_target_and_evidence_stays_outside_worktree() -> Non
     apply = value[apply_guard:]
     assert "start-keeper" in apply
     assert "sha256sum '$($script:configpath)'" in apply
+
+
+def test_review_fact_variables_cannot_shadow_mount_path_constants() -> None:
+    value = text()
+    assert "$hotmount = $null" not in value
+    assert "$warmmount = $null" not in value
+    assert "$hotmountfact = $null" in value
+    assert "$warmmountfact = $null" in value
+    assert "mount_path=$script:hotmount" in value
+    assert "mount_path=$script:warmmount" in value
