@@ -151,9 +151,9 @@ function Start-TargetServer {
     $command = "set -eu; rm -f '$pidFile'; clickhouse server --config-file='$($script:ConfigPath)' --daemon --pid-file='$pidFile'"
     $r = Invoke-Runtime $command
     Require ($r.exit_code -eq 0) 'Accepted target server start failed.'
-    $pid = Runtime-SingleLine "test -s '$pidFile' && cat '$pidFile'" 'accepted target server pid'
-    Require ($pid -match '^[0-9]+$') 'Accepted target server pid is invalid.'
-    $alive = Invoke-Runtime "kill -0 '$pid'" -AllowFailure
+    $serverPidValue = Runtime-SingleLine "test -s '$pidFile' && cat '$pidFile'" 'accepted target server pid'
+    Require ($serverPidValue -match '^[0-9]+$') 'Accepted target server pid is invalid.'
+    $alive = Invoke-Runtime "kill -0 '$serverPidValue'" -AllowFailure
     Require ($alive.exit_code -eq 0) 'Accepted target server exited immediately after daemon launch.'
 }
 function Query-Target([string]$Sql) {
@@ -178,10 +178,11 @@ function Validate-Target {
     $policies = Query-Target "SELECT policy_name,arrayStringConcat(disks, ',') FROM system.storage_policies WHERE policy_name IN ('hot_us_only','warm_cn_only') ORDER BY policy_name FORMAT TSV"
     Require ($policies -match 'hot_us_only\s+hot_us') 'hot_us_only policy drifted.'
     Require ($policies -match 'warm_cn_only\s+warm_cn') 'warm_cn_only policy drifted.'
-    $sql = "SELECT count() FROM system.parts WHERE active AND database='$($script:Database)' AND disk_name NOT IN ('hot_us','warm_cn')"
-    $unexpected = Query-Target $sql
-    Require ([int64]$unexpected -eq 0) 'Unexpected accepted-target active-part placement.'
-    return [ordered]@{ health=$health; disks=$disks; policies=$policies; unexpected_parts=0 }
+    $placement = Query-Target "SELECT t.storage_policy,p.disk_name,count(),sum(p.rows),sum(p.bytes_on_disk) FROM system.parts AS p INNER JOIN system.tables AS t ON p.database=t.database AND p.table=t.name WHERE p.active AND p.database='$($script:Database)' GROUP BY t.storage_policy,p.disk_name ORDER BY t.storage_policy,p.disk_name FORMAT TSV"
+    $mismatchSql = "SELECT count() FROM system.parts AS p INNER JOIN system.tables AS t ON p.database=t.database AND p.table=t.name WHERE p.active AND p.database='$($script:Database)' AND ((t.storage_policy='hot_us_only' AND p.disk_name!='hot_us') OR (t.storage_policy='warm_cn_only' AND p.disk_name!='warm_cn') OR (t.storage_policy='default' AND p.disk_name!='default'))"
+    $mismatches = Query-Target $mismatchSql
+    Require ([int64]$mismatches -eq 0) 'Accepted-target active-part placement does not match table storage policies.'
+    return [ordered]@{ health=$health; disks=$disks; policies=$policies; placement=$placement; placement_mismatches=0 }
 }
 
 function Write-Json([object]$Value,[string]$Path) {

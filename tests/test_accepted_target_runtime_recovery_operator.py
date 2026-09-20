@@ -86,7 +86,10 @@ def test_recovery_orders_keeper_mounts_then_server_and_validates_storage() -> No
     assert "blockdev --getsize64" in value
     assert "hot_us_only" in value
     assert "warm_cn_only" in value
-    assert "disk_name not in ('hot_us','warm_cn')" in value
+    assert "t.storage_policy='hot_us_only' and p.disk_name!='hot_us'" in value
+    assert "t.storage_policy='warm_cn_only' and p.disk_name!='warm_cn'" in value
+    assert "t.storage_policy='default' and p.disk_name!='default'" in value
+    assert "placement_mismatches=0" in value
 
 
 def test_apply_is_journaled_and_fail_closed_after_partial_recovery() -> None:
