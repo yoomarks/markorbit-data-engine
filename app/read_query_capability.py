@@ -155,10 +155,11 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "trademark_event_timeline",
                 "jurisdictions": ["US"],
-                "state": "SUPPORTED_INDEXED",
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
                 "notes": (
-                    "Official event facts are production-backfilled in the bounded serial-keyed "
-                    "US_EVENT_SERIAL_LOOKUP_READY_V1 projection."
+                    "The serial-keyed official-event read model is implemented, but the accepted "
+                    "US target has not yet completed governed bounded backfill, READY acceptance, "
+                    "and production benchmark. Runtime fails closed until that gate completes."
                 ),
             },
             {
