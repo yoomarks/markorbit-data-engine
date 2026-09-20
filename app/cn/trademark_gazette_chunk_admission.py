@@ -520,7 +520,12 @@ def admit_cn_trademark_gazette_chunk(
         },
     ).result_rows
     if existing:
-        fingerprint = str(existing[0][0])
+        raw_fingerprint = existing[0][0]
+        fingerprint = (
+            raw_fingerprint.decode("ascii")
+            if isinstance(raw_fingerprint, (bytes, bytearray))
+            else str(raw_fingerprint)
+        )
         row_count = int(existing[0][1])
         if (
             fingerprint != normalized.chunk_fingerprint
