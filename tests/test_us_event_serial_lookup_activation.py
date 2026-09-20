@@ -181,6 +181,85 @@ def test_plan_requires_one_hundred_ordered_prefixes(tmp_path: Path) -> None:
     assert loaded["source_batches"][-1]["prefix"] == "99"
 
 
+def test_backfill_sql_is_single_threaded() -> None:
+    sql = gate._backfill_sql("60")
+    assert "SETTINGS max_threads = 1, max_insert_threads = 1" in sql
+
+
+def test_prepare_accepts_exact_completed_prefix_for_recovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    target = FakeTarget()
+    target.schema_created = True
+    target.inserted.add("00")
+    monkeypatch.setattr(gate, "source_stats", lambda _client: SOURCE)
+    monkeypatch.setattr(gate, "source_batches", lambda _client: BATCHES)
+    monkeypatch.setattr(
+        gate,
+        "lookup_stats",
+        lambda _client: {
+            "exists": True,
+            "visible_rows": 3,
+            "distinct_serials": 1,
+            "max_source_rank": 123,
+            "binding_sum": "10",
+            "binding_xor": "11",
+        },
+    )
+    monkeypatch.setattr(gate, "ready_marker", lambda _client: None)
+    monkeypatch.setattr(
+        gate,
+        "_capacity_contract",
+        lambda _client: {
+            "hot_us_free_bytes": 1000,
+            "hot_us_total_bytes": 2000,
+            "source_table_bytes": 100,
+            "estimated_lookup_bytes_ceiling": 150,
+            "projected_free_bytes": 850,
+            "minimum_free_ratio_after_estimate": 0.30,
+        },
+    )
+    monkeypatch.setattr(gate, "_batch_stats", _batch_observer(target))
+
+    envelope = gate.prepare_plan(
+        tmp_path / "recovery-plan.json",
+        client=target,
+        epoch_getter=_epoch,
+        main_sha_getter=lambda: MAIN,
+    )
+
+    assert envelope["plan"]["target_precondition"]["completed_prefixes"] == ["00"]
+
+
+def test_prepare_refuses_partial_prefix_recovery(tmp_path: Path, monkeypatch) -> None:
+    target = FakeTarget()
+    target.schema_created = True
+    monkeypatch.setattr(gate, "source_stats", lambda _client: SOURCE)
+    monkeypatch.setattr(gate, "source_batches", lambda _client: BATCHES)
+    monkeypatch.setattr(
+        gate,
+        "lookup_stats",
+        lambda _client: {
+            "exists": True,
+            "visible_rows": 1,
+            "distinct_serials": 1,
+            "max_source_rank": 99,
+            "binding_sum": "bad",
+            "binding_xor": "bad",
+        },
+    )
+    monkeypatch.setattr(gate, "ready_marker", lambda _client: None)
+    monkeypatch.setattr(gate, "_batch_stats", _batch_observer(target, mismatch="00"))
+
+    with pytest.raises(RuntimeError, match="partial or digest-mismatched prefix 00"):
+        gate.prepare_plan(
+            tmp_path / "recovery-plan.json",
+            client=target,
+            epoch_getter=_epoch,
+            main_sha_getter=lambda: MAIN,
+        )
+
+
 def test_execute_requires_exact_authority_before_mutation(tmp_path: Path) -> None:
     path = tmp_path / "plan.json"
     sha = _write_plan(path)
