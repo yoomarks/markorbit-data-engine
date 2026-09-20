@@ -17,7 +17,6 @@ from app.us.applicant_candidate_backfill_control import (
 )
 from app.us.attorney_name_lookup import (
     ATTORNEY_NAME_LOOKUP_READY_VERSION,
-    ATTORNEY_NAME_LOOKUP_SCHEMA_VERSION,
     US_ATTORNEY_NAME_LOOKUP_TABLE,
     attorneys_by_name,
 )
