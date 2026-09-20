@@ -388,8 +388,27 @@ def prepare_plan(
         raise RuntimeError("event prefix batch counts do not cover frozen source truth")
     lookup = lookup_stats(target)
     marker = ready_marker(target)
-    if lookup["exists"] or marker is not None:
-        raise RuntimeError("event gate prepare requires absent lookup and READY marker")
+    if marker is not None:
+        raise RuntimeError("event gate prepare requires absent READY marker")
+    completed_prefixes: list[str] = []
+    if lookup["exists"]:
+        for expected in batches:
+            observed = _batch_stats(target, expected.prefix)
+            if expected.rows == 0:
+                if not _batch_matches(observed, expected):
+                    raise RuntimeError(
+                        "event gate prepare found unexpected rows in empty prefix "
+                        f"{expected.prefix}"
+                    )
+                continue
+            if observed.rows == 0:
+                continue
+            if _batch_matches(observed, expected):
+                completed_prefixes.append(expected.prefix)
+                continue
+            raise RuntimeError(
+                f"event gate prepare found partial or digest-mismatched prefix {expected.prefix}"
+            )
     capacity = _capacity_contract(target)
     plan = {
         "version": PLAN_VERSION,
@@ -398,7 +417,11 @@ def prepare_plan(
         "source_epoch": epoch_getter().to_dict(),
         "source_stats": stats.to_dict(),
         "source_batches": [batch.to_dict() for batch in batches],
-        "target_precondition": {"lookup": lookup, "ready_marker": marker},
+        "target_precondition": {
+            "lookup": lookup,
+            "ready_marker": marker,
+            "completed_prefixes": completed_prefixes,
+        },
         "capacity_contract": capacity,
         "target_schema": {
             "storage_policy": TARGET_STORAGE_POLICY,
@@ -454,6 +477,13 @@ def load_plan(path: Path, expected_sha: str) -> dict[str, Any]:
         raise RuntimeError("event serial production-gate requires exactly 100 prefix batches")
     if [str(item["prefix"]) for item in batches] != [f"{i:02d}" for i in range(100)]:
         raise RuntimeError("event serial production-gate prefix ordering drifted")
+    precondition = dict(plan.get("target_precondition") or {})
+    completed = [str(value) for value in list(precondition.get("completed_prefixes") or [])]
+    if completed != sorted(set(completed)):
+        raise RuntimeError("event serial production-gate completed prefixes drifted")
+    by_prefix = {str(item["prefix"]): int(item["rows"]) for item in batches}
+    if any(prefix not in by_prefix or by_prefix[prefix] <= 0 for prefix in completed):
+        raise RuntimeError("event serial production-gate completed prefix set is invalid")
     return plan
 def _frozen_stats(plan: Mapping[str, Any]) -> SourceStats:
     return SourceStats(**dict(plan["source_stats"]))
@@ -593,6 +623,7 @@ SELECT
     source_row_hash,source_package_id,source_rank,observed_at
 FROM {SOURCE_TABLE} FINAL
 WHERE startsWith(serial_number,{_sql(prefix)})
+SETTINGS max_threads = 1, max_insert_threads = 1
 """.strip()
 
 
