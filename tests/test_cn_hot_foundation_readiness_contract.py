@@ -90,8 +90,12 @@ def test_cn_hot_readiness_discovers_hot_cn_backing_without_fixed_filename() -> N
     assert "hot_cn_backing=$hotCnBacking" in text
 
 
-def test_cn_hot_readiness_verifies_warm_cn_baseline_and_ext4() -> None:
+def test_cn_hot_readiness_verifies_accepted_target_baselines() -> None:
     text = _text()
+    assert "HOT_US_BASELINE_MISSING_OR_AMBIGUOUS" in text
+    assert "HOT_US_BASELINE_DRIFTED" in text
+    assert "$script:HotUsDisk = 'hot_us'" in text
+    assert "$script:HotUsPolicy = 'hot_us_only'" in text
     assert "WARM_CN_BASELINE_MISSING_OR_AMBIGUOUS" in text
     assert "WARM_CN_BASELINE_DRIFTED" in text
     assert "findmnt" in text
