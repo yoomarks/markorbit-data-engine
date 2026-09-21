@@ -192,3 +192,155 @@ def test_activation_watermark_read_uses_only_max_threads_budget():
     assert watermark is not None
     assert watermark["serving_generation"] == 3
     assert all(settings == {"max_threads": 1} for settings in client.settings_seen)
+
+
+def test_prepare_accepts_exact_ready_recovery_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = gate.SourceStats(
+        joined_rows=10,
+        relationship_count=8,
+        normalized_name_count=4,
+        serial_count=7,
+        registration_count=3,
+        max_source_rank=99,
+        binding_sum="123",
+        binding_xor="456",
+    )
+    monkeypatch.setattr(gate, "source_stats", lambda _client: source)
+    monkeypatch.setattr(
+        gate,
+        "lookup_stats",
+        lambda _client: {
+            "exists": True,
+            "visible_rows": 10,
+            "relationship_count": 8,
+            "normalized_name_count": 4,
+            "max_source_rank": 99,
+            "binding_sum": "123",
+            "binding_xor": "456",
+        },
+    )
+    monkeypatch.setattr(gate, "ready_marker", lambda _client: READY_VERSION)
+    monkeypatch.setattr(
+        gate,
+        "_current_watermark",
+        lambda _client: {
+            "serving_generation": 3,
+            "source_max_rank": 99,
+            "source_package_id": "11111111-1111-1111-1111-111111111111",
+        },
+    )
+    monkeypatch.setattr(
+        gate,
+        "capacity_contract",
+        lambda _client, _source: {
+            "hot_us": {"free_bytes": 1000, "total_bytes": 2000},
+            "source_table_bytes": 100,
+            "estimated_lookup_bytes_ceiling": 300,
+            "minimum_free_ratio_after_estimate": 0.30,
+            "projected_free_bytes": 700,
+        },
+    )
+
+    envelope = gate.prepare_plan(
+        tmp_path / "ready-recovery-plan.json",
+        client=object(),
+        main_sha_getter=lambda: MAIN,
+    )
+
+    precondition = envelope["plan"]["target_precondition"]
+    assert precondition["ready_marker"] == READY_VERSION
+    assert precondition["watermark"]["serving_generation"] == 3
+
+
+def test_ready_recovery_reverifies_benchmark_and_runtime_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = gate.SourceStats(
+        joined_rows=10,
+        relationship_count=8,
+        normalized_name_count=4,
+        serial_count=7,
+        registration_count=3,
+        max_source_rank=99,
+        binding_sum="123",
+        binding_xor="456",
+    )
+    plan = _plan()
+    plan["target_precondition"]["ready_marker"] = READY_VERSION
+    plan["target_precondition"]["watermark"] = {
+        "serving_generation": 3,
+        "source_max_rank": 99,
+        "source_package_id": "11111111-1111-1111-1111-111111111111",
+    }
+    plan_sha = "d" * 64
+
+    class Client:
+        def command(self, _sql: str) -> None:
+            raise AssertionError("READY recovery must not mutate production")
+
+    benchmark_generations: list[int] = []
+    monkeypatch.setattr(gate, "load_plan", lambda _path, _sha: plan)
+    monkeypatch.setattr(
+        gate,
+        "_assert_plan_live",
+        lambda _plan, *, client, main_sha_getter: source,
+    )
+    monkeypatch.setattr(gate, "ready_marker", lambda _client: READY_VERSION)
+    monkeypatch.setattr(
+        gate,
+        "_current_watermark",
+        lambda _client: {
+            "serving_generation": 3,
+            "source_max_rank": 99,
+            "source_package_id": "11111111-1111-1111-1111-111111111111",
+        },
+    )
+    monkeypatch.setattr(
+        gate,
+        "verify_completeness",
+        lambda _client, _source: {"complete": True},
+    )
+
+    def _benchmark(_client, generation):
+        benchmark_generations.append(generation)
+        return {
+            "passed": True,
+            "normalized_name": "jane q. counsel",
+            "runs": 7,
+        }
+
+    monkeypatch.setattr(gate, "benchmark_lookup", _benchmark)
+    monkeypatch.setattr(
+        gate,
+        "execute_page",
+        lambda _request, *, client: {
+            "normalized_name": "jane q. counsel",
+            "result_count": 1,
+            "semantics": "DIRECT_OFFICIAL_USPTO_TTAB_PARTY_CORRESPONDENT_HISTORY",
+        },
+    )
+    monkeypatch.setattr(
+        gate,
+        "accepted_us_target_read_client",
+        lambda: object(),
+    )
+
+    receipt_path = tmp_path / "receipt.json"
+    receipt = gate.execute_plan(
+        tmp_path / "plan.json",
+        plan_sha=plan_sha,
+        authority=gate.authority_token(plan_sha),
+        receipt_path=receipt_path,
+        client=Client(),
+        main_sha_getter=lambda: MAIN,
+    )
+
+    assert benchmark_generations == [3]
+    assert receipt["status"] == "SUCCESS"
+    assert receipt["replayed"] is True
+    assert receipt["verification_only"] is True
+    assert receipt["runtime_smoke"]["result_count"] == 1

@@ -241,8 +241,10 @@ def test_correspondent_history_exact_name_page_preserves_provenance():
     assert result["legal_conclusion"] is False
     assert "EXCLUDES_TTAB_INTERLOCUTORY_STAFF_ATTORNEY" in page["semantics"]
     sql = client.queries[-1][0]
-    assert "normalized_name = 'jane q. counsel'" in sql
-    assert "serving_generation <= 1" in sql
+    assert sql.lstrip().startswith("SELECT ")
+    assert not sql.lstrip().startswith("WITH ")
+    assert "history.normalized_name = 'jane q. counsel'" in sql
+    assert "history.serving_generation <= 1" in sql
     assert "ORDER BY proceeding_number, mark_identity, relationship_key" in sql
 
 

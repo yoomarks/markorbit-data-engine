@@ -416,35 +416,29 @@ def _page_sql(
             f"{_sql_text(relationship_key)})"
         )
     return f"""
-        WITH accepted_observations AS
-        (
-            SELECT
-                observation_key,
-                argMax(relationship_key, serving_generation) AS relationship_key,
-                argMax(mark_identity, serving_generation) AS mark_identity,
-                argMax(correspondent_name, serving_generation) AS correspondent_name,
-                argMax(correspondent_organization, serving_generation)
-                    AS correspondent_organization,
-                argMax(proceeding_number, serving_generation) AS proceeding_number,
-                argMax(party_side, serving_generation) AS party_side,
-                argMax(party_ordinal, serving_generation) AS party_ordinal,
-                argMax(party_name, serving_generation) AS party_name,
-                argMax(party_role, serving_generation) AS party_role,
-                argMax(serial_number, serving_generation) AS serial_number,
-                argMax(registration_number, serving_generation) AS registration_number,
-                argMax(mark_text, serving_generation) AS mark_text,
-                argMax(source_snapshot_at, serving_generation) AS source_snapshot_at,
-                argMax(source_rank, serving_generation) AS source_rank,
-                argMax(source_kind, serving_generation) AS source_kind,
-                argMax(source_file, serving_generation) AS source_file,
-                argMax(source_package_id, serving_generation) AS source_package_id,
-                max(serving_generation) AS serving_generation
-            FROM {TARGET_TABLE} FINAL
-            WHERE normalized_name = {_sql_text(request.normalized_name)}
-              AND serving_generation <= {int(serving_generation)}
-            GROUP BY observation_key
-        ),
-        grouped AS
+        SELECT
+            toString(relationship_key) AS relationship_key,
+            mark_identity,
+            correspondent_name,
+            correspondent_organization,
+            proceeding_number,
+            party_side,
+            party_ordinal,
+            party_name,
+            party_role,
+            serial_number,
+            registration_number,
+            mark_text,
+            first_observed_at,
+            last_observed_at,
+            first_source_rank,
+            latest_source_rank,
+            latest_serving_generation,
+            observation_count,
+            latest_source_kind,
+            latest_source_file,
+            latest_source_package_id
+        FROM
         (
             SELECT
                 relationship_key,
@@ -471,32 +465,54 @@ def _page_sql(
                 argMax(source_file, tuple(source_rank, observation_key)) AS latest_source_file,
                 argMax(toString(source_package_id), tuple(source_rank, observation_key))
                     AS latest_source_package_id
-            FROM accepted_observations
+            FROM
+            (
+                SELECT
+                    history.observation_key AS observation_key,
+                    argMax(history.relationship_key, history.serving_generation)
+                        AS relationship_key,
+                    argMax(history.mark_identity, history.serving_generation)
+                        AS mark_identity,
+                    argMax(history.correspondent_name, history.serving_generation)
+                        AS correspondent_name,
+                    argMax(
+                        history.correspondent_organization,
+                        history.serving_generation
+                    ) AS correspondent_organization,
+                    argMax(history.proceeding_number, history.serving_generation)
+                        AS proceeding_number,
+                    argMax(history.party_side, history.serving_generation)
+                        AS party_side,
+                    argMax(history.party_ordinal, history.serving_generation)
+                        AS party_ordinal,
+                    argMax(history.party_name, history.serving_generation)
+                        AS party_name,
+                    argMax(history.party_role, history.serving_generation)
+                        AS party_role,
+                    argMax(history.serial_number, history.serving_generation)
+                        AS serial_number,
+                    argMax(history.registration_number, history.serving_generation)
+                        AS registration_number,
+                    argMax(history.mark_text, history.serving_generation)
+                        AS mark_text,
+                    argMax(history.source_snapshot_at, history.serving_generation)
+                        AS source_snapshot_at,
+                    argMax(history.source_rank, history.serving_generation)
+                        AS source_rank,
+                    argMax(history.source_kind, history.serving_generation)
+                        AS source_kind,
+                    argMax(history.source_file, history.serving_generation)
+                        AS source_file,
+                    argMax(history.source_package_id, history.serving_generation)
+                        AS source_package_id,
+                    max(history.serving_generation) AS serving_generation
+                FROM {TARGET_TABLE} AS history FINAL
+                WHERE history.normalized_name = {_sql_text(request.normalized_name)}
+                  AND history.serving_generation <= {int(serving_generation)}
+                GROUP BY history.observation_key
+            ) AS accepted_observations
             GROUP BY relationship_key
-        )
-        SELECT
-            toString(relationship_key) AS relationship_key,
-            mark_identity,
-            correspondent_name,
-            correspondent_organization,
-            proceeding_number,
-            party_side,
-            party_ordinal,
-            party_name,
-            party_role,
-            serial_number,
-            registration_number,
-            mark_text,
-            first_observed_at,
-            last_observed_at,
-            first_source_rank,
-            latest_source_rank,
-            latest_serving_generation,
-            observation_count,
-            latest_source_kind,
-            latest_source_file,
-            latest_source_package_id
-        FROM grouped
+        ) AS grouped
         WHERE 1
           {cursor_clause}
         ORDER BY proceeding_number, mark_identity, relationship_key
