@@ -24,7 +24,7 @@ $script:WarmCnDisk = 'warm_cn'
 $script:WarmCnPolicy = 'warm_cn_only'
 $script:HotUsDisk = 'hot_us'
 $script:HotUsPolicy = 'hot_us_only'
-$script:HotGlobalVhdx = 'E:\MarkOrbitData\production\clickhouse\hot_global.vhdx'
+$script:ProductionClickHouseRoot = 'E:\MarkOrbitData\production\clickhouse'
 
 function Invoke-NativeText {
     param(
@@ -160,17 +160,55 @@ function Get-ReserveState([int64]$Total, [int64]$Free) {
     }
 }
 
-function Get-VhdxFact {
-    $exists = Test-Path -LiteralPath $script:HotGlobalVhdx -PathType Leaf
-    if (-not $exists) {
-        return [ordered]@{ path=$script:HotGlobalVhdx; exists=$false; file_length_bytes=0; last_write_utc=$null }
+function Get-VhdxInventory {
+    if (-not (Test-Path -LiteralPath $script:ProductionClickHouseRoot -PathType Container)) {
+        return @()
     }
-    $item = Get-Item -LiteralPath $script:HotGlobalVhdx -ErrorAction Stop
+    return @(
+        Get-ChildItem -LiteralPath $script:ProductionClickHouseRoot -Filter '*.vhdx' -File -ErrorAction Stop |
+            Sort-Object FullName |
+            ForEach-Object {
+                [pscustomobject]@{
+                    path = $_.FullName
+                    base_name = $_.BaseName
+                    file_length_bytes = [int64]$_.Length
+                    last_write_utc = $_.LastWriteTimeUtc.ToString('o')
+                }
+            }
+    )
+}
+
+function Normalize-IdentityToken([string]$Value) {
+    if (-not $Value) { return '' }
+    return (($Value.ToLowerInvariant()) -replace '[^a-z0-9]', '')
+}
+
+function Resolve-HotGlobalBacking([object[]]$Inventory, [string]$DiskPath) {
+    $mountToken = ''
+    if ($DiskPath -match '^/mnt/wsl/([^/]+)/') {
+        $mountToken = [string]$Matches[1]
+    }
+    $normalizedMount = Normalize-IdentityToken $mountToken
+    $matches = @(
+        $Inventory | Where-Object {
+            $name = Normalize-IdentityToken ([string]$_.base_name)
+            $name -match 'hotglobal' -or
+            ($normalizedMount -and ($normalizedMount.Contains($name) -or $name.Contains($normalizedMount)))
+        }
+    )
+    $state = if ($matches.Count -eq 0) {
+        'ABSENT'
+    }
+    elseif ($matches.Count -eq 1) {
+        'EXACT_ONE'
+    }
+    else {
+        'AMBIGUOUS'
+    }
     return [ordered]@{
-        path = $item.FullName
-        exists = $true
-        file_length_bytes = [int64]$item.Length
-        last_write_utc = $item.LastWriteTimeUtc.ToString('o')
+        state = $state
+        mount_token = $mountToken
+        candidates = @($matches)
     }
 }
 
@@ -197,7 +235,7 @@ function Get-Decision(
     [object]$EReserve,
     [object[]]$DiskRows,
     [object[]]$PolicyRows,
-    [object]$Vhdx,
+    [object]$Backing,
     [object]$Ext4
 ) {
     $diskMap = @{}
@@ -239,11 +277,15 @@ function Get-Decision(
     if ($hotGlobalDisks.Count -gt 1 -or $hotGlobalPolicies.Count -gt 1) {
         return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_HOT_GLOBAL_IDENTITY_DRIFT'; reason='DUPLICATE_HOT_GLOBAL_IDENTITY' }
     }
-    if (-not $diskPresent -and -not $policyPresent -and -not [bool]$Vhdx.exists) {
+    $backingState = [string]$Backing.state
+    if ($backingState -eq 'AMBIGUOUS') {
+        return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_HOT_GLOBAL_BACKING_IDENTITY'; reason='AMBIGUOUS_E_BACKING_CANDIDATES' }
+    }
+    if (-not $diskPresent -and -not $policyPresent -and $backingState -eq 'ABSENT') {
         return [ordered]@{ decision='HOT_GLOBAL_PROVISIONING_PLAN_REQUIRED'; next_gate='FREEZE_MEASURED_HOT_GLOBAL_PROVISIONING_PLAN'; reason='HOT_GLOBAL_ABSENT' }
     }
-    if (-not ($diskPresent -and $policyPresent -and [bool]$Vhdx.exists)) {
-        return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_PARTIAL_HOT_GLOBAL_STATE'; reason='PARTIAL_HOT_GLOBAL_STATE' }
+    if (-not ($diskPresent -and $policyPresent -and $backingState -eq 'EXACT_ONE')) {
+        return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_PARTIAL_HOT_GLOBAL_STATE'; reason='PARTIAL_OR_UNRESOLVED_HOT_GLOBAL_STATE' }
     }
 
     $hotDisk = $hotGlobalDisks[0]
@@ -267,7 +309,8 @@ try {
         if ($reserve.state -ne 'READY') { throw 'Reserve arithmetic contract drifted.' }
         $disks = @([pscustomobject]@{ name='hot_us'; path='/hot-us' }, [pscustomobject]@{ name='warm_cn'; path='/warm-cn' })
         $policies = @([pscustomobject]@{ policy_name='hot_us_only'; disks=@('hot_us') }, [pscustomobject]@{ policy_name='warm_cn_only'; disks=@('warm_cn') })
-        $absent = Get-Decision ([pscustomobject]@{ state='READY' }) $disks $policies ([pscustomobject]@{ exists=$false }) ([pscustomobject]@{ checked=$false; fstype=$null })
+        $absentBacking = [pscustomobject]@{ state='ABSENT'; mount_token=''; candidates=@() }
+        $absent = Get-Decision ([pscustomobject]@{ state='READY' }) $disks $policies $absentBacking ([pscustomobject]@{ checked=$false; fstype=$null })
         if ($absent.decision -ne 'HOT_GLOBAL_PROVISIONING_PLAN_REQUIRED') { throw 'Absent-state decision drifted.' }
         Write-Host 'GLOBAL_HOT_FOUNDATION_READINESS_CONTRACT_PASS'
         return
@@ -277,7 +320,7 @@ try {
     $targetVersion = Get-TargetVersion
     $eDrive = Get-DriveFact 'E'
     $eReserve = Get-ReserveState $eDrive.total_bytes $eDrive.free_bytes
-    $vhdx = Get-VhdxFact
+    $vhdxInventory = @(Get-VhdxInventory)
 
     $diskRows = @(Invoke-TargetRows @"
 SELECT name, path, total_space, free_space
@@ -299,14 +342,16 @@ GROUP BY disk_name
 "@ 'hot_global active parts')
 
     $hotGlobalDisk = @($diskRows | Where-Object { [string]$_.name -eq $script:HotGlobalDisk })
+    $hotGlobalPath = if ($hotGlobalDisk.Count -eq 1) { [string]$hotGlobalDisk[0].path } else { '' }
+    $backing = Resolve-HotGlobalBacking $vhdxInventory $hotGlobalPath
     $ext4 = if ($hotGlobalDisk.Count -eq 1) {
-        Get-Ext4Fact ([string]$hotGlobalDisk[0].path)
+        Get-Ext4Fact $hotGlobalPath
     }
     else {
         [ordered]@{ checked=$false; fstype=$null; source=$null; target=$null }
     }
 
-    $decision = Get-Decision $eReserve $diskRows $policyRows $vhdx $ext4
+    $decision = Get-Decision $eReserve $diskRows $policyRows $backing $ext4
     Assert-ExactMain 'post-query'
     $head = (git rev-parse HEAD).Trim().ToLowerInvariant()
 
@@ -330,7 +375,9 @@ GROUP BY disk_name
         host = [ordered]@{
             e_drive = $eDrive
             e_reserve = $eReserve
-            expected_hot_global_vhdx = $vhdx
+            production_clickhouse_root = $script:ProductionClickHouseRoot
+            e_vhdx_inventory = @($vhdxInventory)
+            hot_global_backing = $backing
         }
         governance = [ordered]@{
             physical_role = 'E_GLOBAL_HOT_AND_ALL_WARM_GROWTH'
@@ -371,7 +418,7 @@ GROUP BY disk_name
     Write-Host "e_total_bytes=$($eDrive.total_bytes)"
     Write-Host "e_free_bytes=$($eDrive.free_bytes)"
     Write-Host "e_reserve_state=$($eReserve.state)"
-    Write-Host "hot_global_vhdx_exists=$($vhdx.exists)"
+    Write-Host "hot_global_backing_state=$($backing.state)"
     Write-Host "receipt_path=$receiptPath"
 }
 finally {

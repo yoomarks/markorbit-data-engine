@@ -14,7 +14,8 @@ def test_global_hot_readiness_freezes_expected_identity() -> None:
     assert "$script:TargetDistro = 'MarkOrbit-ClickHouse'" in text
     assert "$script:HotGlobalDisk = 'hot_global'" in text
     assert "$script:HotGlobalPolicy = 'hot_global_only'" in text
-    assert "$script:HotGlobalVhdx = 'E:\\MarkOrbitData\\production\\clickhouse\\hot_global.vhdx'" in text
+    assert "$script:ProductionClickHouseRoot = 'E:\\MarkOrbitData\\production\\clickhouse'" in text
+    assert "hot_global.vhdx" not in text
     assert "$script:WarmCnDisk = 'warm_cn'" in text
     assert "$script:HotUsDisk = 'hot_us'" in text
 
@@ -86,6 +87,19 @@ def test_global_hot_readiness_verifies_ext4_and_policy_mapping() -> None:
     assert "policy_name IN ('hot_us_only','warm_cn_only','hot_global_only')" in text
     assert "name IN ('hot_us','warm_cn','hot_global')" in text
     assert "disk_name = 'hot_global'" in text
+
+
+def test_global_hot_readiness_discovers_backing_without_freezing_filename() -> None:
+    text = _text()
+    assert "Get-VhdxInventory" in text
+    assert "Resolve-HotGlobalBacking" in text
+    assert "Get-ChildItem -LiteralPath $script:ProductionClickHouseRoot -Filter '*.vhdx'" in text
+    assert "mount_token" in text
+    assert "AMBIGUOUS_E_BACKING_CANDIDATES" in text
+    assert "PARTIAL_OR_UNRESOLVED_HOT_GLOBAL_STATE" in text
+    assert "REVIEW_HOT_GLOBAL_BACKING_IDENTITY" in text
+    assert "e_vhdx_inventory = @($vhdxInventory)" in text
+    assert "hot_global_backing = $backing" in text
 
 
 def test_global_hot_readiness_contract_mode_never_touches_host() -> None:
