@@ -543,6 +543,7 @@ def test_us_exact_trademark_rejects_wrong_applicant_binding(monkeypatch):
 
 def test_cn_case_current_applicants_returns_case_bound_source_candidate():
     party = _cn_party_row("10001")
+    party["entity_id"] = CN_ENTITY_ID
 
     result = cn_owner.current_applicants_for_case(
         client=FakeClient(
