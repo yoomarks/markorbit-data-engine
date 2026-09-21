@@ -205,21 +205,40 @@ function Get-Decision(
     $policyMap = @{}
     foreach ($row in @($PolicyRows)) { $policyMap[[string]$row.policy_name] = $row }
 
+    $hotUsDisks = @($DiskRows | Where-Object { [string]$_.name -eq $script:HotUsDisk })
+    $warmCnDisks = @($DiskRows | Where-Object { [string]$_.name -eq $script:WarmCnDisk })
+    $hotUsPolicies = @($PolicyRows | Where-Object { [string]$_.policy_name -eq $script:HotUsPolicy })
+    $warmCnPolicies = @($PolicyRows | Where-Object { [string]$_.policy_name -eq $script:WarmCnPolicy })
     $baselineOk = (
-        $diskMap.ContainsKey($script:HotUsDisk) -and
-        $diskMap.ContainsKey($script:WarmCnDisk) -and
-        $policyMap.ContainsKey($script:HotUsPolicy) -and
-        $policyMap.ContainsKey($script:WarmCnPolicy)
+        $hotUsDisks.Count -eq 1 -and
+        $warmCnDisks.Count -eq 1 -and
+        $hotUsPolicies.Count -eq 1 -and
+        $warmCnPolicies.Count -eq 1
     )
+    if ($baselineOk) {
+        $hotUsPolicyDisks = @($hotUsPolicies[0].disks)
+        $warmCnPolicyDisks = @($warmCnPolicies[0].disks)
+        $baselineOk = (
+            $hotUsPolicyDisks.Count -eq 1 -and
+            [string]$hotUsPolicyDisks[0] -eq $script:HotUsDisk -and
+            $warmCnPolicyDisks.Count -eq 1 -and
+            [string]$warmCnPolicyDisks[0] -eq $script:WarmCnDisk
+        )
+    }
     if (-not $baselineOk) {
-        return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='RESTORE_ACCEPTED_TARGET_STORAGE_BASELINE'; reason='ACCEPTED_BASELINE_MISSING' }
+        return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='RESTORE_ACCEPTED_TARGET_STORAGE_BASELINE'; reason='ACCEPTED_BASELINE_MISSING_OR_DRIFTED' }
     }
     if ([string]$EReserve.state -ne 'READY') {
         return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_E_PHYSICAL_CAPACITY'; reason=[string]$EReserve.state }
     }
 
-    $diskPresent = $diskMap.ContainsKey($script:HotGlobalDisk)
-    $policyPresent = $policyMap.ContainsKey($script:HotGlobalPolicy)
+    $hotGlobalDisks = @($DiskRows | Where-Object { [string]$_.name -eq $script:HotGlobalDisk })
+    $hotGlobalPolicies = @($PolicyRows | Where-Object { [string]$_.policy_name -eq $script:HotGlobalPolicy })
+    $diskPresent = $hotGlobalDisks.Count -eq 1
+    $policyPresent = $hotGlobalPolicies.Count -eq 1
+    if ($hotGlobalDisks.Count -gt 1 -or $hotGlobalPolicies.Count -gt 1) {
+        return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_HOT_GLOBAL_IDENTITY_DRIFT'; reason='DUPLICATE_HOT_GLOBAL_IDENTITY' }
+    }
     if (-not $diskPresent -and -not $policyPresent -and -not [bool]$Vhdx.exists) {
         return [ordered]@{ decision='HOT_GLOBAL_PROVISIONING_PLAN_REQUIRED'; next_gate='FREEZE_MEASURED_HOT_GLOBAL_PROVISIONING_PLAN'; reason='HOT_GLOBAL_ABSENT' }
     }
@@ -227,8 +246,8 @@ function Get-Decision(
         return [ordered]@{ decision='HOT_GLOBAL_READINESS_BLOCKED'; next_gate='REVIEW_PARTIAL_HOT_GLOBAL_STATE'; reason='PARTIAL_HOT_GLOBAL_STATE' }
     }
 
-    $hotDisk = $diskMap[$script:HotGlobalDisk]
-    $hotPolicy = $policyMap[$script:HotGlobalPolicy]
+    $hotDisk = $hotGlobalDisks[0]
+    $hotPolicy = $hotGlobalPolicies[0]
     $policyDisks = @($hotPolicy.disks)
     $mappingOk = $policyDisks.Count -eq 1 -and [string]$policyDisks[0] -eq $script:HotGlobalDisk
     $pathOk = [string]$hotDisk.path -ne ''
