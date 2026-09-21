@@ -17,7 +17,9 @@ from app.us_ttab.model import TTABProceedingBundle
 from app.us_ttab.parser import iter_ttab_bundles
 from app.us.publisher import stable_hash
 from app.us.ttab_correspondent_history import (
+    READY_VERSION,
     TARGET_TABLE,
+    WATERMARK_TABLE,
     advance_serving_watermark,
     current_serving_watermark,
     history_ready,
@@ -50,11 +52,7 @@ def _iter_source(path: Path) -> Iterator[tuple[str, TTABProceedingBundle]]:
 def cleanup_ttab_package_outputs(package_id: uuid.UUID) -> None:
     client = clickhouse_client()
     package = str(package_id)
-    for table in TABLE_COLUMNS:
-        client.command(
-            f"ALTER TABLE {table} DELETE WHERE source_package_id = toUUID('{package}') "
-            "SETTINGS mutations_sync = 1"
-        )
+
     target_exists = client.query(
         """
         SELECT count()
@@ -63,15 +61,51 @@ def cleanup_ttab_package_outputs(package_id: uuid.UUID) -> None:
           AND name = 'us_ttab_correspondent_mark_history'
         """
     ).result_rows
-    if target_exists and int(target_exists[0][0]) == 1 and history_ready(client):
+    if (
+        target_exists
+        and int(target_exists[0][0]) == 1
+        and history_ready(client)
+    ):
         watermark = current_serving_watermark(client)
         if watermark is not None:
-            client.command(
-                f"ALTER TABLE {TARGET_TABLE} DELETE "
-                f"WHERE source_package_id = toUUID('{package}') "
-                f"AND serving_generation > {int(watermark['serving_generation'])} "
-                "SETTINGS mutations_sync = 1"
-            )
+            current_generation = int(watermark["serving_generation"])
+            current_package = str(watermark["source_package_id"])
+            if current_package == package:
+                client.command(
+                    f"ALTER TABLE {WATERMARK_TABLE} DELETE "
+                    f"WHERE ready_version = '{READY_VERSION}' "
+                    f"AND serving_generation = {current_generation} "
+                    f"AND source_package_id = toUUID('{package}') "
+                    "SETTINGS mutations_sync = 1"
+                )
+                client.command(
+                    f"ALTER TABLE {TARGET_TABLE} DELETE "
+                    f"WHERE source_package_id = toUUID('{package}') "
+                    f"AND serving_generation = {current_generation} "
+                    "SETTINGS mutations_sync = 1"
+                )
+                rolled_back = current_serving_watermark(client)
+                if (
+                    rolled_back is None
+                    or int(rolled_back["serving_generation"])
+                    != current_generation - 1
+                ):
+                    raise RuntimeError(
+                        "US TTAB correspondent watermark rollback failed"
+                    )
+            else:
+                client.command(
+                    f"ALTER TABLE {TARGET_TABLE} DELETE "
+                    f"WHERE source_package_id = toUUID('{package}') "
+                    f"AND serving_generation > {current_generation} "
+                    "SETTINGS mutations_sync = 1"
+                )
+
+    for table in TABLE_COLUMNS:
+        client.command(
+            f"ALTER TABLE {table} DELETE WHERE source_package_id = toUUID('{package}') "
+            "SETTINGS mutations_sync = 1"
+        )
 
 
 def _archive(path: Path, raw_root: Path) -> Path:
@@ -381,13 +415,6 @@ def ingest_ttab_package(
             "semantics": TTAB_SEMANTICS,
         }
         archived = _archive(path, raw_root)
-        update_package_status(
-            str(package_uuid),
-            "SUCCESS",
-            profile=profile,
-            archived_path=str(archived),
-        )
-        finish_job_run(run_id, "SUCCESS", metrics=totals)
         if correspondent_history_enabled:
             advance_serving_watermark(
                 target_client,
@@ -395,6 +422,13 @@ def ingest_ttab_package(
                 source_rank=int(meta["source_rank"]),
                 source_package_id=package_uuid,
             )
+        update_package_status(
+            str(package_uuid),
+            "SUCCESS",
+            profile=profile,
+            archived_path=str(archived),
+        )
+        finish_job_run(run_id, "SUCCESS", metrics=totals)
         return totals
     except Exception as exc:
         try:
