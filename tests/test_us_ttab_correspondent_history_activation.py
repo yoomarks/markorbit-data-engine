@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -230,6 +231,7 @@ def test_prepare_accepts_exact_ready_recovery_state(
             "serving_generation": 3,
             "source_max_rank": 99,
             "source_package_id": "11111111-1111-1111-1111-111111111111",
+            "updated_at": datetime(2026, 9, 21, tzinfo=timezone.utc),
         },
     )
     monkeypatch.setattr(
@@ -253,6 +255,14 @@ def test_prepare_accepts_exact_ready_recovery_state(
     precondition = envelope["plan"]["target_precondition"]
     assert precondition["ready_marker"] == READY_VERSION
     assert precondition["watermark"]["serving_generation"] == 3
+    assert precondition["watermark"]["source_max_rank"] == 99
+    assert precondition["watermark"]["source_package_id"] == (
+        "11111111-1111-1111-1111-111111111111"
+    )
+    assert precondition["watermark"]["updated_at"] == (
+        "2026-09-21 00:00:00+00:00"
+    )
+    json.dumps(envelope)
 
 
 def test_ready_recovery_reverifies_benchmark_and_runtime_without_mutation(
