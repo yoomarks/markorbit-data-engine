@@ -320,6 +320,37 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "semantics": "current_official_name_facts_no_identity_resolution",
                 },
                 {
+                    "path": "/api/v1/us/correspondents/by-name/ttab-history",
+                    "query": {
+                        "name": {
+                            "type": "string",
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 512,
+                        },
+                        "page_size": {
+                            "type": "integer",
+                            "default": 50,
+                            "min": 1,
+                            "max": 100,
+                        },
+                        "cursor": {
+                            "type": "opaque_string",
+                            "required": False,
+                            "max_length": 8192,
+                        },
+                    },
+                    "pagination": "bounded_keyset_cursor",
+                    "read_model": "US_TTAB_CORRESPONDENT_MARK_HISTORY_V1",
+                    "hard_bounds": {"max_pages": 100, "max_results": 10000},
+                    "source_domain": "US_TTAB",
+                    "semantics": (
+                        "direct_official_party_correspondent_history;"
+                        "excludes_ttab_interlocutory_staff_attorney;"
+                        "no_cross_source_identity_or_continuing_representation_or_legal_conclusion"
+                    ),
+                },
+                {
                     "path": "/api/v1/us/registrations/{registration_number}",
                     "query": {},
                     "pagination": "bounded_exact_lookup",

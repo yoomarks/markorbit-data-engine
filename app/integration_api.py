@@ -62,6 +62,12 @@ from app.us.attorney_name_lookup import (
     AttorneyNameLookupUnavailable,
     attorneys_by_name,
 )
+from app.us.ttab_correspondent_history import (
+    TTABCorrespondentHistoryInvalid,
+    TTABCorrespondentHistoryRequest,
+    TTABCorrespondentHistoryUnavailable,
+    execute_page as execute_us_ttab_correspondent_history_page,
+)
 from app.us.applicant_owner_read import (
     discover_applicants_by_name as us_discover_applicants_by_name,
     read_portfolio as us_read_applicant_portfolio,
@@ -535,6 +541,48 @@ def integration_us_attorneys_by_name(
     if payload["match_count"] == 0:
         result["fact_state"] = "not_found"
     return result
+
+
+@router.get("/us/correspondents/by-name/ttab-history")
+def integration_us_ttab_correspondent_history(
+    name: Annotated[str, Query(min_length=1, max_length=512)],
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=8192)] = None,
+) -> dict[str, Any]:
+    try:
+        payload = execute_us_ttab_correspondent_history_page(
+            TTABCorrespondentHistoryRequest(
+                name=name,
+                page_size=page_size,
+                cursor=cursor,
+            ),
+            client=accepted_us_target_read_client(),
+        )
+    except TTABCorrespondentHistoryInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_US_TTAB_CORRESPONDENT_HISTORY_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except TTABCorrespondentHistoryUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_US_TTAB_CORRESPONDENT_HISTORY_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    except DiscoveryContractError as exc:
+        raise _discovery_http_error(exc) from exc
+    return _envelope(
+        jurisdiction="US",
+        resource_kind="TTAB_CORRESPONDENT_HANDLED_MARK_HISTORY",
+        payload=payload,
+    )
 
 
 @router.get("/us/recorded-parties/by-name")

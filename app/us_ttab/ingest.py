@@ -16,6 +16,13 @@ from app.us_ttab.migrations import ensure_ttab_schema
 from app.us_ttab.model import TTABProceedingBundle
 from app.us_ttab.parser import iter_ttab_bundles
 from app.us.publisher import stable_hash
+from app.us.ttab_correspondent_history import (
+    TARGET_TABLE,
+    advance_serving_watermark,
+    current_serving_watermark,
+    history_ready,
+    next_serving_generation,
+)
 from app.us_ttab.publisher import TABLE_COLUMNS, TTABBatchPublisher
 
 
@@ -48,6 +55,23 @@ def cleanup_ttab_package_outputs(package_id: uuid.UUID) -> None:
             f"ALTER TABLE {table} DELETE WHERE source_package_id = toUUID('{package}') "
             "SETTINGS mutations_sync = 1"
         )
+    target_exists = client.query(
+        """
+        SELECT count()
+        FROM system.tables
+        WHERE database = 'markorbit_facts'
+          AND name = 'us_ttab_correspondent_mark_history'
+        """
+    ).result_rows
+    if target_exists and int(target_exists[0][0]) == 1 and history_ready(client):
+        watermark = current_serving_watermark(client)
+        if watermark is not None:
+            client.command(
+                f"ALTER TABLE {TARGET_TABLE} DELETE "
+                f"WHERE source_package_id = toUUID('{package}') "
+                f"AND serving_generation > {int(watermark['serving_generation'])} "
+                "SETTINGS mutations_sync = 1"
+            )
 
 
 def _archive(path: Path, raw_root: Path) -> Path:
@@ -256,13 +280,10 @@ def ingest_ttab_package(
             "snapshot_at": snapshot_at.isoformat(),
         },
     )
-    publisher = TTABBatchPublisher(
-        clickhouse_client(),
-        package_id=package_uuid,
-        source_kind=str(meta["package_kind"]),
-        source_snapshot_at=snapshot_at,
-        source_rank=int(meta["source_rank"]),
-    )
+    target_client = clickhouse_client()
+    correspondent_history_enabled = history_ready(target_client)
+    correspondent_serving_generation: int | None = None
+    publisher: TTABBatchPublisher | None = None
     seen: set[str] = set()
     source_files: set[str] = set()
     malformed_serials: set[str] = set()
@@ -280,6 +301,8 @@ def ingest_ttab_package(
             pending, snapshot_at, package_uuid, meta, same_historical_batch
         )
         historical_batch_duplicate_count += skipped
+        if publisher is None:
+            raise RuntimeError("US TTAB publisher is not initialized")
         for source_file, bundle in publishable:
             publisher.add(bundle, source_file)
         pending.clear()
@@ -292,6 +315,20 @@ def ingest_ttab_package(
             )
         if retrying:
             cleanup_ttab_package_outputs(package_uuid)
+
+        if correspondent_history_enabled:
+            correspondent_serving_generation = next_serving_generation(
+                target_client
+            )
+        publisher = TTABBatchPublisher(
+            target_client,
+            package_id=package_uuid,
+            source_kind=str(meta["package_kind"]),
+            source_snapshot_at=snapshot_at,
+            source_rank=int(meta["source_rank"]),
+            include_correspondent_history=correspondent_history_enabled,
+            correspondent_serving_generation=correspondent_serving_generation,
+        )
 
         for source_file, bundle in _iter_source(path):
             number = bundle.proceeding.proceeding_number
@@ -320,6 +357,8 @@ def ingest_ttab_package(
         flush_pending()
         if not seen:
             raise RuntimeError("US TTAB source produced no proceeding records")
+        if publisher is None:
+            raise RuntimeError("US TTAB publisher is not initialized")
         row_counts = publisher.close()
         totals: dict[str, object] = {
             "schema_version": TTAB_SCHEMA_VERSION,
@@ -349,6 +388,13 @@ def ingest_ttab_package(
             archived_path=str(archived),
         )
         finish_job_run(run_id, "SUCCESS", metrics=totals)
+        if correspondent_history_enabled:
+            advance_serving_watermark(
+                target_client,
+                serving_generation=int(correspondent_serving_generation or 0),
+                source_rank=int(meta["source_rank"]),
+                source_package_id=package_uuid,
+            )
         return totals
     except Exception as exc:
         try:

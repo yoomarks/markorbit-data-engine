@@ -90,6 +90,18 @@ def read_query_capability_contract() -> dict[str, Any]:
                 ),
             },
             {
+                "id": "correspondent_historical_portfolio",
+                "jurisdictions": ["US"],
+                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "notes": (
+                    "Direct official TTAB party-correspondent observations are linked to the "
+                    "same party's TTAB trademark properties in an exact-name-first bounded read "
+                    "model. The model excludes TTAB interlocutory/staff attorneys and does not "
+                    "claim cross-source identity or continuing representation. Production READY "
+                    "and benchmark acceptance are tracked by #788."
+                ),
+            },
+            {
                 "id": "agent_attorney_name_resolve",
                 "jurisdictions": ["CN"],
                 "state": "SUPPORTED_INDEXED_EXACT_NAME",
