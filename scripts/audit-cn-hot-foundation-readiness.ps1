@@ -148,15 +148,15 @@ function Get-SourceHealth {
         'compose','exec','-T','clickhouse','clickhouse-client',
         '--query','SELECT version() FORMAT TabSeparatedRaw'
     )
-    $mount = Invoke-NativeText 'docker' @(
-        'inspect','--format',
-        '{{range .Mounts}}{{if eq .Destination "/var/lib/clickhouse"}}{{.Type}}|{{.Name}}|{{.Source}}{{end}}{{end}}',
-        $containers[0]
-    )
-    $mountText = ((@($mount.lines) -join '').Trim())
-    if (-not $mountText) { throw 'Source ClickHouse /var/lib/clickhouse mount identity is missing.' }
-    $fields = @($mountText.Split('|'))
-    if ($fields.Count -lt 3) { throw "Source ClickHouse mount identity is malformed: $mountText" }
+    $inspect = Invoke-NativeText 'docker' @('inspect', $containers[0])
+    $inspectText = (@($inspect.lines) -join [Environment]::NewLine)
+    try { $inspectRows = @($inspectText | ConvertFrom-Json) }
+    catch { throw 'Source ClickHouse docker inspect returned invalid JSON.' }
+    if ($inspectRows.Count -ne 1) { throw "Expected exactly one source ClickHouse inspect row; observed=$($inspectRows.Count)" }
+    $mountRows = @($inspectRows[0].Mounts | Where-Object { [string]$_.Destination -eq '/var/lib/clickhouse' })
+    if ($mountRows.Count -ne 1) { throw "Expected exactly one /var/lib/clickhouse mount; observed=$($mountRows.Count)" }
+    $mountRow = $mountRows[0]
+    $fields = @([string]$mountRow.Type, [string]$mountRow.Name, [string]$mountRow.Source)
     return [ordered]@{
         status='healthy'
         version=((@($version.lines) -join '').Trim())

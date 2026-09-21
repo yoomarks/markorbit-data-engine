@@ -149,3 +149,11 @@ def test_cn_hot_readiness_tolerates_missing_media_type() -> None:
     assert "function Get-OptionalPropertyValue" in text
     assert "Get-OptionalPropertyValue $disk 'MediaType'" in text
     assert "$disk.MediaType" not in text
+
+
+def test_cn_hot_readiness_uses_json_docker_inspect_for_source_mount() -> None:
+    text = _text()
+    assert "Invoke-NativeText 'docker' @('inspect', $containers[0])" in text
+    assert "ConvertFrom-Json" in text
+    assert "[string]$_.Destination -eq '/var/lib/clickhouse'" in text
+    assert "eq .Destination" not in text
