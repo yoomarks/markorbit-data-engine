@@ -33,6 +33,8 @@ READY_COMPONENT = "US_EVENT_SERIAL_LOOKUP"
 BENCHMARK_RUNS = 7
 SLO_P95_MS = 300.0
 MIN_FREE_RATIO_AFTER_ESTIMATE = 0.30
+CAPACITY_RECLAIM_POLL_SECONDS = 15.0
+CAPACITY_RECLAIM_MAX_WAIT_SECONDS = 600.0
 EXPECTED_COLUMNS = [
     ("event_key", "FixedString(64)"),
     ("serial_number", "String"),
@@ -314,7 +316,12 @@ SETTINGS storage_policy = '{TARGET_STORAGE_POLICY}'
 """.strip()
 
 
-def _capacity_contract(client: Any) -> dict[str, object]:
+def _capacity_contract(
+    client: Any,
+    *,
+    remaining_rows: int | None = None,
+    total_rows: int | None = None,
+) -> dict[str, object]:
     disk = _rows(
         client,
         "SELECT free_space,total_space FROM system.disks WHERE name='hot_us'",
@@ -331,7 +338,14 @@ def _capacity_contract(client: Any) -> dict[str, object]:
         raise RuntimeError("accepted us_event_history storage policy drifted")
     source_bytes = int(table[0])
     estimated = max((source_bytes * 3) // 2, 1)
-    projected = int(disk[0]) - estimated
+    remaining_estimate = estimated
+    if remaining_rows is not None:
+        if total_rows is None or total_rows <= 0:
+            raise ValueError("capacity recovery requires positive total_rows")
+        remaining_estimate = (
+            estimated * max(int(remaining_rows), 0)
+        ) // int(total_rows)
+    projected = int(disk[0]) - remaining_estimate
     total = int(disk[1])
     if projected < int(total * MIN_FREE_RATIO_AFTER_ESTIMATE):
         raise RuntimeError("hot_us reserve would fall below 30%")
@@ -340,6 +354,7 @@ def _capacity_contract(client: Any) -> dict[str, object]:
         "hot_us_total_bytes": total,
         "source_table_bytes": source_bytes,
         "estimated_lookup_bytes_ceiling": estimated,
+        "remaining_lookup_bytes_ceiling": remaining_estimate,
         "projected_free_bytes": projected,
         "minimum_free_ratio_after_estimate": MIN_FREE_RATIO_AFTER_ESTIMATE,
     }
@@ -353,6 +368,20 @@ def _live_free(client: Any) -> tuple[int, int]:
     return int(row[0]), int(row[1])
 
 
+def _inactive_lookup_bytes(client: Any) -> tuple[int, int]:
+    row = _rows(
+        client,
+        f"""
+        SELECT count(),coalesce(sum(bytes_on_disk),0)
+        FROM system.parts
+        WHERE database='{TARGET_DATABASE}'
+          AND table='us_event_serial_history'
+          AND active=0
+        """,
+    )[0]
+    return int(row[0]), int(row[1])
+
+
 def _assert_remaining_capacity(
     client: Any,
     *,
@@ -360,15 +389,36 @@ def _assert_remaining_capacity(
     remaining_rows: int,
     total_rows: int,
 ) -> None:
-    free_bytes, total_bytes = _live_free(client)
-    if total_bytes != int(plan_capacity["hot_us_total_bytes"]):
-        raise RuntimeError("hot_us total capacity drifted")
     ceiling = int(plan_capacity["estimated_lookup_bytes_ceiling"])
     remaining_estimate = 0
     if total_rows > 0:
         remaining_estimate = (ceiling * max(remaining_rows, 0)) // total_rows
-    if free_bytes - remaining_estimate < int(total_bytes * MIN_FREE_RATIO_AFTER_ESTIMATE):
-        raise RuntimeError("hot_us projected reserve fell below 30% during event backfill")
+    expected_total = int(plan_capacity["hot_us_total_bytes"])
+    minimum_free = int(expected_total * MIN_FREE_RATIO_AFTER_ESTIMATE)
+    required_free = minimum_free + remaining_estimate
+    deadline = time.monotonic() + CAPACITY_RECLAIM_MAX_WAIT_SECONDS
+
+    while True:
+        free_bytes, total_bytes = _live_free(client)
+        if total_bytes != expected_total:
+            raise RuntimeError("hot_us total capacity drifted")
+        if free_bytes >= required_free:
+            return
+
+        inactive_parts, inactive_bytes = _inactive_lookup_bytes(client)
+        if inactive_parts <= 0 or inactive_bytes <= 0:
+            raise RuntimeError(
+                "hot_us projected reserve fell below 30% during event backfill"
+            )
+        if free_bytes + inactive_bytes < required_free:
+            raise RuntimeError(
+                "hot_us projected reserve fell below 30% during event backfill"
+            )
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "hot_us reclaim wait timed out before 30% projected reserve recovered"
+            )
+        time.sleep(CAPACITY_RECLAIM_POLL_SECONDS)
 
 
 def prepare_plan(
@@ -409,7 +459,14 @@ def prepare_plan(
             raise RuntimeError(
                 f"event gate prepare found partial or digest-mismatched prefix {expected.prefix}"
             )
-    capacity = _capacity_contract(target)
+    completed_rows = sum(
+        batch.rows for batch in batches if batch.prefix in completed_prefixes
+    )
+    capacity = _capacity_contract(
+        target,
+        remaining_rows=stats.qualifying_rows - completed_rows,
+        total_rows=stats.qualifying_rows,
+    )
     plan = {
         "version": PLAN_VERSION,
         "expected_main": main_sha,
