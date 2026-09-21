@@ -655,7 +655,8 @@ def _page_benchmark(
             f"{_sql_text(relation)})"
         )
     sql = f"""
-    WITH grouped AS
+    SELECT proceeding_number, mark_identity, toString(relationship_key)
+    FROM
     (
         SELECT relationship_key,
                argMax(mark_identity, tuple(source_rank, observation_key))
@@ -666,9 +667,7 @@ def _page_benchmark(
         WHERE normalized_name={_sql_text(normalized_name)}
           AND serving_generation <= {int(serving_generation)}
         GROUP BY relationship_key
-    )
-    SELECT proceeding_number, mark_identity, toString(relationship_key)
-    FROM grouped
+    ) AS grouped
     WHERE 1 {cursor}
     ORDER BY proceeding_number, mark_identity, relationship_key
     LIMIT 51
