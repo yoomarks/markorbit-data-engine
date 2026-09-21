@@ -85,10 +85,11 @@ def read_query_capability_contract() -> dict[str, Any]:
                 "state": "SUPPORTED_INDEXED",
                 "notes": (
                     "Exact application/serial keys resolve to current source-native applicant "
-                    "candidates with a hard 100-candidate ceiling and the same applicant "
-                    "source_reference used by owner-read portfolio APIs. No display-name inference, "
-                    "cross-source identity, customer relationship, or legal ownership conclusion "
-                    "is created."
+                    "candidates with a hard 100-candidate ceiling. CN returns an exact case-bound "
+                    "applicant source_reference plus stable entity_id for the indexed entity portfolio; "
+                    "US returns the canonical applicant candidate source_reference. No display-name "
+                    "inference, cross-source identity, customer relationship, or legal ownership "
+                    "conclusion is created."
                 ),
             },
             {
