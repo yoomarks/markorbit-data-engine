@@ -142,3 +142,10 @@ def test_cn_hot_readiness_receipt_keeps_all_mutation_authority_false() -> None:
         "api_cutover_authorized=$false",
     ):
         assert marker in text
+
+
+def test_cn_hot_readiness_tolerates_missing_media_type() -> None:
+    text = _text()
+    assert "function Get-OptionalPropertyValue" in text
+    assert "Get-OptionalPropertyValue $disk 'MediaType'" in text
+    assert "$disk.MediaType" not in text
