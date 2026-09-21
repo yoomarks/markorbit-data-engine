@@ -429,8 +429,10 @@ def prepare_plan(
     lookup = lookup_stats(target)
     marker = ready_marker(target)
     watermark = _current_watermark(target)
-    if marker is not None:
-        raise RuntimeError("prepare requires TTAB correspondent READY absent")
+    if marker not in {None, READY_VERSION}:
+        raise RuntimeError(
+            f"prepare found unexpected TTAB correspondent READY marker: {marker}"
+        )
     visible = int(lookup["visible_rows"])
     if visible not in {0, source.joined_rows}:
         raise RuntimeError("partial TTAB correspondent target; prepare refused")
@@ -439,7 +441,17 @@ def prepare_plan(
         or str(lookup["binding_xor"]) != source.binding_xor
     ):
         raise RuntimeError("populated TTAB correspondent target digest mismatch")
-    if watermark is not None and (
+    if marker == READY_VERSION:
+        if (
+            visible != source.joined_rows
+            or watermark is None
+            or int(watermark["serving_generation"]) < 1
+            or int(watermark["source_max_rank"]) < source.max_source_rank
+        ):
+            raise RuntimeError(
+                "READY TTAB correspondent state is not source-complete"
+            )
+    elif watermark is not None and (
         visible != source.joined_rows
         or int(watermark["serving_generation"]) != 1
         or int(watermark["source_max_rank"]) != source.max_source_rank
@@ -832,6 +844,7 @@ def execute_plan(
         )
         marker = ready_marker(target)
         if marker == READY_VERSION:
+            stage = "READY_RECOVERY_PRECHECK"
             watermark = _current_watermark(target)
             if (
                 watermark is None
@@ -839,18 +852,58 @@ def execute_plan(
                 or int(watermark["source_max_rank"]) < source.max_source_rank
             ):
                 raise RuntimeError("READY TTAB correspondent watermark is invalid")
+
+            stage = "READY_RECOVERY_COMPLETENESS"
             completeness = verify_completeness(target, source)
             if completeness["complete"] is not True:
                 raise RuntimeError(
                     "READY TTAB correspondent history is not complete"
                 )
+
+            serving_generation = int(watermark["serving_generation"])
+            stage = "READY_RECOVERY_BENCHMARK"
+            benchmark = benchmark_lookup(target, serving_generation)
+            _assert_plan_live(
+                plan,
+                client=target,
+                main_sha_getter=main_sha_getter,
+            )
+            if benchmark["passed"] is not True:
+                raise RuntimeError(
+                    "READY TTAB correspondent recovery benchmark failed"
+                )
+
+            stage = "READY_RECOVERY_RUNTIME_SMOKE"
+            smoke = execute_page(
+                TTABCorrespondentHistoryRequest(
+                    name=str(benchmark["normalized_name"]),
+                    page_size=10,
+                ),
+                client=accepted_us_target_read_client(),
+            )
+            if int(smoke.get("result_count") or 0) < 1:
+                raise RuntimeError(
+                    "READY TTAB correspondent recovery runtime smoke returned no fact"
+                )
+
             receipt = {
                 "version": RECEIPT_VERSION,
                 "status": "SUCCESS",
                 "replayed": True,
+                "verification_only": True,
                 "plan_sha256": plan_sha,
                 "implementation_sha": str(plan["implementation_sha"]),
+                "source_stats": asdict(source),
                 "completeness": completeness,
+                "benchmark": benchmark,
+                "runtime_smoke": {
+                    "normalized_name": smoke["normalized_name"],
+                    "result_count": smoke["result_count"],
+                    "semantics": smoke["semantics"],
+                },
+                "ready_marker": READY_VERSION,
+                "serving_generation": serving_generation,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             }
             _write_receipt(receipt_path, receipt)
             return receipt
