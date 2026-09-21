@@ -26,6 +26,7 @@ $script:HotUsPolicy = 'hot_us_only'
 $script:WarmCnDisk = 'warm_cn'
 $script:WarmCnPolicy = 'warm_cn_only'
 $script:ProductionHotRoot = 'D:\MarkOrbitData\production\clickhouse'
+$script:AcceptedSourceVolume = 'markorbit-data-engine_clickhouse_data'
 $script:RecommendedReserveRatio = 0.30
 $script:HardReserveRatio = 0.20
 $script:HotRequiredTables = @(
@@ -340,11 +341,18 @@ function Get-Decision(
     [object[]]$TargetPolicies,
     [object]$Backing,
     [object]$HotCnExt4,
+    [object]$HotUsExt4,
     [object]$WarmCnExt4,
     [object]$SourcePlacement
 ) {
     if ([string]$SourceHealth.status -ne 'healthy') {
         return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='RESTORE_CN_SOURCE_SERVING_HEALTH'; reason='CN_SOURCE_UNHEALTHY' }
+    }
+    if (
+        [string]$SourceHealth.data_mount.type -ne 'volume' -or
+        [string]$SourceHealth.data_mount.name -ne $script:AcceptedSourceVolume
+    ) {
+        return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='RESTORE_ACCEPTED_CN_SOURCE_VOLUME'; reason='CN_SOURCE_VOLUME_IDENTITY_DRIFTED' }
     }
     if ([string]$ApiBinding.state -ne 'RUNNING' -or [string]$ApiBinding.clickhouse_host -ne 'clickhouse') {
         return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='REVIEW_CN_SERVING_BINDING'; reason='CN_API_BINDING_UNEXPECTED' }
@@ -362,7 +370,11 @@ function Get-Decision(
         return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='RESTORE_ACCEPTED_TARGET_STORAGE_BASELINE'; reason='HOT_US_BASELINE_MISSING_OR_AMBIGUOUS' }
     }
     $hotUsPolicyDisks=@($hotUsPolicies[0].disks)
-    if ($hotUsPolicyDisks.Count -ne 1 -or [string]$hotUsPolicyDisks[0] -ne $script:HotUsDisk) {
+    if (
+        $hotUsPolicyDisks.Count -ne 1 -or
+        [string]$hotUsPolicyDisks[0] -ne $script:HotUsDisk -or
+        [string]$HotUsExt4.fstype -ne 'ext4'
+    ) {
         return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='RESTORE_ACCEPTED_TARGET_STORAGE_BASELINE'; reason='HOT_US_BASELINE_DRIFTED' }
     }
 
@@ -408,7 +420,13 @@ try {
         if ((Get-CnPlacementClass 'cn_goods_item_observation') -ne 'WARM_AFTER_SUMMARY_EQUIVALENCE') {
             throw 'CN Warm candidate classification drifted.'
         }
-        $source=[pscustomobject]@{ status='healthy' }
+        $source=[pscustomobject]@{
+            status='healthy'
+            data_mount=[pscustomobject]@{
+                type='volume'
+                name='markorbit-data-engine_clickhouse_data'
+            }
+        }
         $api=[pscustomobject]@{ state='RUNNING'; clickhouse_host='clickhouse' }
         $reserve=[pscustomobject]@{ state='READY' }
         $placement=[pscustomobject]@{
@@ -424,13 +442,13 @@ try {
             [pscustomobject]@{ policy_name='hot_us_only'; disks=@('hot_us') },
             [pscustomobject]@{ policy_name='warm_cn_only'; disks=@('warm_cn') }
         )
-        $absent=Get-Decision $source $api $reserve $baseDisks $basePolicies ([pscustomobject]@{ state='ABSENT' }) ([pscustomobject]@{ fstype=$null }) ([pscustomobject]@{ fstype='ext4' }) $placement
+        $absent=Get-Decision $source $api $reserve $baseDisks $basePolicies ([pscustomobject]@{ state='ABSENT' }) ([pscustomobject]@{ fstype=$null }) ([pscustomobject]@{ fstype='ext4' }) ([pscustomobject]@{ fstype='ext4' }) $placement
         if ($absent.decision -ne 'CN_HOT_PROVISIONING_PLAN_REQUIRED') {
             throw 'Absent CN Hot decision contract drifted.'
         }
         $acceptedDisks=@($baseDisks + [pscustomobject]@{ name='hot_cn'; path='/mnt/wsl/markorbit_prod_hot_cn/clickhouse-data/' })
         $acceptedPolicies=@($basePolicies + [pscustomobject]@{ policy_name='hot_cn_only'; disks=@('hot_cn') })
-        $accepted=Get-Decision $source $api $reserve $acceptedDisks $acceptedPolicies ([pscustomobject]@{ state='EXACT_ONE' }) ([pscustomobject]@{ fstype='ext4' }) ([pscustomobject]@{ fstype='ext4' }) $placement
+        $accepted=Get-Decision $source $api $reserve $acceptedDisks $acceptedPolicies ([pscustomobject]@{ state='EXACT_ONE' }) ([pscustomobject]@{ fstype='ext4' }) ([pscustomobject]@{ fstype='ext4' }) ([pscustomobject]@{ fstype='ext4' }) $placement
         if ($accepted.decision -ne 'CN_HOT_FOUNDATION_ACCEPTED') {
             throw 'Accepted CN Hot decision contract drifted.'
         }
@@ -482,6 +500,10 @@ WHERE policy_name IN ('hot_cn_only','hot_us_only','warm_cn_only')
 ORDER BY policy_name,volume_priority
 "@ 'target governed CN/US policies')
 
+    $hotUsRows=@($targetDisks | Where-Object { [string]$_.name -eq $script:HotUsDisk })
+    $hotUsPath=if($hotUsRows.Count -eq 1){[string]$hotUsRows[0].path}else{''}
+    $hotUsExt4=if($hotUsRows.Count -eq 1){Get-Ext4Fact $hotUsPath}else{[ordered]@{checked=$false;fstype=$null;source=$null;target=$null}}
+
     $hotCnRows=@($targetDisks | Where-Object { [string]$_.name -eq $script:HotCnDisk })
     $hotCnPath=if($hotCnRows.Count -eq 1){[string]$hotCnRows[0].path}else{''}
     $hotCnBacking=Resolve-HotCnBacking $vhdxInventory $hotCnPath
@@ -491,7 +513,7 @@ ORDER BY policy_name,volume_priority
     $warmCnPath=if($warmCnRows.Count -eq 1){[string]$warmCnRows[0].path}else{''}
     $warmCnExt4=if($warmCnRows.Count -eq 1){Get-Ext4Fact $warmCnPath}else{[ordered]@{checked=$false;fstype=$null;source=$null;target=$null}}
 
-    $decision=Get-Decision $sourceHealth $apiBinding $dReserve $targetDisks $targetPolicies $hotCnBacking $hotCnExt4 $warmCnExt4 $sourcePlacement
+    $decision=Get-Decision $sourceHealth $apiBinding $dReserve $targetDisks $targetPolicies $hotCnBacking $hotCnExt4 $hotUsExt4 $warmCnExt4 $sourcePlacement
     Assert-ExactMain 'post-query'
     $head=(git rev-parse HEAD).Trim().ToLowerInvariant()
 
@@ -525,6 +547,7 @@ ORDER BY policy_name,volume_priority
             cn_placement=$targetPlacement
             hot_cn_backing=$hotCnBacking
             hot_cn_ext4=$hotCnExt4
+            hot_us_ext4=$hotUsExt4
             warm_cn_ext4=$warmCnExt4
         }
         placement_contract=[ordered]@{
