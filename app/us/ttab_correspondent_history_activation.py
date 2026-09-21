@@ -17,7 +17,6 @@ from app.us.ttab_correspondent_history import (
     READY_VERSION,
     TARGET_TABLE,
     WATERMARK_TABLE,
-    current_serving_watermark,
     TTABCorrespondentHistoryRequest,
     execute_page,
 )
@@ -223,6 +222,33 @@ def _table_exists(client: Any, name: str) -> bool:
     return bool(rows and int(rows[0][0]) == 1)
 
 
+def _current_watermark(client: Any) -> dict[str, object] | None:
+    if not _table_exists(
+        client, "us_ttab_correspondent_mark_history_watermark"
+    ):
+        return None
+    rows = _rows(
+        client,
+        f"""
+        SELECT serving_generation, source_max_rank,
+               toString(source_package_id), updated_at
+        FROM {WATERMARK_TABLE}
+        WHERE ready_version={_sql_text(READY_VERSION)}
+        ORDER BY serving_generation DESC, updated_at DESC
+        LIMIT 1
+        """,
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    return {
+        "serving_generation": int(row[0]),
+        "source_max_rank": int(row[1]),
+        "source_package_id": str(row[2]),
+        "updated_at": row[3],
+    }
+
+
 def ready_marker(client: Any) -> str | None:
     if not _table_exists(client, "us_ttab_correspondent_mark_history_readiness"):
         return None
@@ -402,7 +428,7 @@ def prepare_plan(
     source = source_stats(target)
     lookup = lookup_stats(target)
     marker = ready_marker(target)
-    watermark = current_serving_watermark(target)
+    watermark = _current_watermark(target)
     if marker is not None:
         raise RuntimeError("prepare requires TTAB correspondent READY absent")
     visible = int(lookup["visible_rows"])
@@ -806,7 +832,7 @@ def execute_plan(
         )
         marker = ready_marker(target)
         if marker == READY_VERSION:
-            watermark = current_serving_watermark(target)
+            watermark = _current_watermark(target)
             if (
                 watermark is None
                 or int(watermark["serving_generation"]) < 1
@@ -896,10 +922,10 @@ def execute_plan(
             )
 
         stage = "WATERMARK"
-        watermark = current_serving_watermark(target)
+        watermark = _current_watermark(target)
         if watermark is None:
             target.command(_initial_watermark_sql(source))
-            watermark = current_serving_watermark(target)
+            watermark = _current_watermark(target)
         if (
             watermark is None
             or int(watermark["serving_generation"]) != 1
