@@ -17,6 +17,7 @@ def test_cn_hot_readiness_freezes_current_topology_contract() -> None:
     assert "$script:WarmCnDisk = 'warm_cn'" in text
     assert "$script:WarmCnPolicy = 'warm_cn_only'" in text
     assert "$script:ProductionHotRoot = 'D:\\MarkOrbitData\\production\\clickhouse'" in text
+    assert "$script:AcceptedSourceVolume = 'markorbit-data-engine_clickhouse_data'" in text
 
 
 def test_cn_hot_readiness_preserves_accepted_262_placement_contract() -> None:
@@ -77,6 +78,8 @@ def test_cn_hot_readiness_records_current_api_and_worker_binding() -> None:
     assert "Get-ServiceClickHouseBinding 'worker'" in text
     assert "from app.config import get_settings; print(get_settings().clickhouse_host)" in text
     assert "CN_API_BINDING_UNEXPECTED" in text
+    assert "CN_SOURCE_VOLUME_IDENTITY_DRIFTED" in text
+    assert "RESTORE_ACCEPTED_CN_SOURCE_VOLUME" in text
 
 
 def test_cn_hot_readiness_discovers_hot_cn_backing_without_fixed_filename() -> None:
@@ -96,6 +99,7 @@ def test_cn_hot_readiness_verifies_accepted_target_baselines() -> None:
     assert "HOT_US_BASELINE_DRIFTED" in text
     assert "$script:HotUsDisk = 'hot_us'" in text
     assert "$script:HotUsPolicy = 'hot_us_only'" in text
+    assert "[string]$HotUsExt4.fstype -ne 'ext4'" in text
     assert "WARM_CN_BASELINE_MISSING_OR_AMBIGUOUS" in text
     assert "WARM_CN_BASELINE_DRIFTED" in text
     assert "findmnt" in text
