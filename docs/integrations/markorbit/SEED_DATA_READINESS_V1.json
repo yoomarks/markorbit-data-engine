@@ -1,0 +1,195 @@
+{
+  "contract_version": "SEED_DATA_READINESS_V1",
+  "scope": "FIRST_CN_US_SEED_COHORTS",
+  "cross_repo_consumers": [
+    "yoomarks/markorbit#1396",
+    "yoomarks/markorbit#1417"
+  ],
+  "authority": "DATA_ENGINE_SOURCE_FACT_READINESS_ONLY",
+  "boundary": {
+    "cross_source_identity_owner": "BRAIN_ENTITY_RESOLUTION",
+    "workspace_business_truth_owner": "PRODUCT_WORKSPACE",
+    "data_engine_creates_customer_relationship": false,
+    "representation_implies_customer_relationship": false,
+    "marketplace_implies_ownership_or_valuation": false,
+    "corporate_status_implies_legal_succession": false
+  },
+  "status_definitions": {
+    "SUPPORTED_INDEXED": "Callable bounded indexed source-fact read is available.",
+    "SUPPORTED_BOUNDED_REVIEW": "Callable bounded source-fact read is available but review is required before any identity/business conclusion.",
+    "NOT_COVERED_NO_AUTHORIZED_SOURCE": "No authorized/frozen source adapter is available; consumers must not infer from display text or adjacent facts."
+  },
+  "jurisdictions": {
+    "CN": {
+      "first_seed_cohort_ready": true,
+      "required_v1": {
+        "agent_entry": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/cn/agents/by-name",
+            "/api/v1/cn/agents/{agent_code}"
+          ],
+          "facts": [
+            "exact current agent name",
+            "agent_code",
+            "entity_id",
+            "source_reference",
+            "currentness"
+          ]
+        },
+        "handled_trademarks": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/cn/entities/{entity_id}/trademarks"
+          ],
+          "facts": [
+            "OWNER/CO_OWNER/AGENT current+historical relationship summary",
+            "application_number",
+            "accepted watermark provenance"
+          ]
+        },
+        "selected_case_applicants": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/{jurisdiction}/cases/{case_key}/applicants"
+          ],
+          "hard_max_results": 100,
+          "facts": [
+            "current OWNER/CO_OWNER applicant_candidate_id",
+            "source_reference",
+            "case binding"
+          ],
+          "semantics": "no display-name inference"
+        },
+        "applicant_review": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
+            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
+            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}"
+          ],
+          "facts": [
+            "exact applicant source reference",
+            "bounded current portfolio",
+            "stale-source revalidation"
+          ]
+        },
+        "relationship_history": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/cn/cases/{application_number}/relationships"
+          ],
+          "facts": [
+            "OWNER/CO_OWNER/AGENT observation history",
+            "current/former derived state"
+          ],
+          "legal_effective_dates": false
+        }
+      },
+      "optional_strengtheners": {
+        "assignments_transfers": {
+          "status": "NOT_COVERED_NO_AUTHORIZED_SOURCE",
+          "required_for_first_seed_cohort": false
+        },
+        "corporate_registry": {
+          "status": "NOT_COVERED_NO_AUTHORIZED_SOURCE",
+          "required_for_first_seed_cohort": false
+        },
+        "marketplace_listings": {
+          "status": "NOT_COVERED_NO_AUTHORIZED_SOURCE",
+          "required_for_first_seed_cohort": false
+        }
+      }
+    },
+    "US": {
+      "first_seed_cohort_ready": true,
+      "required_v1": {
+        "attorney_entry": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/us/attorneys/by-name"
+          ],
+          "facts": [
+            "current official attorney-name matches",
+            "serial_number"
+          ],
+          "identity_resolution_claimed": false
+        },
+        "correspondent_history": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/us/correspondents/by-name/ttab-history"
+          ],
+          "facts": [
+            "direct official TTAB party-correspondent handled marks",
+            "party context",
+            "source package/rank provenance"
+          ],
+          "identity_resolution_claimed": false
+        },
+        "selected_case_applicants": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/{jurisdiction}/cases/{case_key}/applicants"
+          ],
+          "hard_max_results": 100,
+          "facts": [
+            "current applicant_candidate_id",
+            "source_reference",
+            "serial binding"
+          ],
+          "semantics": "no display-name inference"
+        },
+        "applicant_review": {
+          "status": "SUPPORTED_INDEXED",
+          "routes": [
+            "/api/v1/us/applicants/by-name",
+            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
+            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
+            "/api/v1/us/applicants/{applicant_candidate_id}/recorded-history",
+            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}"
+          ],
+          "facts": [
+            "exact applicant source reference",
+            "bounded current portfolio",
+            "Assignment/TTAB recorded history review bridge",
+            "stale-source revalidation"
+          ]
+        },
+        "assignments_transfers": {
+          "status": "SUPPORTED_BOUNDED_REVIEW",
+          "routes": [
+            "/api/v1/us/cases/{serial_number}/assignments",
+            "/api/v1/us/recorded-parties/by-name"
+          ],
+          "facts": [
+            "recorded Assignment facts",
+            "assignor/assignee counterparties"
+          ],
+          "legal_ownership_conclusion": false
+        },
+        "ttab_participation": {
+          "status": "SUPPORTED_BOUNDED_REVIEW",
+          "routes": [
+            "/api/v1/us/cases/{serial_number}/ttab",
+            "/api/v1/us/recorded-parties/by-name"
+          ],
+          "facts": [
+            "direct official TTAB party facts"
+          ],
+          "proceeding_outcome_conclusion": false
+        }
+      },
+      "optional_strengtheners": {
+        "corporate_registry": {
+          "status": "NOT_COVERED_NO_AUTHORIZED_SOURCE",
+          "required_for_first_seed_cohort": false
+        },
+        "marketplace_listings": {
+          "status": "NOT_COVERED_NO_AUTHORIZED_SOURCE",
+          "required_for_first_seed_cohort": false
+        }
+      }
+    }
+  }
+}
