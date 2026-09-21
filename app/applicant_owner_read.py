@@ -16,6 +16,7 @@ from app.discovery_contract import (
 
 APPLICANT_RESOURCE_KIND = "APPLICANT_IDENTITY_DISCOVERY"
 PORTFOLIO_RESOURCE_KIND = "APPLICANT_PORTFOLIO_DISCOVERY"
+CASE_APPLICANT_RESOURCE_KIND = "CASE_CURRENT_APPLICANT_DISCOVERY"
 APPLICANT_CANDIDATE_TYPE = "APPLICANT_IDENTITY"
 TRADEMARK_CANDIDATE_TYPE = "DISCOVERED_TRADEMARK"
 SOURCE_OWNER = "MARKORBIT_DATA_ENGINE"
@@ -43,6 +44,10 @@ class OwnerReadConflict(DiscoveryContractError):
 
 
 class OwnerReadUnavailable(RuntimeError):
+    pass
+
+
+class OwnerReadScopeExceeded(DiscoveryContractError):
     pass
 
 
@@ -204,6 +209,26 @@ def applicant_name_query(
         "ordering": ["applicant_candidate_id ASC"],
         "ranking_authority": "NONE",
         "limits": {"page_size": page_size, "max_results": 100},
+    }
+    return {**body, "query_hash": query_hash(body)}
+
+
+def case_applicants_query(
+    *, context: Mapping[str, str], jurisdiction: str, case_key: str,
+) -> dict[str, Any]:
+    if jurisdiction not in {"CN", "US"}:
+        raise OwnerReadInvalid("unsupported owner-read jurisdiction")
+    key = str(case_key or "").strip()
+    if not key or len(key) > 128:
+        raise OwnerReadInvalid("case key must contain 1 to 128 characters")
+    body = {
+        "contract_version": DISCOVERY_CONTRACT_VERSION,
+        "request_context": dict(context),
+        "jurisdiction": jurisdiction,
+        "input": {"kind": "EXACT_CASE_KEY", "value": key},
+        "ordering": ["applicant_candidate_id ASC"],
+        "ranking_authority": "NONE",
+        "limits": {"max_results": 100},
     }
     return {**body, "query_hash": query_hash(body)}
 
