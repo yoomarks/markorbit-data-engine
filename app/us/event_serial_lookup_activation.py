@@ -316,7 +316,12 @@ SETTINGS storage_policy = '{TARGET_STORAGE_POLICY}'
 """.strip()
 
 
-def _capacity_contract(client: Any) -> dict[str, object]:
+def _capacity_contract(
+    client: Any,
+    *,
+    remaining_rows: int | None = None,
+    total_rows: int | None = None,
+) -> dict[str, object]:
     disk = _rows(
         client,
         "SELECT free_space,total_space FROM system.disks WHERE name='hot_us'",
@@ -333,7 +338,14 @@ def _capacity_contract(client: Any) -> dict[str, object]:
         raise RuntimeError("accepted us_event_history storage policy drifted")
     source_bytes = int(table[0])
     estimated = max((source_bytes * 3) // 2, 1)
-    projected = int(disk[0]) - estimated
+    remaining_estimate = estimated
+    if remaining_rows is not None:
+        if total_rows is None or total_rows <= 0:
+            raise ValueError("capacity recovery requires positive total_rows")
+        remaining_estimate = (
+            estimated * max(int(remaining_rows), 0)
+        ) // int(total_rows)
+    projected = int(disk[0]) - remaining_estimate
     total = int(disk[1])
     if projected < int(total * MIN_FREE_RATIO_AFTER_ESTIMATE):
         raise RuntimeError("hot_us reserve would fall below 30%")
@@ -342,6 +354,7 @@ def _capacity_contract(client: Any) -> dict[str, object]:
         "hot_us_total_bytes": total,
         "source_table_bytes": source_bytes,
         "estimated_lookup_bytes_ceiling": estimated,
+        "remaining_lookup_bytes_ceiling": remaining_estimate,
         "projected_free_bytes": projected,
         "minimum_free_ratio_after_estimate": MIN_FREE_RATIO_AFTER_ESTIMATE,
     }
@@ -446,7 +459,14 @@ def prepare_plan(
             raise RuntimeError(
                 f"event gate prepare found partial or digest-mismatched prefix {expected.prefix}"
             )
-    capacity = _capacity_contract(target)
+    completed_rows = sum(
+        batch.rows for batch in batches if batch.prefix in completed_prefixes
+    )
+    capacity = _capacity_contract(
+        target,
+        remaining_rows=stats.qualifying_rows - completed_rows,
+        total_rows=stats.qualifying_rows,
+    )
     plan = {
         "version": PLAN_VERSION,
         "expected_main": main_sha,
