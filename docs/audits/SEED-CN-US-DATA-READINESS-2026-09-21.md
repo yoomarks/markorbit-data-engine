@@ -6,10 +6,10 @@ The first CN/US Agency Seed cohort is data-ready at the Data Engine read plane o
 
 The required V1 traversal is source-native and bounded:
 
-- CN: agent exact-name/current agent -> agent entity portfolio -> selected application -> current applicant/owner candidates -> exact applicant review -> bounded portfolio.
+- CN: agent exact-name/current agent -> agent entity portfolio -> selected application -> current applicant/owner candidates with case-bound source reference + stable entity_id -> bounded entity-first portfolio.
 - US: attorney/current or TTAB correspondent history -> selected serial -> current applicant candidates -> exact applicant review -> bounded portfolio / recorded Assignment+TTAB history.
 
-The case-to-applicant bridge deliberately prevents Lite from taking an owner display name from a trademark and re-running name search as if that reconstructed identity context.
+The case-to-applicant bridge deliberately prevents Lite from taking an owner display name from a trademark and re-running name search as if that reconstructed identity context. CN uses an exact case-bound applicant source reference plus stable entity_id because the subject-wide current/history path is the separately accepted entity-first portfolio; US uses its candidate-keyed canonical applicant source reference.
 
 ## Required vs optional
 
