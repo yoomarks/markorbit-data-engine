@@ -613,12 +613,6 @@ def test_cn_case_current_applicants_fails_closed_above_hard_bound():
 def test_us_case_current_applicants_returns_source_native_candidate(monkeypatch):
     _patch_us_epoch(monkeypatch)
     owner = _us_owner_row("90000001")
-    binding = {
-        "candidate_key": owner["candidate_key"],
-        "owner_keys": [owner["owner_key"]],
-        "binding_observed_at": owner["ingested_at"],
-    }
-
     def respond(sql: str):
         if "us_owner_current" in sql:
             return [owner]
