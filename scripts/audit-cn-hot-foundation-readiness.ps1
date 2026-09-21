@@ -356,6 +356,16 @@ function Get-Decision(
         return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='REVIEW_CN_PLACEMENT_EVIDENCE'; reason='NO_HOT_REQUIRED_SOURCE_BYTES' }
     }
 
+    $hotUsDisks=@($TargetDisks | Where-Object { [string]$_.name -eq $script:HotUsDisk })
+    $hotUsPolicies=@($TargetPolicies | Where-Object { [string]$_.policy_name -eq $script:HotUsPolicy })
+    if ($hotUsDisks.Count -ne 1 -or $hotUsPolicies.Count -ne 1) {
+        return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='RESTORE_ACCEPTED_TARGET_STORAGE_BASELINE'; reason='HOT_US_BASELINE_MISSING_OR_AMBIGUOUS' }
+    }
+    $hotUsPolicyDisks=@($hotUsPolicies[0].disks)
+    if ($hotUsPolicyDisks.Count -ne 1 -or [string]$hotUsPolicyDisks[0] -ne $script:HotUsDisk) {
+        return [ordered]@{ decision='CN_HOT_PLACEMENT_REVIEW_REQUIRED'; next_gate='RESTORE_ACCEPTED_TARGET_STORAGE_BASELINE'; reason='HOT_US_BASELINE_DRIFTED' }
+    }
+
     $warmDisks=@($TargetDisks | Where-Object { [string]$_.name -eq $script:WarmCnDisk })
     $warmPolicies=@($TargetPolicies | Where-Object { [string]$_.policy_name -eq $script:WarmCnPolicy })
     if ($warmDisks.Count -ne 1 -or $warmPolicies.Count -ne 1) {
@@ -406,8 +416,14 @@ try {
                 hot_required=[pscustomobject]@{ bytes=100L }
             }
         }
-        $baseDisks=@([pscustomobject]@{ name='warm_cn'; path='/warm-cn' })
-        $basePolicies=@([pscustomobject]@{ policy_name='warm_cn_only'; disks=@('warm_cn') })
+        $baseDisks=@(
+            [pscustomobject]@{ name='hot_us'; path='/hot-us' },
+            [pscustomobject]@{ name='warm_cn'; path='/warm-cn' }
+        )
+        $basePolicies=@(
+            [pscustomobject]@{ policy_name='hot_us_only'; disks=@('hot_us') },
+            [pscustomobject]@{ policy_name='warm_cn_only'; disks=@('warm_cn') }
+        )
         $absent=Get-Decision $source $api $reserve $baseDisks $basePolicies ([pscustomobject]@{ state='ABSENT' }) ([pscustomobject]@{ fstype=$null }) ([pscustomobject]@{ fstype='ext4' }) $placement
         if ($absent.decision -ne 'CN_HOT_PROVISIONING_PLAN_REQUIRED') {
             throw 'Absent CN Hot decision contract drifted.'
