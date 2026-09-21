@@ -21,6 +21,7 @@ from app.cn.agent_name_lookup import (
     CN_AGENT_NAME_LOOKUP_TABLE,
     agents_by_name,
 )
+from app.config import get_settings
 from app.db import clickhouse_client
 from app.read_performance_baseline import DEFAULT_QUERY_BUDGET
 
@@ -31,7 +32,7 @@ READY_COMPONENT = "CN_AGENT_NAME_LOOKUP"
 BENCHMARK_RUNS = 7
 SLO_P95_MS = 300.0
 DEFAULT_HTTP_BASE_URL = "http://127.0.0.1:8080"
-DEFAULT_API_KEY_ENV = "MARKORBIT_INTEGRATION_API_KEY"
+DEFAULT_API_KEY_ENV = "INTEGRATION_API_KEYS"
 _HEX = frozenset("0123456789abcdef")
 READ_SETTINGS = {**DEFAULT_QUERY_BUDGET, "max_threads": 1}
 
@@ -350,6 +351,14 @@ def http_smoke(
     }
 
 
+def _resolve_http_api_key(api_key_env: str) -> str | None:
+    raw = os.environ.get(api_key_env, "").strip()
+    if not raw and api_key_env == DEFAULT_API_KEY_ENV:
+        raw = str(get_settings().integration_api_keys or "").strip()
+    keys = tuple(key.strip() for key in raw.split(",") if key.strip())
+    return keys[0] if keys else None
+
+
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -390,11 +399,7 @@ def run_acceptance(
         str(sample["agent_code"]),
         str(sample["normalized_name"]),
     )
-    api_key = os.environ.get(api_key_env, "").strip() or None
-    if api_key and "," in api_key:
-        raise RuntimeError(
-            f"{api_key_env} must contain one bearer key, not a rotation list"
-        )
+    api_key = _resolve_http_api_key(api_key_env)
     smoke = http_runner(
         base_url,
         str(sample["normalized_name"]),
