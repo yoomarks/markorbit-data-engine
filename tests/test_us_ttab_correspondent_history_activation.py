@@ -169,3 +169,26 @@ def test_benchmark_sql_is_accepted_by_select_only_read_guard():
     assert rows
     assert client.sql.lstrip().startswith("SELECT ")
     assert not client.sql.lstrip().startswith("WITH ")
+
+
+def test_activation_watermark_read_uses_only_max_threads_budget():
+    class Result:
+        result_rows = [
+            (3, 4070700000000002992, "11111111-1111-1111-1111-111111111111", "now")
+        ]
+
+    class Client:
+        def __init__(self) -> None:
+            self.settings_seen: list[dict[str, object]] = []
+
+        def query(self, sql: str, *, settings: dict[str, object]):
+            self.settings_seen.append(settings)
+            if "system.tables" in sql:
+                return type("Exists", (), {"result_rows": [(1,)]})()
+            return Result()
+
+    client = Client()
+    watermark = gate._current_watermark(client)
+    assert watermark is not None
+    assert watermark["serving_generation"] == 3
+    assert all(settings == {"max_threads": 1} for settings in client.settings_seen)
