@@ -5,8 +5,9 @@ from typing import Any, Mapping
 
 from app.applicant_owner_read import (
     APPLICANT_CANDIDATE_TYPE, TRADEMARK_CANDIDATE_TYPE,
-    OwnerReadConflict, OwnerReadInvalid, OwnerReadUnavailable,
+    OwnerReadConflict, OwnerReadInvalid, OwnerReadScopeExceeded, OwnerReadUnavailable,
     applicant_name_cursor_state, applicant_name_query, applicant_query,
+    case_applicants_query,
     applicant_reference, applicant_revalidation_query, assert_exact_source_reference,
     max_observed, next_applicant_name_cursor, next_portfolio_cursor, page_payload,
     portfolio_cursor_state, request_context, sha256_ref, source_reference, source_snapshot,
@@ -26,6 +27,7 @@ TRADEMARK_PREFIX = "us:trademark:"
 TRADEMARK_SOURCE_PREFIX = "US_TRADEMARK:"
 READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 1_000_000, "read_overflow_mode": "throw"}
 MAX_APPLICANT_CONTRIBUTION_ROWS = 10_000
+MAX_CASE_APPLICANTS = 100
 
 @dataclass(frozen=True, slots=True)
 class OwnerReadResult:
@@ -330,6 +332,93 @@ def revalidate_applicant(
         engine_version=engine_version(),
     )
     _assert_same_epoch(before)
+    return OwnerReadResult("observed", payload)
+
+
+def current_applicants_for_case(
+    client: Any,
+    *,
+    workspace_id: str,
+    request_id: str,
+    serial_number: str,
+) -> OwnerReadResult:
+    context = request_context(workspace_id, request_id)
+    serial = str(serial_number or "").strip()
+    if not serial or len(serial) > 64:
+        raise OwnerReadInvalid("US serial number must contain 1 to 64 characters")
+
+    before = _guard_epoch()
+    bindings = _dict_rows(client.query(
+        f"""
+        SELECT candidate_key,
+               arraySort(groupUniqArray(owner_key)) AS owner_keys,
+               max(ingested_at) AS binding_observed_at
+        FROM {APPLICANT_INDEX_TABLE} FINAL
+        WHERE serial_number = {_sql_text(serial)}
+          AND is_deleted = 0
+        GROUP BY candidate_key
+        ORDER BY candidate_key
+        LIMIT {MAX_CASE_APPLICANTS + 1}
+        """,
+        settings=READ_SETTINGS,
+    ))
+    if len(bindings) > MAX_CASE_APPLICANTS:
+        raise OwnerReadScopeExceeded(
+            f"US case resolves to more than {MAX_CASE_APPLICANTS} current applicant candidates"
+        )
+    if not bindings:
+        _assert_same_epoch(before)
+        return OwnerReadResult("not_found", None)
+
+    results: list[dict[str, Any]] = []
+    observed: list[Any] = []
+    for binding in bindings:
+        candidate_key = str(binding.get("candidate_key") or "").strip()
+        rows = _candidate_rows(client, candidate_key)
+        if not rows:
+            raise OwnerReadUnavailable(
+                "US current case applicant binding has no candidate materialization"
+            )
+        source = _applicant_source(candidate_key, rows, before)
+        material = _applicant_material(candidate_key, rows)
+        candidate = _applicant_candidate(
+            applicant_candidate_id(candidate_key),
+            source,
+            material,
+            match_kind="CURRENT_TRADEMARK_BINDING",
+        )
+        observed.extend([source["observed_at"], binding.get("binding_observed_at")])
+        results.append({
+            **candidate,
+            "case_binding": {
+                "serial_number": serial,
+                "owner_keys": sorted(
+                    {str(key) for key in (binding.get("owner_keys") or [])}
+                ),
+                "state": "CURRENT_SOURCE_FACT",
+            },
+        })
+
+    _assert_same_epoch(before)
+    query = case_applicants_query(
+        context=context, jurisdiction="US", case_key=serial
+    )
+    snapshot = source_snapshot(_epoch_version(before), max_observed(observed))
+    payload = page_payload(
+        query=query,
+        snapshot=snapshot,
+        results=results,
+        next_cursor=None,
+        engine_version=engine_version(),
+    )
+    payload.update({
+        "review_required": True,
+        "identity_resolution_claimed": False,
+        "semantics": (
+            "EXACT_US_SERIAL_TO_CURRENT_APPLICANT_CANDIDATES;"
+            "SOURCE_NATIVE_NO_IDENTITY_OR_CUSTOMER_CONCLUSION"
+        ),
+    })
     return OwnerReadResult("observed", payload)
 
 
