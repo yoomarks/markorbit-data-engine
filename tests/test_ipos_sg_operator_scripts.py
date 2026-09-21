@@ -34,3 +34,38 @@ def test_ipos_sg_runbook_documents_accepted_production_state_root() -> None:
     text = RUNBOOK.read_text(encoding="utf-8")
     assert "RAW_DATA_PATH" in text
     assert r"F:\MarkOrbitData\raw\ipos_sg" in text
+
+
+def test_ipos_sg_run_enforces_cn_serving_regression_gate() -> None:
+    source = _script("run-ipos-sg.ps1")
+    assert "[switch]$ContractOnly" in source
+    assert "Get-CnServingSample" in source
+    assert "ORDER BY application_number LIMIT 1" in source
+    assert "Invoke-CnServingProbe" in source
+    assert "/api/health" in source
+    assert "/api/cn/cases/$encoded" in source
+    assert "Test-CnServingStable" in source
+    assert "production_refresh_latest.json" in source
+    assert "IPOS_SG_PRODUCTION_REFRESH_ACCEPTANCE_V1" in source
+    assert "credential_material_persisted = $false" in source
+    assert "recurring_schedule_enabled = $false" in source
+    assert "CN serving regression gate: PASS" in source
+
+
+def test_ipos_sg_run_never_persists_or_prints_api_key() -> None:
+    source = _script("run-ipos-sg.ps1")
+    assert "DATA_GOV_SG_API_KEY must be set" in source
+    assert "--env DATA_GOV_SG_API_KEY" in source
+    assert "Write-Host $env:DATA_GOV_SG_API_KEY" not in source
+    assert "DATA_GOV_SG_API_KEY =" not in source
+
+
+def test_ipos_sg_run_requires_clean_exact_main_for_production_refresh() -> None:
+    source = _script("run-ipos-sg.ps1")
+    assert "[string]$ExpectedMainSha = ''" in source
+    assert "Assert-ExactMain" in source
+    assert "git rev-parse HEAD" in source
+    assert "git rev-parse origin/main" in source
+    assert "git status --porcelain=v1" in source
+    assert "Working tree must be clean for the controlled Singapore production refresh." in source
+    assert "execution_main_sha = $executionMainSha" in source

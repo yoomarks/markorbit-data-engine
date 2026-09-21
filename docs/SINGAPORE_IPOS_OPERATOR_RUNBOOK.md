@@ -34,7 +34,15 @@ The operator records the DAG version and completed task sequence in success/fail
 
 ## One operator run
 
-`./scripts/run-ipos-sg.ps1` launches one Docker Compose one-shot worker and keeps that same worker alive across the complete operator chain:
+For a controlled production refresh, run from a clean checkout whose `HEAD` and local `origin/main` both equal the reviewed current main SHA:
+
+```powershell
+.\scripts\run-ipos-sg.ps1 -ExpectedMainSha <40-character-current-main-sha>
+```
+
+The wrapper fails before any SG provider request when `ExpectedMainSha`, `HEAD`, `origin/main`, or working-tree cleanliness do not match. The exact execution SHA is persisted in `acceptance/production_refresh_latest.json`.
+
+`./scripts/run-ipos-sg.ps1` then launches one Docker Compose one-shot worker and keeps that same worker alive across the complete operator chain:
 
 1. acquire the state-directory operator lease;
 2. run a fast read-only lifecycle-state preflight;
@@ -131,6 +139,19 @@ Important files include:
 - `acceptance/latest.json` — strict full-corpus acceptance evidence, including live/export row consistency;
 - `acceptance/operator_latest.json` — combined task/state/resource/source/corpus/postflight success receipt;
 - `acceptance/operator_failure_latest.json` — last handled operator failure, including task progress and with the configured API key redacted from the error string.
+
+## CN serving regression gate for controlled production refresh
+
+The production wrapper `scripts/run-ipos-sg.ps1` proves that a controlled SG refresh does not regress current CN serving:
+
+1. before any SG provider request, require `/api/health` to report API, PostgreSQL, and ClickHouse as `ok`;
+2. choose one deterministic current CN application from `cn_case_current` using bounded `ORDER BY application_number LIMIT 1`;
+3. fetch that case through the real host API `/api/cn/cases/{application_number}` and record a SHA-256 of the response;
+4. execute the authenticated SG operator cycle;
+5. probe the exact same CN case again and require the response SHA-256 and dependency health to remain unchanged;
+6. persist `acceptance/production_refresh_latest.json`, which binds the CN pre/post proof to the SHA-256 of `operator_latest.json` and includes compact SG lifecycle/content/schema/row/headroom/runtime fields.
+
+A pre-refresh CN failure prevents the SG cycle from starting. A post-refresh CN mismatch does not roll back already accepted SG source state; instead the wrapper writes a failed production-refresh receipt and blocks #341 acceptance pending review. The receipt contains no SG API key and recurring scheduling remains disabled.
 
 ## Production scheduling gate
 
