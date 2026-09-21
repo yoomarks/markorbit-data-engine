@@ -27,6 +27,7 @@ TRADEMARK_PREFIX = "us:trademark:"
 TRADEMARK_SOURCE_PREFIX = "US_TRADEMARK:"
 READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 1_000_000, "read_overflow_mode": "throw"}
 MAX_APPLICANT_CONTRIBUTION_ROWS = 10_000
+MAX_CASE_OWNER_ROWS = 1_000
 MAX_CASE_APPLICANTS = 100
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +336,25 @@ def revalidate_applicant(
     return OwnerReadResult("observed", payload)
 
 
+def _case_owner_rows(client: Any, serial: str) -> list[dict[str, Any]]:
+    rows = _dict_rows(client.query(
+        f"""
+        SELECT *
+        FROM markorbit_facts.us_owner_current FINAL
+        WHERE serial_number = {_sql_text(serial)}
+          AND is_deleted = 0
+        ORDER BY owner_key
+        LIMIT {MAX_CASE_OWNER_ROWS + 1}
+        """,
+        settings=READ_SETTINGS,
+    ))
+    if len(rows) > MAX_CASE_OWNER_ROWS:
+        raise OwnerReadScopeExceeded(
+            f"US case exceeds {MAX_CASE_OWNER_ROWS} current owner binding rows"
+        )
+    return rows
+
+
 def current_applicants_for_case(
     client: Any,
     *,
@@ -348,36 +368,40 @@ def current_applicants_for_case(
         raise OwnerReadInvalid("US serial number must contain 1 to 64 characters")
 
     before = _guard_epoch()
-    bindings = _dict_rows(client.query(
-        f"""
-        SELECT candidate_key,
-               arraySort(groupUniqArray(owner_key)) AS owner_keys,
-               max(ingested_at) AS binding_observed_at
-        FROM {APPLICANT_INDEX_TABLE} FINAL
-        WHERE serial_number = {_sql_text(serial)}
-          AND is_deleted = 0
-        GROUP BY candidate_key
-        ORDER BY candidate_key
-        LIMIT {MAX_CASE_APPLICANTS + 1}
-        """,
-        settings=READ_SETTINGS,
-    ))
-    if len(bindings) > MAX_CASE_APPLICANTS:
-        raise OwnerReadScopeExceeded(
-            f"US case resolves to more than {MAX_CASE_APPLICANTS} current applicant candidates"
-        )
-    if not bindings:
+    case_rows = _case_owner_rows(client, serial)
+    if not case_rows:
         _assert_same_epoch(before)
         return OwnerReadResult("not_found", None)
 
+    by_candidate: dict[str, list[dict[str, Any]]] = {}
+    for row in case_rows:
+        key = applicant_candidate_key(row)
+        by_candidate.setdefault(key, []).append(row)
+    if len(by_candidate) > MAX_CASE_APPLICANTS:
+        raise OwnerReadScopeExceeded(
+            f"US case resolves to more than {MAX_CASE_APPLICANTS} current applicant candidates"
+        )
+
     results: list[dict[str, Any]] = []
     observed: list[Any] = []
-    for binding in bindings:
-        candidate_key = str(binding.get("candidate_key") or "").strip()
+    for candidate_key in sorted(by_candidate):
+        exact_case_rows = by_candidate[candidate_key]
         rows = _candidate_rows(client, candidate_key)
         if not rows:
             raise OwnerReadUnavailable(
-                "US current case applicant binding has no candidate materialization"
+                "US current owner binding has no canonical candidate materialization"
+            )
+        case_owner_keys = {
+            str(row.get("owner_key") or "") for row in exact_case_rows
+        }
+        indexed_case_owner_keys = {
+            str(row.get("owner_key") or "")
+            for row in rows
+            if str(row.get("serial_number") or "") == serial
+        }
+        if case_owner_keys != indexed_case_owner_keys:
+            raise OwnerReadUnavailable(
+                "US current owner/candidate index binding drifted for selected serial"
             )
         source = _applicant_source(candidate_key, rows, before)
         material = _applicant_material(candidate_key, rows)
@@ -387,14 +411,17 @@ def current_applicants_for_case(
             material,
             match_kind="CURRENT_TRADEMARK_BINDING",
         )
-        observed.extend([source["observed_at"], binding.get("binding_observed_at")])
+        observed.extend(
+            [
+                source["observed_at"],
+                *[row.get("ingested_at") for row in exact_case_rows],
+            ]
+        )
         results.append({
             **candidate,
             "case_binding": {
                 "serial_number": serial,
-                "owner_keys": sorted(
-                    {str(key) for key in (binding.get("owner_keys") or [])}
-                ),
+                "owner_keys": sorted(case_owner_keys),
                 "state": "CURRENT_SOURCE_FACT",
             },
         })
@@ -414,8 +441,10 @@ def current_applicants_for_case(
     payload.update({
         "review_required": True,
         "identity_resolution_claimed": False,
+        "serial_resolution_index": "US_OWNER_CURRENT_NATIVE_SERIAL_KEY",
         "semantics": (
             "EXACT_US_SERIAL_TO_CURRENT_APPLICANT_CANDIDATES;"
+            "SERIAL_FIRST_OWNER_FACT_TO_CANONICAL_CANDIDATE_KEY;"
             "SOURCE_NATIVE_NO_IDENTITY_OR_CUSTOMER_CONCLUSION"
         ),
     })

@@ -613,15 +613,9 @@ def test_cn_case_current_applicants_fails_closed_above_hard_bound():
 def test_us_case_current_applicants_returns_source_native_candidate(monkeypatch):
     _patch_us_epoch(monkeypatch)
     owner = _us_owner_row("90000001")
-    binding = {
-        "candidate_key": owner["candidate_key"],
-        "owner_keys": [owner["owner_key"]],
-        "binding_observed_at": owner["ingested_at"],
-    }
-
     def respond(sql: str):
-        if "GROUP BY candidate_key" in sql:
-            return [binding]
+        if "us_owner_current" in sql:
+            return [owner]
         if "us_applicant_candidate_current" in sql:
             return [owner]
         return []
@@ -654,4 +648,22 @@ def test_us_case_current_applicants_returns_source_native_candidate(monkeypatch)
         "value": "90000001",
     }
     assert result.payload["identity_resolution_claimed"] is False
+
+
+def test_us_case_current_applicants_fails_closed_above_candidate_bound(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    rows = [
+        _us_owner_row("90000001", address=f"{index} Main St")
+        for index in range(us_owner.MAX_CASE_APPLICANTS + 1)
+    ]
+
+    with pytest.raises(OwnerReadScopeExceeded, match="more than 100"):
+        us_owner.current_applicants_for_case(
+            FakeClient(
+                lambda sql: rows if "us_owner_current" in sql else []
+            ),
+            workspace_id="ws-1",
+            request_id="req-case-us-bound",
+            serial_number="90000001",
+        )
 
