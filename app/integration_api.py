@@ -16,6 +16,11 @@ from app.cn.agent_name_lookup import (
     AgentNameLookupUnavailable,
     agents_by_name,
 )
+from app.cn.agent_exact_read import (
+    AgentExactReadInvalid,
+    AgentExactReadUnavailable,
+    read_agent_exact,
+)
 from app.cn.entity_trademark_portfolio import (
     EntityPortfolioInvalid,
     EntityPortfolioRequest,
@@ -272,6 +277,38 @@ def integration_cn_agents_by_name(
         payload=payload,
     )
     if payload["match_count"] == 0:
+        result["fact_state"] = "not_found"
+    return result
+
+
+@router.get("/cn/agents/{agent_code}")
+def integration_cn_agent_exact(agent_code: str) -> dict[str, Any]:
+    try:
+        payload = read_agent_exact(clickhouse_client(), agent_code)
+    except AgentExactReadInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "DATA_ENGINE_AGENT_EXACT_READ_INVALID",
+                "message": str(exc),
+                "retryable": False,
+            },
+        ) from exc
+    except AgentExactReadUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "DATA_ENGINE_AGENT_EXACT_READ_UNAVAILABLE",
+                "message": str(exc),
+                "retryable": True,
+            },
+        ) from exc
+    result = _envelope(
+        jurisdiction="CN",
+        resource_kind="AGENT_SOURCE_RECORD",
+        payload=payload,
+    )
+    if payload["record"] is None:
         result["fact_state"] = "not_found"
     return result
 
