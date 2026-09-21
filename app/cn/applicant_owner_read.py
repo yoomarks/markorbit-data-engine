@@ -6,8 +6,9 @@ import uuid
 
 from app.applicant_owner_read import (
     APPLICANT_CANDIDATE_TYPE, TRADEMARK_CANDIDATE_TYPE,
-    OwnerReadConflict, OwnerReadInvalid, OwnerReadUnavailable,
+    OwnerReadConflict, OwnerReadInvalid, OwnerReadScopeExceeded, OwnerReadUnavailable,
     applicant_query, applicant_reference, applicant_revalidation_query,
+    case_applicants_query,
     assert_exact_source_reference, max_observed, next_portfolio_cursor,
     page_payload, portfolio_cursor_state, request_context, sha256_ref,
     source_reference, source_snapshot,
@@ -20,6 +21,7 @@ APPLICANT_SOURCE_PREFIX = "CN_APPLICANT:"
 TRADEMARK_PREFIX = "cn:trademark:"
 TRADEMARK_SOURCE_PREFIX = "CN_TRADEMARK:"
 PARTY_ROLES = ("OWNER", "CO_OWNER")
+MAX_CASE_APPLICANTS = 100
 READ_SETTINGS = {"max_threads": 1, "max_rows_to_read": 5_000_000, "read_overflow_mode": "throw"}
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +167,96 @@ def read_applicant_exact(
         query=query, snapshot=snapshot, results=[candidate], next_cursor=None,
         engine_version=engine_version(),
     ))
+
+
+def current_applicants_for_case(
+    *,
+    client: Any,
+    workspace_id: str,
+    request_id: str,
+    application_number: str,
+    serving_epoch_getter: Any = _serving_epoch,
+) -> OwnerReadResult:
+    context = request_context(workspace_id, request_id)
+    application = str(application_number or "").strip()
+    if not application or len(application) > 128:
+        raise OwnerReadInvalid("CN application number must contain 1 to 128 characters")
+
+    before = _guard_epoch(serving_epoch_getter)
+    source_version = _epoch_version(before)
+    roles = ",".join(_sql_text(role) for role in PARTY_ROLES)
+    bindings = _dict_rows(client.query(f"""
+        SELECT toString(entity_id) AS entity_id,
+               arraySort(groupUniqArray(role)) AS roles,
+               max(ingested_at) AS binding_observed_at
+        FROM markorbit_facts.cn_case_party_current FINAL
+        WHERE is_deleted = 0 AND is_current = 1
+          AND role IN ({roles})
+          AND application_number = {_sql_text(application)}
+        GROUP BY entity_id
+        ORDER BY entity_id
+        LIMIT {MAX_CASE_APPLICANTS + 1}
+    """, settings=READ_SETTINGS))
+    if len(bindings) > MAX_CASE_APPLICANTS:
+        raise OwnerReadScopeExceeded(
+            f"CN case resolves to more than {MAX_CASE_APPLICANTS} current applicant candidates"
+        )
+    if not bindings:
+        after = _guard_epoch(serving_epoch_getter)
+        if after != before:
+            raise OwnerReadUnavailable("CN serving epoch changed during case applicant read")
+        return OwnerReadResult("not_found", None)
+
+    results: list[dict[str, Any]] = []
+    observed: list[Any] = []
+    for binding in bindings:
+        entity_id = str(binding.get("entity_id") or "").strip()
+        candidate_rows = _candidate_rows(client, entity_id)
+        if not candidate_rows:
+            raise OwnerReadUnavailable(
+                "CN current case applicant binding has no candidate materialization"
+            )
+        candidate, _source = _candidate_projection(
+            entity_id=entity_id,
+            rows=candidate_rows,
+            source_version=source_version,
+        )
+        observed.extend(
+            [candidate["source_reference"]["observed_at"], binding.get("binding_observed_at")]
+        )
+        results.append({
+            **candidate,
+            "match_kind": "CURRENT_TRADEMARK_BINDING",
+            "case_binding": {
+                "application_number": application,
+                "roles": sorted({str(role) for role in (binding.get("roles") or [])}),
+                "state": "CURRENT_SOURCE_FACT",
+            },
+        })
+
+    after = _guard_epoch(serving_epoch_getter)
+    if after != before:
+        raise OwnerReadUnavailable("CN serving epoch changed during case applicant read")
+    query = case_applicants_query(
+        context=context, jurisdiction="CN", case_key=application
+    )
+    snapshot = source_snapshot(source_version, max_observed(observed))
+    payload = page_payload(
+        query=query,
+        snapshot=snapshot,
+        results=results,
+        next_cursor=None,
+        engine_version=engine_version(),
+    )
+    payload.update({
+        "review_required": True,
+        "identity_resolution_claimed": False,
+        "semantics": (
+            "EXACT_CN_APPLICATION_TO_CURRENT_OWNER_CANDIDATES;"
+            "SOURCE_NATIVE_NO_IDENTITY_OR_CUSTOMER_CONCLUSION"
+        ),
+    })
+    return OwnerReadResult("observed", payload)
 
 
 def _portfolio_bindings(
