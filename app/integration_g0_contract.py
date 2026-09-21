@@ -155,6 +155,19 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "semantics": "current_official_name_facts_no_identity_resolution",
                 },
                 {
+                    "path": "/api/v1/cn/agents/{agent_code}",
+                    "query": {},
+                    "pagination": "none",
+                    "read_model": "CN_AGENT_CURRENT",
+                    "index_key": "agent_code",
+                    "semantics": (
+                        "exact_current_official_agent_code_fact_with_entity_pointer;"
+                        "no_identity_resolution_or_customer_or_appointment_conclusion"
+                    ),
+                    "read_only": True,
+                    "business_state_owned_outside_data_engine": True,
+                },
+                {
                     "path": "/api/v1/cn/entities/{entity_id}/trademarks",
                     "query": {
                         "role": {
