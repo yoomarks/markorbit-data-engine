@@ -169,4 +169,3 @@ def test_benchmark_sql_is_accepted_by_select_only_read_guard():
     assert rows
     assert client.sql.lstrip().startswith("SELECT ")
     assert not client.sql.lstrip().startswith("WITH ")
-
