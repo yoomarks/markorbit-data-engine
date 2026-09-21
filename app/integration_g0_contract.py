@@ -51,6 +51,7 @@ def g0_contract_descriptor() -> dict[str, Any]:
                     "hard_bounds": {"max_results": 100},
                     "semantics": (
                         "exact_case_to_current_source_native_applicant_candidates;"
+                        "cn_case_bound_source_reference_us_canonical_candidate_reference;"
                         "review_required_no_identity_or_customer_conclusion"
                     ),
                     "read_only": True,

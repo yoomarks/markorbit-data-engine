@@ -541,25 +541,25 @@ def test_us_exact_trademark_rejects_wrong_applicant_binding(monkeypatch):
             },
         )
 
-def test_cn_case_current_applicants_returns_source_native_candidate():
+def test_cn_case_current_applicants_returns_case_bound_source_candidate():
     party = _cn_party_row("10001")
-    binding = {
-        "entity_id": CN_ENTITY_ID,
-        "roles": ["OWNER"],
-        "binding_observed_at": _ts(1),
-    }
-
-    def respond(sql: str):
-        if "GROUP BY entity_id" in sql:
-            return [binding]
-        if "cn_case_party_current" in sql:
-            return [party]
-        return []
+    party["entity_id"] = CN_ENTITY_ID
 
     result = cn_owner.current_applicants_for_case(
-        client=FakeClient(respond),
+        client=FakeClient(
+            lambda sql: [party] if "cn_case_party_current" in sql else []
+        ),
         workspace_id="ws-1",
         request_id="req-case-cn",
+        application_number="10001",
+        serving_epoch_getter=_cn_epoch,
+    )
+    repeat = cn_owner.current_applicants_for_case(
+        client=FakeClient(
+            lambda sql: [party] if "cn_case_party_current" in sql else []
+        ),
+        workspace_id="ws-1",
+        request_id="req-case-cn-repeat",
         application_number="10001",
         serving_epoch_getter=_cn_epoch,
     )
@@ -568,13 +568,21 @@ def test_cn_case_current_applicants_returns_source_native_candidate():
     assert result.payload is not None
     candidate = result.payload["results"][0]
     assert candidate["applicant_candidate_id"] == CN_CANDIDATE_ID
-    assert candidate["source_reference"] == _cn_source(CN_ENTITY_ID, [party])
+    assert candidate["entity_id"] == CN_ENTITY_ID
+    assert candidate["source_reference"]["source_id"] == (
+        f"CN_APPLICANT_CASE:{CN_ENTITY_ID}:10001"
+    )
+    assert candidate["source_reference"]["source_kind"] == "APPLICANT_IDENTITY"
+    assert candidate["source_reference"] == repeat.payload["results"][0]["source_reference"]
     assert candidate["match_kind"] == "CURRENT_TRADEMARK_BINDING"
     assert candidate["case_binding"] == {
         "application_number": "10001",
         "roles": ["OWNER"],
         "state": "CURRENT_SOURCE_FACT",
     }
+    assert result.payload["source_reference_scope"] == (
+        "EXACT_CASE_CURRENT_APPLICANT_BINDING"
+    )
     assert result.payload["query"]["input"] == {
         "kind": "EXACT_CASE_KEY",
         "value": "10001",
@@ -583,18 +591,17 @@ def test_cn_case_current_applicants_returns_source_native_candidate():
 
 
 def test_cn_case_current_applicants_fails_closed_above_hard_bound():
-    bindings = [
-        {
-            "entity_id": f"00000000-0000-0000-0000-{index:012d}",
-            "roles": ["OWNER"],
-            "binding_observed_at": _ts(1),
-        }
-        for index in range(cn_owner.MAX_CASE_APPLICANTS + 1)
-    ]
+    rows = []
+    for index in range(cn_owner.MAX_CASE_APPLICANTS + 1):
+        row = dict(_cn_party_row("10001"))
+        row["entity_id"] = f"00000000-0000-0000-0000-{index:012d}"
+        row["relation_key"] = f"{index:064x}"
+        rows.append(row)
+
     with pytest.raises(OwnerReadScopeExceeded, match="more than 100"):
         cn_owner.current_applicants_for_case(
             client=FakeClient(
-                lambda sql: bindings if "GROUP BY entity_id" in sql else []
+                lambda sql: rows if "cn_case_party_current" in sql else []
             ),
             workspace_id="ws-1",
             request_id="req-case-cn-bound",
