@@ -459,6 +459,16 @@ def prepare_plan(
         raise RuntimeError(
             "TTAB correspondent pre-READY watermark does not match complete generation 1"
         )
+    plan_watermark = (
+        None
+        if watermark is None
+        else {
+            "serving_generation": int(watermark["serving_generation"]),
+            "source_max_rank": int(watermark["source_max_rank"]),
+            "source_package_id": str(watermark["source_package_id"]),
+            "updated_at": str(watermark["updated_at"]),
+        }
+    )
     plan = {
         "version": PLAN_VERSION,
         "expected_main": main_sha,
@@ -467,7 +477,7 @@ def prepare_plan(
         "target_precondition": {
             "lookup": lookup,
             "ready_marker": marker,
-            "watermark": watermark,
+            "watermark": plan_watermark,
         },
         "capacity_contract": capacity_contract(target, source),
         "target_schema": {
