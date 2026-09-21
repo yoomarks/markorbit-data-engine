@@ -4,7 +4,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $schemaPaths = @(
     (Join-Path $repoRoot "database/clickhouse/init/010_us_ttab_m10.sql"),
     (Join-Path $repoRoot "database/clickhouse/init/011_us_ttab_m11_real_rawxml.sql"),
-    (Join-Path $repoRoot "database/clickhouse/init/012_us_ttab_m12_official_bulk.sql")
+    (Join-Path $repoRoot "database/clickhouse/init/012_us_ttab_m12_official_bulk.sql"),
+    (Join-Path $repoRoot "database/clickhouse/init/025_us_ttab_correspondent_mark_history.sql")
 )
 foreach ($schemaPath in $schemaPaths) {
     if (-not (Test-Path $schemaPath)) {

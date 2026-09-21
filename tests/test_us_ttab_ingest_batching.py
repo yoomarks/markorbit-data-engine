@@ -28,6 +28,7 @@ class _FakeClickHouse:
         rows: list[tuple[object, ...]] | None = None,
     ) -> None:
         self.queries: list[str] = []
+        self.commands: list[str] = []
         self.collision_query = collision_query
         self.rows = rows or []
 
@@ -46,6 +47,9 @@ class _FakeClickHouse:
                 ]
             )
         return _Result(self.rows if self.collision_query is None else [])
+
+    def command(self, sql: str) -> None:
+        self.commands.append(sql)
 
 
 class _FakePublisher:
@@ -240,3 +244,103 @@ def test_collision_batch_is_not_published(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     assert len(fake_ch.queries) == 2
     assert _FakePublisher.instances[0].added == 500
+
+
+def test_cleanup_rolls_back_failed_published_generation_before_base_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    fake_ch = _FakeClickHouse(rows=[(1,)])
+    monkeypatch.setattr(ingest, "clickhouse_client", lambda: fake_ch)
+    monkeypatch.setattr(ingest, "history_ready", lambda _client: True)
+    watermarks = iter(
+        [
+            {
+                "serving_generation": 5,
+                "source_package_id": str(package_id),
+            },
+            {
+                "serving_generation": 4,
+                "source_package_id": "22222222-2222-4222-8222-222222222222",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        ingest,
+        "current_serving_watermark",
+        lambda _client: next(watermarks),
+    )
+
+    ingest.cleanup_ttab_package_outputs(package_id)
+
+    assert ingest.WATERMARK_TABLE in fake_ch.commands[0]
+    assert "serving_generation = 5" in fake_ch.commands[0]
+    assert ingest.TARGET_TABLE in fake_ch.commands[1]
+    assert "serving_generation = 5" in fake_ch.commands[1]
+    first_base_delete = next(
+        index
+        for index, command in enumerate(fake_ch.commands)
+        if any(table in command for table in ingest.TABLE_COLUMNS)
+    )
+    assert first_base_delete > 1
+
+
+def test_cleanup_only_removes_uncommitted_generation_for_other_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    fake_ch = _FakeClickHouse(rows=[(1,)])
+    monkeypatch.setattr(ingest, "clickhouse_client", lambda: fake_ch)
+    monkeypatch.setattr(ingest, "history_ready", lambda _client: True)
+    monkeypatch.setattr(
+        ingest,
+        "current_serving_watermark",
+        lambda _client: {
+            "serving_generation": 4,
+            "source_package_id": "22222222-2222-4222-8222-222222222222",
+        },
+    )
+
+    ingest.cleanup_ttab_package_outputs(package_id)
+
+    assert ingest.WATERMARK_TABLE not in fake_ch.commands[0]
+    assert ingest.TARGET_TABLE in fake_ch.commands[0]
+    assert "serving_generation > 4" in fake_ch.commands[0]
+
+
+def test_ingest_commits_watermark_before_success_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_ch = _FakeClickHouse()
+    _patch_ingest(monkeypatch, fake_ch, 1)
+    source = tmp_path / "ttab.zip"
+    source.write_bytes(b"x")
+
+    events: list[str] = []
+    monkeypatch.setattr(ingest, "history_ready", lambda _client: True)
+    monkeypatch.setattr(ingest, "next_serving_generation", lambda _client: 2)
+    monkeypatch.setattr(
+        ingest,
+        "advance_serving_watermark",
+        lambda *_args, **_kwargs: events.append("watermark"),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "update_package_status",
+        lambda _package_id, status, **_kwargs: events.append(f"status:{status}"),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "finish_job_run",
+        lambda _run_id, status, **_kwargs: events.append(f"job:{status}"),
+    )
+
+    ingest.ingest_ttab_package(
+        "11111111-1111-4111-8111-111111111111",
+        source,
+        tmp_path,
+    )
+
+    assert events.index("watermark") < events.index("status:SUCCESS")
+    assert events.index("status:SUCCESS") < events.index("job:SUCCESS")

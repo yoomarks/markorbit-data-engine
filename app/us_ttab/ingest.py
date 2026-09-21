@@ -16,6 +16,15 @@ from app.us_ttab.migrations import ensure_ttab_schema
 from app.us_ttab.model import TTABProceedingBundle
 from app.us_ttab.parser import iter_ttab_bundles
 from app.us.publisher import stable_hash
+from app.us.ttab_correspondent_history import (
+    READY_VERSION,
+    TARGET_TABLE,
+    WATERMARK_TABLE,
+    advance_serving_watermark,
+    current_serving_watermark,
+    history_ready,
+    next_serving_generation,
+)
 from app.us_ttab.publisher import TABLE_COLUMNS, TTABBatchPublisher
 
 
@@ -43,6 +52,55 @@ def _iter_source(path: Path) -> Iterator[tuple[str, TTABProceedingBundle]]:
 def cleanup_ttab_package_outputs(package_id: uuid.UUID) -> None:
     client = clickhouse_client()
     package = str(package_id)
+
+    target_exists = client.query(
+        """
+        SELECT count()
+        FROM system.tables
+        WHERE database = 'markorbit_facts'
+          AND name = 'us_ttab_correspondent_mark_history'
+        """
+    ).result_rows
+    if (
+        target_exists
+        and int(target_exists[0][0]) == 1
+        and history_ready(client)
+    ):
+        watermark = current_serving_watermark(client)
+        if watermark is not None:
+            current_generation = int(watermark["serving_generation"])
+            current_package = str(watermark["source_package_id"])
+            if current_package == package:
+                client.command(
+                    f"ALTER TABLE {WATERMARK_TABLE} DELETE "
+                    f"WHERE ready_version = '{READY_VERSION}' "
+                    f"AND serving_generation = {current_generation} "
+                    f"AND source_package_id = toUUID('{package}') "
+                    "SETTINGS mutations_sync = 1"
+                )
+                client.command(
+                    f"ALTER TABLE {TARGET_TABLE} DELETE "
+                    f"WHERE source_package_id = toUUID('{package}') "
+                    f"AND serving_generation = {current_generation} "
+                    "SETTINGS mutations_sync = 1"
+                )
+                rolled_back = current_serving_watermark(client)
+                if (
+                    rolled_back is None
+                    or int(rolled_back["serving_generation"])
+                    != current_generation - 1
+                ):
+                    raise RuntimeError(
+                        "US TTAB correspondent watermark rollback failed"
+                    )
+            else:
+                client.command(
+                    f"ALTER TABLE {TARGET_TABLE} DELETE "
+                    f"WHERE source_package_id = toUUID('{package}') "
+                    f"AND serving_generation > {current_generation} "
+                    "SETTINGS mutations_sync = 1"
+                )
+
     for table in TABLE_COLUMNS:
         client.command(
             f"ALTER TABLE {table} DELETE WHERE source_package_id = toUUID('{package}') "
@@ -256,13 +314,10 @@ def ingest_ttab_package(
             "snapshot_at": snapshot_at.isoformat(),
         },
     )
-    publisher = TTABBatchPublisher(
-        clickhouse_client(),
-        package_id=package_uuid,
-        source_kind=str(meta["package_kind"]),
-        source_snapshot_at=snapshot_at,
-        source_rank=int(meta["source_rank"]),
-    )
+    target_client = clickhouse_client()
+    correspondent_history_enabled = history_ready(target_client)
+    correspondent_serving_generation: int | None = None
+    publisher: TTABBatchPublisher | None = None
     seen: set[str] = set()
     source_files: set[str] = set()
     malformed_serials: set[str] = set()
@@ -280,6 +335,8 @@ def ingest_ttab_package(
             pending, snapshot_at, package_uuid, meta, same_historical_batch
         )
         historical_batch_duplicate_count += skipped
+        if publisher is None:
+            raise RuntimeError("US TTAB publisher is not initialized")
         for source_file, bundle in publishable:
             publisher.add(bundle, source_file)
         pending.clear()
@@ -292,6 +349,20 @@ def ingest_ttab_package(
             )
         if retrying:
             cleanup_ttab_package_outputs(package_uuid)
+
+        if correspondent_history_enabled:
+            correspondent_serving_generation = next_serving_generation(
+                target_client
+            )
+        publisher = TTABBatchPublisher(
+            target_client,
+            package_id=package_uuid,
+            source_kind=str(meta["package_kind"]),
+            source_snapshot_at=snapshot_at,
+            source_rank=int(meta["source_rank"]),
+            include_correspondent_history=correspondent_history_enabled,
+            correspondent_serving_generation=correspondent_serving_generation,
+        )
 
         for source_file, bundle in _iter_source(path):
             number = bundle.proceeding.proceeding_number
@@ -320,6 +391,8 @@ def ingest_ttab_package(
         flush_pending()
         if not seen:
             raise RuntimeError("US TTAB source produced no proceeding records")
+        if publisher is None:
+            raise RuntimeError("US TTAB publisher is not initialized")
         row_counts = publisher.close()
         totals: dict[str, object] = {
             "schema_version": TTAB_SCHEMA_VERSION,
@@ -342,6 +415,13 @@ def ingest_ttab_package(
             "semantics": TTAB_SEMANTICS,
         }
         archived = _archive(path, raw_root)
+        if correspondent_history_enabled:
+            advance_serving_watermark(
+                target_client,
+                serving_generation=int(correspondent_serving_generation or 0),
+                source_rank=int(meta["source_rank"]),
+                source_package_id=package_uuid,
+            )
         update_package_status(
             str(package_uuid),
             "SUCCESS",

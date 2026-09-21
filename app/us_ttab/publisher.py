@@ -6,6 +6,14 @@ from typing import Any
 import uuid
 
 from app.us.publisher import stable_hash
+from app.us.ttab_correspondent_history import (
+    TARGET_COLUMNS as CORRESPONDENT_HISTORY_COLUMNS,
+    TARGET_TABLE as CORRESPONDENT_HISTORY_TABLE,
+    correspondent_observation_key,
+    correspondent_relationship_key,
+    mark_identity,
+    normalize_correspondent_name,
+)
 from app.us_ttab.model import TTABProceedingBundle
 
 
@@ -115,6 +123,96 @@ def bundle_rows(
     return rows
 
 
+def correspondent_mark_rows(
+    bundle: TTABProceedingBundle,
+    *,
+    package_id: uuid.UUID,
+    source_kind: str,
+    source_snapshot_at: datetime,
+    source_file: str,
+    source_rank: int,
+    serving_generation: int,
+) -> list[list[Any]]:
+    if serving_generation <= 0:
+        raise ValueError("serving_generation must be positive")
+    p = bundle.proceeding
+    properties_by_party: dict[tuple[str, int], list[tuple[Any, str]]] = {}
+    for item in bundle.properties:
+        if not (str(item.serial_number or "").strip() or str(item.registration_number or "").strip()):
+            continue
+        property_key = _key(
+            item.party_side,
+            item.party_ordinal,
+            item.ordinal,
+            item.source_property_id,
+            item.serial_number,
+            item.registration_number,
+            item.trademark_gid,
+            item.mark_text,
+            item.mark_explanation,
+        )
+        properties_by_party.setdefault((item.party_side, int(item.party_ordinal)), []).append(
+            (item, property_key)
+        )
+
+    rows: list[list[Any]] = []
+    for party in bundle.parties:
+        raw_name = str(party.correspondent_name or "").strip()
+        if not raw_name:
+            continue
+        try:
+            normalized_name = normalize_correspondent_name(raw_name)
+        except ValueError:
+            continue
+        party_key = _key(party.side, party.ordinal, party.party_id, party.party_name)
+        for item, property_key in properties_by_party.get(
+            (party.side, int(party.ordinal)), []
+        ):
+            identity = mark_identity(item.serial_number, item.registration_number)
+            relationship_key = correspondent_relationship_key(
+                normalized_name,
+                p.proceeding_number,
+                party.side,
+                int(party.ordinal),
+                item.serial_number,
+                item.registration_number,
+            )
+            observation_key = correspondent_observation_key(
+                package_id,
+                p.proceeding_number,
+                party_key,
+                property_key,
+                normalized_name,
+            )
+            rows.append(
+                [
+                    observation_key,
+                    relationship_key,
+                    normalized_name,
+                    raw_name,
+                    party.correspondent_organization,
+                    p.proceeding_number,
+                    party.side,
+                    int(party.ordinal),
+                    party.party_name,
+                    party.role,
+                    party_key,
+                    property_key,
+                    identity,
+                    item.serial_number,
+                    item.registration_number,
+                    item.mark_text,
+                    source_kind,
+                    source_snapshot_at,
+                    source_file,
+                    package_id,
+                    source_rank,
+                    serving_generation,
+                ]
+            )
+    return rows
+
+
 class TTABBatchPublisher:
     def __init__(
         self,
@@ -125,6 +223,8 @@ class TTABBatchPublisher:
         source_snapshot_at: datetime,
         source_rank: int,
         batch_size: int = 500,
+        include_correspondent_history: bool = False,
+        correspondent_serving_generation: int | None = None,
     ) -> None:
         self.client = client
         self.package_id = package_id
@@ -132,8 +232,20 @@ class TTABBatchPublisher:
         self.source_snapshot_at = source_snapshot_at
         self.source_rank = source_rank
         self.batch_size = batch_size
+        self.include_correspondent_history = include_correspondent_history
+        self.correspondent_serving_generation = correspondent_serving_generation
+        if include_correspondent_history and (
+            correspondent_serving_generation is None
+            or correspondent_serving_generation <= 0
+        ):
+            raise ValueError(
+                "correspondent_serving_generation is required when history is enabled"
+            )
         self.buffers: dict[str, list[list[Any]]] = {table: [] for table in TABLE_COLUMNS}
         self.counts: dict[str, int] = {table: 0 for table in TABLE_COLUMNS}
+        self.correspondent_history_buffer: list[list[Any]] = []
+        if include_correspondent_history:
+            self.counts[CORRESPONDENT_HISTORY_TABLE] = 0
         self.proceeding_count = 0
 
     def add(self, bundle: TTABProceedingBundle, source_file: str) -> None:
@@ -147,6 +259,20 @@ class TTABBatchPublisher:
         )
         for table, values in rows.items():
             self.buffers[table].extend(values)
+        if self.include_correspondent_history:
+            self.correspondent_history_buffer.extend(
+                correspondent_mark_rows(
+                    bundle,
+                    package_id=self.package_id,
+                    source_kind=self.source_kind,
+                    source_snapshot_at=self.source_snapshot_at,
+                    source_file=source_file,
+                    source_rank=self.source_rank,
+                    serving_generation=int(
+                        self.correspondent_serving_generation or 0
+                    ),
+                )
+            )
         self.proceeding_count += 1
         if self.proceeding_count % self.batch_size == 0:
             self.flush()
@@ -157,6 +283,16 @@ class TTABBatchPublisher:
                 self.client.insert(table, rows, column_names=TABLE_COLUMNS[table])
                 self.counts[table] += len(rows)
                 rows.clear()
+        if self.include_correspondent_history and self.correspondent_history_buffer:
+            self.client.insert(
+                CORRESPONDENT_HISTORY_TABLE,
+                self.correspondent_history_buffer,
+                column_names=CORRESPONDENT_HISTORY_COLUMNS,
+            )
+            self.counts[CORRESPONDENT_HISTORY_TABLE] += len(
+                self.correspondent_history_buffer
+            )
+            self.correspondent_history_buffer.clear()
 
     def close(self) -> dict[str, int]:
         self.flush()
