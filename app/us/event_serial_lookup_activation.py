@@ -833,7 +833,14 @@ def execute_plan(
                 raise RuntimeError("event serial lookup schema did not become visible")
 
         batches = _frozen_batches(plan)
-        completed_rows = 0
+        precondition = dict(plan.get("target_precondition") or {})
+        frozen_completed = {
+            str(prefix)
+            for prefix in list(precondition.get("completed_prefixes") or [])
+        }
+        completed_rows = sum(
+            batch.rows for batch in batches if batch.prefix in frozen_completed
+        )
         for expected in batches:
             stage = f"BATCH_{expected.prefix}"
             _assert_plan_live(
@@ -851,6 +858,13 @@ def execute_plan(
                 total_rows=source.qualifying_rows,
             )
             observed = _batch_stats(target, expected.prefix)
+            if expected.prefix in frozen_completed:
+                if not _batch_matches(observed, expected):
+                    raise RuntimeError(
+                        f"event recovery completed prefix {expected.prefix} drifted"
+                    )
+                batch_summary["skipped_complete_prefixes"].append(expected.prefix)
+                continue
             if expected.rows == 0:
                 if not _batch_matches(observed, expected):
                     raise RuntimeError(

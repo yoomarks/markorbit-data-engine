@@ -78,8 +78,10 @@ def _plan() -> dict[str, object]:
             "operation": "CREATE_INSERT_BATCHED_PREFIX_ONLY",
         },
     }
-def _write_plan(path: Path) -> str:
+def _write_plan(path: Path, *, completed_prefixes: list[str] | None = None) -> str:
     plan = _plan()
+    if completed_prefixes is not None:
+        plan["target_precondition"]["completed_prefixes"] = completed_prefixes
     sha = gate._sha256(plan)
     path.write_text(
         json.dumps({"plan": plan, "plan_sha256": sha}),
@@ -344,6 +346,57 @@ def test_partial_prefix_refuses_automatic_resume(tmp_path: Path, monkeypatch) ->
             receipt_path=tmp_path / "receipt.json",
             client=target,
         )
+    assert target.commands == []
+
+
+def test_recovery_capacity_starts_after_frozen_completed_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "plan.json"
+    sha = _write_plan(path, completed_prefixes=["00"])
+    target = FakeTarget()
+    target.schema_created = True
+    target.inserted.add("00")
+    _patch_common(monkeypatch, target)
+    monkeypatch.setattr(gate, "_batch_stats", _batch_observer(target))
+    remaining: list[int] = []
+
+    def record_capacity(*_args, **kwargs) -> None:
+        remaining.append(int(kwargs["remaining_rows"]))
+
+    monkeypatch.setattr(gate, "_assert_remaining_capacity", record_capacity)
+    result = gate.execute_plan(
+        path,
+        plan_sha=sha,
+        authority=gate.authority_token(sha),
+        receipt_path=tmp_path / "receipt.json",
+        client=target,
+    )
+
+    assert result["status"] == "SUCCESS"
+    assert remaining[:2] == [2, 2]
+    assert result["batch_summary"]["skipped_complete_prefixes"][0] == "00"
+
+
+def test_recovery_frozen_completed_prefix_drift_fails_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "plan.json"
+    sha = _write_plan(path, completed_prefixes=["00"])
+    target = FakeTarget()
+    target.schema_created = True
+    _patch_common(monkeypatch, target)
+    monkeypatch.setattr(gate, "_batch_stats", _batch_observer(target))
+
+    with pytest.raises(RuntimeError, match="recovery completed prefix 00 drifted"):
+        gate.execute_plan(
+            path,
+            plan_sha=sha,
+            authority=gate.authority_token(sha),
+            receipt_path=tmp_path / "receipt.json",
+            client=target,
+        )
+
     assert target.commands == []
 
 
