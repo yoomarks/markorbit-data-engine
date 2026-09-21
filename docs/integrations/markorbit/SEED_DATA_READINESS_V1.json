@@ -56,23 +56,24 @@
           "hard_max_results": 100,
           "facts": [
             "current OWNER/CO_OWNER applicant_candidate_id",
-            "source_reference",
+            "stable entity_id",
+            "exact case-bound APPLICANT_IDENTITY source_reference",
             "case binding"
           ],
-          "semantics": "no display-name inference"
+          "semantics": "no display-name inference",
+          "source_reference_scope": "EXACT_CASE_CURRENT_APPLICANT_BINDING"
         },
         "applicant_review": {
           "status": "SUPPORTED_INDEXED",
           "routes": [
-            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
-            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
-            "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/trademarks/{trademark_candidate_id}"
+            "/api/v1/cn/entities/{entity_id}/trademarks"
           ],
           "facts": [
-            "exact applicant source reference",
-            "bounded current portfolio",
-            "stale-source revalidation"
-          ]
+            "stable entity_id from selected-case applicant review",
+            "bounded current + historical entity portfolio",
+            "accepted watermark provenance"
+          ],
+          "semantics": "subject-wide traversal uses entity-first portfolio; it does not rebuild identity from display name"
         },
         "relationship_history": {
           "status": "SUPPORTED_INDEXED",
