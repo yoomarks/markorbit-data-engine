@@ -5,7 +5,12 @@ import pytest
 
 import app.cn.applicant_owner_read as cn_owner
 import app.us.applicant_owner_read as us_owner
-from app.applicant_owner_read import OwnerReadConflict, OwnerReadInvalid, OwnerReadUnavailable
+from app.applicant_owner_read import (
+    OwnerReadConflict,
+    OwnerReadInvalid,
+    OwnerReadScopeExceeded,
+    OwnerReadUnavailable,
+)
 from app.discovery_contract import DiscoveryCursorError
 from app.us.applicant_candidate_backfill_control import USApplicantServingEpoch
 from app.us.applicant_candidate_index import applicant_candidate_key
@@ -535,3 +540,111 @@ def test_us_exact_trademark_rejects_wrong_applicant_binding(monkeypatch):
                 "observed_at": "2026-09-05T01:02:03Z",
             },
         )
+
+def test_cn_case_current_applicants_returns_source_native_candidate():
+    party = _cn_party_row("10001")
+    binding = {
+        "entity_id": CN_ENTITY_ID,
+        "roles": ["OWNER"],
+        "binding_observed_at": _ts(1),
+    }
+
+    def respond(sql: str):
+        if "GROUP BY entity_id" in sql:
+            return [binding]
+        if "cn_case_party_current" in sql:
+            return [party]
+        return []
+
+    result = cn_owner.current_applicants_for_case(
+        client=FakeClient(respond),
+        workspace_id="ws-1",
+        request_id="req-case-cn",
+        application_number="10001",
+        serving_epoch_getter=_cn_epoch,
+    )
+
+    assert result.fact_state == "observed"
+    assert result.payload is not None
+    candidate = result.payload["results"][0]
+    assert candidate["applicant_candidate_id"] == CN_CANDIDATE_ID
+    assert candidate["source_reference"] == _cn_source(CN_ENTITY_ID, [party])
+    assert candidate["match_kind"] == "CURRENT_TRADEMARK_BINDING"
+    assert candidate["case_binding"] == {
+        "application_number": "10001",
+        "roles": ["OWNER"],
+        "state": "CURRENT_SOURCE_FACT",
+    }
+    assert result.payload["query"]["input"] == {
+        "kind": "EXACT_CASE_KEY",
+        "value": "10001",
+    }
+    assert result.payload["identity_resolution_claimed"] is False
+
+
+def test_cn_case_current_applicants_fails_closed_above_hard_bound():
+    bindings = [
+        {
+            "entity_id": f"00000000-0000-0000-0000-{index:012d}",
+            "roles": ["OWNER"],
+            "binding_observed_at": _ts(1),
+        }
+        for index in range(cn_owner.MAX_CASE_APPLICANTS + 1)
+    ]
+    with pytest.raises(OwnerReadScopeExceeded, match="more than 100"):
+        cn_owner.current_applicants_for_case(
+            client=FakeClient(
+                lambda sql: bindings if "GROUP BY entity_id" in sql else []
+            ),
+            workspace_id="ws-1",
+            request_id="req-case-cn-bound",
+            application_number="10001",
+            serving_epoch_getter=_cn_epoch,
+        )
+
+
+def test_us_case_current_applicants_returns_source_native_candidate(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    owner = _us_owner_row("90000001")
+    binding = {
+        "candidate_key": owner["candidate_key"],
+        "owner_keys": [owner["owner_key"]],
+        "binding_observed_at": owner["ingested_at"],
+    }
+
+    def respond(sql: str):
+        if "GROUP BY candidate_key" in sql:
+            return [binding]
+        if "us_applicant_candidate_current" in sql:
+            return [owner]
+        return []
+
+    result = us_owner.current_applicants_for_case(
+        FakeClient(respond),
+        workspace_id="ws-1",
+        request_id="req-case-us",
+        serial_number="90000001",
+    )
+
+    assert result.fact_state == "observed"
+    assert result.payload is not None
+    candidate = result.payload["results"][0]
+    expected_source = us_owner._applicant_source(
+        owner["candidate_key"], [owner], _us_epoch()
+    )
+    assert candidate["applicant_candidate_id"] == (
+        f"us:applicant:{owner['candidate_key']}"
+    )
+    assert candidate["source_reference"] == expected_source
+    assert candidate["match_kind"] == "CURRENT_TRADEMARK_BINDING"
+    assert candidate["case_binding"] == {
+        "serial_number": "90000001",
+        "owner_keys": [owner["owner_key"]],
+        "state": "CURRENT_SOURCE_FACT",
+    }
+    assert result.payload["query"]["input"] == {
+        "kind": "EXACT_CASE_KEY",
+        "value": "90000001",
+    }
+    assert result.payload["identity_resolution_claimed"] is False
+
