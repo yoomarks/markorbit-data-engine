@@ -92,13 +92,15 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "correspondent_historical_portfolio",
                 "jurisdictions": ["US"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "Direct official TTAB party-correspondent observations are linked to the "
-                    "same party's TTAB trademark properties in an exact-name-first bounded read "
-                    "model. The model excludes TTAB interlocutory/staff attorneys and does not "
-                    "claim cross-source identity or continuing representation. Production READY "
-                    "and benchmark acceptance are tracked by #788."
+                    "Direct official TTAB party-correspondent observations are production-backed "
+                    "under US_TTAB_CORRESPONDENT_MARK_HISTORY_READY_V1 and linked to the same "
+                    "party's TTAB trademark properties in an exact-name-first bounded read model. "
+                    "The model excludes TTAB interlocutory/staff attorneys and does not claim "
+                    "cross-source identity or continuing representation. Production gate #788 "
+                    "completed with source/target completeness, bounded benchmark, and runtime "
+                    "smoke acceptance."
                 ),
             },
             {
