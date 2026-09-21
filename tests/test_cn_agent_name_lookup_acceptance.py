@@ -19,6 +19,34 @@ SOURCE = acceptance.ProjectionStats(
 )
 
 
+def test_http_api_key_uses_first_configured_rotation_key(monkeypatch) -> None:
+    monkeypatch.setenv(acceptance.DEFAULT_API_KEY_ENV, "  first-key  , second-key ")
+
+    assert acceptance._resolve_http_api_key(acceptance.DEFAULT_API_KEY_ENV) == "first-key"
+
+
+def test_http_api_key_falls_back_to_same_dotenv_backed_settings(monkeypatch) -> None:
+    monkeypatch.delenv(acceptance.DEFAULT_API_KEY_ENV, raising=False)
+
+    class Settings:
+        integration_api_keys = "settings-key-a,settings-key-b"
+
+    monkeypatch.setattr(acceptance, "get_settings", lambda: Settings())
+
+    assert acceptance._resolve_http_api_key(acceptance.DEFAULT_API_KEY_ENV) == "settings-key-a"
+
+
+def test_custom_http_api_key_env_does_not_fall_back_to_integration_settings(monkeypatch) -> None:
+    monkeypatch.delenv("CUSTOM_SMOKE_KEY", raising=False)
+
+    class Settings:
+        integration_api_keys = "must-not-be-used"
+
+    monkeypatch.setattr(acceptance, "get_settings", lambda: Settings())
+
+    assert acceptance._resolve_http_api_key("CUSTOM_SMOKE_KEY") is None
+
+
 def test_projection_audit_requires_exact_source_lookup_binding(monkeypatch) -> None:
     monkeypatch.setattr(acceptance, "_source_stats", lambda _client: SOURCE)
     monkeypatch.setattr(acceptance, "_lookup_stats", lambda _client: SOURCE)
