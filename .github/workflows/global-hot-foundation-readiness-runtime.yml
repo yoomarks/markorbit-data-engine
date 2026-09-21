@@ -1,0 +1,36 @@
+name: Global Hot Foundation Readiness Contract
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/audit-global-hot-foundation-readiness.ps1'
+      - 'tests/test_global_hot_foundation_readiness_contract.py'
+      - '.github/workflows/global-hot-foundation-readiness-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute read-only contract mode under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Contract must execute under Windows PowerShell 5.1.'
+          }
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\audit-global-hot-foundation-readiness.ps1 -ExpectedMainSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $output -join [Environment]::NewLine
+          if ($text -notmatch 'GLOBAL_HOT_FOUNDATION_READINESS_CONTRACT_PASS') {
+            throw 'Contract marker missing.'
+          }
