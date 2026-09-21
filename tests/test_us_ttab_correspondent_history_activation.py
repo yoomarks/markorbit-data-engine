@@ -141,3 +141,31 @@ def test_prepare_contract_does_not_authorize_mutation(tmp_path: Path):
         plan["acceptance"]["indexed_historical_relationship_p95_ms"]
         == 400.0
     )
+
+
+def test_benchmark_sql_is_accepted_by_select_only_read_guard():
+    class Client:
+        def __init__(self) -> None:
+            self.sql = ""
+
+        def query(self, sql: str, *, settings: dict[str, object]):
+            self.sql = sql
+            return type(
+                "Result",
+                (),
+                {
+                    "result_rows": [
+                        ("91234567", "SERIAL:90123456", "b" * 64)
+                    ]
+                },
+            )()
+
+    client = Client()
+    _elapsed_ms, rows = gate._page_benchmark(
+        client,
+        "jane q. counsel",
+        1,
+    )
+    assert rows
+    assert client.sql.lstrip().startswith("SELECT ")
+    assert not client.sql.lstrip().startswith("WITH ")
