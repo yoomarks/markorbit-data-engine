@@ -1,0 +1,29 @@
+name: Self-hosted MarkOrbit Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/self-hosted-markorbit-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Verify MarkOrbit host shape only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = Test-Path -LiteralPath 'D:\yoomarks\markorbit-data-engine' -PathType Container
+          $sg = Test-Path -LiteralPath 'F:\MarkOrbitData\raw\ipos_sg' -PathType Container
+          $e = Test-Path -LiteralPath 'E:\MarkOrbitData\production\clickhouse' -PathType Container
+          Write-Host "repo_present=$repo"
+          Write-Host "sg_state_present=$sg"
+          Write-Host "e_clickhouse_root_present=$e"
+          if (-not ($repo -and $sg -and $e)) {
+            throw 'Runner is not the accepted MarkOrbit production host shape.'
+          }
+          Write-Host 'MARKORBIT_HOST_SHAPE_PASS'
