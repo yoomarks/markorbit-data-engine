@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.cn.applicant_owner_read import (
+    current_applicants_for_case as cn_current_applicants_for_case,
     read_applicant_exact as cn_read_applicant_exact,
     read_portfolio as cn_read_applicant_portfolio,
     read_trademark_exact as cn_read_trademark_exact,
@@ -74,6 +75,7 @@ from app.us.ttab_correspondent_history import (
     execute_page as execute_us_ttab_correspondent_history_page,
 )
 from app.us.applicant_owner_read import (
+    current_applicants_for_case as us_current_applicants_for_case,
     discover_applicants_by_name as us_discover_applicants_by_name,
     read_portfolio as us_read_applicant_portfolio,
     revalidate_applicant as us_read_applicant_exact,
@@ -844,6 +846,43 @@ def integration_us_applicants_by_name(
     return owner_envelope(
         jurisdiction="US", resource_kind="APPLICANT_IDENTITY_DISCOVERY",
         fact_state=result.fact_state, payload=result.payload,
+    )
+
+
+_CASE_APPLICANT_QUERY_FIELDS = {"requester_workspace_id"}
+
+
+@router.get("/{jurisdiction}/cases/{case_key}/applicants")
+def integration_case_current_applicants(
+    request: Request,
+    jurisdiction: str,
+    case_key: str,
+    requester_workspace_id: Annotated[str, Query(min_length=1, max_length=512)],
+) -> dict[str, Any]:
+    reject_unknown_query(request, _CASE_APPLICANT_QUERY_FIELDS)
+    code = _owner_jurisdiction(jurisdiction)
+    try:
+        if code == "CN":
+            result = cn_current_applicants_for_case(
+                client=clickhouse_client(),
+                workspace_id=requester_workspace_id,
+                request_id=request_id_from_request(request),
+                application_number=case_key,
+            )
+        else:
+            result = us_current_applicants_for_case(
+                accepted_us_target_read_client(),
+                workspace_id=requester_workspace_id,
+                request_id=request_id_from_request(request),
+                serial_number=case_key,
+            )
+    except OWNER_READ_EXCEPTIONS as exc:
+        raise owner_read_http_error(exc) from exc
+    return owner_envelope(
+        jurisdiction=code,
+        resource_kind="CASE_CURRENT_APPLICANT_DISCOVERY",
+        fact_state=result.fact_state,
+        payload=result.payload,
     )
 
 

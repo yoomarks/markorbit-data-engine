@@ -25,6 +25,7 @@ def _request(path: str, query: str = "") -> Request:
 def test_owner_read_routes_are_get_only_and_g0_declared():
     paths = {
         "/api/v1/us/applicants/by-name",
+        "/api/v1/{jurisdiction}/cases/{case_key}/applicants",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}",
         "/api/v1/{jurisdiction}/applicants/{applicant_candidate_id}/portfolio",
         "/api/v1/us/applicants/{applicant_candidate_id}/recorded-history",
@@ -215,3 +216,42 @@ def test_us_applicant_recorded_history_bridges_without_identity_claim(monkeypatc
         "externalActionAuthorized": False,
     }
     assert "NOT_CROSS_SOURCE_IDENTITY_RESOLUTION" in payload["semantics"]
+
+def test_case_current_applicant_route_delegates_without_name_inference(monkeypatch):
+    captured = {}
+    result = SimpleNamespace(
+        fact_state="observed",
+        payload={"results": [{"applicant_candidate_id": "us:applicant:" + "a" * 64}]},
+    )
+
+    def fake_read(client, **kwargs):
+        captured["client"] = client
+        captured.update(kwargs)
+        return result
+
+    sentinel = object()
+    monkeypatch.setattr(
+        integration_api, "accepted_us_target_read_client", lambda: sentinel
+    )
+    monkeypatch.setattr(
+        integration_api, "us_current_applicants_for_case", fake_read
+    )
+
+    body = integration_api.integration_case_current_applicants(
+        request=_request(
+            "/api/v1/us/cases/90000001/applicants",
+            "requester_workspace_id=ws-1",
+        ),
+        jurisdiction="us",
+        case_key="90000001",
+        requester_workspace_id="ws-1",
+    )
+
+    assert captured["client"] is sentinel
+    assert captured["workspace_id"] == "ws-1"
+    assert captured["request_id"] == "hop-request-1"
+    assert captured["serial_number"] == "90000001"
+    assert body["resource_kind"] == "CASE_CURRENT_APPLICANT_DISCOVERY"
+    assert body["fact_state"] == "observed"
+    assert body["legal_conclusion"] is False
+

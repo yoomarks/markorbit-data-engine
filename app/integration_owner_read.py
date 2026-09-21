@@ -7,6 +7,7 @@ from app.applicant_owner_read import (
     PORTFOLIO_RESOURCE_KIND,
     OwnerReadConflict,
     OwnerReadInvalid,
+    OwnerReadScopeExceeded,
     OwnerReadUnavailable,
     source_reference,
 )
@@ -112,6 +113,11 @@ def owner_read_http_error(exc: Exception) -> HTTPException:
                 "retryable": False,
             },
         )
+    if isinstance(exc, OwnerReadScopeExceeded):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "DATA_ENGINE_OWNER_READ_SCOPE_EXCEEDED", "message": str(exc), "retryable": False},
+        )
     if isinstance(exc, OwnerReadInvalid):
         return HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -132,6 +138,7 @@ def resource_kind_for_operation(operation: str) -> str:
 OWNER_READ_EXCEPTIONS = (
     OwnerReadConflict,
     OwnerReadInvalid,
+    OwnerReadScopeExceeded,
     OwnerReadUnavailable,
     DiscoveryCursorError,
 )

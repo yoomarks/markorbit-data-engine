@@ -31,6 +31,28 @@
         "admin_detail_exposed": false
       },
       {
+        "path": "/api/v1/{jurisdiction}/cases/{case_key}/applicants",
+        "jurisdictions": [
+          "CN",
+          "US"
+        ],
+        "query": {
+          "requester_workspace_id": {
+            "type": "string",
+            "required": true,
+            "max_length": 512
+          }
+        },
+        "pagination": "bounded_limit_no_cursor",
+        "snapshot": "QUIESCENT_DURABLE_SERVING_EPOCH",
+        "hard_bounds": {
+          "max_results": 100
+        },
+        "semantics": "exact_case_to_current_source_native_applicant_candidates;review_required_no_identity_or_customer_conclusion",
+        "read_only": true,
+        "business_state_owned_outside_data_engine": true
+      },
+      {
         "path": "/api/v1/us/applicants/by-name",
         "jurisdictions": [
           "US"

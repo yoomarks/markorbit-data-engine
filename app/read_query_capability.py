@@ -80,6 +80,18 @@ def read_query_capability_contract() -> dict[str, Any]:
                 ),
             },
             {
+                "id": "case_current_applicant_review",
+                "jurisdictions": ["CN", "US"],
+                "state": "SUPPORTED_INDEXED",
+                "notes": (
+                    "Exact application/serial keys resolve to current source-native applicant "
+                    "candidates with a hard 100-candidate ceiling and the same applicant "
+                    "source_reference used by owner-read portfolio APIs. No display-name inference, "
+                    "cross-source identity, customer relationship, or legal ownership conclusion "
+                    "is created."
+                ),
+            },
+            {
                 "id": "agent_attorney_name_resolve",
                 "jurisdictions": ["US"],
                 "state": "SUPPORTED_INDEXED_EXACT_NAME",
