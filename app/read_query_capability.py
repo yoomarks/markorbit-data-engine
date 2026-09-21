@@ -155,11 +155,12 @@ def read_query_capability_contract() -> dict[str, Any]:
             {
                 "id": "trademark_event_timeline",
                 "jurisdictions": ["US"],
-                "state": "IMPLEMENTED_REQUIRES_PRODUCTION_BACKFILL",
+                "state": "SUPPORTED_INDEXED",
                 "notes": (
-                    "The serial-keyed official-event read model is implemented, but the accepted "
-                    "US target has not yet completed governed bounded backfill, READY acceptance, "
-                    "and production benchmark. Runtime fails closed until that gate completes."
+                    "The serial-keyed official USPTO event read model is production-accepted under "
+                    "US_EVENT_SERIAL_LOOKUP_READY_V1 with complete governed source coverage and "
+                    "bounded indexed lookup. Events are objective official facts and are not a "
+                    "legal-status or substantive-rights conclusion."
                 ),
             },
             {
