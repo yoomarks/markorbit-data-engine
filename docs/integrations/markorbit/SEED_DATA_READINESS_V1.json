@@ -135,11 +135,13 @@
           ],
           "hard_max_results": 100,
           "facts": [
+            "exact serial resolved from native serial-keyed current owner facts",
             "current applicant_candidate_id",
-            "source_reference",
+            "canonical applicant source_reference",
             "serial binding"
           ],
-          "semantics": "no display-name inference"
+          "semantics": "no display-name inference",
+          "serial_resolution_index": "us_owner_current ORDER BY (serial_number, owner_key)"
         },
         "applicant_review": {
           "status": "SUPPORTED_INDEXED",
