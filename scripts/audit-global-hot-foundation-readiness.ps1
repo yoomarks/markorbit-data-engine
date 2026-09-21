@@ -124,6 +124,13 @@ function Get-TargetVersion {
     return (@($version.lines) -join '').Trim()
 }
 
+function Get-OptionalPropertyValue([object]$Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 function Get-DriveFact([string]$DriveLetter) {
     $volume = Get-Volume -DriveLetter $DriveLetter -ErrorAction Stop
     $partition = Get-Partition -DriveLetter $DriveLetter -ErrorAction Stop
@@ -137,7 +144,7 @@ function Get-DriveFact([string]$DriveLetter) {
         disk_number = [int]$disk.Number
         friendly_name = [string]$disk.FriendlyName
         bus_type = [string]$disk.BusType
-        media_type = [string]$disk.MediaType
+        media_type = [string](Get-OptionalPropertyValue $disk 'MediaType')
     }
 }
 
