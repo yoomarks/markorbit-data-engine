@@ -192,4 +192,3 @@ def test_activation_watermark_read_uses_only_max_threads_budget():
     assert watermark is not None
     assert watermark["serving_generation"] == 3
     assert all(settings == {"max_threads": 1} for settings in client.settings_seen)
-
