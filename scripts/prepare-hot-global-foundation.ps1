@@ -187,7 +187,7 @@ function New-ProposedConfig([string]$CurrentText,[string]$OutputPath) {
     $disks=$storage.disks
     $policies=$storage.policies
     if($null -eq $disks -or $null -eq $policies){throw 'Target config lacks disks or policies.'}
-    if($null -ne $disks.hot_global -or $null -ne $policies.hot_global_only){throw 'Target config already contains hot_global identity.'}
+    if($null -ne $disks.SelectSingleNode('hot_global') -or $null -ne $policies.SelectSingleNode('hot_global_only')){throw 'Target config already contains hot_global identity.'}
 
     $diskNode=$xml.CreateElement('hot_global')
     $typeNode=$xml.CreateElement('type'); $typeNode.InnerText='local'
