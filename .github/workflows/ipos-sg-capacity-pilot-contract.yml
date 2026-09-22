@@ -1,0 +1,31 @@
+name: IPOS SG Capacity Pilot Contract
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run-ipos-sg-capacity-pilot.ps1'
+      - 'tests/test_ipos_sg_capacity_pilot_contract.py'
+      - '.github/workflows/ipos-sg-capacity-pilot-contract.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute SG capacity-pilot contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Contract requires Windows PowerShell 5.1.' }
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-ipos-sg-capacity-pilot.ps1 -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (($output -join [Environment]::NewLine) -notmatch 'IPOS_SG_CAPACITY_PILOT_CONTRACT_PASS') { throw 'SG capacity-pilot contract marker missing.' }
