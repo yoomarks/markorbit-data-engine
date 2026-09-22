@@ -132,3 +132,11 @@ def test_prepare_tolerates_localized_wsl_help_exit_code() -> None:
     assert ".Replace([string][char]0,'')" in text
     assert "Where-Object{$_ -eq '--vhd'}" in text
     assert "if($helpTokens.Count -lt 1)" in text
+
+
+def test_prepare_uses_strictmode_safe_xml_absence_checks() -> None:
+    text = _prepare()
+    assert "$disks.SelectSingleNode('hot_global')" in text
+    assert "$policies.SelectSingleNode('hot_global_only')" in text
+    assert "$null -ne $disks.hot_global" not in text
+    assert "$null -ne $policies.hot_global_only" not in text
