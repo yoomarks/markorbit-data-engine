@@ -1,4 +1,4 @@
-"""Single-process authenticated operator controller for Singapore IPOS activation."""
+"""Single-process controlled operator for Singapore IPOS snapshot refresh."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def ipos_operator_lease(
     stale_after: timedelta = _DEFAULT_STALE_LOCK_AGE,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> Iterator[dict[str, str]]:
-    """Hold one filesystem lease for the complete authenticated operator run.
+    """Hold one filesystem lease for the complete controlled operator run.
 
     The lease is intentionally stored inside the mounted lifecycle state so separate
     one-shot containers cannot overlap. Stale lock recovery is explicit and is only
@@ -193,7 +193,7 @@ def _redact_secret(value: str, secret: str) -> str:
 def run_ipos_operator(
     state_directory: str | Path,
     *,
-    api_key: str,
+    api_key: str | None = None,
     recover_stale_lock: bool = False,
     state_auditor: Callable[[str | Path], IposStateAudit] = audit_ipos_state,
     storage_builder: Callable[[str | Path], IposStoragePreflight] = build_ipos_storage_preflight,
@@ -206,13 +206,14 @@ def run_ipos_operator(
     """Run state/resource preflight, source probe, full corpus, and strict postflight.
 
     The lightweight live probe deliberately does not resolve a whole-dataset download
-    URL. The full-corpus downloader performs the single authenticated initiate/poll
-    sequence. The live datastore total is carried into the full-corpus pre-commit gate
-    so a materially truncated/wrong export cannot advance accepted-current state.
+    URL. The full-corpus downloader performs the single public initiate/poll sequence.
+    The live datastore total is carried into the full-corpus pre-commit gate so a
+    materially truncated/wrong export cannot advance accepted-current state.
+
+    The api_key argument remains compatibility-only for redacting legacy caller error
+    text; current public dataset routes are invoked anonymously.
     """
-    secret = api_key.strip()
-    if not secret:
-        raise ValueError("DATA_GOV_SG_API_KEY is required for authenticated Singapore runs")
+    secret = (api_key or "").strip()
 
     state = Path(state_directory)
     state.mkdir(parents=True, exist_ok=True)
@@ -251,7 +252,7 @@ def run_ipos_operator(
 
             phase = "LIVE_SOURCE_AUTHENTICATION"
             live = live_probe(
-                api_key=secret,
+                api_key=None,
                 resolve_download_url=False,
             )
             if live.dataset_id != IPOS_SG_TRADEMARK_APPLICATIONS.dataset_id:
@@ -259,7 +260,7 @@ def run_ipos_operator(
             completed_tasks.append("LIVE_SOURCE_AUTHENTICATION")
 
             phase = "FULL_CORPUS_LIFECYCLE"
-            downloader = downloader_factory(api_key=secret)
+            downloader = downloader_factory(api_key=None)
             corpus = full_runner(
                 state,
                 downloader=downloader,
@@ -316,7 +317,7 @@ def run_ipos_operator(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run one authenticated Singapore IPOS operator cycle"
+        description="Run one controlled Singapore IPOS operator cycle"
     )
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument(
@@ -325,11 +326,9 @@ def main() -> int:
         help="recover an operator lock only when it is at least 12 hours old",
     )
     args = parser.parse_args()
-    api_key = os.getenv("DATA_GOV_SG_API_KEY") or ""
     try:
         report = run_ipos_operator(
             args.state_dir,
-            api_key=api_key,
             recover_stale_lock=args.recover_stale_lock,
         )
     except Exception as exc:
@@ -338,7 +337,7 @@ def main() -> int:
                 {
                     "status": "FAILED",
                     "error_type": type(exc).__name__,
-                    "error": _redact_secret(str(exc), api_key),
+                    "error": str(exc),
                 },
                 ensure_ascii=False,
                 sort_keys=True,
