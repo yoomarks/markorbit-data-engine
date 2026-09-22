@@ -1,0 +1,40 @@
+name: Hot Global Foundation Contract
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/prepare-hot-global-foundation.ps1'
+      - 'scripts/apply-hot-global-foundation.ps1'
+      - 'tests/test_hot_global_foundation_operator_contract.py'
+      - '.github/workflows/hot-global-foundation-contract.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Execute PREPARE contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Contract requires Windows PowerShell 5.1.' }
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\prepare-hot-global-foundation.ps1 -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (($output -join [Environment]::NewLine) -notmatch 'HOT_GLOBAL_FOUNDATION_PREPARE_CONTRACT_PASS') { throw 'PREPARE contract marker missing.' }
+      - name: Execute APPLY contract under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\apply-hot-global-foundation.ps1 -ContractOnly 2>&1
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (($output -join [Environment]::NewLine) -notmatch 'HOT_GLOBAL_FOUNDATION_APPLY_CONTRACT_PASS') { throw 'APPLY contract marker missing.' }
