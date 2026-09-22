@@ -61,6 +61,44 @@ def test_probe_accepts_complete_live_datastore_contract():
     assert seen[0][0].endswith("&limit=1")
 
 
+def test_probe_keeps_export_api_key_off_public_datastore_but_uses_it_for_export():
+    requests = []
+    responses = iter(
+        [
+            _Response(_payload()),
+            _Response({"code": 0, "data": {}}),
+            _Response(
+                {
+                    "code": 0,
+                    "data": {"url": "https://download.example/ipos.csv"},
+                }
+            ),
+        ]
+    )
+
+    def opener(request, *, timeout):
+        requests.append(request)
+        return next(responses)
+
+    result = probe_ipos_live_source(
+        opener=opener,
+        sleeper=lambda _: None,
+        api_key="secret-key",
+        resolve_download_url=True,
+    )
+
+    assert result.download_url_resolved is True
+    datastore_headers = {
+        key.lower(): value for key, value in requests[0].header_items()
+    }
+    export_headers = [
+        {key.lower(): value for key, value in request.header_items()}
+        for request in requests[1:]
+    ]
+    assert "x-api-key" not in datastore_headers
+    assert all(headers.get("x-api-key") == "secret-key" for headers in export_headers)
+
+
 def test_probe_rejects_critical_schema_drift_before_full_contract_check():
     fields = [
         {"id": field}

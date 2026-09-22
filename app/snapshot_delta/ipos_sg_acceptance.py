@@ -94,12 +94,15 @@ def probe_ipos_live_source(
 ) -> IposSourceAcceptance:
     """Probe one live row and the authoritative schema without downloading the corpus."""
     query_url = f"{source.api_url}&{urlencode({'limit': 1})}"
+    # The legacy public datastore_search endpoint is anonymous. Supplying
+    # the data.gov.sg export API key can cause HTTP 400 on this endpoint even
+    # though the same key is valid for initiate-download/poll-download.
     payload = _request_json(
         query_url,
         opener=opener,
         sleeper=sleeper,
         timeout_seconds=timeout_seconds,
-        api_key=api_key,
+        api_key=None,
     )
 
     if payload.get("success") is not True:
