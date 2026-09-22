@@ -147,14 +147,19 @@ function Assert-CapacityPlan([string]$Path,[string]$ExpectedSha) {
     if($actual -ne $ExpectedSha.Trim().ToLowerInvariant()){throw "Capacity plan SHA drift. expected=$ExpectedSha actual=$actual"}
     $p=Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
     if([string]$p.plan_version -ne $script:CapacityPlanVersion){throw 'Capacity plan version drifted.'}
-    if([string]$p.target.vhdx_path -ne $script:VhdxPath){throw 'Capacity plan VHDX path drifted.'}
-    if([int64]$p.target.max_bytes -ne $script:VhdxMaxBytes){throw 'Capacity plan VHDX max bytes drifted.'}
-    if([string]$p.target.mount_name -ne $script:MountName){throw 'Capacity plan mount name drifted.'}
-    if([string]$p.target.clickhouse_disk_path -ne $script:DiskPath){throw 'Capacity plan disk path drifted.'}
-    if([string]$p.target.clickhouse_disk -ne $script:DiskName){throw 'Capacity plan disk name drifted.'}
-    if([string]$p.target.clickhouse_policy -ne $script:PolicyName){throw 'Capacity plan policy name drifted.'}
-    if([string]$p.target.filesystem -ne 'ext4'){throw 'Capacity plan filesystem drifted.'}
+    if([string]$p.decision -ne 'FREEZE_16_GIB_DYNAMIC_VHDX_SG_FIRST'){throw 'Capacity plan decision drifted.'}
     if([bool]$p.production_mutation_authorized){throw 'Capacity plan unexpectedly authorizes mutation.'}
+    if([string]$p.target.host_drive -ne 'E:'){throw 'Capacity plan host drive drifted.'}
+    if([string]$p.target.vhdx_path -ne $script:VhdxPath){throw 'Capacity plan VHDX path drifted.'}
+    if([string]$p.target.vhdx_type -ne 'Dynamic'){throw 'Capacity plan VHDX type drifted.'}
+    if([int64]$p.target.vhdx_max_bytes -ne $script:VhdxMaxBytes){throw 'Capacity plan VHDX max bytes drifted.'}
+    if([int]$p.target.vhdx_max_gib -ne 16){throw 'Capacity plan VHDX GiB drifted.'}
+    if([string]$p.target.wsl_distro -ne $script:TargetDistro){throw 'Capacity plan WSL distro drifted.'}
+    if([string]$p.target.wsl_mount_name -ne $script:MountName){throw 'Capacity plan mount name drifted.'}
+    if([string]$p.target.wsl_mount_path -ne $script:MountPath){throw 'Capacity plan mount path drifted.'}
+    if([string]$p.target.clickhouse_disk_path -ne $script:DiskPath){throw 'Capacity plan disk path drifted.'}
+    if([string]$p.target.clickhouse_disk_name -ne $script:DiskName){throw 'Capacity plan disk name drifted.'}
+    if([string]$p.target.clickhouse_policy -ne $script:PolicyName){throw 'Capacity plan policy name drifted.'}
     return [ordered]@{ path=[IO.Path]::GetFullPath($Path); sha256=$actual; value=$p }
 }
 

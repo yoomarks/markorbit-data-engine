@@ -124,3 +124,21 @@ def test_apply_preserves_accepted_baseline_and_forbids_data_work() -> None:
 def test_both_scripts_have_windows_powershell_contract_mode() -> None:
     assert "HOT_GLOBAL_FOUNDATION_PREPARE_CONTRACT_PASS" in _prepare()
     assert "HOT_GLOBAL_FOUNDATION_APPLY_CONTRACT_PASS" in _apply()
+
+
+def test_prepare_binds_latest_canonical_822_schema() -> None:
+    text = _prepare()
+    for marker in (
+        "FREEZE_16_GIB_DYNAMIC_VHDX_SG_FIRST",
+        "$p.target.vhdx_max_bytes",
+        "$p.target.vhdx_max_gib",
+        "$p.target.wsl_distro",
+        "$p.target.wsl_mount_name",
+        "$p.target.wsl_mount_path",
+        "$p.target.clickhouse_disk_name",
+        "$p.target.clickhouse_policy",
+    ):
+        assert marker in text
+    assert "$p.target.max_bytes" not in text
+    assert "$p.target.mount_name" not in text
+    assert "$p.target.clickhouse_disk -ne" not in text
