@@ -123,8 +123,9 @@ function Get-EState {
 
 function Assert-ToolingReady {
     if(-not (Get-Command diskpart.exe -ErrorAction SilentlyContinue)){throw 'diskpart.exe is not available.'}
-    $help=(Invoke-NativeText 'wsl.exe' @('--help') -AllowFailure).lines -join [Environment]::NewLine
-    if($help -notmatch '--vhd'){throw 'WSL --vhd support is not available.'}
+    $help=((Invoke-NativeText 'wsl.exe' @('--help') -AllowFailure).lines -join [Environment]::NewLine).Replace([string][char]0,'')
+    $helpTokens=@($help -split '[\r\n]+' | ForEach-Object{$_.Trim()} | Where-Object{$_ -eq '--vhd'})
+    if($helpTokens.Count -lt 1){throw 'WSL --vhd support is not available.'}
     $probe=Invoke-NativeText 'wsl.exe' @('-d',$ToolingDistro,'-u','root','--','sh','-lc','for c in mkfs.ext4 lsblk blkid findmnt sha256sum; do command -v "$c" >/dev/null 2>&1 || exit 10; done') -AllowFailure
     if($probe.exit_code -ne 0){throw "Tooling distro is missing required ext4 tools: $ToolingDistro"}
 }
