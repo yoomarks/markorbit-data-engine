@@ -98,13 +98,56 @@ $ExpectedHeaders = @(
     'Agent Correspondence Details'
 )
 
+$ExpectedApiHeaders = @(
+    'applicationNumber',
+    'filingDate',
+    'internationalRegDate',
+    'singaporeProtectionDate',
+    'seriesMarkNum',
+    'applicationType',
+    'tradeMarkType',
+    'descriptionParticularFeatureOfMark',
+    'applicationDate',
+    'markStatus',
+    'markStatusDate',
+    'statusUpdateDate',
+    'registrationProcedureCompletionDate',
+    'expiryDate',
+    'publicationDate',
+    'lastModifiedDate',
+    'journalData_json',
+    'irDetails_json',
+    'iaDetails_json',
+    'transformationData_json',
+    'transformationIntoData_json',
+    'replacementData_json',
+    'priorityData_json',
+    'replacementReplacesData_json',
+    'markClausesData_json',
+    'markData_json',
+    'hmgCases_json',
+    'otherEntriesData_json',
+    'logogramData_json',
+    'licenseData_json',
+    'grantorData_json',
+    'granteeData_json',
+    'securityInterestData_json',
+    'transferData_json',
+    'documents_json',
+    'goodsAndServicesSpecifications_json',
+    'priorityClaimsDetails_json',
+    'currentApplicantProprietorDetails_json',
+    'agentCorrespondenceDetails_json'
+)
+
 function Quote-ChIdentifier([string]$Name) {
     $tick = [char]96
     return ([string]$tick + $Name + [string]$tick)
 }
 
-function Get-SchemaText {
-    return (($ExpectedHeaders | ForEach-Object { "$(Quote-ChIdentifier $_) String" }) -join ', ')
+function Get-SchemaText([string[]]$Headers) {
+    if ($Headers.Count -ne 39) { throw "SG pilot schema requires 39 headers; observed=$($Headers.Count)" }
+    return (($Headers | ForEach-Object { "$(Quote-ChIdentifier $_) String" }) -join ", ")
 }
 
 function Assert-SnapshotContract {
@@ -127,11 +170,16 @@ function Assert-SnapshotContract {
     if ($observed.Count -ne $ExpectedHeaders.Count) { throw "Snapshot header count drifted: $($observed.Count)" }
     $observed[0] = $observed[0].TrimStart([char]0xFEFF)
     for ($i = 0; $i -lt $ExpectedHeaders.Count; $i++) {
-        if ($observed[$i] -ne $ExpectedHeaders[$i]) {
-            throw "Snapshot header drift at index $i`: expected='$($ExpectedHeaders[$i])' observed='$($observed[$i])'"
+        $display = $ExpectedHeaders[$i]
+        $api = $ExpectedApiHeaders[$i]
+        if ($observed[$i] -ne $display -and $observed[$i] -ne $api) {
+            throw "Snapshot header drift at index ${i}: expected='$display' or '$api' observed='$($observed[$i])'"
         }
     }
-    return $manifestValue
+    return [ordered]@{
+        manifest = $manifestValue
+        headers = $observed
+    }
 }
 
 function Wait-PilotReady([string]$Container) {
@@ -202,10 +250,15 @@ function Remove-PilotRuntime([string]$Container, [string]$Volume) {
 }
 
 if ($ContractOnly) {
-    if ($ExpectedHeaders.Count -ne 39) { throw "Expected 39 SG fields; observed=$($ExpectedHeaders.Count)" }
-    $schema = Get-SchemaText
-    if ($schema -notmatch 'Application Number' -or $schema -notmatch 'Agent Correspondence Details') {
-        throw 'SG pilot schema contract markers are missing.'
+    if ($ExpectedHeaders.Count -ne 39) { throw "Expected 39 SG display fields; observed=$($ExpectedHeaders.Count)" }
+    if ($ExpectedApiHeaders.Count -ne 39) { throw "Expected 39 SG API fields; observed=$($ExpectedApiHeaders.Count)" }
+    $displaySchema = Get-SchemaText $ExpectedHeaders
+    $apiSchema = Get-SchemaText $ExpectedApiHeaders
+    if ($displaySchema -notmatch 'Application Number' -or $displaySchema -notmatch 'Agent Correspondence Details') {
+        throw 'SG pilot display schema contract markers are missing.'
+    }
+    if ($apiSchema -notmatch 'applicationNumber' -or $apiSchema -notmatch 'agentCorrespondenceDetails_json') {
+        throw 'SG pilot API schema contract markers are missing.'
     }
     if ($ClickHouseImage -ne 'clickhouse/clickhouse-server:24.8') {
         throw 'SG pilot ClickHouse image contract drifted.'
@@ -232,7 +285,9 @@ try {
     $manifestResolved = (Resolve-Path -LiteralPath $ManifestPath).Path
     $contentHash = $ExpectedContentHash.Trim().ToLowerInvariant()
     $schemaHash = $ExpectedSchemaHash.Trim().ToLowerInvariant()
-    $manifest = Assert-SnapshotContract $snapshotResolved $manifestResolved $contentHash $schemaHash
+    $snapshotContract = Assert-SnapshotContract $snapshotResolved $manifestResolved $contentHash $schemaHash
+    $manifest = $snapshotContract.manifest
+    $sourceHeaders = @($snapshotContract.headers)
     $evidenceFull = [IO.Path]::GetFullPath($EvidenceRoot)
     $repoFull = [IO.Path]::GetFullPath($repoRoot)
     if ($evidenceFull.StartsWith($repoFull, [StringComparison]::OrdinalIgnoreCase)) {
@@ -254,9 +309,9 @@ try {
     $existingVolumes = Invoke-DockerText @('volume','ls','--format','{{.Name}}') 'inspect pilot volumes'
     if (@($existingVolumes -split "`r?`n") -contains $volumeName) { throw "Pilot volume already exists: $volumeName" }
 
-    $schema = Get-SchemaText
+    $schema = Get-SchemaText $sourceHeaders
     $schemaForFile = $schema.Replace("'", "''")
-    $orderBy = Quote-ChIdentifier 'Application Number'
+    $orderBy = Quote-ChIdentifier $sourceHeaders[0]
     $inputRef = "input/$fileName"
     $containerCreated = $false
     $volumeCreated = $false
@@ -357,7 +412,7 @@ try {
             schema_hash = $schemaHash
             row_count = [int64]$manifest.row_count
             snapshot_bytes = $snapshotBytes
-            field_count = $ExpectedHeaders.Count
+            field_count = $sourceHeaders.Count
             format = 'CSVWithNames_UNCOMPRESSED'
         }
         pilot = $pilotResult

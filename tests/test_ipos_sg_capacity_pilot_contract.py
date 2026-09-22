@@ -81,3 +81,13 @@ def test_sg_capacity_pilot_has_powershell_contract_mode() -> None:
     text = _text()
     assert '[switch]$ContractOnly' in text
     assert 'IPOS_SG_CAPACITY_PILOT_CONTRACT_PASS' in text
+
+def test_sg_capacity_pilot_accepts_api_and_display_header_aliases() -> None:
+    text = _text()
+    assert "$ExpectedApiHeaders = @(" in text
+    assert "'applicationNumber'" in text
+    assert "'agentCorrespondenceDetails_json'" in text
+    assert "$observed[$i] -ne $display -and $observed[$i] -ne $api" in text
+    assert "headers = $observed" in text
+    assert "$schema = Get-SchemaText $sourceHeaders" in text
+    assert "Quote-ChIdentifier $sourceHeaders[0]" in text
