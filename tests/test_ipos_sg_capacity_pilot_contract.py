@@ -91,3 +91,15 @@ def test_sg_capacity_pilot_accepts_api_and_display_header_aliases() -> None:
     assert "headers = $observed" in text
     assert "$schema = Get-SchemaText $sourceHeaders" in text
     assert "Quote-ChIdentifier $sourceHeaders[0]" in text
+
+
+def test_sg_capacity_pilot_keeps_readonly_input_outside_clickhouse_data_dir() -> None:
+    text = _text()
+    assert "$pilotInputPath = '/pilot-input'" in text
+    assert '<user_files_path>$pilotInputPath/</user_files_path>' in text
+    assert 'CLICKHOUSE_DO_NOT_CHOWN=1' in text
+    assert 'dst=$pilotInputPath,readonly' in text
+    assert 'dst=/etc/clickhouse-server/config.d/pilot-user-files.xml,readonly' in text
+    assert '/var/lib/clickhouse/user_files/input' not in text
+    assert '$inputRef = $fileName' in text
+    assert 'clickhouse_do_not_chown = $true' in text

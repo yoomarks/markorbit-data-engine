@@ -304,6 +304,16 @@ try {
     $snapshotDir = [IO.Path]::GetDirectoryName($snapshotResolved)
     $fileName = [IO.Path]::GetFileName($snapshotResolved)
     $snapshotBytes = [int64](Get-Item -LiteralPath $snapshotResolved).Length
+    $pilotInputPath = '/pilot-input'
+    $pilotConfigPath = Join-Path $evidenceFull "pilot-user-files-$prefix.xml"
+    $pilotConfigXml = @(
+        '<clickhouse>',
+        "  <user_files_path>$pilotInputPath/</user_files_path>",
+        '</clickhouse>'
+    ) -join [Environment]::NewLine
+    $pilotConfigXml += [Environment]::NewLine
+    [IO.File]::WriteAllText($pilotConfigPath, $pilotConfigXml, (New-Object Text.UTF8Encoding($false)))
+    $pilotConfigSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $pilotConfigPath).Hash.ToLowerInvariant()
     $existingContainer = Invoke-DockerText @('ps','-a','--filter',"name=$containerName",'--format','{{.Names}}') 'inspect pilot container'
     if (@($existingContainer -split "`r?`n") -contains $containerName) { throw "Pilot container already exists: $containerName" }
     $existingVolumes = Invoke-DockerText @('volume','ls','--format','{{.Name}}') 'inspect pilot volumes'
@@ -312,7 +322,7 @@ try {
     $schema = Get-SchemaText $sourceHeaders
     $schemaForFile = $schema.Replace("'", "''")
     $orderBy = Quote-ChIdentifier $sourceHeaders[0]
-    $inputRef = "input/$fileName"
+    $inputRef = $fileName
     $containerCreated = $false
     $volumeCreated = $false
     $cleanupPerformed = $false
@@ -321,8 +331,16 @@ try {
         [void](Invoke-DockerText @('volume','create',$volumeName) 'create disposable pilot volume')
         $volumeCreated = $true
         $volumeMount = "type=volume,src=$volumeName,dst=/var/lib/clickhouse"
-        $inputMount = "type=bind,src=$snapshotDir,dst=/var/lib/clickhouse/user_files/input,readonly"
-        [void](Invoke-DockerText @('run','-d','--name',$containerName,'--mount',$volumeMount,'--mount',$inputMount,$ClickHouseImage) 'start disposable pilot ClickHouse')
+        $inputMount = "type=bind,src=$snapshotDir,dst=$pilotInputPath,readonly"
+        $configMount = "type=bind,src=$pilotConfigPath,dst=/etc/clickhouse-server/config.d/pilot-user-files.xml,readonly"
+        [void](Invoke-DockerText @(
+            'run','-d','--name',$containerName,
+            '-e','CLICKHOUSE_DO_NOT_CHOWN=1',
+            '--mount',$volumeMount,
+            '--mount',$inputMount,
+            '--mount',$configMount,
+            $ClickHouseImage
+        ) 'start disposable pilot ClickHouse')
         $containerCreated = $true
         Wait-PilotReady $containerName
         $imageId = Invoke-DockerText @('inspect','--format','{{.Image}}',$containerName) 'inspect pilot image'
@@ -420,6 +438,10 @@ try {
             container_name = $containerName
             volume_name = $volumeName
             clickhouse_image = $ClickHouseImage
+            readonly_input_mount = $pilotInputPath
+            user_files_config_path = $pilotConfigPath
+            user_files_config_sha256 = $pilotConfigSha
+            clickhouse_do_not_chown = $true
             keep_runtime_requested = [bool]$KeepPilotRuntime
             cleanup_performed = [bool]$cleanupPerformed
             cleanup_verified = [bool](-not $containerStillExists -and -not $volumeStillExists)
