@@ -181,8 +181,8 @@ function Get-ServiceClickHouseBinding([string]$Service) {
         'compose','exec','-T',$Service,'python','-c',
         'from app.config import get_settings; print(get_settings().clickhouse_host)'
     )
-    $host = ((@($probe.lines) -join '').Trim())
-    return [ordered]@{ service=$Service; state='RUNNING'; clickhouse_host=$host }
+    $clickhouseHost = ((@($probe.lines) -join '').Trim())
+    return [ordered]@{ service=$Service; state='RUNNING'; clickhouse_host=$clickhouseHost }
 }
 
 function Get-TargetVersion {
