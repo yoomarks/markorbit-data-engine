@@ -1,23 +1,22 @@
-# Singapore IPOS Authenticated Operator Runbook
+# Singapore IPOS Controlled Operator Runbook
 
 ## Purpose
 
 This runbook defines the production-facing operator boundary for the Singapore IPOS current-snapshot source. It is intentionally separate from the root M1.7 release promotion gate and from the sovereign CN M1.6 replay.
 
-The authenticated operator run is not a scheduler. Recurring production acquisition remains disabled until a real authenticated operator run passes on the target host and its retained state/report are reviewed.
+The controlled operator run is not a scheduler. Recurring production acquisition remains disabled until a real target-host operator run passes and its retained state/report are reviewed.
 
-## Secret boundary
+## Provider access boundary
 
-`DATA_GOV_SG_API_KEY` is supplied only through the process environment.
+The current data.gov.sg public dataset routes used by this pipeline are invoked anonymously:
 
-The key must never be:
+- legacy `datastore_search` for the live row/schema probe;
+- public v1 `initiate-download` and `poll-download` for whole-dataset materialization;
+- the returned signed object-storage URL for CSV transfer.
 
-- committed to the repository;
-- written into snapshot manifests, delta/native evidence, acceptance reports, or operator reports;
-- forwarded to signed object-storage download URLs;
-- embedded in command-line arguments that may be retained in shell history.
+The production host has verified that attaching the current v2 API key to these legacy public dataset routes can return HTTP 400, while the same routes succeed anonymously. The operator therefore does not require or forward `DATA_GOV_SG_API_KEY`.
 
-The data.gov.sg API key is attached only to data.gov.sg API requests. Whole-dataset signed storage requests are deliberately unauthenticated with respect to that key.
+If a provider credential is configured elsewhere for unrelated APIs, it must still never be committed, written into evidence/receipts, forwarded to signed object-storage URLs, or embedded in command-line history.
 
 ## Explicit task DAG
 
@@ -47,9 +46,9 @@ The wrapper fails before any SG provider request when `ExpectedMainSha`, `HEAD`,
 1. acquire the state-directory operator lease;
 2. run a fast read-only lifecycle-state preflight;
 3. verify filesystem headroom before any provider request;
-4. authenticate the live datastore source and validate the authoritative 39-field contract;
+4. validate the live public datastore source and the authoritative 39-field contract;
 5. record the live datastore total row count as a full-corpus consistency reference;
-6. perform one logical authenticated whole-dataset initiate/poll sequence as part of the real full-corpus acquisition;
+6. perform one logical public whole-dataset initiate/poll sequence as part of the real full-corpus acquisition;
 7. stream the current CSV into the lifecycle without buffering the corpus in memory;
 8. validate critical and complete source schema before acceptance;
 9. compare the candidate manifest row count with the authenticated live total before any candidate snapshot/pointer persistence;
@@ -63,7 +62,7 @@ The wrapper fails before any SG provider request when `ExpectedMainSha`, `HEAD`,
 
 Keeping all phases in one worker removes the gap that previously existed between a live-source probe and a second full-corpus container. Other guarded worker operations can observe that the worker service is occupied for the complete Singapore run.
 
-The live-source probe intentionally does **not** request a whole-dataset export URL. The full-corpus downloader owns the authenticated materialization request, avoiding duplicate 3+ GB export initiations. Transient data.gov.sg control-plane failures (network errors, HTTP 429, and HTTP 5xx) use bounded exponential retries. Non-transient HTTP failures fail immediately. Signed object-storage streaming remains a single transfer attempt rather than inventing unverified byte-range resume semantics.
+The live-source probe intentionally does **not** request a whole-dataset export URL. The full-corpus downloader owns the public materialization request, avoiding duplicate multi-GB export initiations. Transient data.gov.sg control-plane failures (network errors, HTTP 429, and HTTP 5xx) use bounded exponential retries. Non-transient HTTP failures fail immediately. Signed object-storage transfer is bound to the declared object byte length; an early EOF resumes the same signed object with an exact HTTP Range offset, while range/size drift fails closed.
 
 ## State audit
 
@@ -78,7 +77,7 @@ Possible statuses:
 
 `READY` is intentionally a fast metadata-state result, not a fresh checksum of the multi-gigabyte retained CSV. Physical content integrity is enforced by the lifecycle before it may rely on retained bytes for an unchanged or changed cycle.
 
-The postflight gate is stricter than the preflight gate: a successful authenticated operator run must end in `READY`, not merely `RECOVERABLE`.
+The postflight gate is stricter than the preflight gate: a successful controlled operator run must end in `READY`, not merely `RECOVERABLE`.
 
 ## Physical snapshot integrity
 
@@ -104,12 +103,12 @@ Insufficient headroom fails before the live provider probe or whole-dataset mate
 
 ## Live/export corpus consistency
 
-A syntactically valid CSV is not enough evidence that a multi-gigabyte transfer is complete. The authenticated live datastore probe returns `total_rows`; the full-corpus lifecycle carries that value into a pre-commit candidate validator.
+A syntactically valid CSV is not enough evidence that a multi-gigabyte transfer is complete. The live public datastore probe returns `total_rows`; the full-corpus lifecycle carries that value into a pre-commit candidate validator.
 
 The default drift tolerance is the greater of:
 
 - 1,000 rows; or
-- 0.5% of the authenticated live total.
+- 0.5% of the live datastore total.
 
 This tolerance permits normal source movement between the lightweight live query and asynchronous export materialization while rejecting materially truncated or wrong-corpus downloads. A mismatch fails before `_persist_version` and before `current.json` can advance. The unaccepted incoming file is removed, and an existing accepted snapshot remains unchanged.
 
@@ -117,7 +116,7 @@ The full-corpus acceptance report records `live_total_rows`, `live_row_count_del
 
 ## Lease and interruption recovery
 
-The state directory contains `.operator.lock` while an authenticated Singapore run is active. A second Singapore run fails closed rather than overlapping the first.
+The state directory contains `.operator.lock` while a controlled Singapore run is active. A second Singapore run fails closed rather than overlapping the first.
 
 Normal exits and handled failures remove the lock. An abrupt host/container termination may leave it behind. Automatic stale deletion is intentionally forbidden. `-RecoverStaleLock` may recover the lease only when the recorded lock is at least 12 hours old; malformed or younger locks remain blocking.
 
@@ -138,7 +137,7 @@ Important files include:
 - `native_changes/*.jsonl` — neutral IPOS source-family evidence for updates;
 - `acceptance/latest.json` — strict full-corpus acceptance evidence, including live/export row consistency;
 - `acceptance/operator_latest.json` — combined task/state/resource/source/corpus/postflight success receipt;
-- `acceptance/operator_failure_latest.json` — last handled operator failure, including task progress and with the configured API key redacted from the error string.
+- `acceptance/operator_failure_latest.json` — last handled operator failure, including task progress; provider credential material is never persisted.
 
 ## CN serving regression gate for controlled production refresh
 
@@ -147,7 +146,7 @@ The production wrapper `scripts/run-ipos-sg.ps1` proves that a controlled SG ref
 1. before any SG provider request, require `/api/health` to report API, PostgreSQL, and ClickHouse as `ok`;
 2. choose one deterministic current CN application from `cn_case_current` using bounded `ORDER BY application_number LIMIT 1`;
 3. fetch that case through the real host API `/api/cn/cases/{application_number}` and record a SHA-256 of the response;
-4. execute the authenticated SG operator cycle;
+4. execute the controlled SG operator cycle;
 5. probe the exact same CN case again and require the response SHA-256 and dependency health to remain unchanged;
 6. persist `acceptance/production_refresh_latest.json`, which binds the CN pre/post proof to the SHA-256 of `operator_latest.json` and includes compact SG lifecycle/content/schema/row/headroom/runtime fields.
 
@@ -157,7 +156,7 @@ A pre-refresh CN failure prevents the SG cycle from starting. A post-refresh CN 
 
 Do not enable a recurring acquisition schedule merely because code/CI is green. Scheduling is a separate operational activation step and requires all of the following:
 
-1. authenticated source probe passes on the target host;
+1. live public source probe passes on the target host;
 2. full-corpus lifecycle passes on the target host;
 3. live/export row consistency passes and is recorded;
 4. postflight state is `READY`;

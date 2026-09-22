@@ -254,10 +254,6 @@ Push-Location $repoRoot
 try {
     $executionMainSha = Assert-ExactMain -ExpectedSha $ExpectedMainSha
 
-    if (-not $env:DATA_GOV_SG_API_KEY) {
-        throw "DATA_GOV_SG_API_KEY must be set in the current PowerShell session."
-    }
-
     $runningWorker = docker compose ps --status running -q worker
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect Docker Compose worker state."
@@ -298,11 +294,10 @@ try {
         $operatorArgs += "--recover-stale-lock"
     }
 
-    Write-Host "Running leased authenticated Singapore IPOS operator cycle..."
-    Write-Host "The same one-shot worker remains alive for preflight, source authentication, full corpus, and postflight."
+    Write-Host "Running leased Singapore IPOS operator cycle..."
+    Write-Host "The same one-shot worker remains alive for preflight, live-source validation, full corpus, and postflight."
     Write-Host "State: $hostState"
     docker compose run --rm --no-deps -T `
-        --env DATA_GOV_SG_API_KEY `
         --volume $appMount `
         --volume $stateMount `
         worker python @operatorArgs
@@ -367,7 +362,7 @@ try {
         throw "Singapore refresh completed, but CN serving regression gate failed. Review $acceptancePath before any further SG run."
     }
 
-    Write-Host "Singapore IPOS authenticated operator acceptance: PASS"
+    Write-Host "Singapore IPOS operator acceptance: PASS"
     Write-Host "CN serving regression gate: PASS"
     Write-Host "State: $hostState"
     Write-Host "Corpus report: $(Join-Path $hostState 'acceptance\latest.json')"

@@ -55,10 +55,10 @@ def test_ipos_sg_run_enforces_cn_serving_regression_gate() -> None:
     assert "CN serving regression gate: PASS" in source
 
 
-def test_ipos_sg_run_never_persists_or_prints_api_key() -> None:
+def test_ipos_sg_run_does_not_require_or_forward_api_key() -> None:
     source = _script("run-ipos-sg.ps1")
-    assert "DATA_GOV_SG_API_KEY must be set" in source
-    assert "--env DATA_GOV_SG_API_KEY" in source
+    assert "DATA_GOV_SG_API_KEY must be set" not in source
+    assert "--env DATA_GOV_SG_API_KEY" not in source
     assert "Write-Host $env:DATA_GOV_SG_API_KEY" not in source
     assert "DATA_GOV_SG_API_KEY =" not in source
 

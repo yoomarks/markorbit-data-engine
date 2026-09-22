@@ -61,7 +61,7 @@ def test_probe_accepts_complete_live_datastore_contract():
     assert seen[0][0].endswith("&limit=1")
 
 
-def test_probe_keeps_export_api_key_off_public_datastore_but_uses_it_for_export():
+def test_probe_keeps_api_key_off_public_datastore_and_v1_export_control_plane():
     requests = []
     responses = iter(
         [
@@ -96,7 +96,7 @@ def test_probe_keeps_export_api_key_off_public_datastore_but_uses_it_for_export(
         for request in requests[1:]
     ]
     assert "x-api-key" not in datastore_headers
-    assert all(headers.get("x-api-key") == "secret-key" for headers in export_headers)
+    assert all("x-api-key" not in headers for headers in export_headers)
 
 
 def test_probe_rejects_critical_schema_drift_before_full_contract_check():
