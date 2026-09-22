@@ -16,8 +16,9 @@ from app.snapshot_delta.ipos_sg_schema_contract import IPOS_NATIVE_CSV_SOURCE_FI
 
 
 class FakeResponse:
-    def __init__(self, payload: bytes):
+    def __init__(self, payload: bytes, headers: dict[str, str] | None = None):
         self._stream = io.BytesIO(payload)
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -165,6 +166,77 @@ def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path
     assert acquired.bytes_written == len(csv_payload)
     assert acquired.retrieved_at.tzinfo is not None
     assert not (tmp_path / ".IPOSTradeMarkApplications.csv.part").exists()
+
+
+def test_download_resumes_when_signed_export_ends_before_content_length(tmp_path: Path):
+    csv_payload = valid_snapshot_bytes()
+    split = max(1, len(csv_payload) // 2)
+    requests: list[Request] = []
+    sleeps: list[float] = []
+    responses = iter(
+        [
+            json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
+            FakeResponse(
+                csv_payload[:split],
+                {"Content-Length": str(len(csv_payload))},
+            ),
+            FakeResponse(
+                csv_payload[split:],
+                {
+                    "Content-Range": (
+                        f"bytes {split}-{len(csv_payload) - 1}/{len(csv_payload)}"
+                    )
+                },
+            ),
+        ]
+    )
+
+    def opener(request: Request, **kwargs):
+        requests.append(request)
+        return next(responses)
+
+    acquired = DataGovSgSnapshotDownloader(
+        opener=opener,
+        sleeper=sleeps.append,
+        chunk_size=7,
+        download_request_attempts=2,
+        download_retry_base_seconds=0.25,
+    ).download(tmp_path)
+
+    assert acquired.path.read_bytes() == csv_payload
+    assert acquired.bytes_written == len(csv_payload)
+    assert requests[2].get_header("Range") == f"bytes={split}-"
+    assert sleeps == [0.25]
+
+
+def test_download_retries_transient_signed_object_failure_before_first_byte(tmp_path: Path):
+    csv_payload = valid_snapshot_bytes()
+    calls = 0
+    sleeps: list[float] = []
+    responses = iter(
+        [
+            json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
+            FakeResponse(csv_payload, {"Content-Length": str(len(csv_payload))}),
+        ]
+    )
+
+    def opener(request: Request, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise URLError("temporary signed object failure")
+        return next(responses)
+
+    acquired = DataGovSgSnapshotDownloader(
+        opener=opener,
+        sleeper=sleeps.append,
+        download_request_attempts=2,
+        download_retry_base_seconds=0.5,
+    ).download(tmp_path)
+
+    assert acquired.path.read_bytes() == csv_payload
+    assert acquired.bytes_written == len(csv_payload)
+    assert sleeps == [0.5]
 
 
 def test_api_key_initiates_refresh_and_is_not_forwarded_to_signed_download(tmp_path: Path):
