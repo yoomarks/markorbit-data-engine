@@ -336,7 +336,7 @@ def cn_case(application_number: str):
             f"""
             SELECT *
             FROM markorbit_facts.cn_observed_event FINAL
-            WHERE application_number = '{safe}'
+            PREWHERE application_number = '{safe}'
             ORDER BY event_date, observed_at, event_type
             """
         ),
