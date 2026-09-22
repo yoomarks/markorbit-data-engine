@@ -77,6 +77,8 @@ def test_projection_contract_is_exact_caex_hot_us_and_minimal_table():
     assert "us_event_history AS e FINAL" in sql
     assert "us_case_current AS c FINAL" in sql
     assert "FINAL AS" not in sql
+    assert "join_algorithm = 'grace_hash'" in sql
+    assert "max_bytes_before_external_group_by = 536870912" in sql
 
 
 def test_source_identity_is_event_class_serial_bounded():
@@ -85,6 +87,8 @@ def test_source_identity_is_event_class_serial_bounded():
     assert "event_code = 'CAEX'" in sql
     assert "event_type_code = 'O'" in sql
     assert "status_code = '900'" not in sql
+    assert "join_algorithm = 'grace_hash'" in sql
+    assert "grace_hash_join_initial_buckets = 64" in sql
 
 
 def test_snapshot_identity_binds_epoch_manifest_and_source_identity():
