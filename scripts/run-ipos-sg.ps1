@@ -86,17 +86,43 @@ function Get-CnServingSample {
     return $values[0]
 }
 
+function Invoke-RawHttpGet {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][int]$TimeoutSec
+    )
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = 'GET'
+    $request.Timeout = $TimeoutSec * 1000
+    $request.ReadWriteTimeout = $TimeoutSec * 1000
+    $response = $null
+    $reader = $null
+    try {
+        $response = [System.Net.HttpWebResponse]$request.GetResponse()
+        if ([int]$response.StatusCode -ne 200) {
+            throw "HTTP status is $([int]$response.StatusCode) for $Uri"
+        }
+        $reader = New-Object System.IO.StreamReader(
+            $response.GetResponseStream(),
+            [System.Text.Encoding]::UTF8,
+            $true
+        )
+        return $reader.ReadToEnd()
+    }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+}
+
 function Invoke-CnServingProbe {
     param(
         [Parameter(Mandatory = $true)][int]$ApiPort,
         [Parameter(Mandatory = $true)][string]$ApplicationNumber
     )
     $healthUri = "http://127.0.0.1:$ApiPort/api/health"
-    $healthResponse = Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Uri $healthUri
-    if ([int]$healthResponse.StatusCode -ne 200) {
-        throw "CN serving health HTTP status is $($healthResponse.StatusCode)."
-    }
-    $health = $healthResponse.Content | ConvertFrom-Json
+    $healthContent = Invoke-RawHttpGet -Uri $healthUri -TimeoutSec 20
+    $health = $healthContent | ConvertFrom-Json
     foreach ($name in @('api','postgres','clickhouse')) {
         if ([string]$health.$name -ne 'ok') {
             throw "CN serving dependency '$name' is not ok: $($health.$name)"
@@ -105,18 +131,15 @@ function Invoke-CnServingProbe {
 
     $encoded = [uri]::EscapeDataString($ApplicationNumber)
     $caseUri = "http://127.0.0.1:$ApiPort/api/cn/cases/$encoded"
-    $caseResponse = Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri $caseUri
-    if ([int]$caseResponse.StatusCode -ne 200) {
-        throw "CN serving case HTTP status is $($caseResponse.StatusCode)."
-    }
-    $payload = $caseResponse.Content | ConvertFrom-Json
+    $caseContent = Invoke-RawHttpGet -Uri $caseUri -TimeoutSec 30
+    $payload = $caseContent | ConvertFrom-Json
     if ([string]$payload.case.application_number -ne $ApplicationNumber) {
         throw "CN serving case identity drifted."
     }
     return [ordered]@{
         application_number = $ApplicationNumber
-        response_sha256 = Get-TextSha256 ([string]$caseResponse.Content)
-        response_bytes = [System.Text.Encoding]::UTF8.GetByteCount([string]$caseResponse.Content)
+        response_sha256 = Get-TextSha256 ([string]$caseContent)
+        response_bytes = [System.Text.Encoding]::UTF8.GetByteCount([string]$caseContent)
         scope_count = @($payload.scopes).Count
         goods_item_count = @($payload.goods_items).Count
         party_count = @($payload.parties).Count

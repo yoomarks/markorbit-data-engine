@@ -42,6 +42,9 @@ def test_ipos_sg_run_enforces_cn_serving_regression_gate() -> None:
     assert "Get-CnServingSample" in source
     assert "ORDER BY application_number LIMIT 1" in source
     assert "Invoke-CnServingProbe" in source
+    assert "Invoke-RawHttpGet" in source
+    assert "[System.Net.HttpWebRequest]::Create" in source
+    assert "Invoke-WebRequest" not in source
     assert "/api/health" in source
     assert "/api/cn/cases/$encoded" in source
     assert "Test-CnServingStable" in source
