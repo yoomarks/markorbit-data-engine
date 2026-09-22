@@ -14,7 +14,7 @@ def test_recovery_freezes_exact_accepted_topology() -> None:
     value = text()
     assert "markorbit-clickhouse" in value
     assert "24.8.14.39" in value
-    assert "d:\\markorbitdata\\production\\clickhouse\\hot_us.vhdx" in value
+    assert "e:\\markorbitdata\\production\\clickhouse\\hot_us.vhdx" in value
     assert "e:\\markorbitdata\\production\\clickhouse\\warm_cn.vhdx" in value
     assert "markorbit_prod_hot_us" in value
     assert "markorbit_prod_warm_cn" in value
