@@ -124,3 +124,9 @@ def test_apply_preserves_accepted_baseline_and_forbids_data_work() -> None:
 def test_both_scripts_have_windows_powershell_contract_mode() -> None:
     assert "HOT_GLOBAL_FOUNDATION_PREPARE_CONTRACT_PASS" in _prepare()
     assert "HOT_GLOBAL_FOUNDATION_APPLY_CONTRACT_PASS" in _apply()
+
+
+def test_prepare_tolerates_localized_wsl_help_exit_code() -> None:
+    text = _prepare()
+    assert "Invoke-NativeText 'wsl.exe' @('--help') -AllowFailure" in text
+    assert "if($help -notmatch '--vhd')" in text
