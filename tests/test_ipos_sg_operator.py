@@ -88,10 +88,9 @@ def corpus_report() -> FullCorpusAcceptanceReport:
     )
 
 
-def test_operator_uses_one_authenticated_materialization_path_and_never_reports_secret(
+def test_operator_uses_one_public_materialization_path_without_api_key(
     tmp_path: Path,
 ):
-    secret = "operator-secret-value"
     audits = iter([state_audit("EMPTY", safe=True), state_audit("READY", safe=True)])
     calls = {}
 
@@ -131,7 +130,6 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
     )
     report = run_ipos_operator(
         tmp_path,
-        api_key=secret,
         state_auditor=audit,
         storage_builder=lambda _state: storage_preflight(),
         live_probe=live_probe,
@@ -141,9 +139,9 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
         now=lambda: next(times),
     )
 
-    assert calls["live_api_key"] == secret
+    assert calls["live_api_key"] is None
     assert calls["resolve_download_url"] is False
-    assert calls["downloader_api_key"] == secret
+    assert calls["downloader_api_key"] is None
     assert calls["full_downloader"] is downloader
     assert calls["full_state"] == tmp_path
     assert calls["expected_live_rows"] == 875000
@@ -151,8 +149,7 @@ def test_operator_uses_one_authenticated_materialization_path_and_never_reports_
     assert report.status == "PASS"
     assert report.storage_preflight["status"] == "PASS"
     assert report.full_corpus["live_row_count_delta"] == 0
-    serialized = json.dumps(operator_report_payload(report), sort_keys=True)
-    assert secret not in serialized
+    json.dumps(operator_report_payload(report), sort_keys=True)
     assert not (tmp_path / ".operator.lock").exists()
     assert (tmp_path / "acceptance" / "operator_latest.json").exists()
 
