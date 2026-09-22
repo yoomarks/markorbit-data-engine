@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,6 +48,8 @@ class DataGovSgSnapshotDownloader:
         api_key: str | None = None,
         api_request_attempts: int = 3,
         api_retry_base_seconds: float = 1.0,
+        download_request_attempts: int = 4,
+        download_retry_base_seconds: float = 1.0,
     ) -> None:
         if max_poll_attempts < 1:
             raise ValueError("max_poll_attempts must be positive")
@@ -56,6 +59,10 @@ class DataGovSgSnapshotDownloader:
             raise ValueError("api_request_attempts must be positive")
         if api_retry_base_seconds < 0:
             raise ValueError("api_retry_base_seconds must not be negative")
+        if download_request_attempts < 1:
+            raise ValueError("download_request_attempts must be positive")
+        if download_retry_base_seconds < 0:
+            raise ValueError("download_retry_base_seconds must not be negative")
         self.source = source
         self._opener = opener
         self._sleeper = sleeper
@@ -66,6 +73,8 @@ class DataGovSgSnapshotDownloader:
         self.api_key = api_key
         self.api_request_attempts = api_request_attempts
         self.api_retry_base_seconds = api_retry_base_seconds
+        self.download_request_attempts = download_request_attempts
+        self.download_retry_base_seconds = download_retry_base_seconds
 
     def _request_json(self, url: str) -> dict[str, Any]:
         headers = {
@@ -156,38 +165,114 @@ class DataGovSgSnapshotDownloader:
             f"data.gov.sg download was not ready after {self.max_poll_attempts} polls{suffix}"
         )
 
+    @staticmethod
+    def _response_header(response: Any, name: str) -> str | None:
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return None
+        value = headers.get(name)
+        return str(value).strip() if value is not None else None
+
+    @staticmethod
+    def _content_range(value: str | None) -> tuple[int, int, int] | None:
+        if not value:
+            return None
+        match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", value.strip())
+        if not match:
+            return None
+        return tuple(int(group) for group in match.groups())
+
     def download(self, destination_directory: str | Path) -> AcquiredSnapshot:
-        """Stream the current snapshot to disk and publish it with an atomic rename."""
+        """Stream the current snapshot to disk and publish it with an atomic rename.
+
+        Large provider exports may terminate a connection cleanly before the declared
+        Content-Length has arrived. Keep the partial file private and resume the same
+        signed object with HTTP Range until its exact byte length is present.
+        """
         destination = Path(destination_directory)
         destination.mkdir(parents=True, exist_ok=True)
         final_path = destination / self.source.filename
         partial_path = destination / f".{self.source.filename}.part"
         download_url = self.resolve_download_url()
         retrieved_at = datetime.now(timezone.utc)
-        # Never forward the data.gov.sg API key to signed object storage.
-        request = Request(
-            download_url,
-            headers={
-                "Accept": "text/csv,application/octet-stream",
-                "User-Agent": "markorbit-data-engine/ipos-snapshot-acquisition",
-            },
-        )
-        bytes_written = 0
+        expected_total: int | None = None
+        partial_path.unlink(missing_ok=True)
 
         try:
-            with self._opener(request, timeout=self.timeout_seconds) as response:
-                with partial_path.open("wb") as target:
-                    while True:
-                        chunk = response.read(self.chunk_size)
-                        if not chunk:
-                            break
-                        target.write(chunk)
-                        bytes_written += len(chunk)
-                    target.flush()
-                    os.fsync(target.fileno())
+            for attempt in range(self.download_request_attempts):
+                offset = partial_path.stat().st_size if partial_path.exists() else 0
+                headers = {
+                    "Accept": "text/csv,application/octet-stream",
+                    "User-Agent": "markorbit-data-engine/ipos-snapshot-acquisition",
+                }
+                if offset:
+                    headers["Range"] = f"bytes={offset}-"
+                # Never forward the data.gov.sg API key to signed object storage.
+                request = Request(download_url, headers=headers)
 
+                request_failed = False
+                try:
+                    with self._opener(request, timeout=self.timeout_seconds) as response:
+                        if offset:
+                            content_range = self._content_range(
+                                self._response_header(response, "Content-Range")
+                            )
+                            if content_range is None or content_range[0] != offset:
+                                raise SnapshotDownloadError(
+                                    "data.gov.sg resume response did not honor the requested byte range"
+                                )
+                            if expected_total is not None and content_range[2] != expected_total:
+                                raise SnapshotDownloadError(
+                                    "data.gov.sg signed export size changed during resume"
+                                )
+                            expected_total = content_range[2]
+                        else:
+                            content_length = self._response_header(response, "Content-Length")
+                            if content_length:
+                                expected_total = int(content_length)
+
+                        with partial_path.open("ab" if offset else "wb") as target:
+                            while True:
+                                chunk = response.read(self.chunk_size)
+                                if not chunk:
+                                    break
+                                target.write(chunk)
+                            target.flush()
+                            os.fsync(target.fileno())
+                except (HTTPError, URLError, TimeoutError, OSError) as exc:
+                    request_failed = True
+                    if attempt + 1 >= self.download_request_attempts:
+                        raise SnapshotDownloadError(
+                            "data.gov.sg signed export download exhausted retries"
+                        ) from exc
+
+                if request_failed:
+                    self._sleeper(self.download_retry_base_seconds * float(2**attempt))
+                    continue
+
+                bytes_written = partial_path.stat().st_size if partial_path.exists() else 0
+                if expected_total is None:
+                    break
+                if bytes_written == expected_total:
+                    break
+                if bytes_written > expected_total:
+                    raise SnapshotDownloadError(
+                        "data.gov.sg signed export exceeded its declared byte length"
+                    )
+                if attempt + 1 >= self.download_request_attempts:
+                    raise SnapshotDownloadError(
+                        "data.gov.sg signed export ended before its declared byte length: "
+                        f"expected={expected_total} downloaded={bytes_written}"
+                    )
+                self._sleeper(self.download_retry_base_seconds * float(2**attempt))
+
+            bytes_written = partial_path.stat().st_size if partial_path.exists() else 0
             if bytes_written == 0:
                 raise SnapshotDownloadError("data.gov.sg returned an empty snapshot")
+            if expected_total is not None and bytes_written != expected_total:
+                raise SnapshotDownloadError(
+                    "data.gov.sg signed export byte length mismatch after download"
+                )
 
             loader = SnapshotCsvLoader(partial_path)
             validate_ipos_snapshot_schema(loader)
