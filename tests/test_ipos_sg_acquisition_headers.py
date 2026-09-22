@@ -39,4 +39,4 @@ def test_download_api_requests_send_explicit_user_agent():
     for request in requests:
         headers = {key.lower(): value for key, value in request.header_items()}
         assert headers["user-agent"] == "markorbit-data-engine/ipos-snapshot-acquisition"
-        assert headers["x-api-key"] == "secret-key"
+        assert "x-api-key" not in headers

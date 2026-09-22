@@ -81,9 +81,10 @@ class DataGovSgSnapshotDownloader:
             "Accept": "application/json",
             "User-Agent": "markorbit-data-engine/ipos-snapshot-acquisition",
         }
-        if self.api_key:
-            headers["x-api-key"] = self.api_key
-
+        # The current public v1 dataset export control plane is deliberately
+        # called without credential headers. data.gov.sg documents anonymous
+        # poll-download usage, and the production endpoint returns HTTP 400 when
+        # the current v2 API key is attached to these legacy v1 dataset routes.
         last_error: Exception | None = None
         for attempt in range(self.api_request_attempts):
             request = Request(url, headers=headers)
@@ -133,19 +134,18 @@ class DataGovSgSnapshotDownloader:
     def resolve_download_url(self) -> str:
         """Resolve the current whole-dataset export with bounded polling.
 
-        Authenticated operators explicitly initiate materialization before polling.
-        Anonymous public acceptance uses the already-materialized poll endpoint,
-        because data.gov.sg rejects anonymous initiate calls while permitting poll.
+        The public v1 dataset export control plane is invoked anonymously.
+        Initiation is always performed so the subsequent poll resolves a fresh
+        whole-dataset export instead of relying on a previously materialized URL.
         Transient control-plane failures use bounded exponential retry, while the
         outer poll loop remains the bound for materialization readiness.
         """
-        if self.api_key:
-            initiated = self._request_json(self.source.initiate_download_url)
-            if initiated.get("code") != 0:
-                raise SnapshotDownloadError(
-                    "data.gov.sg initiate-download rejected the request: "
-                    + self._api_error_detail(initiated)
-                )
+        initiated = self._request_json(self.source.initiate_download_url)
+        if initiated.get("code") != 0:
+            raise SnapshotDownloadError(
+                "data.gov.sg initiate-download rejected the request: "
+                + self._api_error_detail(initiated)
+            )
 
         last_payload: dict[str, Any] | None = None
         for attempt in range(self.max_poll_attempts):

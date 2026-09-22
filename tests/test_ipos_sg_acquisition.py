@@ -54,6 +54,7 @@ def test_anonymous_resolve_download_url_polls_until_ready():
     sleeps: list[float] = []
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 1, "errMsg": "Preparing download"}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
         ]
@@ -72,6 +73,7 @@ def test_anonymous_resolve_download_url_polls_until_ready():
 
     assert downloader.resolve_download_url() == "https://download.example/ipos.csv"
     assert calls == [
+        IPOS_SG_TRADEMARK_APPLICATIONS.initiate_download_url,
         IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
         IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
     ]
@@ -87,6 +89,8 @@ def test_control_plane_request_retries_transient_network_failure():
         calls += 1
         if calls == 1:
             raise URLError("temporary provider network failure")
+        if calls == 2:
+            return json_response({"code": 0, "data": {}})
         return json_response(
             {"code": 0, "data": {"url": "https://download.example/ipos.csv"}}
         )
@@ -100,7 +104,7 @@ def test_control_plane_request_retries_transient_network_failure():
     )
 
     assert downloader.resolve_download_url() == "https://download.example/ipos.csv"
-    assert calls == 2
+    assert calls == 3
     assert sleeps == [0.25]
 
 
@@ -127,7 +131,7 @@ def test_control_plane_request_does_not_retry_nontransient_http_error():
     assert sleeps == []
 
 
-def test_authenticated_initiate_provider_rejection_fails_before_polling():
+def test_initiate_provider_rejection_fails_before_polling():
     calls: list[str] = []
 
     def opener(request: Request, **kwargs):
@@ -136,7 +140,6 @@ def test_authenticated_initiate_provider_rejection_fails_before_polling():
 
     downloader = DataGovSgSnapshotDownloader(
         opener=opener,
-        api_key="secret-key",
         max_poll_attempts=1,
     )
 
@@ -150,6 +153,7 @@ def test_download_streams_valid_snapshot_and_publishes_atomically(tmp_path: Path
     csv_payload = valid_snapshot_bytes()
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(csv_payload),
         ]
@@ -175,6 +179,7 @@ def test_download_resumes_when_signed_export_ends_before_content_length(tmp_path
     sleeps: list[float] = []
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(
                 csv_payload[:split],
@@ -205,7 +210,7 @@ def test_download_resumes_when_signed_export_ends_before_content_length(tmp_path
 
     assert acquired.path.read_bytes() == csv_payload
     assert acquired.bytes_written == len(csv_payload)
-    assert requests[2].get_header("Range") == f"bytes={split}-"
+    assert requests[3].get_header("Range") == f"bytes={split}-"
     assert sleeps == [0.25]
 
 
@@ -215,6 +220,7 @@ def test_download_retries_transient_signed_object_failure_before_first_byte(tmp_
     sleeps: list[float] = []
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(csv_payload, {"Content-Length": str(len(csv_payload))}),
         ]
@@ -223,7 +229,7 @@ def test_download_retries_transient_signed_object_failure_before_first_byte(tmp_
     def opener(request: Request, **kwargs):
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 3:
             raise URLError("temporary signed object failure")
         return next(responses)
 
@@ -239,7 +245,7 @@ def test_download_retries_transient_signed_object_failure_before_first_byte(tmp_
     assert sleeps == [0.5]
 
 
-def test_api_key_initiates_refresh_and_is_not_forwarded_to_signed_download(tmp_path: Path):
+def test_api_key_is_not_forwarded_to_public_v1_export_or_signed_download(tmp_path: Path):
     csv_payload = valid_snapshot_bytes()
     responses = iter(
         [
@@ -260,13 +266,11 @@ def test_api_key_initiates_refresh_and_is_not_forwarded_to_signed_download(tmp_p
         IPOS_SG_TRADEMARK_APPLICATIONS.initiate_download_url,
         IPOS_SG_TRADEMARK_APPLICATIONS.poll_download_url,
     ]
-    api_headers = [dict(request.header_items()) for request in requests[:2]]
-    signed_headers = {key.lower(): value for key, value in requests[2].header_items()}
-    assert all(
-        any(key.lower() == "x-api-key" and value == "secret-key" for key, value in headers.items())
-        for headers in api_headers
-    )
-    assert "x-api-key" not in signed_headers
+    all_headers = [
+        {key.lower(): value for key, value in request.header_items()}
+        for request in requests
+    ]
+    assert all("x-api-key" not in headers for headers in all_headers)
 
 
 def test_download_rejects_schema_drift_without_replacing_existing_snapshot(tmp_path: Path):
@@ -275,6 +279,7 @@ def test_download_rejects_schema_drift_without_replacing_existing_snapshot(tmp_p
     invalid_payload = b"Application Number,Unexpected Status\nSG1,Pending\n"
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(invalid_payload),
         ]
@@ -308,6 +313,7 @@ def test_download_rejects_new_unknown_source_column_before_atomic_publish(tmp_pa
     invalid_payload = stream.getvalue().encode("utf-8")
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 0, "data": {"url": "https://download.example/ipos.csv"}}),
             FakeResponse(invalid_payload),
         ]
@@ -326,6 +332,7 @@ def test_download_rejects_new_unknown_source_column_before_atomic_publish(tmp_pa
 def test_resolve_download_url_fails_after_bounded_polls():
     responses = iter(
         [
+            json_response({"code": 0, "data": {}}),
             json_response({"code": 1, "errMsg": "still preparing"}),
             json_response({"code": 1, "errMsg": "still preparing"}),
         ]
