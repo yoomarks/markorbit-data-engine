@@ -74,6 +74,9 @@ def test_projection_contract_is_exact_caex_hot_us_and_minimal_table():
     assert "class_lineage_json" in sql and "owner_lineage_json" in sql
     assert "status_code = '900'" not in sql
     assert "TTAB" not in sql
+    assert "us_event_history AS e FINAL" in sql
+    assert "us_case_current AS c FINAL" in sql
+    assert "FINAL AS" not in sql
 
 
 def test_source_identity_is_event_class_serial_bounded():

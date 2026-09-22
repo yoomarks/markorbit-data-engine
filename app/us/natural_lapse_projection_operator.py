@@ -240,8 +240,8 @@ def _source_key_select() -> str:
                e.serial_number AS serial_number,
                e.event_date AS event_date,
                nice_class
-        FROM markorbit_facts.us_event_history FINAL AS e
-        INNER JOIN markorbit_facts.us_case_current FINAL AS c
+        FROM markorbit_facts.us_event_history AS e FINAL
+        INNER JOIN markorbit_facts.us_case_current AS c FINAL
             ON c.serial_number = e.serial_number AND c.is_deleted = 0
         INNER JOIN ({_class_projection_sql()}) AS cls
             ON cls.serial_number = e.serial_number
@@ -390,8 +390,8 @@ def projection_insert_sql(*, snapshot_id: str, source_manifest_fingerprint: str)
                    cls.class_source_rank,
                    ifNull(owners.owner_source_rank, toUInt64(0))
                ) AS projection_rank
-        FROM markorbit_facts.us_event_history FINAL AS e
-        INNER JOIN markorbit_facts.us_case_current FINAL AS c
+        FROM markorbit_facts.us_event_history AS e FINAL
+        INNER JOIN markorbit_facts.us_case_current AS c FINAL
             ON c.serial_number = e.serial_number AND c.is_deleted = 0
         INNER JOIN ({_class_projection_sql()}) AS cls
             ON cls.serial_number = e.serial_number
