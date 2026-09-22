@@ -129,4 +129,6 @@ def test_both_scripts_have_windows_powershell_contract_mode() -> None:
 def test_prepare_tolerates_localized_wsl_help_exit_code() -> None:
     text = _prepare()
     assert "Invoke-NativeText 'wsl.exe' @('--help') -AllowFailure" in text
-    assert "if($help -notmatch '--vhd')" in text
+    assert ".Replace([string][char]0,'')" in text
+    assert "Where-Object{$_ -eq '--vhd'}" in text
+    assert "if($helpTokens.Count -lt 1)" in text
