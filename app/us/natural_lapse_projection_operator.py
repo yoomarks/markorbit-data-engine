@@ -264,7 +264,10 @@ def source_identity_sql() -> str:
                max(event_date) AS max_event_date
         FROM ({_source_key_select()})
         SETTINGS max_threads = 4, max_execution_time = 1800,
-                 max_memory_usage = 4294967296, use_uncompressed_cache = 0
+                 max_memory_usage = 4294967296, use_uncompressed_cache = 0,
+                 join_algorithm = 'grace_hash', grace_hash_join_initial_buckets = 64,
+                 max_bytes_before_external_group_by = 536870912,
+                 max_bytes_before_external_sort = 536870912
     """
 
 
@@ -403,7 +406,10 @@ def projection_insert_sql(*, snapshot_id: str, source_manifest_fingerprint: str)
           AND e.description_text = '{ADMITTED_DESCRIPTION}'
           AND e.event_date IS NOT NULL
         SETTINGS max_threads = 4, max_execution_time = 1800,
-                 max_memory_usage = 4294967296, use_uncompressed_cache = 0
+                 max_memory_usage = 4294967296, use_uncompressed_cache = 0,
+                 join_algorithm = 'grace_hash', grace_hash_join_initial_buckets = 64,
+                 max_bytes_before_external_group_by = 536870912,
+                 max_bytes_before_external_sort = 536870912
     """
 
 
