@@ -187,13 +187,30 @@ function Get-ServiceClickHouseBinding([string]$Service) {
 
 function Get-TargetVersion {
     Assert-TargetRunning
+    $pidFile = '/opt/markorbit-clickhouse-production/server.pid'
+    $pidProbe = Invoke-NativeText 'wsl.exe' @(
+        '-d',$script:TargetDistro,'-u','root','--',
+        'bash','-lc',"test -s '$pidFile' && cat '$pidFile'"
+    )
+    $pidLines = @($pidProbe.lines | Where-Object { $_.Trim() })
+    if ($pidLines.Count -ne 1 -or $pidLines[0].Trim() -notmatch '^\d+$') {
+        throw 'Accepted target ClickHouse PID file is missing or invalid.'
+    }
+    $serverPid = $pidLines[0].Trim()
+    $alive = Invoke-NativeText 'wsl.exe' @(
+        '-d',$script:TargetDistro,'-u','root','--',
+        'kill','-0',$serverPid
+    ) -AllowFailure
+    if ($alive.exit_code -ne 0) {
+        throw "Accepted target ClickHouse PID is not alive: $serverPid"
+    }
     $server = Invoke-NativeText 'wsl.exe' @(
         '-d',$script:TargetDistro,'-u','root','--',
         'pgrep','-f','[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml'
     )
-    $pids = @($server.lines | Where-Object { $_.Trim() -match '^\d+$' })
-    if ($pids.Count -ne 1) {
-        throw "Expected one accepted target ClickHouse server; observed=$($pids.Count)"
+    $pids = @($server.lines | Where-Object { $_.Trim() -match '^\d+$' } | ForEach-Object { $_.Trim() })
+    if ($pids -notcontains $serverPid) {
+        throw "Accepted target ClickHouse PID is not bound to the expected server command: $serverPid"
     }
     $version = Invoke-NativeText 'wsl.exe' @(
         '-d',$script:TargetDistro,'-u','root','--',
