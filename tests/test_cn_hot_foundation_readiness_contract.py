@@ -69,7 +69,11 @@ def test_cn_hot_readiness_requires_existing_source_and_target_runtimes() -> None
     assert "Source ClickHouse is not healthy" in text
     assert "'--list','--running','--quiet'" in text
     assert "is not already running; refusing to start it" in text
+    assert "/opt/markorbit-clickhouse-production/server.pid" in text
+    assert "'kill','-0',$serverPid" in text
     assert "[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml" in text
+    assert "Accepted target ClickHouse PID is not bound to the expected server command" in text
+    assert "Expected one accepted target ClickHouse server" not in text
 
 
 def test_cn_hot_readiness_records_current_api_and_worker_binding() -> None:
