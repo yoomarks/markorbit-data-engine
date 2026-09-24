@@ -50,7 +50,9 @@ def test_global_hot_readiness_requires_existing_target_runtime() -> None:
     assert "'--list', '--running', '--quiet'" in text
     assert "is not already running; refusing to start it" in text
     assert "pgrep" in text
-    assert "[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml" in text
+    assert (
+        "[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml" in text
+    )
 
 
 def test_global_hot_readiness_checks_e_capacity_without_guessing_allocation() -> None:
@@ -129,3 +131,12 @@ def test_global_hot_readiness_tolerates_missing_media_type() -> None:
     assert "function Get-OptionalPropertyValue" in text
     assert "Get-OptionalPropertyValue $disk 'MediaType'" in text
     assert "$disk.MediaType" not in text
+
+
+def test_global_hot_readiness_counts_only_server_child_not_watchdog_parent() -> None:
+    text = _text()
+    assert "pgrep" in text
+    assert "clckhouse-watch" in text
+    assert '"/proc/$($candidate.Trim())/comm"' in text
+    assert "$_.Trim() -eq 'clickhouse'" in text
+    assert "$pids.Count -ne 1" in text

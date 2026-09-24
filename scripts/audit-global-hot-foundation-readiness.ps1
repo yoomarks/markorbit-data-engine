@@ -114,7 +114,20 @@ function Get-TargetVersion {
         '-d', $script:TargetDistro, '-u', 'root', '--',
         'pgrep', '-f', '[c]lickhouse server --config-file=/opt/markorbit-clickhouse-production/config.xml'
     )
-    $pids = @($server.lines | Where-Object { $_.Trim() -match '^\d+$' })
+    $candidates = @($server.lines | Where-Object { $_.Trim() -match '^\d+$' })
+    # pgrep -f also matches ClickHouse's watchdog parent (clckhouse-watch).
+    # Count only the real server child with the verified production config path.
+    $pids = @(
+        foreach ($candidate in $candidates) {
+            $comm = Invoke-NativeText 'wsl.exe' @(
+                '-d', $script:TargetDistro, '-u', 'root', '--',
+                'cat', "/proc/$($candidate.Trim())/comm"
+            ) -AllowFailure
+            if ($comm.exit_code -eq 0 -and @($comm.lines | Where-Object {
+                $_.Trim() -eq 'clickhouse'
+            }).Count -eq 1) { $candidate.Trim() }
+        }
+    )
     if ($pids.Count -ne 1) { throw "Expected one accepted target ClickHouse server; observed=$($pids.Count)" }
     $version = Invoke-NativeText 'wsl.exe' @(
         '-d', $script:TargetDistro, '-u', 'root', '--',

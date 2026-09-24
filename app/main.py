@@ -12,6 +12,7 @@ from app.contact_ingest.admin_api import router as contact_admin_router
 from app.integration_api import router as integration_router
 from app.cn.citation_relation_admission_api import router as citation_relation_admission_router
 from app.cn.trademark_gazette_admission_api import router as trademark_gazette_admission_router
+from app.global_trademarks.hot_global_api import admission_router as global_hot_admission_router, read_router as global_hot_read_router
 from app.integration_runtime import install_integration_runtime
 from app.integration_transport import install_integration_transport
 from app.us.alert_api import router as us_alert_router
@@ -39,6 +40,8 @@ _core.app.include_router(admin_task_router)
 _core.app.include_router(contact_admin_router)
 _core.app.include_router(citation_relation_admission_router)
 _core.app.include_router(trademark_gazette_admission_router)
+_core.app.include_router(global_hot_admission_router)
+_core.app.include_router(global_hot_read_router)
 _core.app.include_router(integration_router)
 _core.app.include_router(us_alert_router)
 _core.app.include_router(us_case_360_router)
