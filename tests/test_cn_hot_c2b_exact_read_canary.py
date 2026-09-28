@@ -64,6 +64,30 @@ class C2bExactReadCanaryTests(unittest.TestCase):
             with self.subTest(sql=invalid), self.assertRaises(RuntimeError):
                 canary.capped_sql(invalid)
 
+    def test_real_multiline_route_sql_is_accepted_by_preflight_guard(self):
+        sys.path.insert(0, str(FILE.parents[1]))
+        from app.cn.discovery_preliminary_publication import (
+            PreliminaryPublicationDiscoveryRequest,
+            build_page_sql,
+        )
+
+        for key in ("10002014", '"10002014"'):
+            with self.subTest(raw_application_number=key):
+                req = PreliminaryPublicationDiscoveryRequest(
+                    application_number_start=key,
+                    application_number_end=key + "!",
+                    page_size=1,
+                    cursor=None,
+                )
+                actual = build_page_sql(req, fetch_limit=2)
+                self.assertRegex(actual, r"SELECT\s*\n")
+                bounded = canary.capped_sql(actual)
+                self.assertIn("FROM markorbit_facts.cn_case_current FINAL", bounded)
+                self.assertIn("max_rows_to_read=32768", bounded)
+                self.assertTrue(bounded.endswith(" FORMAT JSONCompact"))
+                with self.assertRaisesRegex(RuntimeError, "exact capped"):
+                    canary.capped_sql(actual.replace("LIMIT 2", "UNION ALL SELECT 1 LIMIT 2"))
+
     def test_client_decodes_uint64_without_changing_original_key(self):
         base = {
             "max_rows_to_read": 250000,
