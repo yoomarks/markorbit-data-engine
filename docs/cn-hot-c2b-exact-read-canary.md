@@ -38,3 +38,15 @@ API/worker startup, write cutover, merge execution or source reclamation.
 Do not turn the narrow two-sample result into global CN API serving
 acceptance. Additional representative samples, load/performance evidence
 and an approved bounded routing/rollback contract remain separate gates.
+
+## Real route SQL preflight guard
+
+The first authorized attempt failed closed before its first ClickHouse query:
+the route SQL renders `SELECT` followed by a newline, whereas the initial
+canary guard matched only `SELECT ` with an immediate space. No data read
+or success receipt resulted. The corrected validator accepts SQL whitespace
+while still requiring exactly one SELECT, the exact accepted FINAL table,
+route LIMIT 2 and strict resource settings. `--preflight-only` now renders
+both real request variants through the same SQL guard before reporting PASS.
+A change to the operator must pass code review and CI before execution;
+this fix does not expand the accepted plan or authorize serving cutover.

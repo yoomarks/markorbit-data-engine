@@ -103,11 +103,11 @@ def cli(backend: str) -> list[str]:
 def capped_sql(sql: str) -> str:
     statement = str(sql).strip()
     require(
-        statement.startswith("SELECT ") and ";" not in statement,
+        re.match(r"(?i)^SELECT\b", statement) is not None and ";" not in statement,
         "canary SQL must be one source route SELECT",
     )
     require(
-        statement.upper().count("SELECT ") == 1
+        len(re.findall(r"\bSELECT\b", statement, re.I)) == 1
         and re.search(r"\bFROM\s+markorbit_facts\.cn_case_current\s+FINAL\b", statement, re.I)
         is not None
         and re.search(r"\bLIMIT\s+2\s*$", statement, re.I) is not None,
@@ -255,6 +255,32 @@ def load_and_preflight(repo: Path) -> tuple[dict[str, Any], Any]:
         and all(s["latest_source_equals_target_raw"] for s in samples),
         "frozen two-key source/target raw witness drift",
     )
+    # Exercise the actual route SQL formatter in preflight: a syntactically
+    # valid synthetic SELECT is not proof that build_page_sql is accepted.
+    sys.path.insert(0, str(repo))
+    from app.cn.discovery_preliminary_publication import (
+        PreliminaryPublicationDiscoveryRequest,
+        build_page_sql,
+    )
+
+    for case in plan["read_canary"]["sample_ranges"]:
+        require(
+            case["page_size"] == 1
+            and case["cursor"] is None
+            and case["end_exclusive"] == case["start_inclusive"] + "!",
+            "unapproved preflight canary range",
+        )
+        request = PreliminaryPublicationDiscoveryRequest(
+            application_number_start=case["start_inclusive"],
+            application_number_end=case["end_exclusive"],
+            page_size=1,
+            cursor=None,
+        )
+        rendered = capped_sql(build_page_sql(request, fetch_limit=2))
+        require(
+            rendered.endswith(" FORMAT JSONCompact") and "max_rows_to_read=32768" in rendered,
+            "actual route SQL cannot be bounded for canary",
+        )
     return plan, planner["epoch"]
 
 
