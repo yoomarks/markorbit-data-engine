@@ -168,3 +168,25 @@ Do not enable a recurring acquisition schedule merely because code/CI is green. 
 10. failure/retry alerting and stale-lock recovery ownership are assigned.
 
 Until those gates are complete, Singapore acquisition remains explicit operator-driven execution.
+
+## Cost-gated SG source metadata pilot (#849)
+
+The operator may explicitly run a read-only public metadata check:
+python -m app.snapshot_delta.ipos_sg_metadata_probe --check
+The module only GETs the official dataset metadata endpoint; it never calls
+initiate-download, poll-download, or the CSV downloader. Use M/W/F 21:00 SGT
+as the proposed probe windows, at most once per window. The helper
+sg_metadata_probe_due does not install or enable a production scheduler.
+
+The returned lastUpdatedAt, dataset size and column-schema digest are
+untrusted change hints, not proof that the entire source CSV is unchanged.
+Until cross-validated with at least two independent accepted full snapshot
+hashes, a weekly full refresh remains due even if metadata matches. Same row
+count or matching source timestamp must not bypass that weekly reconciliation.
+Any metadata regression, schema mismatch, HTTP 429 or timeout requires
+operator review and must not advance the last-success watermark.
+
+The proposed retention tier (four logical weekly recovery points and three
+independent monthly backups) is a separate implementation and operator gate.
+Do not store additional full CSVs inside the active one-snapshot lifecycle.
+Do not enable a recurring schedule or modify current.json from this pilot.
