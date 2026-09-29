@@ -201,21 +201,27 @@ the active snapshot, the SG source download DAG, or the production scheduler.
 Before each planned full refresh, confirm the prior accepted snapshot already
 has its weekly restore point. On the first archive activation, take an initial
 weekly restore point before the next destructive snapshot cleanup. After each
-approved weekly full refresh, create the Sunday weekly point; do not overwrite
-an existing weekly slot if the accepted source changed midweek.
+approved weekly full refresh, create the Sunday weekly point. If the accepted
+source changes within the same week/month, preserve the first immutable slot
+manifest and create an immutable `<slot>--<content-sha256>.json` revision in
+that *same approved archive root*. Never overwrite the initial slot or store
+another copy when the exact content hash already exists there.
 
 An operator-provisioned archive root must already exist and be separate from
 the active SG lifecycle. Do not point the weekly archive into snapshots/.
 Each distinct SHA-256 has one archived CSV copy; identical weekly points reuse
-that copy. Keep the last four immutable weekly point manifests; a content
-object is deleted only after no retained weekly/monthly point references it.
+that copy. Keep the last four weekly *calendar slots*, preserving every accepted
+same-slot content revision within each retained week. A content object is
+deleted only after no retained weekly/monthly base or revision point references
+it. A malformed revision filename, manifest or referenced object blocks cleanup.
 
 Monthly backups require a separately approved filesystem, independent from the
 active source volume. The runtime rejects the same filesystem/device number.
 The operator must also prove *physical* isolation (distinct device or approved
 remote backup), not merely a second drive letter or partition of one disk.
-Keep the last three immutable monthly points on that independent target;
-identical content is deduplicated within the monthly backup target only.
+Keep the last three monthly *calendar slots* on that independent target,
+including any immutable same-month revisions; identical content is deduplicated
+within the monthly backup target only.
 The monthly root must not be a symlink or nested under the active state.
 
 An explicit one-shot operator call after target approval is:
@@ -224,7 +230,10 @@ python -m app.snapshot_delta.ipos_sg_snapshot_archive --state-root <accepted-sta
   --operator-approved-target
 A separate scratch-only restoration may use restore_archive_point() to validate
 a real copied CSV and SHA-256; it refuses an existing destination and does not
-promote a backup into current.json. Run a monthly restore drill before enabling
+promote a backup into current.json. For a same-slot revision pass
+`revision_sha256=<exact-content-sha256>` to verify_archive_point() or
+restore_archive_point(); omitting it restores the original immutable slot.
+Run a monthly restore drill before enabling
 production retention, and verify the destination's physical-device mapping.
 
 Each archive checks the active CSV SHA-256 and exact accepted operator report;
