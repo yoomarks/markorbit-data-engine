@@ -122,6 +122,18 @@ def _slot(tier: str, now: datetime) -> str:
     return f"{iso.year}-W{iso.week:02d}"
 
 
+def _point_path(root: Path, tier: str, slot: str, revision_sha256: str | None = None) -> Path:
+    """A source version never overwrites an immutable point in the same calendar slot."""
+    if tier not in _TIERS or not re.fullmatch(
+        r"[0-9]{4}-W[0-9]{2}" if tier == "weekly" else r"[0-9]{4}-[0-9]{2}", slot
+    ):
+        raise IposArchiveError("Invalid archive tier or slot")
+    if revision_sha256 is not None and not _SHA.fullmatch(revision_sha256):
+        raise IposArchiveError("Revision must be an exact accepted SHA-256")
+    stem = slot if revision_sha256 is None else f"{slot}--{revision_sha256}"
+    return root / "points" / tier / f"{stem}.json"
+
+
 def _guard_roots(state: Path, archive: Path, tier: str) -> None:
     if not state.is_dir() or not archive.is_dir():
         raise IposArchiveError("State and operator-approved archive roots must exist")
@@ -168,11 +180,11 @@ def _copy_verified(snapshot: Path, destination: Path, content_hash: str, root: P
         partial.unlink(missing_ok=True)
 
 
-def verify_archive_point(root: str | Path, tier: str, slot: str) -> dict[str, Any]:
-    if tier not in _TIERS or not re.fullmatch(r"[0-9]{4}-(?:W[0-9]{2}|[0-9]{2})", slot):
-        raise IposArchiveError("Invalid archive tier or slot")
+def verify_archive_point(
+    root: str | Path, tier: str, slot: str, *, revision_sha256: str | None = None
+) -> dict[str, Any]:
     archive = Path(root)
-    point_path = archive / "points" / tier / f"{slot}.json"
+    point_path = _point_path(archive, tier, slot, revision_sha256)
     if any(
         path.is_symlink()
         for path in (
@@ -191,6 +203,7 @@ def verify_archive_point(root: str | Path, tier: str, slot: str) -> dict[str, An
         point.get("contract") != ARCHIVE_CONTRACT
         or point.get("tier") != tier
         or point.get("slot") != slot
+        or (revision_sha256 is not None and content_hash != revision_sha256)
         or not isinstance(content_hash, str)
         or not _SHA.fullmatch(content_hash)
         or point.get("object_reference") != expected
@@ -205,7 +218,14 @@ def verify_archive_point(root: str | Path, tier: str, slot: str) -> dict[str, An
     return point
 
 
-def restore_archive_point(root: str | Path, tier: str, slot: str, destination: str | Path) -> Path:
+def restore_archive_point(
+    root: str | Path,
+    tier: str,
+    slot: str,
+    destination: str | Path,
+    *,
+    revision_sha256: str | None = None,
+) -> Path:
     """Verify and restore into a new scratch file; never mutate production current."""
     archive = Path(root)
     target = Path(destination)
@@ -216,7 +236,7 @@ def restore_archive_point(root: str | Path, tier: str, slot: str, destination: s
         or target.resolve().is_relative_to(archive.resolve())
     ):
         raise IposArchiveError("Restore target must be a new file outside archive")
-    point = verify_archive_point(archive, tier, slot)
+    point = verify_archive_point(archive, tier, slot, revision_sha256=revision_sha256)
     source = archive / point["object_reference"]
     partial = target.with_name("." + target.name + "." + uuid.uuid4().hex + ".part")
     try:
@@ -237,13 +257,21 @@ def restore_archive_point(root: str | Path, tier: str, slot: str, destination: s
         partial.unlink(missing_ok=True)
 
 
+def _point_slot(path: Path, tier: str) -> tuple[str, str | None]:
+    """Resolve strict V1 slot or immutable same-slot content revision identity."""
+    stem = path.stem
+    slot, separator, revision = stem.partition("--")
+    _point_path(Path("."), tier, slot, revision if separator else None)
+    if separator and not revision:
+        raise IposArchiveError("Archive revision has no SHA-256")
+    return slot, revision if separator else None
+
+
 def _retention(root: Path, tier: str) -> None:
     """Retain last four weekly/three monthly points; collect only unreferenced objects."""
     points_dir = root / "points" / tier
     points = sorted(points_dir.glob("*.json"))
-    valid_slot = r"[0-9]{4}-W[0-9]{2}" if tier == "weekly" else r"[0-9]{4}-[0-9]{2}"
-    if any(not re.fullmatch(valid_slot, point.stem) for point in points):
-        raise IposArchiveError("Unknown archive point prevents automatic pruning")
+    slots = sorted({_point_slot(point, tier)[0] for point in points})
     # Validate all tier references before destructive cleanup, including a
     # second tier if an operator deliberately configured a shared archive root.
     all_points: dict[str, list[Path]] = {}
@@ -252,10 +280,8 @@ def _retention(root: Path, tier: str) -> None:
         if directory.is_symlink():
             raise IposArchiveError("Archive point directory cannot be a symlink")
         candidates = sorted(directory.glob("*.json"))
-        pattern = r"[0-9]{4}-W[0-9]{2}" if existing_tier == "weekly" else r"[0-9]{4}-[0-9]{2}"
-        if any(not re.fullmatch(pattern, path.stem) for path in candidates):
-            raise IposArchiveError("Unknown archive point prevents object cleanup")
         for candidate in candidates:
+            slot, revision = _point_slot(candidate, existing_tier)
             if candidate.is_symlink():
                 raise IposArchiveError("Archive point cannot be a symlink")
             record = _read_json(candidate)
@@ -263,7 +289,8 @@ def _retention(root: Path, tier: str) -> None:
             if (
                 record.get("contract") != ARCHIVE_CONTRACT
                 or record.get("tier") != existing_tier
-                or record.get("slot") != candidate.stem
+                or record.get("slot") != slot
+                or (revision is not None and digest != revision)
                 or not isinstance(digest, str)
                 or not _SHA.fullmatch(digest)
                 or record.get("object_reference") != f"objects/{digest}.csv"
@@ -271,8 +298,10 @@ def _retention(root: Path, tier: str) -> None:
             ):
                 raise IposArchiveError("Invalid existing archive point prevents pruning")
         all_points[existing_tier] = candidates
-    for expired in points[: -_TIERS[tier]]:
-        expired.unlink()
+    expired_slots = set(slots[: -_TIERS[tier]])
+    for expired in points:
+        if _point_slot(expired, tier)[0] in expired_slots:
+            expired.unlink()
     referenced = {
         _read_json(point)["content_hash"]
         for existing_tier in _TIERS
@@ -301,13 +330,21 @@ def archive_accepted_current(
     with ipos_operator_lease(state):
         snapshot, manifest, report_sha = _accepted_current(state)
         content_hash = manifest["content_hash"]
-        point_path = archive / "points" / tier / f"{slot}.json"
-        if point_path.is_symlink():
+        base_path = _point_path(archive, tier, slot)
+        if base_path.is_symlink():
             raise IposArchiveError("Archive point cannot be a symlink")
-        if point_path.exists():
+        revision_sha256 = None
+        if base_path.exists():
             previous = verify_archive_point(archive, tier, slot)
             if previous["content_hash"] != content_hash:
-                raise IposArchiveError("Archive slot already contains a different accepted version")
+                revision_sha256 = content_hash
+        point_path = _point_path(archive, tier, slot, revision_sha256)
+        if point_path.is_symlink():
+            raise IposArchiveError("Archive revision cannot be a symlink")
+        if point_path.exists():
+            previous = verify_archive_point(archive, tier, slot, revision_sha256=revision_sha256)
+            if previous["content_hash"] != content_hash:
+                raise IposArchiveError("Archive revision conflicts with accepted source")
             _retention(archive, tier)
             return previous
         objects = archive / "objects"
@@ -330,7 +367,7 @@ def archive_accepted_current(
             "source_revision_trusted": False,
         }
         _atomic_json(point_path, point)
-        verify_archive_point(archive, tier, slot)
+        verify_archive_point(archive, tier, slot, revision_sha256=revision_sha256)
         _retention(archive, tier)
         return point
 

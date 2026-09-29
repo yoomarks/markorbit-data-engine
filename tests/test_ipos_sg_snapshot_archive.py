@@ -167,16 +167,39 @@ def test_corrupt_source_and_receipt_cannot_create_restore_point(tmp_path: Path):
     assert not (state / ".operator.lock").exists()
 
 
-def test_existing_point_cannot_be_overwritten_by_same_slot_new_version(tmp_path: Path):
-    state, weekly = tmp_path / "active", tmp_path / "weekly"
-    state.mkdir()
-    weekly.mkdir()
+def test_same_slot_new_version_is_immutable_revision_with_verified_restore(tmp_path: Path):
+    state, weekly, scratch = tmp_path / "active", tmp_path / "weekly", tmp_path / "scratch"
+    for directory in (state, weekly, scratch):
+        directory.mkdir()
     first = accepted(state)
     archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW)
-    accepted(state, b"changed corpus")
-    with pytest.raises(archive.IposArchiveError, match="different accepted version"):
-        archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW + timedelta(hours=2))
+    second = accepted(state, b"changed corpus")
+    revision = archive.archive_accepted_current(
+        state, weekly, tier="weekly", now=NOW + timedelta(hours=2)
+    )
+    assert revision["content_hash"] == second
     assert archive.verify_archive_point(weekly, "weekly", "2026-W40")["content_hash"] == first
+    assert (
+        archive.verify_archive_point(weekly, "weekly", "2026-W40", revision_sha256=second)
+        == revision
+    )
+    assert len(list((weekly / "points" / "weekly").glob("*.json"))) == 2
+    assert (
+        archive.restore_archive_point(
+            weekly, "weekly", "2026-W40", scratch / "old.csv"
+        ).read_bytes()
+        == b"SG,verified corpus\n"
+    )
+    assert (
+        archive.restore_archive_point(
+            weekly, "weekly", "2026-W40", scratch / "new.csv", revision_sha256=second
+        ).read_bytes()
+        == b"changed corpus"
+    )
+    assert (
+        archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW + timedelta(hours=3))
+        == revision
+    )
 
 
 def test_archive_object_tampering_fails_closed_without_replacing_evidence(tmp_path: Path):
@@ -268,3 +291,84 @@ def test_tampered_source_or_archive_does_not_overwrite_active_current(tmp_path: 
         archive.verify_archive_point(weekly, "weekly", "2026-W40")
     assert (state / "current.json").read_bytes() == pointer
     assert (weekly / "points" / "weekly" / "2026-W40.json").read_bytes() == point
+
+
+def test_revision_retention_counts_calendar_slots_and_only_deletes_unreferenced(tmp_path: Path):
+    state, weekly = tmp_path / "active", tmp_path / "weekly"
+    state.mkdir()
+    weekly.mkdir()
+    first = accepted(state, b"week-zero-old")
+    archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW)
+    revised = accepted(state, b"week-zero-revised")
+    archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW)
+    kept = {}
+    for week in range(1, 5):
+        original = accepted(state, f"week-{week}-first".encode())
+        point = archive.archive_accepted_current(
+            state, weekly, tier="weekly", now=NOW + timedelta(weeks=week)
+        )
+        kept[point["slot"]] = original
+        if week == 2:
+            second = accepted(state, b"week-two-revised")
+            archive.archive_accepted_current(
+                state, weekly, tier="weekly", now=NOW + timedelta(weeks=week, hours=1)
+            )
+            kept["week-two-revised"] = second
+    points = list((weekly / "points" / "weekly").glob("*.json"))
+    assert len(points) == 5  # Four calendar slots, two versions in week 2.
+    assert not (weekly / "objects" / f"{first}.csv").exists()
+    assert not (weekly / "objects" / f"{revised}.csv").exists()
+    assert not (weekly / "points" / "weekly" / "2026-W40.json").exists()
+    assert (
+        archive.verify_archive_point(
+            weekly, "weekly", "2026-W42", revision_sha256=kept["week-two-revised"]
+        )["content_hash"]
+        == kept["week-two-revised"]
+    )
+    assert len(list((weekly / "objects").glob("*.csv"))) == 5
+
+
+def test_same_month_revision_is_independent_and_restorable(tmp_path: Path, monkeypatch):
+    state, monthly, scratch = tmp_path / "active", tmp_path / "monthly", tmp_path / "scratch"
+    for directory in (state, monthly, scratch):
+        directory.mkdir()
+    monkeypatch.setattr(archive, "_guard_roots", lambda *_args: None)
+    first = accepted(state, b"first-in-month")
+    archive.archive_accepted_current(state, monthly, tier="monthly", now=NOW)
+    second = accepted(state, b"second-in-month")
+    archive.archive_accepted_current(state, monthly, tier="monthly", now=NOW)
+    assert archive.verify_archive_point(monthly, "monthly", "2026-09")["content_hash"] == first
+    assert (
+        archive.restore_archive_point(
+            monthly, "monthly", "2026-09", scratch / "new.csv", revision_sha256=second
+        ).read_bytes()
+        == b"second-in-month"
+    )
+    assert (
+        archive.restore_archive_point(
+            monthly, "monthly", "2026-09", scratch / "old.csv"
+        ).read_bytes()
+        == b"first-in-month"
+    )
+    with pytest.raises(archive.IposArchiveError, match="Revision"):
+        archive.verify_archive_point(monthly, "monthly", "2026-09", revision_sha256="../")
+
+
+def test_tampered_revision_manifest_blocks_retention_and_preserves_current(tmp_path: Path):
+    state, weekly = tmp_path / "active", tmp_path / "weekly"
+    state.mkdir()
+    weekly.mkdir()
+    accepted(state, b"first-version")
+    archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW)
+    revised = accepted(state, b"revised-version")
+    archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW)
+    broken = weekly / "points" / "weekly" / f"2026-W40--{revised}.json"
+    point = json.loads(broken.read_text())
+    point["content_hash"] = "0" * 64
+    _json(broken, point)
+    accepted(state, b"following-week")
+    pointer = (state / "current.json").read_bytes()
+    with pytest.raises(archive.IposArchiveError, match="Invalid existing archive point"):
+        archive.archive_accepted_current(state, weekly, tier="weekly", now=NOW + timedelta(days=7))
+    assert (state / "current.json").read_bytes() == pointer
+    assert broken.is_file()
