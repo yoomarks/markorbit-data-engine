@@ -7,11 +7,10 @@ from pathlib import Path
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 except ModuleNotFoundError:
+
     class BaseSettings:
         def __init__(self, *args, **kwargs) -> None:
-            raise ModuleNotFoundError(
-                "pydantic-settings is required for full application Settings"
-            )
+            raise ModuleNotFoundError("pydantic-settings is required for full application Settings")
 
     SettingsConfigDict = dict
     _PYDANTIC_SETTINGS_AVAILABLE = False
@@ -110,6 +109,9 @@ class Settings(BaseSettings):
     # Governed Fact Candidate admission uses separate owner-plane credentials.
     # Unlike the read-only integration API, admission never has a disabled mode.
     fact_admission_api_keys: str = ""
+    # Separate, default-off operator gate for LA full-index/detail V2 admissions.
+    # Never enabled by the pilot, schema migration, or owner API startup.
+    global_hot_full_baseline_enabled: bool = False
 
     # MO-DE-005 backpressure is opt-in so G0 changes no live runtime defaults.
     # When enabled, the default envelope is 120 requests per 60 seconds for each

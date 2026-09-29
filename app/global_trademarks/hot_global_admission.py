@@ -9,7 +9,11 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, parse_qsl
 
 CONTRACT_VERSION = "GLOBAL_TRADEMARK_STRUCTURED_ADMISSION_V1"
+FULL_BASELINE_CONTRACT_VERSION = "GLOBAL_TRADEMARK_STRUCTURED_ADMISSION_V2"
 MAPPING_VERSION = "GLOBAL_TRADEMARK_NORMALIZED_V1"
+FULL_INDEX_PAGE_SIZE = 50
+FULL_INDEX_MAX_PAGES = 2000
+FULL_INDEX_MAX_RECORDS = FULL_INDEX_PAGE_SIZE * FULL_INDEX_MAX_PAGES
 TABLE = "markorbit_facts.global_trademark_hot_observation"
 SOURCE = "LA_DIPO_WOPUBLISH_TRADEMARKS"
 _SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -54,7 +58,7 @@ CREATE TABLE IF NOT EXISTS markorbit_facts.global_trademark_hot_observation
     source_id LowCardinality(String),
     source_record_id String,
     observation_kind LowCardinality(String),
-    page_index UInt8,
+    page_index UInt16,
     mapping_version String,
     source_response_sha256 FixedString(64),
     evidence_sha256 FixedString(64),
@@ -137,6 +141,7 @@ def _text(value: Any, label: str, maximum: int = 4096, optional: bool = False) -
 
 
 def _source_uri(value: Any, kind: str) -> str:
+    is_index = kind in ("LIST_PAGE", "FULL_INDEX_PAGE")
     uri = _text(value, "source_uri")
     assert uri is not None
     parsed = urlsplit(uri)
@@ -145,14 +150,14 @@ def _source_uri(value: Any, kind: str) -> str:
     if ";jsessionid=" in uri.lower():
         raise HotGlobalAdmissionError("source_uri must not include Wicket session identifiers")
     expected_path = "/wopublish-search/public/" + (
-        "trademarks" if kind == "LIST_PAGE" else "detail/trademarks"
+        "trademarks" if is_index else "detail/trademarks"
     )
     if parsed.path != expected_path:
         raise HotGlobalAdmissionError("source_uri path does not match observation_kind")
     params = parse_qsl(parsed.query, keep_blank_values=True)
-    if kind == "LIST_PAGE" and parsed.query != "0":
+    if is_index and parsed.query != "0":
         raise HotGlobalAdmissionError("list source_uri must be the canonical first-page URL")
-    if kind == "DETAIL" and (
+    if not is_index and (
         len(params) != 1 or params[0][0] != "id" or not _LA_ID.fullmatch(params[0][1])
     ):
         raise HotGlobalAdmissionError("detail source_uri requires one LA source record ID")
@@ -222,7 +227,7 @@ def _record(value: Any, kind: str, detail_id: str | None) -> dict[str, Any]:
     if re.search(r"(?i)jsessionid|psusr|token|cookie|authorization", native_json):
         raise HotGlobalAdmissionError("source_native_fields cannot contain authentication metadata")
     record["source_native_json"] = native_json
-    if kind == "LIST_PAGE" and any(
+    if kind in ("LIST_PAGE", "FULL_INDEX_PAGE") and any(
         record[name] is not None
         for name in (
             "application_number",
@@ -240,6 +245,7 @@ def _record(value: Any, kind: str, detail_id: str | None) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class NormalizedAdmission:
+    contract_version: str
     kind: str
     page: int
     source_uri: str
@@ -248,14 +254,23 @@ class NormalizedAdmission:
     source_response_sha256: str
     observed_at: datetime
     records: tuple[dict[str, Any], ...]
+    source_total: int | None = None
 
 
 def normalize(package: Mapping[str, Any]) -> NormalizedAdmission:
     if not isinstance(package, dict):
         raise HotGlobalAdmissionError("admission package must be a JSON object")
-    _exact(package, _ALLOWED_PACKAGE, "package")
+    version = package.get("contract_version")
+    if version not in (CONTRACT_VERSION, FULL_BASELINE_CONTRACT_VERSION):
+        raise HotGlobalAdmissionError("Unsupported Global Hot admission contract version")
+    full_baseline = version == FULL_BASELINE_CONTRACT_VERSION
+    _exact(
+        package,
+        _ALLOWED_PACKAGE | frozenset({"source_total"}) if full_baseline else _ALLOWED_PACKAGE,
+        "package",
+    )
     required = {
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": version,
         "mapping_version": MAPPING_VERSION,
         "source_owner": "MARKORBIT_KNOWLEDGE",
         "jurisdiction": "LA",
@@ -265,11 +280,33 @@ def normalize(package: Mapping[str, Any]) -> NormalizedAdmission:
         if package.get(key) != expected:
             raise HotGlobalAdmissionError(key + " must equal " + expected)
     kind = package.get("observation_kind")
-    if kind not in ("LIST_PAGE", "DETAIL"):
-        raise HotGlobalAdmissionError("only bounded LA LIST_PAGE or DETAIL admitted")
+    allowed_kinds = ("FULL_INDEX_PAGE", "FULL_DETAIL") if full_baseline else ("LIST_PAGE", "DETAIL")
+    if kind not in allowed_kinds:
+        raise HotGlobalAdmissionError("observation_kind is outside the versioned LA contract")
     page = package.get("page_index")
-    if isinstance(page, bool) or page not in ((1, 2) if kind == "LIST_PAGE" else (0,)):
-        raise HotGlobalAdmissionError("page_index outside LA pilot bound")
+    is_index = kind in ("LIST_PAGE", "FULL_INDEX_PAGE")
+    source_total: int | None = None
+    if not full_baseline:
+        if isinstance(page, bool) or page not in ((1, 2) if is_index else (0,)):
+            raise HotGlobalAdmissionError("page_index outside LA pilot bound")
+        count = FULL_INDEX_PAGE_SIZE if is_index else 1
+    elif is_index:
+        source_total = package.get("source_total")
+        if (
+            isinstance(source_total, bool)
+            or not isinstance(source_total, int)
+            or source_total <= FULL_INDEX_PAGE_SIZE * 2
+            or source_total > FULL_INDEX_MAX_RECORDS
+        ):
+            raise HotGlobalAdmissionError("full index requires a bounded official source_total")
+        pages = (source_total + FULL_INDEX_PAGE_SIZE - 1) // FULL_INDEX_PAGE_SIZE
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1 or page > pages:
+            raise HotGlobalAdmissionError("full index page_index exceeds official source_total")
+        count = min(FULL_INDEX_PAGE_SIZE, source_total - (page - 1) * FULL_INDEX_PAGE_SIZE)
+    else:
+        if page != 0 or isinstance(page, bool) or "source_total" in package:
+            raise HotGlobalAdmissionError("full detail requires page_index 0 without source_total")
+        count = 1
     uri = _source_uri(package.get("source_uri"), kind)
     canonical = _text(package.get("evidence_canonical_uri"), "evidence_canonical_uri")
     if (
@@ -280,7 +317,7 @@ def normalize(package: Mapping[str, Any]) -> NormalizedAdmission:
         raise HotGlobalAdmissionError("evidence_canonical_uri must reference Knowledge LA artifact")
     expected_canonical = (
         ("la-dipo://wopublish/trademarks/list/page/" + str(page) + "/redacted-response")
-        if kind == "LIST_PAGE"
+        if is_index
         else (
             "la-dipo://wopublish/trademarks/detail/"
             + dict(parse_qsl(urlsplit(uri).query))["id"]
@@ -302,15 +339,14 @@ def normalize(package: Mapping[str, Any]) -> NormalizedAdmission:
         raise HotGlobalAdmissionError("observed_at requires timezone")
     instant = instant.astimezone(timezone.utc)
     values = package.get("records")
-    count = 50 if kind == "LIST_PAGE" else 1
     if not isinstance(values, list) or len(values) != count:
-        raise HotGlobalAdmissionError("bounded pilot record count mismatch")
-    detail_id = dict(parse_qsl(urlsplit(uri).query)).get("id") if kind == "DETAIL" else None
+        raise HotGlobalAdmissionError("bounded source page/detail record count mismatch")
+    detail_id = dict(parse_qsl(urlsplit(uri).query)).get("id") if not is_index else None
     rows = tuple(_record(item, kind, detail_id) for item in values)
     if len({row["source_record_id"] for row in rows}) != len(rows):
         raise HotGlobalAdmissionError("duplicate source_record_id in one source response")
     return NormalizedAdmission(
-        kind, page, uri, canonical, evidence_sha, response_sha, instant, rows
+        version, kind, page, uri, canonical, evidence_sha, response_sha, instant, rows, source_total
     )
 
 
@@ -321,6 +357,11 @@ def _fingerprint(row: dict[str, Any], admission: NormalizedAdmission) -> str:
             "_evidence_sha256": admission.evidence_sha256,
             "_evidence_canonical_uri": admission.evidence_canonical_uri,
             "_source_uri": admission.source_uri,
+            **(
+                {"_source_total": admission.source_total}
+                if admission.source_total is not None
+                else {}
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -350,6 +391,16 @@ def require_hot_global_ready(client: Any) -> None:
         raise RuntimeError("global trademark table is missing or not bound to hot_global_only")
 
 
+def require_hot_global_full_baseline_ready(client: Any) -> None:
+    """Full LA pages fail closed until a separately approved UInt16 migration."""
+    columns = client.query(
+        "SELECT type FROM system.columns WHERE database = 'markorbit_facts' "
+        "AND table = 'global_trademark_hot_observation' AND name = 'page_index'"
+    ).result_rows
+    if columns != [("UInt16",)]:
+        raise RuntimeError("Full LA baseline requires the reviewed UInt16 page_index migration")
+
+
 def install_hot_global_schema(client: Any) -> None:
     """Explicit operator migration only; never called from HTTP requests."""
     disks = client.query(
@@ -371,6 +422,8 @@ def install_hot_global_schema(client: Any) -> None:
 def admit(package: Mapping[str, Any], *, client: Any) -> dict[str, Any]:
     normalized = normalize(package)
     require_hot_global_ready(client)
+    if normalized.contract_version == FULL_BASELINE_CONTRACT_VERSION:
+        require_hot_global_full_baseline_ready(client)
     query = (
         "SELECT source_record_id, record_sha256 FROM "
         + TABLE
@@ -431,7 +484,7 @@ def admit(package: Mapping[str, Any], *, client: Any) -> dict[str, Any]:
     if len(after) != len(readback) or after != expected:
         raise RuntimeError("hot_global read-back incomplete; receipt must not claim success")
     return {
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": normalized.contract_version,
         "outcome": "BOUNDED_OBSERVATIONS_ADMITTED",
         "jurisdiction": "LA",
         "source_id": SOURCE,
@@ -444,4 +497,7 @@ def admit(package: Mapping[str, Any], *, client: Any) -> dict[str, Any]:
         "evidence_sha256": normalized.evidence_sha256,
         "storage_placement": "hot_global",
         "current_state_verified": False,
+        **(
+            {"source_total": normalized.source_total} if normalized.source_total is not None else {}
+        ),
     }

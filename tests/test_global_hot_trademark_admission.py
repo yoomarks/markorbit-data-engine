@@ -6,6 +6,7 @@ import pytest
 
 from app.global_trademarks.hot_global_admission import (
     CONTRACT_VERSION,
+    FULL_BASELINE_CONTRACT_VERSION,
     DDL,
     MAPPING_VERSION,
     SOURCE,
@@ -24,8 +25,9 @@ class Result:
 
 
 class HotGlobalClient:
-    def __init__(self, *, ready=True):
+    def __init__(self, *, ready=True, full_ready=False):
         self.ready = ready
+        self.full_ready = full_ready
         self.rows: dict[tuple[str, str], str] = {}
         self.insert_calls: list = []
         self.commands: list[str] = []
@@ -35,6 +37,8 @@ class HotGlobalClient:
             return Result([("hot_global", 1000, 500)] if self.ready else [])
         if "FROM system.storage_policies" in sql:
             return Result([("hot_global_only", "main", ["hot_global"])] if self.ready else [])
+        if "FROM system.columns" in sql and "page_index" in sql:
+            return Result([("UInt16" if self.full_ready else "UInt8",)])
         if sql.startswith("SHOW CREATE TABLE"):
             return Result([(DDL,)] if self.ready else [])
         if "SELECT source_record_id, record_sha256" in sql:
@@ -221,3 +225,110 @@ def test_explicit_schema_install_only_with_target_hot_global_disk_policy():
     client = HotGlobalClient()
     install_hot_global_schema(client)
     assert client.commands == ["CREATE DATABASE IF NOT EXISTS markorbit_facts", DDL]
+
+
+def full_page(*, page: int, total: int = 73531):
+    value = package(page=page)
+    value["contract_version"] = FULL_BASELINE_CONTRACT_VERSION
+    value["observation_kind"] = "FULL_INDEX_PAGE"
+    value["source_total"] = total
+    value["source_response_sha256"] = f"{page:064x}"
+    last_page_count = total - (page - 1) * 50
+    value["records"] = value["records"][: min(50, max(0, last_page_count))]
+    return value
+
+
+def test_full_index_contract_accepts_actual_last_page_size_and_1471st_page():
+    assert "page_index UInt16" in DDL
+    assert normalize(full_page(page=1)).source_total == 73531
+    last = normalize(full_page(page=1471))
+    assert last.kind == "FULL_INDEX_PAGE"
+    assert last.page == 1471
+    assert len(last.records) == 31
+    assert all(item["registration_number"] is None for item in last.records)
+
+
+def test_full_index_gate_blocks_old_uint8_production_schema_without_writes():
+    client = HotGlobalClient(full_ready=False)
+    with pytest.raises(RuntimeError, match="UInt16"):
+        admit(full_page(page=3), client=client)
+    assert client.insert_calls == []
+    assert client.rows == {}
+
+
+def test_full_index_later_page_and_detail_replay_under_uint16_schema():
+    client = HotGlobalClient(full_ready=True)
+    page = full_page(page=1471)
+    receipt = admit(page, client=client)
+    assert receipt["contract_version"] == FULL_BASELINE_CONTRACT_VERSION
+    assert receipt["record_count"] == 31
+    assert receipt["source_total"] == 73531
+    assert receipt["page_index"] == 1471
+    assert receipt["current_state_verified"] is False
+    assert admit(page, client=client)["replayed"] is True
+    detail = package(kind="DETAIL")
+    detail["contract_version"] = FULL_BASELINE_CONTRACT_VERSION
+    detail["observation_kind"] = "FULL_DETAIL"
+    assert admit(detail, client=client)["record_count"] == 1
+    assert admit(detail, client=client)["replayed"] is True
+    assert len(client.rows) == 32
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"source_total": 100},
+        {"source_total": 100001},
+        {"source_total": True},
+        {"source_total": "73531"},
+        {"page_index": 1472},
+        {"page_index": 65536},
+        {"page_index": -1},
+        {"page_index": 0},
+        {"observation_kind": "LIST_PAGE"},
+    ],
+)
+def test_full_index_rejects_unbounded_or_legacy_pilot_scope(changed):
+    with pytest.raises(HotGlobalAdmissionError):
+        normalize({**full_page(page=1), **changed})
+
+
+def test_full_index_rejects_missing_ids_and_declared_total_replay_drift():
+    value = full_page(page=1471)
+    value["records"] = value["records"][:-1]
+    with pytest.raises(HotGlobalAdmissionError, match="record count"):
+        normalize(value)
+    client = HotGlobalClient(full_ready=True)
+    original = full_page(page=3)
+    admit(original, client=client)
+    conflicted = full_page(page=3, total=73530)
+    with pytest.raises(HotGlobalAdmissionError, match="conflicting mapped facts"):
+        admit(conflicted, client=client)
+    assert len(client.insert_calls) == 1
+
+
+def test_full_detail_rejects_list_source_total_and_legal_number_guess():
+    detail = package(kind="DETAIL")
+    detail["contract_version"] = FULL_BASELINE_CONTRACT_VERSION
+    detail["observation_kind"] = "FULL_DETAIL"
+    with pytest.raises(HotGlobalAdmissionError, match="source_total"):
+        normalize({**detail, "source_total": 73531})
+    detail["records"][0]["registration_number"] = "LA55159"
+    with pytest.raises(HotGlobalAdmissionError, match="cannot be inferred"):
+        normalize(detail)
+
+
+def test_full_index_api_default_off_even_when_signed_pilot_is_valid(monkeypatch):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app.global_trademarks import hot_global_api
+
+    monkeypatch.setattr(
+        hot_global_api,
+        "get_settings",
+        lambda: SimpleNamespace(global_hot_full_baseline_enabled=False),
+    )
+    with pytest.raises(HTTPException) as exc:
+        hot_global_api.admit_global_observations(full_page(page=3))
+    assert exc.value.status_code == 400
+    assert "disabled" in exc.value.detail["message"]
