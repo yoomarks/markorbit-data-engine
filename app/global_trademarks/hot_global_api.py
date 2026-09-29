@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.config import get_settings
 from app.db import clickhouse_client
 from app.fact_admission_security import require_fact_admission_auth
 from app.global_trademarks.execution import (
@@ -13,6 +14,7 @@ from app.global_trademarks.execution import (
 )
 from app.global_trademarks.hot_global_admission import (
     CONTRACT_VERSION,
+    FULL_BASELINE_CONTRACT_VERSION,
     SOURCE,
     TABLE,
     HotGlobalAdmissionError,
@@ -38,6 +40,13 @@ read_router = APIRouter(
 def admit_global_observations(package: dict[str, Any]) -> dict[str, Any]:
     try:
         normalized = normalize(package)
+        if (
+            normalized.contract_version == FULL_BASELINE_CONTRACT_VERSION
+            and not get_settings().global_hot_full_baseline_enabled
+        ):
+            raise HotGlobalAdmissionError(
+                "Full LA baseline admission is disabled until approved production activation"
+            )
         with global_trademark_execution_lock(
             "global-hot:" + SOURCE + ":" + normalized.source_response_sha256
         ):
