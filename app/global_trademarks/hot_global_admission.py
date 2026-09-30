@@ -419,6 +419,19 @@ def install_hot_global_schema(client: Any) -> None:
     require_hot_global_ready(client)
 
 
+def _persisted_record_sha256(value: Any) -> str:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = bytes(value).decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise HotGlobalAdmissionError("persisted record_sha256 is not ASCII") from exc
+    if not isinstance(value, str) or not _SHA.fullmatch(value):
+        raise HotGlobalAdmissionError("persisted record_sha256 is invalid")
+    return value
+
+
 def admit(package: Mapping[str, Any], *, client: Any) -> dict[str, Any]:
     normalized = normalize(package)
     require_hot_global_ready(client)
@@ -438,7 +451,10 @@ def admit(package: Mapping[str, Any], *, client: Any) -> dict[str, Any]:
         "response_sha": normalized.source_response_sha256,
         "mapping": MAPPING_VERSION,
     }
-    present = client.query(query, parameters=params).result_rows
+    present = [
+        (identity, _persisted_record_sha256(digest))
+        for identity, digest in client.query(query, parameters=params).result_rows
+    ]
     seen = dict(present)
     if len(seen) != len(present):
         raise HotGlobalAdmissionError("duplicate persisted observations for one evidence identity")
@@ -479,7 +495,10 @@ def admit(package: Mapping[str, Any], *, client: Any) -> dict[str, Any]:
                 ]
             )
         client.insert(TABLE, rows, column_names=list(COLUMNS))
-    readback = client.query(query, parameters=params).result_rows
+    readback = [
+        (identity, _persisted_record_sha256(digest))
+        for identity, digest in client.query(query, parameters=params).result_rows
+    ]
     after = dict(readback)
     if len(after) != len(readback) or after != expected:
         raise RuntimeError("hot_global read-back incomplete; receipt must not claim success")
