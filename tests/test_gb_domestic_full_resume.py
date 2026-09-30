@@ -52,7 +52,7 @@ def live():
 class GBDomesticFullResumeTests(unittest.TestCase):
     def test_merged_pilot_dependency_is_exact(self):
         self.assertEqual(
-            full.sha(Path(full.pilot.__file__)),
+            full.canonical_text_sha(Path(full.pilot.__file__)),
             full.PILOT_OPERATOR_SHA,
         )
 

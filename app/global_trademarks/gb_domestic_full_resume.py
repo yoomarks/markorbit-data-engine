@@ -25,7 +25,7 @@ PILOT_RECEIPT = GOV / "gb-domestic-pg-pilot-r1.json"
 PILOT_RECEIPT_SHA = "3d233767b09e1265a0728f264b5806cb0675214acae5d7cd8d3cb790f780c9f1"
 PILOT_AUDIT = GOV / "gb-domestic-pg-pilot-independent-audit-r1.json"
 PILOT_AUDIT_SHA = "b9aac974a4db02e2813deefa20ec66e2d7fc5977ea7c1074c77925cccc6df947"
-PILOT_OPERATOR_SHA = "bacf2d6caa800958d8572bfbd6861dce392a162e82ab4d0a1d4c70322b44187a"
+PILOT_OPERATOR_SHA = "d086bd0efad9953279d0d788417c0e65496078f1a61ba1a4cc939d64405a918a"
 
 
 def require(ok: bool, why: str) -> None:
@@ -39,6 +39,11 @@ def sha(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def canonical_text_sha(path: Path) -> str:
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def verify_prior_acceptance() -> dict[str, Any]:
@@ -71,7 +76,7 @@ def verify_prior_acceptance() -> dict[str, Any]:
         "independent GB pilot audit contract drift",
     )
     require(
-        sha(Path(pilot.__file__)) == PILOT_OPERATOR_SHA,
+        canonical_text_sha(Path(pilot.__file__)) == PILOT_OPERATOR_SHA,
         "merged first-1,000 pilot dependency SHA drift",
     )
     return {"receipt": receipt, "audit": audit}
@@ -168,7 +173,7 @@ def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
         "pilot_receipt_sha256": PILOT_RECEIPT_SHA,
         "pilot_independent_audit_sha256": PILOT_AUDIT_SHA,
         "pilot_operator_sha256": PILOT_OPERATOR_SHA,
-        "full_resume_operator_sha256": sha(Path(__file__)),
+        "full_resume_operator_sha256": canonical_text_sha(Path(__file__)),
         "schema_sql_sha256": hashlib.sha256(pilot.SCHEMA_SQL.encode("utf-8")).hexdigest(),
         "disk_reserve_preflight": reserve,
         "historical_source_only": True,
@@ -193,7 +198,7 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
         and plan["pilot_receipt_sha256"] == PILOT_RECEIPT_SHA
         and plan["pilot_independent_audit_sha256"] == PILOT_AUDIT_SHA
         and plan["pilot_operator_sha256"] == PILOT_OPERATOR_SHA
-        and plan["full_resume_operator_sha256"] == sha(Path(__file__))
+        and plan["full_resume_operator_sha256"] == canonical_text_sha(Path(__file__))
         and plan["schema_sql_sha256"]
         == hashlib.sha256(pilot.SCHEMA_SQL.encode("utf-8")).hexdigest()
         and plan["historical_source_only"] is True
