@@ -24,8 +24,8 @@ reviewed byte budgets for every governed E placement.
 
 The V2 roles are intentionally asymmetric:
 
-- D NVMe owns primary `hot_cn` and `hot_us` serving;
-- E NVMe owns `hot_global` and all Warm growth (`warm_cn`, `warm_us`,
+- D NVMe owns primary `hot_cn` serving only;
+- E NVMe owns `hot_us`, `hot_global`, and all Warm growth (`warm_cn`, `warm_us`,
   `warm_global`);
 - F HDD is the authority for immutable Raw, backup/recovery, and original visual
   assets, and is not primary MergeTree serving storage.
@@ -33,8 +33,8 @@ The V2 roles are intentionally asymmetric:
 Every physical drive and every named Hot/Warm VHDX retains a 30% recommended
 free-space reserve and a 20% hard floor. E allocation is calculated only after
 the recommended physical reserve. The contract deliberately does not guess
-equal or percentage splits: byte budgets for `warm_cn`, `hot_global`, `warm_us`,
-and `warm_global` must come from measured, reviewed workload evidence, must
+equal or percentage splits: byte budgets for `hot_us`, `hot_global`, `warm_cn`,
+`warm_us`, and `warm_global` must come from measured, reviewed workload evidence, must
 conserve the allocatable pool, and cannot overcommit E. A dedicated future-
 jurisdiction disk must be carved from the matching Global budget.
 

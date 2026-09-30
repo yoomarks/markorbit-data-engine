@@ -21,8 +21,9 @@ def test_topology_freezes_physical_roles_reserves_and_non_authority() -> None:
     topology = build_storage_topology()
 
     assert topology["contract_version"] == CONTRACT_VERSION
-    assert topology["physical_drives"]["D"]["placements"] == ["hot_cn", "hot_us"]
+    assert topology["physical_drives"]["D"]["placements"] == ["hot_cn"]
     assert topology["physical_drives"]["E"]["placements"] == [
+        "hot_us",
         "hot_global",
         "warm_cn",
         "warm_us",
@@ -43,18 +44,23 @@ def test_topology_freezes_physical_roles_reserves_and_non_authority() -> None:
     assert topology["vhdx_reserve_policy"]["hard_free_bps"] == 2_000
     assert topology["monitoring"]["automatic_remediation"] is False
     assert topology["e_allocation_policy"]["placements"] == [
-        "warm_cn",
+        "hot_us",
         "hot_global",
+        "warm_cn",
         "warm_us",
         "warm_global",
     ]
-    assert all(value is False for key, value in topology["constraints"].items() if "authorized" in key)
+    assert all(
+        value is False for key, value in topology["constraints"].items() if "authorized" in key
+    )
 
 
 def test_default_placement_is_deterministic_for_cn_us_and_other_jurisdictions() -> None:
     assert placement_for("CN", "hot") == {"drive": "D", "placement": "hot_cn"}
-    assert placement_for("US", "hot") == {"drive": "D", "placement": "hot_us"}
+    assert placement_for("US", "hot") == {"drive": "E", "placement": "hot_us"}
     assert placement_for("SG", "hot") == {"drive": "E", "placement": "hot_global"}
+    assert placement_for("GB", "hot") == {"drive": "E", "placement": "hot_global"}
+    assert placement_for("LA", "hot") == {"drive": "E", "placement": "hot_global"}
     assert placement_for("US", "warm") == {"drive": "E", "placement": "warm_us"}
     assert placement_for("EU", "warm") == {"drive": "E", "placement": "warm_global"}
     assert placement_for("CN", "original_visual") == {
@@ -67,10 +73,11 @@ def test_e_budgets_conserve_capacity_after_recommended_reserve() -> None:
     budgets = e_allocation_budgets(
         2_000 * GIB,
         {
-            "warm_cn": 840 * GIB,
+            "hot_us": 100 * GIB,
             "hot_global": 200 * GIB,
-            "warm_us": 100 * GIB,
-            "warm_global": 60 * GIB,
+            "warm_cn": 840 * GIB,
+            "warm_us": 40 * GIB,
+            "warm_global": 20 * GIB,
         },
     )
 
@@ -129,10 +136,7 @@ def test_inventory_audit_emits_physical_and_vhdx_alerts_without_remediation() ->
 
 def test_inventory_accepts_governed_future_jurisdiction_vhdx_name() -> None:
     report = evaluate_capacity_inventory(
-        {
-            drive: {"total_bytes": 100, "free_bytes": 30}
-            for drive in ("D", "E", "F")
-        },
+        {drive: {"total_bytes": 100, "free_bytes": 30} for drive in ("D", "E", "F")},
         {"hot_sg": {"total_bytes": 100, "free_bytes": 30}},
     )
 
@@ -145,15 +149,16 @@ def test_inventory_cli_emits_machine_readable_audit(tmp_path, monkeypatch, capsy
         json.dumps(
             {
                 "physical_drives": {
-                    name: {"total_bytes": 100, "free_bytes": 30}
-                    for name in ("D", "E", "F")
+                    name: {"total_bytes": 100, "free_bytes": 30} for name in ("D", "E", "F")
                 },
                 "vhdx_disks": {"hot_us": {"total_bytes": 100, "free_bytes": 30}},
             }
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("sys.argv", ["storage_topology_v2", "--compact", "--inventory", str(inventory)])
+    monkeypatch.setattr(
+        "sys.argv", ["storage_topology_v2", "--compact", "--inventory", str(inventory)]
+    )
 
     assert main() == 0
     report = json.loads(capsys.readouterr().out)
@@ -217,7 +222,7 @@ def test_regulatory_isolation_only_makes_placement_eligible_for_review() -> None
         lambda: e_allocation_budgets(-1),
         lambda: e_allocation_budgets(
             100,
-            {"warm_cn": 71, "hot_global": 0, "warm_us": 0, "warm_global": 0},
+            {"hot_us": 0, "warm_cn": 71, "hot_global": 0, "warm_us": 0, "warm_global": 0},
         ),
         lambda: evaluate_physical_capacity({"D": {}, "E": {}}),
         lambda: evaluate_physical_capacity(
