@@ -25,9 +25,10 @@ class Result:
 
 
 class HotGlobalClient:
-    def __init__(self, *, ready=True, full_ready=False):
+    def __init__(self, *, ready=True, full_ready=False, fixed_string_bytes=False):
         self.ready = ready
         self.full_ready = full_ready
+        self.fixed_string_bytes = fixed_string_bytes
         self.rows: dict[tuple[str, str], str] = {}
         self.insert_calls: list = []
         self.commands: list[str] = []
@@ -44,7 +45,10 @@ class HotGlobalClient:
         if "SELECT source_record_id, record_sha256" in sql:
             return Result(
                 [
-                    (identity, sha)
+                    (
+                        identity,
+                        sha.encode("ascii") if self.fixed_string_bytes else sha,
+                    )
                     for (source_sha, identity), sha in self.rows.items()
                     if source_sha == parameters["response_sha"]
                 ]
@@ -187,6 +191,18 @@ def test_100_unique_pilot_ids_and_detail_are_idempotent_hot_global_observations(
     assert admit(package(page=1), client=client)["replayed"] is True
     assert len(client.insert_calls) == 3
     assert "storage_policy = 'hot_global_only'" in DDL
+
+
+def test_fixedstring_digest_bytes_are_normalized_for_write_readback_and_replay():
+    client = HotGlobalClient(fixed_string_bytes=True)
+    first = admit(package(page=1), client=client)
+    replay = admit(package(page=1), client=client)
+    assert first["inserted_count"] == 50
+    assert first["replayed"] is False
+    assert replay["inserted_count"] == 0
+    assert replay["replayed"] is True
+    assert len(client.rows) == 50
+    assert len(client.insert_calls) == 1
 
 
 def test_identical_source_evidence_with_conflicting_mapping_fails_closed():
