@@ -10,7 +10,7 @@ from typing import Any, Mapping
 CONTRACT_VERSION = "DATA_ENGINE_STORAGE_TOPOLOGY_V2"
 RECOMMENDED_FREE_BPS = 3_000
 HARD_FREE_BPS = 2_000
-E_PLACEMENTS = ("warm_cn", "hot_global", "warm_us", "warm_global")
+E_PLACEMENTS = ("hot_us", "hot_global", "warm_cn", "warm_us", "warm_global")
 VHDX_NAME = re.compile(r"^(?:hot|warm)_[a-z0-9]+(?:_[a-z0-9]+)*$")
 
 
@@ -27,13 +27,13 @@ def build_storage_topology() -> dict[str, Any]:
         "physical_drives": {
             "D": {
                 "media": "NVME",
-                "role": "PRIMARY_CN_US_HOT",
-                "placements": ["hot_cn", "hot_us"],
+                "role": "PRIMARY_CN_HOT",
+                "placements": ["hot_cn"],
             },
             "E": {
                 "media": "NVME",
-                "role": "GLOBAL_HOT_AND_ALL_WARM_GROWTH",
-                "placements": ["hot_global", "warm_cn", "warm_us", "warm_global"],
+                "role": "US_GLOBAL_HOT_AND_ALL_WARM_GROWTH",
+                "placements": ["hot_us", "hot_global", "warm_cn", "warm_us", "warm_global"],
             },
             "F": {
                 "media": "HDD",
@@ -117,8 +117,7 @@ def e_allocation_budgets(
     if set(requested) != set(E_PLACEMENTS):
         raise ValueError("E allocations must contain exactly the governed placements")
     allocations = {
-        name: _non_negative_int(requested[name], f"e_allocations.{name}")
-        for name in E_PLACEMENTS
+        name: _non_negative_int(requested[name], f"e_allocations.{name}") for name in E_PLACEMENTS
     }
     allocated = sum(allocations.values())
     if allocated > allocatable:
@@ -224,9 +223,7 @@ def evaluate_capacity_inventory(
         if state != "READY":
             alerts.append(
                 {
-                    "severity": "CRITICAL"
-                    if state == "BLOCKED_BELOW_HARD_RESERVE"
-                    else "WARNING",
+                    "severity": "CRITICAL" if state == "BLOCKED_BELOW_HARD_RESERVE" else "WARNING",
                     "dimension": "vhdx",
                     "name": name,
                     "state": state,
@@ -285,7 +282,9 @@ def dedicated_jurisdiction_review(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Print the read-only Storage Topology V2 contract.")
+    parser = argparse.ArgumentParser(
+        description="Print the read-only Storage Topology V2 contract."
+    )
     parser.add_argument("--compact", action="store_true")
     parser.add_argument(
         "--inventory",
