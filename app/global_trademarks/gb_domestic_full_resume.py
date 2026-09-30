@@ -151,8 +151,34 @@ def verify_live_checkpoint(proof: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def _disk_reserve_gate() -> dict[str, dict[str, int]]:
+    current = pilot.require_disk_reserve()
+    return {
+        drive: {"reserve_bytes": int(values["reserve_bytes"])}
+        for drive, values in sorted(current.items())
+    }
+
+
+def verify_apply_disk_reserve(
+    gate: dict[str, dict[str, int]],
+) -> dict[str, dict[str, int]]:
+    current = pilot.require_disk_reserve()
+    require(set(current) == set(gate), "GB Domestic disk set changed")
+    for drive, frozen in gate.items():
+        live = current[drive]
+        require(
+            int(live["reserve_bytes"]) == int(frozen["reserve_bytes"]),
+            f"GB Domestic {drive}: reserve floor changed",
+        )
+        require(
+            int(live["free_bytes"]) >= int(frozen["reserve_bytes"]),
+            f"GB Domestic {drive}: free space below frozen reserve floor",
+        )
+    return current
+
+
 def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    reserve = pilot.require_disk_reserve()
+    reserve_gate = _disk_reserve_gate()
     return {
         "kind": "GB_DOMESTIC_HISTORICAL_FULL_RESUME_PLAN_V1",
         "status": "FROZEN_NO_APPLY",
@@ -175,7 +201,7 @@ def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
         "pilot_operator_sha256": PILOT_OPERATOR_SHA,
         "full_resume_operator_sha256": canonical_text_sha(Path(__file__)),
         "schema_sql_sha256": hashlib.sha256(pilot.SCHEMA_SQL.encode("utf-8")).hexdigest(),
-        "disk_reserve_preflight": reserve,
+        "disk_reserve_gate": reserve_gate,
         "historical_source_only": True,
         "current_state_verified": False,
         "journal_ingest_authorized": False,
@@ -201,6 +227,11 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
         and plan["full_resume_operator_sha256"] == canonical_text_sha(Path(__file__))
         and plan["schema_sql_sha256"]
         == hashlib.sha256(pilot.SCHEMA_SQL.encode("utf-8")).hexdigest()
+        and set(plan["disk_reserve_gate"]) == {"D", "E"}
+        and all(
+            set(values) == {"reserve_bytes"} and int(values["reserve_bytes"]) > 0
+            for values in plan["disk_reserve_gate"].values()
+        )
         and plan["historical_source_only"] is True
         and plan["current_state_verified"] is False
         and plan["journal_ingest_authorized"] is False
@@ -226,7 +257,7 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
         live["checkpoint_source_ordinal"] == plan["start_checkpoint_source_ordinal"],
         "GB Domestic live checkpoint no longer matches frozen plan",
     )
-    reserve = pilot.require_disk_reserve()
+    reserve = verify_apply_disk_reserve(plan["disk_reserve_gate"])
     spec = proof["spec"]
     committed = int(live["rows_committed"])
     accepted = int(live["accepted_committed"])
@@ -337,7 +368,7 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
         "api_cutover_authorized": False,
         "clickhouse_cutover_authorized": False,
         "source_cleanup_authorized": False,
-        "disk_reserve_preflight": reserve,
+        "disk_reserve_apply_snapshot": reserve,
     }
     with receipt.open("x", encoding="utf-8") as stream:
         json.dump(payload, stream, ensure_ascii=False, sort_keys=True, indent=2)

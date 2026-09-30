@@ -88,6 +88,67 @@ class GBDomesticFullResumeTests(unittest.TestCase):
         self.assertFalse(plan["api_cutover_authorized"])
         self.assertFalse(plan["clickhouse_cutover_authorized"])
         self.assertFalse(plan["source_cleanup_authorized"])
+        self.assertEqual(
+            plan["disk_reserve_gate"],
+            {"D": {"reserve_bytes": 5}, "E": {"reserve_bytes": 5}},
+        )
+        self.assertNotIn("free_bytes", str(plan["disk_reserve_gate"]))
+
+    def test_dynamic_free_space_does_not_change_frozen_plan(self):
+        with patch.object(
+            full.pilot,
+            "require_disk_reserve",
+            return_value={
+                "D": {"free_bytes": 10, "reserve_bytes": 5},
+                "E": {"free_bytes": 20, "reserve_bytes": 5},
+            },
+        ):
+            first = full.make_plan(proof(), live())
+        with patch.object(
+            full.pilot,
+            "require_disk_reserve",
+            return_value={
+                "D": {"free_bytes": 999, "reserve_bytes": 5},
+                "E": {"free_bytes": 888, "reserve_bytes": 5},
+            },
+        ):
+            second = full.make_plan(proof(), live())
+        self.assertEqual(first, second)
+
+    def test_apply_reserve_accepts_free_space_drift_but_not_floor_or_low_free(self):
+        gate = {"D": {"reserve_bytes": 5}, "E": {"reserve_bytes": 5}}
+        with patch.object(
+            full.pilot,
+            "require_disk_reserve",
+            return_value={
+                "D": {"free_bytes": 8, "reserve_bytes": 5},
+                "E": {"free_bytes": 7, "reserve_bytes": 5},
+            },
+        ):
+            current = full.verify_apply_disk_reserve(gate)
+        self.assertEqual(current["D"]["free_bytes"], 8)
+
+        with patch.object(
+            full.pilot,
+            "require_disk_reserve",
+            return_value={
+                "D": {"free_bytes": 8, "reserve_bytes": 6},
+                "E": {"free_bytes": 7, "reserve_bytes": 5},
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "reserve floor changed"):
+                full.verify_apply_disk_reserve(gate)
+
+        with patch.object(
+            full.pilot,
+            "require_disk_reserve",
+            return_value={
+                "D": {"free_bytes": 4, "reserve_bytes": 5},
+                "E": {"free_bytes": 7, "reserve_bytes": 5},
+            },
+        ):
+            with self.assertRaisesRegex(RuntimeError, "below frozen reserve floor"):
+                full.verify_apply_disk_reserve(gate)
 
     def test_authority_is_exact_and_bound_to_plan_sha(self):
         with patch.object(

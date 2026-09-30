@@ -20,6 +20,12 @@ disk-reserve failure or source-evidence drift fails closed. A crash can only
 leave the last committed checkpoint; a new frozen plan is then required before
 resume.
 
+The frozen plan records only the D:/E: reserve floors, not observed free bytes.
+Observed free bytes are intentionally dynamic and may change between plan freeze
+and Apply. Apply re-runs the live disk-reserve check, requires the same frozen
+reserve floors and requires current free bytes to remain at or above them.
+This keeps the authority plan deterministic without weakening the capacity gate.
+
 The final expected counts are 1,188,992 physical source rows, 1,188,886
 accepted rows and 106 quarantined malformed-width rows. Completion marks only
 the historical source ingest run COMPLETE. It does not claim current UKIPO
