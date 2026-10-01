@@ -26,6 +26,9 @@ file deletion, current-register assertion, or serving cutover. Exact authority:
 GO #855 GB-HISTORICAL-E-STAGE <plan-sha> ADDITIVE-COPY-VERIFY-NO-DELETE
 ```
 
-After authorized Apply, a separate independent E-vs-accepted-stage audit and a
-new E-bound full-resume plan are required. The 2018-era source status remains
+The authorized copy completed and was independently accepted without deleting
+D or F evidence. The E-bound reader pins the relocation receipt, E manifest and
+independent audit identities and rehashes E structured files plus F raw ZIPs
+before allowing a continuation preflight. A final full-resume plan still must be
+frozen from latest merged main. The 2018-era source status remains
 `historical_source_only=true` and `current_state_verified=false`.

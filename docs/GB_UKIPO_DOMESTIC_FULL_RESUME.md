@@ -1,17 +1,20 @@
 # GB Domestic historical full resume (#855)
 
-> **SUPERSEDED / DO NOT APPLY:** this version reads its structured JSONL from D:.
-> Post-#837 topology reserves D for `hot_cn`; GB structured/query data belongs on
-> E / `hot_global`. The code now rejects this legacy authority even with an old
-> exact token. A new full-resume plan may be frozen only after the governed E
-> structured stage is applied and independently accepted.
+> **V1 PLANS r1/r2 ARE SUPERSEDED / DO NOT APPLY.** They point at the legacy D
+> stage. D is `hot_cn` only. This V2 operator accepts only the independently
+> audited E structured stage; GB structured/query data stays on E / `hot_global`.
 
 This operator resumes the accepted UKIPO Domestic historical source-row ingest
 after the independently verified first-1,000-row production pilot.
 
 ## Frozen boundaries
 
-The source is the immutable 2018-era Domestic ZIP already staged and audited.
+The source is the immutable 2018-era Domestic ZIP retained on F and its
+byte-identical, independently accepted structured stage on E. The operator pins
+the source audit, relocation plan, relocation receipt, independent E audit,
+E-stage manifest and every accepted/quarantine JSONL hash. It rejects partial,
+unexpected, symlinked or junction-backed stage state.
+
 The production checkpoint must be exactly source ordinal 1,000 with 1,000
 accepted rows, zero quarantine rows, no rows beyond the checkpoint and no
 current-state assertions. The operator also pins the first-1,000 pilot receipt,
@@ -26,7 +29,7 @@ disk-reserve failure or source-evidence drift fails closed. A crash can only
 leave the last committed checkpoint; a new frozen plan is then required before
 resume.
 
-The frozen plan records only the D:/E: reserve floors, not observed free bytes.
+The frozen plan records only the E: reserve floor, not observed free bytes.
 Observed free bytes are intentionally dynamic and may change between plan freeze
 and Apply. Apply re-runs the live disk-reserve check, requires the same frozen
 reserve floors and requires current free bytes to remain at or above them.
@@ -39,8 +42,11 @@ register status.
 
 ## Production authority
 
-Preflight and plan freeze are read-only. After the code is merged, freeze the
-plan from clean merged main and review its SHA. Apply requires the exact token:
+Preflight and plan freeze are read-only. The E-stage reader and V2 continuation
+must first be independently reviewed and merged. Only then may the final plan
+be frozen from clean, latest main and its SHA reviewed. Any pre-merge output is
+diagnostic only and cannot be presented as the production authority plan.
+Apply requires the exact post-merge token:
 
 GO #855 GB-DOMESTIC-FULL-RESUME <plan-sha> CHECKPOINT-1000-TO-1188992
 
