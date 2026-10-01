@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ PILOT_PLAN = GOV / "gb-domestic-pg-pilot-plan-r1.json"
 PILOT_PLAN_SHA = "5e5c9a16d96d37068a130e8a5dec52fb0cb39dbe3f461638e90fdddb13ba4be2"
 PILOT_OPERATOR_SHA = "bacf2d6caa800958d8572bfbd6861dce392a162e82ab4d0a1d4c70322b44187a"
 REQUIRED_FREE_BUFFER = 64 * 1024**3
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def require(ok: bool, why: str) -> None:
@@ -49,6 +51,40 @@ def sha(path: Path) -> str:
 def canonical_text_sha(path: Path) -> str:
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _git(args: list[str]) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=45,
+    )
+    require(completed.returncode == 0, f"git {' '.join(args)} failed")
+    return completed.stdout.strip()
+
+
+def current_git_head() -> str:
+    head = _git(["rev-parse", "HEAD"]).lower()
+    require(re.fullmatch(r"[0-9a-f]{40}", head) is not None, "invalid Git HEAD identity")
+    return head
+
+
+def require_live_clean_main(expected: str | None = None) -> str:
+    require(
+        not _git(["status", "--porcelain=v1"]),
+        "GB Domestic production authority requires a clean worktree",
+    )
+    head = current_git_head()
+    remote = _git(["ls-remote", "origin", "refs/heads/main"]).split()
+    require(
+        len(remote) == 2 and remote[1] == "refs/heads/main" and remote[0].lower() == head,
+        "GB Domestic production authority requires live origin/main",
+    )
+    if expected is not None:
+        require(head == expected, "GB Domestic execution main drift")
+    return head
 
 
 def verify_prior_acceptance() -> dict[str, Any]:
@@ -200,11 +236,19 @@ def verify_apply_disk_reserve(
     return current
 
 
-def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
+def make_plan(
+    proof: dict[str, Any], live: dict[str, Any], *, execution_main: str | None = None
+) -> dict[str, Any]:
     reserve_gate = _disk_reserve_gate()
+    execution_main = current_git_head() if execution_main is None else execution_main
+    require(
+        re.fullmatch(r"[0-9a-f]{40}", execution_main) is not None,
+        "invalid GB Domestic execution main identity",
+    )
     return {
         "kind": "GB_DOMESTIC_HISTORICAL_E_FULL_RESUME_PLAN_V2",
         "status": "FROZEN_NO_APPLY",
+        "execution_main_sha": execution_main,
         "source_stream": STREAM,
         "source_zip_sha256": proof["spec"]["zip_sha"],
         "source_member": proof["spec"]["member"],
@@ -246,6 +290,7 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
     require(
         plan["kind"] == "GB_DOMESTIC_HISTORICAL_E_FULL_RESUME_PLAN_V2"
         and plan["status"] == "FROZEN_NO_APPLY"
+        and re.fullmatch(r"[0-9a-f]{40}", plan["execution_main_sha"]) is not None
         and plan["source_stream"] == STREAM
         and plan["start_checkpoint_source_ordinal"] == START_CHECKPOINT
         and plan["target_checkpoint_source_ordinal"] == TARGET_SOURCE_ROWS
@@ -291,6 +336,7 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
 
     receipt = GOV / "gb-domestic-e-full-resume-r1.json"
     require(not receipt.exists(), "GB Domestic full-resume receipt already exists; refuse replay")
+    require_live_clean_main(plan["execution_main_sha"])
     live = verify_live_checkpoint(proof)
     require(
         live["checkpoint_source_ordinal"] == plan["start_checkpoint_source_ordinal"],
@@ -394,6 +440,7 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
         "kind": "GB_DOMESTIC_HISTORICAL_E_FULL_RESUME_V2",
         "status": "DOMESTIC_HISTORICAL_SOURCE_COMPLETE_NOT_CURRENT_REGISTER",
         "plan_sha256": plan_sha,
+        "execution_main_sha": plan["execution_main_sha"],
         "source_zip_sha256": spec["zip_sha"],
         "source_rows_committed": committed,
         "accepted_rows_committed": accepted,
@@ -432,10 +479,16 @@ def main() -> None:
     parser.add_argument("--authority-token", default="")
     args = parser.parse_args()
 
+    execution_main = (
+        require_live_clean_main()
+        if args.freeze_plan is not None or args.apply_full
+        else current_git_head()
+    )
+
     verify_prior_acceptance()
     proof = e_stage.verify_e_stage(STREAM)
     live = verify_live_checkpoint(proof)
-    proposed = make_plan(proof, live)
+    proposed = make_plan(proof, live, execution_main=execution_main)
 
     if args.preflight_only:
         require(not args.plan and not args.authority_token, "preflight accepts no Apply arguments")

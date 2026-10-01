@@ -56,6 +56,38 @@ def live():
 
 
 class GBDomesticFullResumeTests(unittest.TestCase):
+    def test_production_authority_requires_clean_live_origin_main(self):
+        head = "a" * 40
+
+        def clean_main(args):
+            if args == ["status", "--porcelain=v1"]:
+                return ""
+            if args == ["rev-parse", "HEAD"]:
+                return head
+            if args == ["ls-remote", "origin", "refs/heads/main"]:
+                return f"{head}\trefs/heads/main"
+            self.fail(args)
+
+        with patch.object(full, "_git", side_effect=clean_main):
+            self.assertEqual(full.require_live_clean_main(head), head)
+
+        with patch.object(full, "_git", return_value="dirty"):
+            with self.assertRaisesRegex(RuntimeError, "clean worktree"):
+                full.require_live_clean_main()
+
+        def feature_branch(args):
+            if args == ["status", "--porcelain=v1"]:
+                return ""
+            if args == ["rev-parse", "HEAD"]:
+                return head
+            if args == ["ls-remote", "origin", "refs/heads/main"]:
+                return f"{'b' * 40}\trefs/heads/main"
+            self.fail(args)
+
+        with patch.object(full, "_git", side_effect=feature_branch):
+            with self.assertRaisesRegex(RuntimeError, "live origin/main"):
+                full.require_live_clean_main()
+
     def test_accepted_pilot_plan_operator_sha_is_exact(self):
         self.assertEqual(
             full.PILOT_OPERATOR_SHA,
@@ -85,6 +117,7 @@ class GBDomesticFullResumeTests(unittest.TestCase):
         ):
             plan = full.make_plan(proof(), live())
         self.assertEqual(plan["status"], "FROZEN_NO_APPLY")
+        self.assertRegex(plan["execution_main_sha"], r"^[0-9a-f]{40}$")
         self.assertEqual(plan["start_checkpoint_source_ordinal"], 1000)
         self.assertEqual(plan["target_checkpoint_source_ordinal"], 1188992)
         self.assertEqual(plan["remaining_source_rows"], 1187992)

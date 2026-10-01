@@ -46,6 +46,9 @@ Preflight and plan freeze are read-only. The E-stage reader and V2 continuation
 must first be independently reviewed and merged. Only then may the final plan
 be frozen from clean, latest main and its SHA reviewed. Any pre-merge output is
 diagnostic only and cannot be presented as the production authority plan.
+The operator enforces this in code by requiring a clean worktree whose HEAD
+equals live `origin/main` at plan freeze and again immediately before Apply; the
+frozen plan and receipt bind that exact 40-character execution commit.
 Apply requires the exact post-merge token:
 
 GO #855 GB-DOMESTIC-FULL-RESUME <plan-sha> CHECKPOINT-1000-TO-1188992
