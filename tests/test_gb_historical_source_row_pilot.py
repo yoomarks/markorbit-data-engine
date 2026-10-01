@@ -163,7 +163,7 @@ class GBHistoricalSourceRowPilotTests(unittest.TestCase):
         self.assertEqual(plan["pilot_source_rows"], 1000)
         self.assertEqual(plan["target_database"], "markorbit")
 
-    def test_exact_authority_token_is_required(self):
+    def test_legacy_d_stage_authority_is_superseded(self):
         p1, p2, p3, p4, p5 = self.patched()
         with p1, p2, p3, p4, p5:
             proof = pilot.verify_stage("DOMESTIC")
@@ -172,9 +172,8 @@ class GBHistoricalSourceRowPilotTests(unittest.TestCase):
             plan_path.write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
             plan_sha = sha(plan_path)
             good = f"GO #855 GB-SOURCE-ROW-PILOT {plan_sha} DOMESTIC FIRST-1000-ONLY"
-            pilot.authorize(plan, plan_sha, good, "DOMESTIC")
-            with self.assertRaisesRegex(RuntimeError, "exact GB stock"):
-                pilot.authorize(plan, plan_sha, good + " EXTRA", "DOMESTIC")
+            with self.assertRaisesRegex(RuntimeError, "D-resident GB stage authority"):
+                pilot.authorize(plan, plan_sha, good, "DOMESTIC")
 
     def test_payload_keeps_historical_currentness_false(self):
         p1, p2, p3, p4, p5 = self.patched()

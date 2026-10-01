@@ -1,5 +1,11 @@
 # GB Domestic historical full resume (#855)
 
+> **SUPERSEDED / DO NOT APPLY:** this version reads its structured JSONL from D:.
+> Post-#837 topology reserves D for `hot_cn`; GB structured/query data belongs on
+> E / `hot_global`. The code now rejects this legacy authority even with an old
+> exact token. A new full-resume plan may be frozen only after the governed E
+> structured stage is applied and independently accepted.
+
 This operator resumes the accepted UKIPO Domestic historical source-row ingest
 after the independently verified first-1,000-row production pilot.
 

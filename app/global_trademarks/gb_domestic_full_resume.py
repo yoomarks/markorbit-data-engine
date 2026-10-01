@@ -212,6 +212,7 @@ def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
 
 
 def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
+    require(not pilot.LEGACY_D_STAGE_SUPERSEDED, pilot.LEGACY_D_STAGE_SUPERSEDED_REASON)
     require(
         plan["kind"] == "GB_DOMESTIC_HISTORICAL_FULL_RESUME_PLAN_V1"
         and plan["status"] == "FROZEN_NO_APPLY"
@@ -388,6 +389,8 @@ def main() -> None:
     parser.add_argument("--plan-sha", default="")
     parser.add_argument("--authority-token", default="")
     args = parser.parse_args()
+
+    require(not pilot.LEGACY_D_STAGE_SUPERSEDED, pilot.LEGACY_D_STAGE_SUPERSEDED_REASON)
 
     verify_prior_acceptance()
     proof = pilot.verify_stage(STREAM)

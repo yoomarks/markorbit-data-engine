@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from app.global_trademarks import gb_domestic_full_resume as full
@@ -50,11 +49,12 @@ def live():
 
 
 class GBDomesticFullResumeTests(unittest.TestCase):
-    def test_merged_pilot_dependency_is_exact(self):
+    def test_accepted_pilot_sha_is_retained_while_d_stage_code_is_retired(self):
         self.assertEqual(
-            full.canonical_text_sha(Path(full.pilot.__file__)),
             full.PILOT_OPERATOR_SHA,
+            "d086bd0efad9953279d0d788417c0e65496078f1a61ba1a4cc939d64405a918a",
         )
+        self.assertTrue(full.pilot.LEGACY_D_STAGE_SUPERSEDED)
 
     def test_live_checkpoint_accepts_only_exact_pilot_state(self):
         with patch.object(full, "_readonly_live_state", return_value=live()):
@@ -150,7 +150,7 @@ class GBDomesticFullResumeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "below frozen reserve floor"):
                 full.verify_apply_disk_reserve(gate)
 
-    def test_authority_is_exact_and_bound_to_plan_sha(self):
+    def test_legacy_d_stage_full_resume_authority_is_superseded(self):
         with patch.object(
             full.pilot,
             "require_disk_reserve",
@@ -162,15 +162,8 @@ class GBDomesticFullResumeTests(unittest.TestCase):
             plan = full.make_plan(proof(), live())
         plan_sha = "a" * 64
         token = "GO #855 GB-DOMESTIC-FULL-RESUME " + plan_sha + " CHECKPOINT-1000-TO-1188992"
-        full.authorize(plan, plan_sha, token)
-        for invalid in (
-            token + " EXTRA",
-            token.replace("1188992", "1188991"),
-            token.replace(plan_sha, "b" * 64),
-        ):
-            with self.subTest(token=invalid):
-                with self.assertRaisesRegex(RuntimeError, "exact GB Domestic"):
-                    full.authorize(plan, plan_sha, invalid)
+        with self.assertRaisesRegex(RuntimeError, "D-resident GB stage authority"):
+            full.authorize(plan, plan_sha, token)
 
     def test_batch_and_total_bound_are_fixed(self):
         self.assertEqual(full.START_CHECKPOINT, 1000)
