@@ -118,7 +118,7 @@ def test_contact_batch_apply_is_explicit_sequential_background_work() -> None:
     ]
     batch_route = source[
         source.index('def admin_contact_batch_apply()') : source.index(
-            '@router.post("/api/admin/contacts/tasks/{task_id}/apply"'
+            "def admin_contact_apply(task_id: str)"
         )
     ]
     assert "for task_id in task_ids" in batch_worker
