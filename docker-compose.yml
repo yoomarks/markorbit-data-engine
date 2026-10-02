@@ -51,8 +51,13 @@ services:
       RAW_DATA_ROOT: /data/raw
       VISUAL_RAW_ROOT: /data/visual-raw
       VISUAL_PROCESSED_ROOT: /data/visual-processed
+      API_PUBLISH_ADDRESS: ${API_PUBLISH_ADDRESS:-127.0.0.1}
+      API_ALLOW_REMOTE_BIND: ${API_ALLOW_REMOTE_BIND:-false}
     ports:
-      - "${API_PORT:-8080}:8080"
+      - target: 8080
+        published: "${API_PORT:-8080}"
+        host_ip: "${API_PUBLISH_ADDRESS:-127.0.0.1}"
+        protocol: tcp
     volumes:
       - "${RAW_DATA_PATH}:/data/raw"
       - "${VISUAL_RAW_PATH:-./raw_data}:/data/visual-raw"

@@ -17,4 +17,4 @@ COPY VERSION /app/VERSION
 COPY app /app/app
 COPY web /app/web
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "app.api_runtime"]

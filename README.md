@@ -249,6 +249,21 @@ Transport headers：
 
 Integration plane 是 read-only source-fact contract；consumer 不写回 Data Engine source facts，也不应跨服务直连数据库。
 
+### Runtime network boundary
+
+The supported Compose runtime publishes the API on host loopback by default:
+
+```text
+API_PUBLISH_ADDRESS=127.0.0.1
+API_ALLOW_REMOTE_BIND=false
+```
+
+Set `API_PUBLISH_ADDRESS` to a non-loopback literal address only for an intentional remote
+deployment. Startup then fails closed unless `API_ALLOW_REMOTE_BIND=true`,
+`INTEGRATION_AUTH_MODE=required`, and `INTEGRATION_API_KEYS` contains at least one key of 32 or
+more characters. Container-internal Uvicorn still listens on the Compose bridge so the loopback
+host publication and container health/read behavior remain unchanged.
+
 ## 本地目录
 
 ```text
