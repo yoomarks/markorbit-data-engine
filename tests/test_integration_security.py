@@ -27,6 +27,68 @@ def test_authentication_is_disabled_by_default_compatibility(monkeypatch):
     assert integration_security.require_integration_auth(authorization=None) is None
 
 
+def test_admin_control_authentication_is_required_in_disabled_mode(monkeypatch):
+    monkeypatch.setattr(
+        integration_security,
+        "get_settings",
+        lambda: _settings("disabled", PRIMARY_KEY),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        integration_security.require_admin_control_auth(authorization=None)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail["code"] == "DATA_ENGINE_INTEGRATION_AUTH_REQUIRED"
+
+
+def test_admin_control_authentication_accepts_configured_bearer_in_disabled_mode(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        integration_security,
+        "get_settings",
+        lambda: _settings("disabled", PRIMARY_KEY),
+    )
+
+    assert (
+        integration_security.require_admin_control_auth(
+            authorization=f"Bearer {PRIMARY_KEY}",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "keys"),
+    [
+        ("disabled", ""),
+        ("disabled", "too-short"),
+        ("unexpected", PRIMARY_KEY),
+    ],
+)
+def test_admin_control_authentication_fails_closed_on_invalid_configuration(
+    monkeypatch,
+    mode,
+    keys,
+):
+    monkeypatch.setattr(
+        integration_security,
+        "get_settings",
+        lambda: _settings(mode, keys),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        integration_security.require_admin_control_auth(
+            authorization=f"Bearer {PRIMARY_KEY}",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        exc_info.value.detail["code"]
+        == "DATA_ENGINE_INTEGRATION_AUTH_CONFIGURATION_INVALID"
+    )
+
+
 def test_required_authentication_accepts_valid_bearer_key(monkeypatch):
     monkeypatch.setattr(
         integration_security,

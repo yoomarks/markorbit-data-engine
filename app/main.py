@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import sys
 
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
+
 from app import main_core as _core
 from app.admin_api import router as admin_router
 from app.admin_pages import router as admin_pages_router
@@ -10,6 +13,7 @@ from app.admin_system_api import router as admin_system_router
 from app.admin_task_api import router as admin_task_router
 from app.contact_ingest.admin_api import router as contact_admin_router
 from app.integration_api import router as integration_router
+from app.integration_security import require_admin_control_auth
 from app.cn.citation_relation_admission_api import router as citation_relation_admission_router
 from app.cn.trademark_gazette_admission_api import router as trademark_gazette_admission_router
 from app.global_trademarks.hot_global_api import admission_router as global_hot_admission_router, read_router as global_hot_read_router
@@ -24,6 +28,29 @@ from app.us_assignment.api import router as us_assignment_router
 from app.us_assignment.audit_api import router as us_assignment_audit_router
 from app.us_ttab.api import router as us_ttab_router
 from app.us_ttab.audit_api import router as us_ttab_audit_router
+
+
+_LEGACY_CONTROL_WRITE_PATHS = frozenset(
+    {
+        "/api/jobs/cn/scan",
+        "/api/jobs/cn/run",
+        "/api/jobs/cn/retry",
+    }
+)
+
+
+@_core.app.middleware("http")
+async def require_legacy_control_auth(request: Request, call_next):
+    if request.method == "POST" and request.url.path in _LEGACY_CONTROL_WRITE_PATHS:
+        try:
+            require_admin_control_auth(request.headers.get("Authorization"))
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+    return await call_next(request)
 
 
 _core.app.description = (
