@@ -17,11 +17,13 @@ from typing import Any
 from app.global_trademarks import gb_domestic_full_resume as domestic
 from app.global_trademarks import gb_historical_e_stage_reader as e_stage
 from app.global_trademarks import gb_historical_source_row_pilot as source_rows
+from app.global_trademarks import gb_pg_pilot_safety as safety
 
 STREAM = "MADRID_IR"
 PILOT_SOURCE_ROWS = 1000
 GOV = Path(r"D:\yoomarks\governed-plans\855")
 RECEIPT = GOV / "gb-madrid-ir-e-pg-pilot-r1.json"
+OPERATION_KIND = "GB_MADRID_IR_HISTORICAL_E_PG_PILOT_V1"
 
 
 def require(ok: bool, reason: str) -> None:
@@ -105,10 +107,18 @@ def verify_live_prestate(proof: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def live_postgres_topology() -> dict[str, Any]:
+    from app.db import postgres_conn
+
+    with postgres_conn() as conn:
+        return safety.capture_e_postgres_topology(conn)
+
+
 def make_plan(
     proof: dict[str, Any],
     prefix: dict[str, Any],
     *,
+    postgres_topology: dict[str, Any],
     execution_main: str | None = None,
 ) -> dict[str, Any]:
     reserve = domestic.require_e_disk_reserve()["E"]
@@ -143,8 +153,12 @@ def make_plan(
         "target_database": "markorbit",
         "target_database_physical_drive": "E",
         "future_query_storage_placement": "hot_global",
+        "postgres_topology": postgres_topology,
         "operator_sha256": domestic.canonical_text_sha(Path(__file__)),
         "schema_sql_sha256": hashlib.sha256(source_rows.SCHEMA_SQL.encode()).hexdigest(),
+        "execution_evidence_schema_sha256": hashlib.sha256(
+            safety.EXECUTION_EVIDENCE_SQL.encode()
+        ).hexdigest(),
         "disk_reserve_gate": {"E": {"reserve_bytes": int(reserve["reserve_bytes"])}},
         "historical_source_only": True,
         "current_state_verified": False,
@@ -180,9 +194,12 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
         and plan.get("target_database") == "markorbit"
         and plan.get("target_database_physical_drive") == "E"
         and plan.get("future_query_storage_placement") == "hot_global"
+        and safety.validate_frozen_topology(plan.get("postgres_topology"))
         and plan.get("operator_sha256") == domestic.canonical_text_sha(Path(__file__))
         and plan.get("schema_sql_sha256")
         == hashlib.sha256(source_rows.SCHEMA_SQL.encode()).hexdigest()
+        and plan.get("execution_evidence_schema_sha256")
+        == hashlib.sha256(safety.EXECUTION_EVIDENCE_SQL.encode()).hexdigest()
         and set(plan.get("disk_reserve_gate", {})) == {"E"}
         and set(plan["disk_reserve_gate"]["E"]) == {"reserve_bytes"}
         and int(plan["disk_reserve_gate"]["E"]["reserve_bytes"]) > 0
@@ -200,25 +217,98 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
     require(token == expected, "exact GB Madrid-IR pilot authority required")
 
 
-def apply_pilot(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> dict[str, Any]:
-    from app.db import postgres_conn
-
-    require(not RECEIPT.exists(), "Madrid-IR pilot receipt already exists; refuse replay")
-    domestic.require_live_clean_main(plan["execution_main_sha"])
-    verify_live_prestate(proof)
-    reserve = domestic.verify_apply_disk_reserve(plan["disk_reserve_gate"])
-    spec = proof["spec"]
-    rows = []
+def authorized_pilot_rows(proof: dict[str, Any], plan: dict[str, Any]) -> list[tuple[Any, ...]]:
+    selected = []
+    digest = hashlib.sha256()
     for row in source_rows.ordered_source_records(proof, STREAM):
         if row[0] > PILOT_SOURCE_ROWS:
             break
-        rows.append(source_rows.pg_params(row, STREAM, proof))
-    require(len(rows) == PILOT_SOURCE_ROWS, "Madrid-IR pilot source bound drift")
+        selected.append(row)
+        digest.update(f"{row[0]}:{row[1]}:{row[-1]}\n".encode())
+    require(
+        len(selected) == PILOT_SOURCE_ROWS
+        and digest.hexdigest() == plan["pilot_ordered_row_identity_sha256"],
+        "Madrid-IR pilot ordered source digest drifted after authorization",
+    )
+    accepted = sum(row[1] == "ACCEPTED" for row in selected)
+    quarantined = len(selected) - accepted
+    require(
+        accepted == plan["pilot_expected_accepted_rows"]
+        and quarantined == plan["pilot_expected_quarantine_rows"],
+        "Madrid-IR pilot source cardinality drifted after authorization",
+    )
+    return [source_rows.pg_params(row, STREAM, proof) for row in selected]
+
+
+def apply_pilot(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> dict[str, Any]:
+    from app.db import postgres_conn
+
+    domestic.require_live_clean_main(plan["execution_main_sha"])
+    reserve = domestic.verify_apply_disk_reserve(plan["disk_reserve_gate"])
+    spec = proof["spec"]
+    rows = authorized_pilot_rows(proof, plan)
+    accepted = plan["pilot_expected_accepted_rows"]
+    quarantined = plan["pilot_expected_quarantine_rows"]
+    operation_key = f"gb-madrid-ir:{spec['zip_sha']}:first-{PILOT_SOURCE_ROWS}"
+    payload = {
+        "kind": OPERATION_KIND,
+        "status": "FIRST_1000_HISTORICAL_ROWS_COMMITTED_NOT_FULL_IMPORT",
+        "plan_sha256": plan_sha,
+        "execution_main_sha": plan["execution_main_sha"],
+        "source_zip_sha256": spec["zip_sha"],
+        "source_rows_committed": PILOT_SOURCE_ROWS,
+        "accepted_rows_committed": plan["pilot_expected_accepted_rows"],
+        "quarantined_rows_committed": plan["pilot_expected_quarantine_rows"],
+        "checkpoint_source_row_ordinal": PILOT_SOURCE_ROWS,
+        "target_database": "markorbit",
+        "target_database_physical_drive": "E",
+        "postgres_topology": plan["postgres_topology"],
+        "structured_stage_root": str(e_stage.STAGE_ROOT),
+        "future_query_storage_placement": "hot_global",
+        "full_import_complete": False,
+        "historical_source_only": True,
+        "source_status_current_verified": False,
+        "journal_ingest_authorized": False,
+        "serving_cutover_authorized": False,
+        "source_cleanup_authorized": False,
+        "disk_reserve_apply_snapshot": reserve,
+    }
 
     with postgres_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT current_database() AS db")
-            require(cur.fetchone()["db"] == "markorbit", "Madrid-IR target must be markorbit")
+            safety.verify_e_postgres_topology(conn, plan["postgres_topology"])
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (operation_key,))
+            evidence = safety.read_execution_evidence(cur, operation_key)
+            if evidence is not None:
+                committed = safety.validate_execution_evidence(
+                    evidence,
+                    operation_key=operation_key,
+                    operation_kind=OPERATION_KIND,
+                    plan=plan,
+                    plan_sha=plan_sha,
+                )
+                require(committed == payload, "Madrid-IR committed receipt evidence drifted")
+                _verify_committed_state(cur, plan, spec["zip_sha"])
+                conn.commit()
+                digest_value = safety.atomic_publish_receipt(RECEIPT, committed)
+                return {
+                    **committed,
+                    "receipt_path": str(RECEIPT),
+                    "receipt_sha256": digest_value,
+                }
+            require(not RECEIPT.exists(), "receipt exists without committed Madrid-IR DB evidence")
+            cur.execute(
+                "SELECT count(*) AS total FROM trademark_gb.historical_source_row_v2 "
+                "WHERE source_archive_sha256=%s",
+                (spec["zip_sha"],),
+            )
+            require(cur.fetchone()["total"] == 0, "Madrid-IR production prestate is not empty")
+            cur.execute(
+                "SELECT count(*) AS total FROM trademark_gb.historical_source_ingest_run_v2 "
+                "WHERE source_archive_sha256=%s",
+                (spec["zip_sha"],),
+            )
+            require(cur.fetchone()["total"] == 0, "Madrid-IR ingest run already exists")
             cur.execute(
                 """
                 INSERT INTO trademark_gb.historical_source_ingest_run_v2(
@@ -242,8 +332,6 @@ def apply_pilot(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> d
             require(cur.rowcount == 1, "Madrid-IR ingest run insert failed")
             cur.executemany(source_rows.INSERT_SQL, rows)
             require(cur.rowcount == len(rows), "Madrid-IR pilot duplicate/partial INSERT detected")
-            accepted = sum(row[4] == "ACCEPTED" for row in rows)
-            quarantined = len(rows) - accepted
             cur.execute(
                 """
                 UPDATE trademark_gb.historical_source_ingest_run_v2
@@ -261,61 +349,64 @@ def apply_pilot(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> d
                 ),
             )
             require(cur.rowcount == 1, "Madrid-IR pilot checkpoint transition failed")
-            cur.execute(
-                """
-                SELECT count(*) AS total,
-                       count(*) FILTER (WHERE record_kind='ACCEPTED') AS accepted,
-                       count(*) FILTER (WHERE record_kind='QUARANTINED') AS quarantined,
-                       count(*) FILTER (WHERE current_state_verified) AS unapproved_current,
-                       count(*) FILTER (WHERE NOT historical_source_only) AS nonhistorical,
-                       min(source_row_ordinal) AS min_ordinal,
-                       max(source_row_ordinal) AS max_ordinal
-                FROM trademark_gb.historical_source_row_v2
-                WHERE source_archive_sha256=%s
-                """,
-                (spec["zip_sha"],),
-            )
-            check = cur.fetchone()
-            require(
-                check["total"] == PILOT_SOURCE_ROWS
-                and check["accepted"] == plan["pilot_expected_accepted_rows"]
-                and check["quarantined"] == plan["pilot_expected_quarantine_rows"]
-                and check["unapproved_current"] == 0
-                and check["nonhistorical"] == 0
-                and check["min_ordinal"] == 1
-                and check["max_ordinal"] == PILOT_SOURCE_ROWS,
-                "Madrid-IR pilot live residency/currentness drift",
+            _verify_committed_state(cur, plan, spec["zip_sha"])
+            safety.insert_execution_evidence(
+                cur,
+                operation_key=operation_key,
+                operation_kind=OPERATION_KIND,
+                plan=plan,
+                plan_sha=plan_sha,
+                receipt=payload,
             )
             conn.commit()
-
-    payload = {
-        "kind": "GB_MADRID_IR_HISTORICAL_E_PG_PILOT_V1",
-        "status": "FIRST_1000_HISTORICAL_ROWS_COMMITTED_NOT_FULL_IMPORT",
-        "plan_sha256": plan_sha,
-        "execution_main_sha": plan["execution_main_sha"],
-        "source_zip_sha256": spec["zip_sha"],
-        "source_rows_committed": PILOT_SOURCE_ROWS,
-        "accepted_rows_committed": plan["pilot_expected_accepted_rows"],
-        "quarantined_rows_committed": plan["pilot_expected_quarantine_rows"],
-        "checkpoint_source_row_ordinal": PILOT_SOURCE_ROWS,
-        "target_database": "markorbit",
-        "target_database_physical_drive": "E",
-        "structured_stage_root": str(e_stage.STAGE_ROOT),
-        "future_query_storage_placement": "hot_global",
-        "full_import_complete": False,
-        "historical_source_only": True,
-        "source_status_current_verified": False,
-        "journal_ingest_authorized": False,
-        "serving_cutover_authorized": False,
-        "source_cleanup_authorized": False,
-        "disk_reserve_apply_snapshot": reserve,
-    }
-    with RECEIPT.open("x", encoding="utf-8") as stream:
-        json.dump(payload, stream, ensure_ascii=False, sort_keys=True, indent=2)
-        stream.write("\n")
+    digest_value = safety.atomic_publish_receipt(RECEIPT, payload)
     payload["receipt_path"] = str(RECEIPT)
-    payload["receipt_sha256"] = domestic.sha(RECEIPT)
+    payload["receipt_sha256"] = digest_value
     return payload
+
+
+def _verify_committed_state(cur: Any, plan: dict[str, Any], source_sha: str) -> None:
+    cur.execute(
+        """
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE record_kind='ACCEPTED') AS accepted,
+               count(*) FILTER (WHERE record_kind='QUARANTINED') AS quarantined,
+               count(*) FILTER (WHERE current_state_verified) AS unapproved_current,
+               count(*) FILTER (WHERE NOT historical_source_only) AS nonhistorical,
+               min(source_row_ordinal) AS min_ordinal,
+               max(source_row_ordinal) AS max_ordinal
+        FROM trademark_gb.historical_source_row_v2
+        WHERE source_archive_sha256=%s
+        """,
+        (source_sha,),
+    )
+    check = cur.fetchone()
+    cur.execute(
+        """
+        SELECT checkpoint_source_ordinal,rows_committed,accepted_committed,
+               quarantine_committed,status
+        FROM trademark_gb.historical_source_ingest_run_v2
+        WHERE source_archive_sha256=%s
+        """,
+        (source_sha,),
+    )
+    run = cur.fetchone()
+    require(
+        check["total"] == PILOT_SOURCE_ROWS
+        and check["accepted"] == plan["pilot_expected_accepted_rows"]
+        and check["quarantined"] == plan["pilot_expected_quarantine_rows"]
+        and check["unapproved_current"] == 0
+        and check["nonhistorical"] == 0
+        and check["min_ordinal"] == 1
+        and check["max_ordinal"] == PILOT_SOURCE_ROWS
+        and run is not None
+        and run["checkpoint_source_ordinal"] == PILOT_SOURCE_ROWS
+        and run["rows_committed"] == PILOT_SOURCE_ROWS
+        and run["accepted_committed"] == plan["pilot_expected_accepted_rows"]
+        and run["quarantine_committed"] == plan["pilot_expected_quarantine_rows"]
+        and run["status"] == "RUNNING",
+        "Madrid-IR pilot committed state drift",
+    )
 
 
 def main() -> None:
@@ -335,15 +426,22 @@ def main() -> None:
         else domestic.current_git_head()
     )
     proof = e_stage.verify_e_stage(STREAM)
-    verify_live_prestate(proof)
     prefix = prefix_summary(proof)
-    proposed = make_plan(proof, prefix, execution_main=execution_main)
+    topology = live_postgres_topology()
+    proposed = make_plan(
+        proof,
+        prefix,
+        postgres_topology=topology,
+        execution_main=execution_main,
+    )
 
     if args.preflight_only:
+        verify_live_prestate(proof)
         require(not args.plan and not args.authority_token, "preflight accepts no Apply arguments")
         print(json.dumps(proposed, ensure_ascii=False, sort_keys=True), flush=True)
         return
     if args.freeze_plan is not None:
+        verify_live_prestate(proof)
         require(
             not args.plan
             and not args.authority_token

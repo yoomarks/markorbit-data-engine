@@ -7,9 +7,30 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.global_trademarks import gb_madrid_ir_pilot as madrid
+
+
+def topology() -> dict:
+    return {
+        "database": "markorbit",
+        "system_identifier": "123456789",
+        "server_address": "172.18.0.3",
+        "server_port": 5432,
+        "configured_host": "localhost",
+        "configured_port": 5432,
+        "container_id": "a" * 64,
+        "container_image_sha256": "b" * 64,
+        "compose_project": "markorbit-data-engine",
+        "compose_service": "postgres",
+        "compose_external_storage": True,
+        "data_directory": "/var/lib/postgresql/data",
+        "data_mount_type": "bind",
+        "data_mount_source": r"E:\MarkOrbitData\production\postgres",
+        "data_mount_host_drive": "E",
+    }
 
 
 def proof(root: Path, kinds: tuple[str, ...] = ("ACCEPTED", "QUARANTINED")) -> dict:
@@ -96,7 +117,12 @@ class GBMadridIRPilotTests(unittest.TestCase):
             "require_e_disk_reserve",
             return_value={"E": {"free_bytes": 20, "reserve_bytes": 5}},
         ):
-            return madrid.make_plan(evidence, prefix, execution_main="a" * 40)
+            return madrid.make_plan(
+                evidence,
+                prefix,
+                postgres_topology=topology(),
+                execution_main="a" * 40,
+            )
 
     def test_prefix_summary_preserves_ordered_accepted_and_quarantine_rows(self) -> None:
         summary = madrid.prefix_summary(proof(self.root))
@@ -112,6 +138,7 @@ class GBMadridIRPilotTests(unittest.TestCase):
         self.assertEqual(plan["structured_stage_drive"], "E")
         self.assertEqual(plan["target_database_physical_drive"], "E")
         self.assertEqual(plan["future_query_storage_placement"], "hot_global")
+        self.assertEqual(plan["postgres_topology"]["data_mount_source"][0], "E")
         self.assertEqual(plan["pilot_source_rows"], 1000)
         self.assertTrue(plan["historical_source_only"])
         self.assertFalse(plan["current_state_verified"])
@@ -162,8 +189,18 @@ class GBMadridIRPilotTests(unittest.TestCase):
                 {"E": {"free_bytes": 999, "reserve_bytes": 5}},
             ),
         ):
-            first = madrid.make_plan(evidence, prefix, execution_main="a" * 40)
-            second = madrid.make_plan(evidence, prefix, execution_main="a" * 40)
+            first = madrid.make_plan(
+                evidence,
+                prefix,
+                postgres_topology=topology(),
+                execution_main="a" * 40,
+            )
+            second = madrid.make_plan(
+                evidence,
+                prefix,
+                postgres_topology=topology(),
+                execution_main="a" * 40,
+            )
         self.assertEqual(first, second)
 
     def test_plan_binds_schema_and_operator_identities(self) -> None:
@@ -177,6 +214,106 @@ class GBMadridIRPilotTests(unittest.TestCase):
             plan["operator_sha256"],
             madrid.domestic.canonical_text_sha(Path(madrid.__file__)),
         )
+
+    def test_authorized_rows_recheck_exact_ordered_digest(self) -> None:
+        evidence = proof(self.root, ("ACCEPTED",))
+        plan = self.plan(evidence, madrid.prefix_summary(evidence))
+        madrid.authorized_pilot_rows(evidence, plan)
+        rows = evidence["rows"].read_text(encoding="utf-8").splitlines()
+        first = json.loads(rows[0])
+        first["applicant_name_raw"] = "stage replaced after authorization"
+        rows[0] = json.dumps(first, sort_keys=True)
+        evidence["rows"].write_text("\n".join(rows) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "drift"):
+            madrid.authorized_pilot_rows(evidence, plan)
+
+    def test_receipt_publication_recovers_after_post_commit_io_fault(self) -> None:
+        receipt = self.root / "receipt.json"
+        payload = {"plan_sha256": "c" * 64, "status": "COMMITTED"}
+        with patch.object(madrid.safety.os, "link", side_effect=OSError("disk fault")):
+            with self.assertRaisesRegex(OSError, "disk fault"):
+                madrid.safety.atomic_publish_receipt(receipt, payload)
+        self.assertFalse(receipt.exists())
+        digest = madrid.safety.atomic_publish_receipt(receipt, payload)
+        self.assertEqual(digest, hashlib.sha256(receipt.read_bytes()).hexdigest())
+        self.assertEqual(madrid.safety.atomic_publish_receipt(receipt, payload), digest)
+
+    def test_non_e_postgres_topology_is_rejected(self) -> None:
+        value = topology()
+        value["data_mount_source"] = r"D:\docker\volumes\postgres"
+        value["data_mount_host_drive"] = "D"
+        self.assertFalse(madrid.safety.validate_frozen_topology(value))
+
+    def test_live_topology_binds_dsn_cluster_container_and_e_mount(self) -> None:
+        inspect = {
+            "Id": "a" * 64,
+            "Image": "sha256:" + "b" * 64,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "markorbit-data-engine",
+                    "com.docker.compose.service": "postgres",
+                    "com.docker.compose.project.config_files": (
+                        r"D:\repo\docker-compose.yml,D:\repo\docker-compose.external-storage.yml"
+                    ),
+                }
+            },
+            "Mounts": [
+                {
+                    "Destination": "/var/lib/postgresql/data",
+                    "Source": r"E:\MarkOrbitData\production\postgres",
+                    "Type": "bind",
+                    "RW": True,
+                }
+            ],
+            "NetworkSettings": {
+                "Ports": {"5432/tcp": [{"HostPort": "5432"}]},
+                "Networks": {"default": {"IPAddress": "172.18.0.3"}},
+            },
+        }
+        with (
+            patch(
+                "app.db.get_settings",
+                return_value=SimpleNamespace(
+                    postgres_host="localhost", postgres_port=5432, postgres_db="markorbit"
+                ),
+            ),
+            patch.object(
+                madrid.safety,
+                "_docker_json",
+                side_effect=([{"ID": "a" * 12}], [inspect]),
+            ),
+            patch.object(
+                madrid.safety,
+                "_postgres_database_identity",
+                return_value={
+                    "database": "markorbit",
+                    "system_identifier": "123456789",
+                    "server_address": "172.18.0.3",
+                    "server_port": 5432,
+                    "data_directory": "/var/lib/postgresql/data",
+                },
+            ),
+        ):
+            self.assertEqual(
+                madrid.safety.capture_e_postgres_topology(object()),
+                topology(),
+            )
+        inspect["Mounts"][0]["Source"] = r"D:\docker\postgres"
+        with (
+            patch(
+                "app.db.get_settings",
+                return_value=SimpleNamespace(
+                    postgres_host="localhost", postgres_port=5432, postgres_db="markorbit"
+                ),
+            ),
+            patch.object(
+                madrid.safety,
+                "_docker_json",
+                side_effect=([{"ID": "a" * 12}], [inspect]),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "not E-backed"):
+                madrid.safety.capture_e_postgres_topology(object())
 
 
 if __name__ == "__main__":
