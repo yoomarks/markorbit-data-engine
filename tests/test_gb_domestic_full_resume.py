@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.global_trademarks import gb_domestic_full_resume as full
@@ -52,6 +53,38 @@ def live():
         "live_unapproved_current": 0,
         "live_nonhistorical": 0,
         "live_rows_past_checkpoint": 0,
+    }
+
+
+def topology():
+    return {
+        "accepted_storage_topology_evidence": {
+            "contract_version": full.pg_target.STORAGE_TOPOLOGY_VERSION,
+            "contract_sha256": "1" * 64,
+            "gb_hot_placement": {"drive": "E", "placement": "hot_global"},
+            "accepted_docker_e_receipt_sha256": full.pg_target.ACCEPTED_DOCKER_E_RECEIPT_SHA,
+            "docker_desktop_data_root": str(full.pg_target.DOCKER_E_ROOT),
+            "docker_data_vhdx": str(full.pg_target.DOCKER_E_DATA_VHDX),
+            "docker_engine_version": "29.6.2",
+            "docker_root_dir": "/var/lib/docker",
+        },
+        "postgres_target_evidence": {
+            "database": "markorbit",
+            "data_directory": "/var/lib/postgresql/data",
+            "server_version_num": 170006,
+            "server_port": 5432,
+            "server_address": "172.18.0.3",
+            "observed_server_port": 5432,
+            "system_identifier": "123456789",
+            "configured_endpoint_host": "localhost",
+            "configured_endpoint_port": 5432,
+            "container_id": "a" * 64,
+            "container_image_id": "sha256:" + "b" * 64,
+            "compose_project": "markorbit-data-engine",
+            "container_addresses": ["172.18.0.3"],
+            "volume_name": "markorbit-data-engine_postgres_data",
+            "volume_source": "/var/lib/docker/volumes/markorbit-data-engine_postgres_data/_data",
+        },
     }
 
 
@@ -115,7 +148,7 @@ class GBDomesticFullResumeTests(unittest.TestCase):
             "require_e_disk_reserve",
             return_value={"E": {"free_bytes": 10, "reserve_bytes": 5}},
         ):
-            plan = full.make_plan(proof(), live())
+            plan = full.make_plan(proof(), live(), postgres_topology=topology())
         self.assertEqual(plan["status"], "FROZEN_NO_APPLY")
         self.assertRegex(plan["execution_main_sha"], r"^[0-9a-f]{40}$")
         self.assertEqual(plan["start_checkpoint_source_ordinal"], 1000)
@@ -125,6 +158,17 @@ class GBDomesticFullResumeTests(unittest.TestCase):
         self.assertEqual(plan["structured_stage_drive"], "E")
         self.assertEqual(plan["target_database_physical_drive"], "E")
         self.assertEqual(plan["future_query_storage_placement"], "hot_global")
+        self.assertEqual(
+            plan["postgres_topology"]["accepted_storage_topology_evidence"][
+                "accepted_docker_e_receipt_sha256"
+            ],
+            full.pg_target.ACCEPTED_DOCKER_E_RECEIPT_SHA,
+        )
+        self.assertTrue(
+            plan["postgres_topology"]["postgres_target_evidence"]["volume_source"].startswith(
+                "/var/lib/docker/volumes/"
+            )
+        )
         self.assertTrue(plan["historical_source_only"])
         self.assertFalse(plan["current_state_verified"])
         self.assertFalse(plan["journal_ingest_authorized"])
@@ -143,13 +187,13 @@ class GBDomesticFullResumeTests(unittest.TestCase):
             "require_e_disk_reserve",
             return_value={"E": {"free_bytes": 20, "reserve_bytes": 5}},
         ):
-            first = full.make_plan(proof(), live())
+            first = full.make_plan(proof(), live(), postgres_topology=topology())
         with patch.object(
             full,
             "require_e_disk_reserve",
             return_value={"E": {"free_bytes": 888, "reserve_bytes": 5}},
         ):
-            second = full.make_plan(proof(), live())
+            second = full.make_plan(proof(), live(), postgres_topology=topology())
         self.assertEqual(first, second)
 
     def test_apply_reserve_accepts_free_space_drift_but_not_floor_or_low_free(self):
@@ -184,7 +228,7 @@ class GBDomesticFullResumeTests(unittest.TestCase):
             "require_e_disk_reserve",
             return_value={"E": {"free_bytes": 10, "reserve_bytes": 5}},
         ):
-            plan = full.make_plan(proof(), live())
+            plan = full.make_plan(proof(), live(), postgres_topology=topology())
         plan_sha = "a" * 64
         token = "GO #855 GB-DOMESTIC-FULL-RESUME " + plan_sha + " CHECKPOINT-1000-TO-1188992"
         full.authorize(plan, plan_sha, token)
@@ -196,6 +240,89 @@ class GBDomesticFullResumeTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(RuntimeError, "exact GB Domestic"):
             full.authorize(plan, plan_sha, token + " EXTRA")
+
+        drift = topology()
+        drift["accepted_storage_topology_evidence"]["docker_data_vhdx"] = (
+            r"D:\DockerData\disk\docker_data.vhdx"
+        )
+        with self.assertRaisesRegex(RuntimeError, "frozen plan/operator mismatch"):
+            full.authorize({**plan, "postgres_topology": drift}, plan_sha, token)
+
+    def test_apply_rechecks_exact_topology_on_mutation_connection(self):
+        expected = topology()
+        with patch.object(full.pg_target, "capture", return_value=expected):
+            self.assertEqual(full.pg_target.verify(object(), expected), expected)
+        changed = topology()
+        changed["postgres_target_evidence"]["system_identifier"] = "987654321"
+        with (
+            patch.object(full.pg_target, "capture", return_value=changed),
+            self.assertRaisesRegex(RuntimeError, "topology or cluster endpoint drifted"),
+        ):
+            full.pg_target.verify(object(), expected)
+
+    def test_postgres_target_requires_healthy_named_volume_and_exact_endpoint(self):
+        database = {
+            key: value
+            for key, value in topology()["postgres_target_evidence"].items()
+            if key
+            not in {
+                "configured_endpoint_host",
+                "configured_endpoint_port",
+                "container_id",
+                "container_image_id",
+                "compose_project",
+                "container_addresses",
+                "volume_name",
+                "volume_source",
+            }
+        }
+        inspected = {
+            "Id": "a" * 64,
+            "Image": "sha256:" + "b" * 64,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "markorbit-data-engine",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Running": True, "Health": {"Status": "healthy"}},
+            "Mounts": [
+                {
+                    "Destination": "/var/lib/postgresql/data",
+                    "Source": (
+                        "/var/lib/docker/volumes/markorbit-data-engine_postgres_data/_data"
+                    ),
+                    "Name": "markorbit-data-engine_postgres_data",
+                    "Type": "volume",
+                    "RW": True,
+                }
+            ],
+            "NetworkSettings": {
+                "Ports": {"5432/tcp": [{"HostPort": "5432"}]},
+                "Networks": {"default": {"IPAddress": "172.18.0.3"}},
+            },
+        }
+        settings = SimpleNamespace(
+            postgres_host="localhost", postgres_port=5432, postgres_db="markorbit"
+        )
+        with (
+            patch("app.config.get_settings", return_value=settings),
+            patch.object(full.pg_target, "_docker_lines", return_value=["a" * 12]),
+            patch.object(full.pg_target, "_docker_json", return_value=[inspected]),
+        ):
+            self.assertEqual(
+                full.pg_target._docker_postgres_identity(database),
+                topology()["postgres_target_evidence"],
+            )
+
+        inspected["Mounts"][0]["Type"] = "bind"
+        with (
+            patch("app.config.get_settings", return_value=settings),
+            patch.object(full.pg_target, "_docker_lines", return_value=["a" * 12]),
+            patch.object(full.pg_target, "_docker_json", return_value=[inspected]),
+            self.assertRaisesRegex(RuntimeError, "runtime topology is not accepted"),
+        ):
+            full.pg_target._docker_postgres_identity(database)
 
     def test_batch_and_total_bound_are_fixed(self):
         self.assertEqual(full.START_CHECKPOINT, 1000)

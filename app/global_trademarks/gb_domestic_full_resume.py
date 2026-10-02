@@ -18,6 +18,7 @@ from typing import Any
 
 from app.global_trademarks import gb_historical_source_row_pilot as pilot
 from app.global_trademarks import gb_historical_e_stage_reader as e_stage
+from app.global_trademarks import gb_postgres_target as pg_target
 
 STREAM = "DOMESTIC"
 START_CHECKPOINT = 1000
@@ -206,6 +207,15 @@ def verify_live_checkpoint(proof: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def live_postgres_topology() -> dict[str, Any]:
+    from app.db import postgres_conn
+
+    with postgres_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET TRANSACTION READ ONLY")
+        return pg_target.capture(conn)
+
+
 def require_e_disk_reserve() -> dict[str, dict[str, int]]:
     disk = shutil.disk_usage("E:\\")
     floor = (disk.total * 30 + 99) // 100 + REQUIRED_FREE_BUFFER
@@ -237,7 +247,11 @@ def verify_apply_disk_reserve(
 
 
 def make_plan(
-    proof: dict[str, Any], live: dict[str, Any], *, execution_main: str | None = None
+    proof: dict[str, Any],
+    live: dict[str, Any],
+    *,
+    postgres_topology: dict[str, Any],
+    execution_main: str | None = None,
 ) -> dict[str, Any]:
     reserve_gate = _disk_reserve_gate()
     execution_main = current_git_head() if execution_main is None else execution_main
@@ -271,6 +285,7 @@ def make_plan(
         "target_database": "markorbit",
         "target_database_physical_drive": "E",
         "future_query_storage_placement": "hot_global",
+        "postgres_topology": postgres_topology,
         "pilot_receipt_sha256": PILOT_RECEIPT_SHA,
         "pilot_independent_audit_sha256": PILOT_AUDIT_SHA,
         "pilot_operator_sha256": PILOT_OPERATOR_SHA,
@@ -299,6 +314,7 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
         and plan["target_database"] == "markorbit"
         and plan["target_database_physical_drive"] == "E"
         and plan["future_query_storage_placement"] == "hot_global"
+        and pg_target.validate(plan.get("postgres_topology"))
         and plan["structured_stage_root"] == str(e_stage.STAGE_ROOT)
         and plan["structured_stage_drive"] == "E"
         and plan["structured_stage_manifest_sha256"] == e_stage.STAGE_MANIFEST_SHA
@@ -350,6 +366,7 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
     last = int(live["checkpoint_source_ordinal"])
 
     with postgres_conn() as conn:
+        pg_target.verify(conn, plan["postgres_topology"])
         with conn.cursor() as cur:
             db = cur.execute("SELECT current_database() AS db").fetchone()["db"]
             require(db == "markorbit", "GB Domestic full-resume target must be markorbit")
@@ -451,6 +468,7 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
         "structured_stage_root": str(e_stage.STAGE_ROOT),
         "structured_stage_manifest_sha256": e_stage.STAGE_MANIFEST_SHA,
         "future_query_storage_placement": "hot_global",
+        "postgres_topology": plan["postgres_topology"],
         "full_import_complete": True,
         "historical_source_only": True,
         "source_status_current_verified": False,
@@ -488,7 +506,13 @@ def main() -> None:
     verify_prior_acceptance()
     proof = e_stage.verify_e_stage(STREAM)
     live = verify_live_checkpoint(proof)
-    proposed = make_plan(proof, live, execution_main=execution_main)
+    topology = live_postgres_topology()
+    proposed = make_plan(
+        proof,
+        live,
+        postgres_topology=topology,
+        execution_main=execution_main,
+    )
 
     if args.preflight_only:
         require(not args.plan and not args.authority_token, "preflight accepts no Apply arguments")
