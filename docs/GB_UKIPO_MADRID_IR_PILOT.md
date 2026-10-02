@@ -14,7 +14,17 @@ F raw evidence through the accepted E-stage reader.
 Preflight requires an empty Madrid-IR run and zero Madrid-IR rows in the
 production `markorbit` database. Freeze and Apply require a clean checkout whose
 HEAD exactly equals live `origin/main`. The plan records only the E reserve
-floor; Apply rechecks live E capacity. No full Madrid import, Domestic resume,
+floor; Apply rechecks live E capacity. Preflight, freeze, and Apply also bind the
+DSN and PostgreSQL cluster identity to the single running Compose PostgreSQL
+container and require its data directory to be a writable bind mount under
+`E:\MarkOrbitData` created with the external-storage Compose topology. A Docker
+managed volume or any D/F-backed mount fails closed.
+
+Apply rechecks the exact ordered first-1,000-row digest immediately before the
+insert. The same database transaction stores the frozen plan, execution identity,
+E topology, and exact receipt payload. Receipt publication is immutable and
+atomic; if filesystem publication fails after commit, an exact retry validates
+the committed rows and reconstructs only the matching receipt. No full Madrid import, Domestic resume,
 journal ingestion, current-state assertion, serving cutover, ClickHouse change,
 or source cleanup is authorized.
 
