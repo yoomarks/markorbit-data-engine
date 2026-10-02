@@ -11,18 +11,22 @@ existing co-owner-safe `historical_source_row_v2` schema and row decoder. The
 plan binds the E relocation plan/receipt/manifest/independent audit and official
 F raw evidence through the accepted E-stage reader. It also binds the exact
 PostgreSQL system identifier, loopback endpoint, container/image identity and
-the existing external-storage Compose guard. The live PostgreSQL data mount
-must be the single writable `/var/lib/postgresql/data` bind under
-`E:\MarkOrbitData`; the database name alone is not placement evidence.
+the accepted Storage Topology V2 / #837 Docker relocation evidence. The live
+PostgreSQL data mount must be the single writable Docker named volume at
+`/var/lib/postgresql/data`; its `/var/lib/docker/volumes/...` source is bound to
+the accepted E-resident Docker Desktop durable VHDX rather than inferred from
+the database name alone.
 
 Preflight requires an empty Madrid-IR run and zero Madrid-IR rows in the
 production `markorbit` database. Freeze and Apply require a clean checkout whose
 HEAD exactly equals live `origin/main`. The plan records only the E reserve
 floor; Apply rechecks live E capacity. Preflight, freeze, and Apply also bind the
 DSN and PostgreSQL cluster identity to the single running Compose PostgreSQL
-container and require its data directory to be a writable bind mount under
-`E:\MarkOrbitData` created with the external-storage Compose topology. A Docker
-managed volume or any D/F-backed mount fails closed.
+container. They recheck the immutable accepted #837 receipt SHA, current Docker
+Desktop `CustomWslDistroDir`, exact E VHDX path, Docker engine/root identity,
+PostgreSQL endpoint/system/container/image identity, and named-volume identity.
+A host bind, D/F-backed Docker root, mismatched receipt/runtime, or ambiguous
+container fails closed.
 
 Apply materializes the exact 1,000 rows once and recomputes their ordered
 identity immediately before insert. The same transaction persists the source

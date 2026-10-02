@@ -8,12 +8,20 @@ import os
 import re
 import subprocess
 import uuid
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
+from app.storage_topology_v2 import CONTRACT_VERSION as STORAGE_TOPOLOGY_VERSION
+from app.storage_topology_v2 import build_storage_topology, placement_for
+
+ACCEPTED_DOCKER_E_RECEIPT = Path(
+    r"D:\yoomarks\governed-plans\837\phase-b-docker-relocation"
+    r"\docker-relocation-final-receipt-r2.json"
+)
+ACCEPTED_DOCKER_E_RECEIPT_SHA = "7a2cf5df887eaf7751dcea2ff22bb329bf7fd3fe476bb40c09b9c5a62a7f8f74"
+DOCKER_E_ROOT = Path(r"E:\DockerData\DockerDesktopWSL")
+DOCKER_E_DATA_VHDX = DOCKER_E_ROOT / "disk" / "docker_data.vhdx"
 POSTGRES_DATA_DESTINATION = "/var/lib/postgresql/data"
-POSTGRES_E_ROOT = PureWindowsPath(r"E:\MarkOrbitData")
-COMPOSE_PROJECT = "markorbit-data-engine"
 EXECUTION_EVIDENCE_SQL = """
 CREATE SCHEMA IF NOT EXISTS trademark_gb;
 CREATE TABLE IF NOT EXISTS trademark_gb.governed_pilot_execution_v1 (
@@ -35,31 +43,107 @@ def require(ok: bool, reason: str) -> None:
         raise RuntimeError(reason)
 
 
-def _docker_json(*args: str) -> Any:
+def _load_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
+    require(path.is_file() and not path.is_symlink(), f"{label} missing or symlinked")
+    payload = path.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    value = json.loads(payload.decode("utf-8-sig"))
+    require(isinstance(value, dict), f"{label} must be a JSON object")
+    return value, digest
+
+
+def _canonical_json_sha(value: dict[str, Any]) -> str:
+    payload = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _docker_json(args: list[str]) -> Any:
     completed = subprocess.run(
         ["docker", *args],
         check=False,
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        timeout=30,
     )
-    require(completed.returncode == 0, "unable to inspect PostgreSQL Docker topology")
+    require(completed.returncode == 0, f"docker {' '.join(args)} failed")
     try:
-        if args and args[0] == "ps":
-            return [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
         return json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("invalid PostgreSQL Docker topology response") from exc
+        raise RuntimeError("invalid Docker JSON response") from exc
 
 
-def _e_host_path(value: str) -> str:
-    path = PureWindowsPath(value)
-    require(path.is_absolute(), "PostgreSQL data mount source is not absolute")
-    require(
-        path.drive.upper() == "E:" and POSTGRES_E_ROOT in (path, *path.parents),
-        "PostgreSQL data mount is not E-backed under MarkOrbitData",
+def _docker_lines(args: list[str]) -> list[str]:
+    completed = subprocess.run(
+        ["docker", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
-    return str(path)
+    require(completed.returncode == 0, f"docker {' '.join(args)} failed")
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def verify_accepted_storage_topology() -> dict[str, Any]:
+    topology = build_storage_topology()
+    placement = placement_for("GB", "hot")
+    require(
+        topology.get("contract_version") == STORAGE_TOPOLOGY_VERSION
+        and topology.get("read_only") is True
+        and topology.get("constraints", {}).get("production_mutation_authorized") is False
+        and placement == {"drive": "E", "placement": "hot_global"},
+        "accepted GB hot storage topology drift",
+    )
+
+    accepted, accepted_sha = _load_json(
+        ACCEPTED_DOCKER_E_RECEIPT, "accepted Docker E topology receipt"
+    )
+    require(
+        accepted_sha == ACCEPTED_DOCKER_E_RECEIPT_SHA
+        and accepted.get("version") == "DOCKER_DESKTOP_DURABLE_DATA_RELOCATION_RECEIPT_V2"
+        and accepted.get("status") == "PASS"
+        and accepted.get("source_released") is True
+        and accepted.get("target_root") == str(DOCKER_E_ROOT)
+        and accepted.get("custom_wsl_distro_dir") == str(DOCKER_E_ROOT)
+        and accepted.get("docker_desktop_wsl_base_path") == str(DOCKER_E_ROOT / "main")
+        and accepted.get("container_identity_match") is True
+        and accepted.get("volume_identity_match") is True
+        and accepted.get("api_health") == "api/postgres/clickhouse=ok",
+        "accepted Docker E topology receipt drift",
+    )
+
+    appdata = os.environ.get("APPDATA", "").strip()
+    require(bool(appdata), "APPDATA required for Docker E topology verification")
+    settings, _ = _load_json(
+        Path(appdata) / "Docker" / "settings-store.json",
+        "current Docker Desktop settings",
+    )
+    require(
+        settings.get("CustomWslDistroDir") == str(DOCKER_E_ROOT),
+        "current Docker Desktop durable root is not accepted E topology",
+    )
+    require(
+        DOCKER_E_DATA_VHDX.is_file() and not DOCKER_E_DATA_VHDX.is_symlink(),
+        "accepted E Docker durable VHDX missing or symlinked",
+    )
+
+    docker = _docker_json(["info", "--format", "{{json .}}"])
+    require(
+        docker.get("DockerRootDir") == "/var/lib/docker"
+        and docker.get("OperatingSystem") == "Docker Desktop"
+        and docker.get("ServerVersion") == accepted.get("docker_engine_version"),
+        "live Docker runtime differs from accepted E topology",
+    )
+    return {
+        "contract_version": STORAGE_TOPOLOGY_VERSION,
+        "contract_sha256": _canonical_json_sha(topology),
+        "gb_hot_placement": placement,
+        "accepted_docker_e_receipt_sha256": accepted_sha,
+        "docker_desktop_data_root": str(DOCKER_E_ROOT),
+        "docker_data_vhdx": str(DOCKER_E_DATA_VHDX),
+        "docker_engine_version": docker["ServerVersion"],
+        "docker_root_dir": docker["DockerRootDir"],
+    }
 
 
 def _postgres_database_identity(conn: Any) -> dict[str, Any]:
@@ -67,107 +151,99 @@ def _postgres_database_identity(conn: Any) -> dict[str, Any]:
         cur.execute(
             """
             SELECT current_database() AS database,
-                   inet_server_addr()::text AS server_address,
-                   inet_server_port() AS server_port,
-                   current_setting('data_directory') AS data_directory
+                   current_setting('data_directory') AS data_directory,
+                   current_setting('server_version_num')::integer AS server_version_num,
+                   current_setting('port')::integer AS server_port,
+                   host(inet_server_addr()) AS server_address,
+                   inet_server_port() AS observed_server_port,
+                   (SELECT system_identifier::text FROM pg_control_system()) AS system_identifier
             """
         )
-        endpoint = dict(cur.fetchone())
-        cur.execute("SELECT system_identifier::text FROM pg_control_system()")
-        system_identifier = str(cur.fetchone()["system_identifier"])
-    require(endpoint["database"] == "markorbit", "GB pilot target must be markorbit")
+        return dict(cur.fetchone())
+
+
+def _docker_postgres_identity(database: dict[str, Any]) -> dict[str, Any]:
+    from app.config import get_settings
+
+    settings = get_settings()
+    endpoint_host = str(settings.postgres_host)
+    endpoint_port = int(settings.postgres_port)
     require(
-        endpoint["data_directory"] == POSTGRES_DATA_DESTINATION,
-        "PostgreSQL data_directory does not match governed container mount",
+        endpoint_host.lower() in {"localhost", "127.0.0.1", "::1"},
+        "GB pilot requires the locally accepted PostgreSQL endpoint",
     )
-    require(re.fullmatch(r"[0-9]+", system_identifier) is not None, "invalid cluster identity")
-    return {**endpoint, "system_identifier": system_identifier}
+    require(str(settings.postgres_db) == "markorbit", "GB pilot DSN database must be markorbit")
+    candidates: list[dict[str, Any]] = []
+    for container_id in _docker_lines(
+        ["ps", "-q", "--filter", "label=com.docker.compose.service=postgres"]
+    ):
+        inspected = _docker_json(["inspect", container_id])
+        require(
+            isinstance(inspected, list) and len(inspected) == 1,
+            "ambiguous Docker inspect result",
+        )
+        item = inspected[0]
+        ports = item.get("NetworkSettings", {}).get("Ports", {}).get("5432/tcp") or []
+        if not any(int(binding.get("HostPort", -1)) == endpoint_port for binding in ports):
+            continue
+        mounts = [
+            mount
+            for mount in item.get("Mounts", [])
+            if mount.get("Destination") == POSTGRES_DATA_DESTINATION
+        ]
+        networks = item.get("NetworkSettings", {}).get("Networks", {})
+        addresses = sorted(
+            network.get("IPAddress") for network in networks.values() if network.get("IPAddress")
+        )
+        labels = item.get("Config", {}).get("Labels", {}) or {}
+        state = item.get("State", {})
+        health = state.get("Health", {}).get("Status")
+        require(
+            state.get("Running") is True
+            and health == "healthy"
+            and len(mounts) == 1
+            and mounts[0].get("Type") == "volume"
+            and mounts[0].get("RW") is True
+            and str(mounts[0].get("Source", "")).startswith("/var/lib/docker/volumes/")
+            and labels.get("com.docker.compose.service") == "postgres",
+            "PostgreSQL Docker runtime topology is not accepted",
+        )
+        candidates.append(
+            {
+                "container_id": item["Id"],
+                "container_image_id": item["Image"],
+                "compose_project": labels.get("com.docker.compose.project"),
+                "container_addresses": addresses,
+                "volume_name": mounts[0].get("Name"),
+                "volume_source": mounts[0].get("Source"),
+            }
+        )
+    require(len(candidates) == 1, "configured PostgreSQL endpoint is not one exact container")
+    candidate = candidates[0]
+    require(
+        database.get("database") == "markorbit"
+        and database.get("data_directory") == POSTGRES_DATA_DESTINATION
+        and database.get("server_port") == 5432
+        and database.get("observed_server_port") == 5432
+        and database.get("server_address") in candidate["container_addresses"]
+        and re.fullmatch(r"[0-9]+", str(database.get("system_identifier", ""))) is not None,
+        "live PostgreSQL cluster identity does not match configured Docker endpoint",
+    )
+    return {
+        **database,
+        "configured_endpoint_host": endpoint_host,
+        "configured_endpoint_port": endpoint_port,
+        **candidate,
+    }
 
 
 def capture_e_postgres_topology(conn: Any) -> dict[str, Any]:
-    """Bind the live DB connection to one E-backed Compose PostgreSQL container."""
-    from app.db import get_settings
-
-    settings = get_settings()
-    host = str(settings.postgres_host).strip().lower()
-    port = int(settings.postgres_port)
-    require(host in {"localhost", "127.0.0.1", "::1"}, "GB pilot requires loopback Postgres")
-    require(str(settings.postgres_db) == "markorbit", "GB pilot DSN database must be markorbit")
-    container_ids = _docker_json(
-        "ps",
-        "--filter",
-        f"label=com.docker.compose.project={COMPOSE_PROJECT}",
-        "--filter",
-        "label=com.docker.compose.service=postgres",
-        "--filter",
-        "status=running",
-        "--format",
-        "json",
-    )
-    require(
-        isinstance(container_ids, list) and len(container_ids) == 1,
-        "ambiguous PostgreSQL container",
-    )
-    container_id = str(container_ids[0].get("ID", ""))
-    require(
-        re.fullmatch(r"[0-9a-f]{12,64}", container_id) is not None,
-        "invalid container identity",
-    )
-    inspected = _docker_json("inspect", container_id)
-    require(isinstance(inspected, list) and len(inspected) == 1, "ambiguous Docker inspect result")
-    item = inspected[0]
-    labels = item.get("Config", {}).get("Labels", {}) or {}
-    require(
-        labels.get("com.docker.compose.project") == COMPOSE_PROJECT
-        and labels.get("com.docker.compose.service") == "postgres",
-        "PostgreSQL container labels do not match governed service",
-    )
-    compose_files = str(labels.get("com.docker.compose.project.config_files", ""))
-    require(
-        "docker-compose.external-storage.yml" in compose_files,
-        "PostgreSQL container was not created with the external-storage topology",
-    )
-    mounts = [
-        mount
-        for mount in item.get("Mounts", [])
-        if mount.get("Destination") == POSTGRES_DATA_DESTINATION
-    ]
-    require(len(mounts) == 1, "PostgreSQL data mount is missing or ambiguous")
-    mount = mounts[0]
-    require(
-        mount.get("Type") == "bind" and mount.get("RW") is True,
-        "PostgreSQL data mount must be one writable bind mount",
-    )
-    source = _e_host_path(str(mount.get("Source", "")))
-    bindings = item.get("NetworkSettings", {}).get("Ports", {}).get("5432/tcp") or []
-    require(
-        any(int(binding.get("HostPort", 0)) == port for binding in bindings),
-        "PostgreSQL configured port does not match the governed container",
-    )
-    addresses = {
-        str(network.get("IPAddress", ""))
-        for network in item.get("NetworkSettings", {}).get("Networks", {}).values()
-    }
+    """Bind the live DB connection to accepted E Docker and PostgreSQL identities."""
+    storage = verify_accepted_storage_topology()
     db = _postgres_database_identity(conn)
-    require(db["server_address"] in addresses, "DSN is not connected to the governed container")
-    image = str(item.get("Image", ""))
-    require(re.fullmatch(r"sha256:[0-9a-f]{64}", image) is not None, "invalid image identity")
     return {
-        "database": db["database"],
-        "system_identifier": db["system_identifier"],
-        "server_address": db["server_address"],
-        "server_port": db["server_port"],
-        "configured_host": host,
-        "configured_port": port,
-        "container_id": str(item.get("Id", "")),
-        "container_image_sha256": image.removeprefix("sha256:"),
-        "compose_project": COMPOSE_PROJECT,
-        "compose_service": "postgres",
-        "compose_external_storage": True,
-        "data_directory": db["data_directory"],
-        "data_mount_type": "bind",
-        "data_mount_source": source,
-        "data_mount_host_drive": "E",
+        "accepted_storage_topology_evidence": storage,
+        "postgres_target_evidence": _docker_postgres_identity(db),
     }
 
 
@@ -180,44 +256,70 @@ def verify_e_postgres_topology(conn: Any, expected: dict[str, Any]) -> dict[str,
 def validate_frozen_topology(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
-    expected_keys = {
-        "database",
-        "system_identifier",
-        "server_address",
-        "server_port",
-        "configured_host",
-        "configured_port",
-        "container_id",
-        "container_image_sha256",
-        "compose_project",
-        "compose_service",
-        "compose_external_storage",
-        "data_directory",
-        "data_mount_type",
-        "data_mount_source",
-        "data_mount_host_drive",
-    }
-    try:
-        source = _e_host_path(str(value.get("data_mount_source", "")))
-    except RuntimeError:
+    storage = value.get("accepted_storage_topology_evidence")
+    target = value.get("postgres_target_evidence")
+    if not isinstance(storage, dict) or not isinstance(target, dict):
         return False
     return (
-        set(value) == expected_keys
-        and value.get("database") == "markorbit"
-        and re.fullmatch(r"[0-9]+", str(value.get("system_identifier", ""))) is not None
-        and isinstance(value.get("server_address"), str)
-        and type(value.get("server_port")) is int
-        and value.get("configured_host") in {"localhost", "127.0.0.1", "::1"}
-        and value.get("configured_port") == value.get("server_port")
-        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("container_id", ""))) is not None
-        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("container_image_sha256", ""))) is not None
-        and value.get("compose_project") == COMPOSE_PROJECT
-        and value.get("compose_service") == "postgres"
-        and value.get("compose_external_storage") is True
-        and value.get("data_directory") == POSTGRES_DATA_DESTINATION
-        and value.get("data_mount_type") == "bind"
-        and value.get("data_mount_host_drive") == "E"
-        and source == value.get("data_mount_source")
+        set(value) == {"accepted_storage_topology_evidence", "postgres_target_evidence"}
+        and set(storage)
+        == {
+            "contract_version",
+            "contract_sha256",
+            "gb_hot_placement",
+            "accepted_docker_e_receipt_sha256",
+            "docker_desktop_data_root",
+            "docker_data_vhdx",
+            "docker_engine_version",
+            "docker_root_dir",
+        }
+        and set(target)
+        == {
+            "database",
+            "data_directory",
+            "server_version_num",
+            "server_port",
+            "server_address",
+            "observed_server_port",
+            "system_identifier",
+            "configured_endpoint_host",
+            "configured_endpoint_port",
+            "container_id",
+            "container_image_id",
+            "compose_project",
+            "container_addresses",
+            "volume_name",
+            "volume_source",
+        }
+        and storage.get("contract_version") == STORAGE_TOPOLOGY_VERSION
+        and re.fullmatch(r"[0-9a-f]{64}", str(storage.get("contract_sha256", ""))) is not None
+        and storage.get("gb_hot_placement") == {"drive": "E", "placement": "hot_global"}
+        and storage.get("accepted_docker_e_receipt_sha256") == ACCEPTED_DOCKER_E_RECEIPT_SHA
+        and storage.get("docker_desktop_data_root") == str(DOCKER_E_ROOT)
+        and storage.get("docker_data_vhdx") == str(DOCKER_E_DATA_VHDX)
+        and storage.get("docker_root_dir") == "/var/lib/docker"
+        and target.get("database") == "markorbit"
+        and target.get("data_directory") == POSTGRES_DATA_DESTINATION
+        and re.fullmatch(r"[0-9]+", str(target.get("system_identifier", ""))) is not None
+        and isinstance(target.get("server_address"), str)
+        and target.get("server_port") == 5432
+        and target.get("observed_server_port") == 5432
+        and str(target.get("configured_endpoint_host", "")).lower()
+        in {"localhost", "127.0.0.1", "::1"}
+        and type(target.get("configured_endpoint_port")) is int
+        and target.get("configured_endpoint_port") > 0
+        and re.fullmatch(r"[0-9a-f]{64}", str(target.get("container_id", ""))) is not None
+        and re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(target.get("container_image_id", ""))
+        )
+        is not None
+        and isinstance(target.get("compose_project"), str)
+        and bool(target.get("compose_project"))
+        and isinstance(target.get("container_addresses"), list)
+        and target.get("server_address") in target.get("container_addresses")
+        and isinstance(target.get("volume_name"), str)
+        and bool(target.get("volume_name"))
+        and str(target.get("volume_source", "")).startswith("/var/lib/docker/volumes/")
     )
 
 

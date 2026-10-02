@@ -15,21 +15,35 @@ from app.global_trademarks import gb_madrid_ir_pilot as madrid
 
 def topology() -> dict:
     return {
-        "database": "markorbit",
-        "system_identifier": "123456789",
-        "server_address": "172.18.0.3",
-        "server_port": 5432,
-        "configured_host": "localhost",
-        "configured_port": 5432,
-        "container_id": "a" * 64,
-        "container_image_sha256": "b" * 64,
-        "compose_project": "markorbit-data-engine",
-        "compose_service": "postgres",
-        "compose_external_storage": True,
-        "data_directory": "/var/lib/postgresql/data",
-        "data_mount_type": "bind",
-        "data_mount_source": r"E:\MarkOrbitData\production\postgres",
-        "data_mount_host_drive": "E",
+        "accepted_storage_topology_evidence": {
+            "contract_version": madrid.safety.STORAGE_TOPOLOGY_VERSION,
+            "contract_sha256": "1" * 64,
+            "gb_hot_placement": {"drive": "E", "placement": "hot_global"},
+            "accepted_docker_e_receipt_sha256": (
+                madrid.safety.ACCEPTED_DOCKER_E_RECEIPT_SHA
+            ),
+            "docker_desktop_data_root": str(madrid.safety.DOCKER_E_ROOT),
+            "docker_data_vhdx": str(madrid.safety.DOCKER_E_DATA_VHDX),
+            "docker_engine_version": "28.3.2",
+            "docker_root_dir": "/var/lib/docker",
+        },
+        "postgres_target_evidence": {
+            "database": "markorbit",
+            "data_directory": "/var/lib/postgresql/data",
+            "server_version_num": 170006,
+            "server_port": 5432,
+            "server_address": "172.18.0.3",
+            "observed_server_port": 5432,
+            "system_identifier": "123456789",
+            "configured_endpoint_host": "localhost",
+            "configured_endpoint_port": 5432,
+            "container_id": "a" * 64,
+            "container_image_id": "sha256:" + "b" * 64,
+            "compose_project": "markorbit-data-engine",
+            "container_addresses": ["172.18.0.3"],
+            "volume_name": "markorbit-data-engine_postgres_data",
+            "volume_source": "/var/lib/docker/volumes/markorbit-data-engine_postgres_data/_data",
+        },
     }
 
 
@@ -138,7 +152,17 @@ class GBMadridIRPilotTests(unittest.TestCase):
         self.assertEqual(plan["structured_stage_drive"], "E")
         self.assertEqual(plan["target_database_physical_drive"], "E")
         self.assertEqual(plan["future_query_storage_placement"], "hot_global")
-        self.assertEqual(plan["postgres_topology"]["data_mount_source"][0], "E")
+        self.assertEqual(
+            plan["postgres_topology"]["accepted_storage_topology_evidence"][
+                "gb_hot_placement"
+            ],
+            {"drive": "E", "placement": "hot_global"},
+        )
+        self.assertTrue(
+            plan["postgres_topology"]["postgres_target_evidence"]["volume_source"].startswith(
+                "/var/lib/docker/volumes/"
+            )
+        )
         self.assertEqual(plan["pilot_source_rows"], 1000)
         self.assertTrue(plan["historical_source_only"])
         self.assertFalse(plan["current_state_verified"])
@@ -258,19 +282,35 @@ class GBMadridIRPilotTests(unittest.TestCase):
 
     def test_non_e_postgres_topology_is_rejected(self) -> None:
         value = topology()
-        value["data_mount_source"] = r"D:\docker\volumes\postgres"
-        value["data_mount_host_drive"] = "D"
+        value["accepted_storage_topology_evidence"]["gb_hot_placement"] = {
+            "drive": "D",
+            "placement": "hot_cn",
+        }
         self.assertFalse(madrid.safety.validate_frozen_topology(value))
 
     def test_apply_topology_rejects_wrong_cluster_endpoint_and_placement(self) -> None:
         expected = topology()
         for changed in (
-            {**expected, "system_identifier": "987654321"},
-            {**expected, "configured_port": 5544},
             {
                 **expected,
-                "data_mount_source": r"D:\docker\postgres",
-                "data_mount_host_drive": "D",
+                "postgres_target_evidence": {
+                    **expected["postgres_target_evidence"],
+                    "system_identifier": "987654321",
+                },
+            },
+            {
+                **expected,
+                "postgres_target_evidence": {
+                    **expected["postgres_target_evidence"],
+                    "configured_endpoint_port": 5544,
+                },
+            },
+            {
+                **expected,
+                "accepted_storage_topology_evidence": {
+                    **expected["accepted_storage_topology_evidence"],
+                    "docker_data_vhdx": r"D:\DockerData\disk\docker_data.vhdx",
+                },
             },
         ):
             with (
@@ -284,7 +324,7 @@ class GBMadridIRPilotTests(unittest.TestCase):
             ):
                 madrid.safety.verify_e_postgres_topology(object(), expected)
 
-    def test_live_topology_binds_dsn_cluster_container_and_e_mount(self) -> None:
+    def test_live_topology_binds_accepted_e_runtime_and_exact_volume_cluster(self) -> None:
         inspect = {
             "Id": "a" * 64,
             "Image": "sha256:" + "b" * 64,
@@ -292,16 +332,17 @@ class GBMadridIRPilotTests(unittest.TestCase):
                 "Labels": {
                     "com.docker.compose.project": "markorbit-data-engine",
                     "com.docker.compose.service": "postgres",
-                    "com.docker.compose.project.config_files": (
-                        r"D:\repo\docker-compose.yml,D:\repo\docker-compose.external-storage.yml"
-                    ),
                 }
             },
+            "State": {"Running": True, "Health": {"Status": "healthy"}},
             "Mounts": [
                 {
                     "Destination": "/var/lib/postgresql/data",
-                    "Source": r"E:\MarkOrbitData\production\postgres",
-                    "Type": "bind",
+                    "Source": (
+                        "/var/lib/docker/volumes/markorbit-data-engine_postgres_data/_data"
+                    ),
+                    "Name": "markorbit-data-engine_postgres_data",
+                    "Type": "volume",
                     "RW": True,
                 }
             ],
@@ -312,15 +353,25 @@ class GBMadridIRPilotTests(unittest.TestCase):
         }
         with (
             patch(
-                "app.db.get_settings",
+                "app.config.get_settings",
                 return_value=SimpleNamespace(
                     postgres_host="localhost", postgres_port=5432, postgres_db="markorbit"
                 ),
             ),
             patch.object(
                 madrid.safety,
+                "verify_accepted_storage_topology",
+                return_value=topology()["accepted_storage_topology_evidence"],
+            ),
+            patch.object(
+                madrid.safety,
+                "_docker_lines",
+                return_value=["a" * 12],
+            ),
+            patch.object(
+                madrid.safety,
                 "_docker_json",
-                side_effect=([{"ID": "a" * 12}], [inspect]),
+                return_value=[inspect],
             ),
             patch.object(
                 madrid.safety,
@@ -330,6 +381,8 @@ class GBMadridIRPilotTests(unittest.TestCase):
                     "system_identifier": "123456789",
                     "server_address": "172.18.0.3",
                     "server_port": 5432,
+                    "observed_server_port": 5432,
+                    "server_version_num": 170006,
                     "data_directory": "/var/lib/postgresql/data",
                 },
             ),
@@ -338,21 +391,32 @@ class GBMadridIRPilotTests(unittest.TestCase):
                 madrid.safety.capture_e_postgres_topology(object()),
                 topology(),
             )
-        inspect["Mounts"][0]["Source"] = r"D:\docker\postgres"
+        inspect["Mounts"][0]["Type"] = "bind"
         with (
             patch(
-                "app.db.get_settings",
+                "app.config.get_settings",
                 return_value=SimpleNamespace(
                     postgres_host="localhost", postgres_port=5432, postgres_db="markorbit"
                 ),
             ),
             patch.object(
                 madrid.safety,
+                "verify_accepted_storage_topology",
+                return_value=topology()["accepted_storage_topology_evidence"],
+            ),
+            patch.object(madrid.safety, "_docker_lines", return_value=["a" * 12]),
+            patch.object(
+                madrid.safety,
                 "_docker_json",
-                side_effect=([{"ID": "a" * 12}], [inspect]),
+                return_value=[inspect],
+            ),
+            patch.object(
+                madrid.safety,
+                "_postgres_database_identity",
+                return_value=topology()["postgres_target_evidence"],
             ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "not E-backed"):
+            with self.assertRaisesRegex(RuntimeError, "runtime topology is not accepted"):
                 madrid.safety.capture_e_postgres_topology(object())
 
     def test_committed_state_reconciliation_recomputes_exact_ordered_digest(self) -> None:
