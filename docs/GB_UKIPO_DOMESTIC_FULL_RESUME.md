@@ -4,6 +4,10 @@
 > stage. D is `hot_cn` only. This V2 operator accepts only the independently
 > audited E structured stage; GB structured/query data stays on E / `hot_global`.
 
+> **The frozen plan SHA `6f174845c5f71a2fa966b7bb8da4e1bca9eaa8c30f69270b17a805def02637ca`
+> is also superseded / do not apply.** It predates the exact Storage Topology V2,
+> #837 Docker-E receipt, Docker runtime and PostgreSQL cluster binding below.
+
 This operator resumes the accepted UKIPO Domestic historical source-row ingest
 after the independently verified first-1,000-row production pilot.
 
@@ -34,6 +38,17 @@ Observed free bytes are intentionally dynamic and may change between plan freeze
 and Apply. Apply re-runs the live disk-reserve check, requires the same frozen
 reserve floors and requires current free bytes to remain at or above them.
 This keeps the authority plan deterministic without weakening the capacity gate.
+
+The frozen plan additionally binds the Storage Topology V2 contract and exact
+GB/hot -> E/hot_global placement; immutable accepted #837 Docker relocation
+receipt SHA; current Docker Desktop E durable root and VHDX; Docker engine/root;
+and the exact PostgreSQL configured endpoint, system identifier, server version,
+container, image, Compose project and named volume. The named volume is accepted
+only when its source is under `/var/lib/docker/volumes/` and that Docker durable
+root is the accepted E VHDX. Apply rechecks the complete evidence on the same
+database connection before the first write. A host bind, D/F Docker root,
+unhealthy or ambiguous container, or any endpoint/cluster/volume drift fails
+closed.
 
 The final expected counts are 1,188,992 physical source rows, 1,188,886
 accepted rows and 106 quarantined malformed-width rows. Completion marks only
