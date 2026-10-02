@@ -11,10 +11,13 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
 from app.global_trademarks import gb_historical_source_row_pilot as pilot
+from app.global_trademarks import gb_historical_e_stage_reader as e_stage
 
 STREAM = "DOMESTIC"
 START_CHECKPOINT = 1000
@@ -25,7 +28,11 @@ PILOT_RECEIPT = GOV / "gb-domestic-pg-pilot-r1.json"
 PILOT_RECEIPT_SHA = "3d233767b09e1265a0728f264b5806cb0675214acae5d7cd8d3cb790f780c9f1"
 PILOT_AUDIT = GOV / "gb-domestic-pg-pilot-independent-audit-r1.json"
 PILOT_AUDIT_SHA = "b9aac974a4db02e2813deefa20ec66e2d7fc5977ea7c1074c77925cccc6df947"
-PILOT_OPERATOR_SHA = "d086bd0efad9953279d0d788417c0e65496078f1a61ba1a4cc939d64405a918a"
+PILOT_PLAN = GOV / "gb-domestic-pg-pilot-plan-r1.json"
+PILOT_PLAN_SHA = "5e5c9a16d96d37068a130e8a5dec52fb0cb39dbe3f461638e90fdddb13ba4be2"
+PILOT_OPERATOR_SHA = "bacf2d6caa800958d8572bfbd6861dce392a162e82ab4d0a1d4c70322b44187a"
+REQUIRED_FREE_BUFFER = 64 * 1024**3
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def require(ok: bool, why: str) -> None:
@@ -46,6 +53,40 @@ def canonical_text_sha(path: Path) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _git(args: list[str]) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=45,
+    )
+    require(completed.returncode == 0, f"git {' '.join(args)} failed")
+    return completed.stdout.strip()
+
+
+def current_git_head() -> str:
+    head = _git(["rev-parse", "HEAD"]).lower()
+    require(re.fullmatch(r"[0-9a-f]{40}", head) is not None, "invalid Git HEAD identity")
+    return head
+
+
+def require_live_clean_main(expected: str | None = None) -> str:
+    require(
+        not _git(["status", "--porcelain=v1"]),
+        "GB Domestic production authority requires a clean worktree",
+    )
+    head = current_git_head()
+    remote = _git(["ls-remote", "origin", "refs/heads/main"]).split()
+    require(
+        len(remote) == 2 and remote[1] == "refs/heads/main" and remote[0].lower() == head,
+        "GB Domestic production authority requires live origin/main",
+    )
+    if expected is not None:
+        require(head == expected, "GB Domestic execution main drift")
+    return head
+
+
 def verify_prior_acceptance() -> dict[str, Any]:
     require(
         PILOT_RECEIPT.is_file() and sha(PILOT_RECEIPT) == PILOT_RECEIPT_SHA,
@@ -55,10 +96,16 @@ def verify_prior_acceptance() -> dict[str, Any]:
         PILOT_AUDIT.is_file() and sha(PILOT_AUDIT) == PILOT_AUDIT_SHA,
         "independent GB pilot audit SHA drift",
     )
+    require(
+        PILOT_PLAN.is_file() and sha(PILOT_PLAN) == PILOT_PLAN_SHA,
+        "accepted GB pilot plan SHA drift",
+    )
     receipt = json.loads(PILOT_RECEIPT.read_text(encoding="utf-8"))
     audit = json.loads(PILOT_AUDIT.read_text(encoding="utf-8"))
+    plan = json.loads(PILOT_PLAN.read_text(encoding="utf-8"))
     require(
         receipt["status"] == "FIRST_1000_HISTORICAL_ROWS_ACCEPTED_NOT_FULL_IMPORT"
+        and receipt["plan_sha256"] == PILOT_PLAN_SHA
         and receipt["stream"] == STREAM
         and receipt["checkpoint_source_row_ordinal"] == START_CHECKPOINT
         and receipt["source_rows_committed"] == START_CHECKPOINT
@@ -76,10 +123,18 @@ def verify_prior_acceptance() -> dict[str, Any]:
         "independent GB pilot audit contract drift",
     )
     require(
-        canonical_text_sha(Path(pilot.__file__)) == PILOT_OPERATOR_SHA,
-        "merged first-1,000 pilot dependency SHA drift",
+        plan["kind"] == "GB_HISTORICAL_PG_PILOT_PLAN_V1"
+        and plan["operator_sha256"] == PILOT_OPERATOR_SHA
+        and plan["source_stream"] == STREAM
+        and plan["source_zip_sha256"]
+        == "3b6063bed36a78e8a04f10a5383f2881f4072a1be13e706a81ab097fb56ee571"
+        and plan["historical_only"] is True
+        and plan["api_cutover_authorized"] is False
+        and plan["merge_authorized"] is False
+        and plan["source_cleanup_authorized"] is False,
+        "accepted first-1,000 pilot plan contract drift",
     )
-    return {"receipt": receipt, "audit": audit}
+    return {"receipt": receipt, "audit": audit, "plan": plan}
 
 
 def _readonly_live_state(source_sha: str) -> dict[str, Any]:
@@ -151,18 +206,22 @@ def verify_live_checkpoint(proof: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def require_e_disk_reserve() -> dict[str, dict[str, int]]:
+    disk = shutil.disk_usage("E:\\")
+    floor = (disk.total * 30 + 99) // 100 + REQUIRED_FREE_BUFFER
+    require(disk.free >= floor + 4 * 1024**3, "E: physical reserve insufficient")
+    return {"E": {"free_bytes": disk.free, "reserve_bytes": floor}}
+
+
 def _disk_reserve_gate() -> dict[str, dict[str, int]]:
-    current = pilot.require_disk_reserve()
-    return {
-        drive: {"reserve_bytes": int(values["reserve_bytes"])}
-        for drive, values in sorted(current.items())
-    }
+    current = require_e_disk_reserve()
+    return {"E": {"reserve_bytes": int(current["E"]["reserve_bytes"])}}
 
 
 def verify_apply_disk_reserve(
     gate: dict[str, dict[str, int]],
 ) -> dict[str, dict[str, int]]:
-    current = pilot.require_disk_reserve()
+    current = require_e_disk_reserve()
     require(set(current) == set(gate), "GB Domestic disk set changed")
     for drive, frozen in gate.items():
         live = current[drive]
@@ -177,17 +236,31 @@ def verify_apply_disk_reserve(
     return current
 
 
-def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
+def make_plan(
+    proof: dict[str, Any], live: dict[str, Any], *, execution_main: str | None = None
+) -> dict[str, Any]:
     reserve_gate = _disk_reserve_gate()
+    execution_main = current_git_head() if execution_main is None else execution_main
+    require(
+        re.fullmatch(r"[0-9a-f]{40}", execution_main) is not None,
+        "invalid GB Domestic execution main identity",
+    )
     return {
-        "kind": "GB_DOMESTIC_HISTORICAL_FULL_RESUME_PLAN_V1",
+        "kind": "GB_DOMESTIC_HISTORICAL_E_FULL_RESUME_PLAN_V2",
         "status": "FROZEN_NO_APPLY",
+        "execution_main_sha": execution_main,
         "source_stream": STREAM,
         "source_zip_sha256": proof["spec"]["zip_sha"],
         "source_member": proof["spec"]["member"],
         "stage_manifest_sha256": proof["spec"]["manifest_sha"],
         "stage_rows_sha256": proof["manifest"]["accepted_jsonl_sha256"],
         "stage_quarantine_sha256": proof["manifest"]["quarantine_jsonl_sha256"],
+        "structured_stage_root": proof["e_stage"]["root"],
+        "structured_stage_drive": "E",
+        "structured_stage_manifest_sha256": proof["e_stage"]["manifest_sha256"],
+        "structured_stage_relocation_plan_sha256": proof["e_stage"]["relocation_plan_sha256"],
+        "structured_stage_relocation_receipt_sha256": proof["e_stage"]["relocation_receipt_sha256"],
+        "structured_stage_independent_audit_sha256": proof["e_stage"]["independent_audit_sha256"],
         "source_total_rows": proof["spec"]["total"],
         "source_expected_accepted_rows": proof["spec"]["accepted"],
         "source_expected_quarantine_rows": proof["spec"]["bad"],
@@ -196,6 +269,8 @@ def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
         "remaining_source_rows": proof["spec"]["total"] - live["checkpoint_source_ordinal"],
         "batch_size": BATCH_SIZE,
         "target_database": "markorbit",
+        "target_database_physical_drive": "E",
+        "future_query_storage_placement": "hot_global",
         "pilot_receipt_sha256": PILOT_RECEIPT_SHA,
         "pilot_independent_audit_sha256": PILOT_AUDIT_SHA,
         "pilot_operator_sha256": PILOT_OPERATOR_SHA,
@@ -213,21 +288,30 @@ def make_plan(proof: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
 
 def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
     require(
-        plan["kind"] == "GB_DOMESTIC_HISTORICAL_FULL_RESUME_PLAN_V1"
+        plan["kind"] == "GB_DOMESTIC_HISTORICAL_E_FULL_RESUME_PLAN_V2"
         and plan["status"] == "FROZEN_NO_APPLY"
+        and re.fullmatch(r"[0-9a-f]{40}", plan["execution_main_sha"]) is not None
         and plan["source_stream"] == STREAM
         and plan["start_checkpoint_source_ordinal"] == START_CHECKPOINT
         and plan["target_checkpoint_source_ordinal"] == TARGET_SOURCE_ROWS
         and plan["remaining_source_rows"] == TARGET_SOURCE_ROWS - START_CHECKPOINT
         and plan["batch_size"] == BATCH_SIZE
         and plan["target_database"] == "markorbit"
+        and plan["target_database_physical_drive"] == "E"
+        and plan["future_query_storage_placement"] == "hot_global"
+        and plan["structured_stage_root"] == str(e_stage.STAGE_ROOT)
+        and plan["structured_stage_drive"] == "E"
+        and plan["structured_stage_manifest_sha256"] == e_stage.STAGE_MANIFEST_SHA
+        and plan["structured_stage_relocation_plan_sha256"] == e_stage.RELOCATION_PLAN_SHA
+        and plan["structured_stage_relocation_receipt_sha256"] == e_stage.RELOCATION_RECEIPT_SHA
+        and plan["structured_stage_independent_audit_sha256"] == e_stage.INDEPENDENT_AUDIT_SHA
         and plan["pilot_receipt_sha256"] == PILOT_RECEIPT_SHA
         and plan["pilot_independent_audit_sha256"] == PILOT_AUDIT_SHA
         and plan["pilot_operator_sha256"] == PILOT_OPERATOR_SHA
         and plan["full_resume_operator_sha256"] == canonical_text_sha(Path(__file__))
         and plan["schema_sql_sha256"]
         == hashlib.sha256(pilot.SCHEMA_SQL.encode("utf-8")).hexdigest()
-        and set(plan["disk_reserve_gate"]) == {"D", "E"}
+        and set(plan["disk_reserve_gate"]) == {"E"}
         and all(
             set(values) == {"reserve_bytes"} and int(values["reserve_bytes"]) > 0
             for values in plan["disk_reserve_gate"].values()
@@ -250,8 +334,9 @@ def authorize(plan: dict[str, Any], plan_sha: str, token: str) -> None:
 def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> dict[str, Any]:
     from app.db import postgres_conn
 
-    receipt = GOV / "gb-domestic-full-resume-r1.json"
+    receipt = GOV / "gb-domestic-e-full-resume-r1.json"
     require(not receipt.exists(), "GB Domestic full-resume receipt already exists; refuse replay")
+    require_live_clean_main(plan["execution_main_sha"])
     live = verify_live_checkpoint(proof)
     require(
         live["checkpoint_source_ordinal"] == plan["start_checkpoint_source_ordinal"],
@@ -352,15 +437,20 @@ def apply_full(proof: dict[str, Any], plan: dict[str, Any], plan_sha: str) -> di
             conn.commit()
 
     payload = {
-        "kind": "GB_DOMESTIC_HISTORICAL_FULL_RESUME_V1",
+        "kind": "GB_DOMESTIC_HISTORICAL_E_FULL_RESUME_V2",
         "status": "DOMESTIC_HISTORICAL_SOURCE_COMPLETE_NOT_CURRENT_REGISTER",
         "plan_sha256": plan_sha,
+        "execution_main_sha": plan["execution_main_sha"],
         "source_zip_sha256": spec["zip_sha"],
         "source_rows_committed": committed,
         "accepted_rows_committed": accepted,
         "quarantined_rows_committed": quarantined,
         "checkpoint_source_row_ordinal": last,
         "target_database": "markorbit",
+        "target_database_physical_drive": "E",
+        "structured_stage_root": str(e_stage.STAGE_ROOT),
+        "structured_stage_manifest_sha256": e_stage.STAGE_MANIFEST_SHA,
+        "future_query_storage_placement": "hot_global",
         "full_import_complete": True,
         "historical_source_only": True,
         "source_status_current_verified": False,
@@ -389,10 +479,16 @@ def main() -> None:
     parser.add_argument("--authority-token", default="")
     args = parser.parse_args()
 
+    execution_main = (
+        require_live_clean_main()
+        if args.freeze_plan is not None or args.apply_full
+        else current_git_head()
+    )
+
     verify_prior_acceptance()
-    proof = pilot.verify_stage(STREAM)
+    proof = e_stage.verify_e_stage(STREAM)
     live = verify_live_checkpoint(proof)
-    proposed = make_plan(proof, live)
+    proposed = make_plan(proof, live, execution_main=execution_main)
 
     if args.preflight_only:
         require(not args.plan and not args.authority_token, "preflight accepts no Apply arguments")

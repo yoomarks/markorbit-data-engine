@@ -1,5 +1,10 @@
 # GB historical source-row PostgreSQL pilot (#855)
 
+> **Storage-topology supersession:** new Apply authority from this D-resident
+> stage is disabled. The accepted first-1,000 Domestic pilot remains valid
+> historical evidence, but any further database admission must first consume an
+> independently accepted E-resident structured stage.
+
 This follow-on operator is intentionally separate from the accepted UKIPO
 source staging in PR #856. It consumes only the independently audited
 Domestic or Madrid-IR stage under D:\yoomarks\governed-plans\855 and never

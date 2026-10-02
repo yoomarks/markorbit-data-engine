@@ -21,6 +21,11 @@ AUDIT = Path(r"D:\yoomarks\governed-plans\855\gb-historical-stock-independent-au
 AUDIT_SHA = "320c40b1cea7d5593ee8dbb99dfcbc1f534b71bd682281ab42fd719873a9d0c5"
 STAGE = Path(r"D:\yoomarks\governed-plans\855\historical-stock")
 GOV = Path(r"D:\yoomarks\governed-plans\855")
+LEGACY_D_STAGE_SUPERSEDED = True
+LEGACY_D_STAGE_SUPERSEDED_REASON = (
+    "D-resident GB stage authority is superseded; freeze and accept the governed "
+    "E structured stage before any further database admission"
+)
 PILOT_SOURCE_ROWS = 1000
 REQUIRED_FREE_BUFFER = 64 * 1024**3
 SOURCE_SPECS = {
@@ -202,6 +207,7 @@ def make_plan(stream: str, proof: dict[str, Any]) -> dict[str, Any]:
 
 
 def authorize(plan: dict[str, Any], plan_sha: str, token: str, stream: str) -> None:
+    require(not LEGACY_D_STAGE_SUPERSEDED, LEGACY_D_STAGE_SUPERSEDED_REASON)
     require(
         plan["kind"] == "GB_HISTORICAL_PG_PILOT_PLAN_V1"
         and plan["status"] == "FROZEN_NO_APPLY"
@@ -459,6 +465,7 @@ def main() -> None:
     parser.add_argument("--plan-sha", default="")
     parser.add_argument("--authority-token", default="")
     args = parser.parse_args()
+    require(not LEGACY_D_STAGE_SUPERSEDED, LEGACY_D_STAGE_SUPERSEDED_REASON)
     proof = verify_stage(args.stream)
     proposed = make_plan(args.stream, proof)
     if args.preflight_only:
