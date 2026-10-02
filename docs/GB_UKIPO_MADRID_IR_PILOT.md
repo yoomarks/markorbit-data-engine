@@ -9,7 +9,11 @@ source ordinals, raw status values, classes, and lineage remain preserved.
 physical rows from the independently accepted E structured stage. It reuses the
 existing co-owner-safe `historical_source_row_v2` schema and row decoder. The
 plan binds the E relocation plan/receipt/manifest/independent audit and official
-F raw evidence through the accepted E-stage reader.
+F raw evidence through the accepted E-stage reader. It also binds the exact
+PostgreSQL system identifier, loopback endpoint, container/image identity and
+the existing external-storage Compose guard. The live PostgreSQL data mount
+must be the single writable `/var/lib/postgresql/data` bind under
+`E:\MarkOrbitData`; the database name alone is not placement evidence.
 
 Preflight requires an empty Madrid-IR run and zero Madrid-IR rows in the
 production `markorbit` database. Freeze and Apply require a clean checkout whose
@@ -20,13 +24,17 @@ container and require its data directory to be a writable bind mount under
 `E:\MarkOrbitData` created with the external-storage Compose topology. A Docker
 managed volume or any D/F-backed mount fails closed.
 
-Apply rechecks the exact ordered first-1,000-row digest immediately before the
-insert. The same database transaction stores the frozen plan, execution identity,
-E topology, and exact receipt payload. Receipt publication is immutable and
-atomic; if filesystem publication fails after commit, an exact retry validates
-the committed rows and reconstructs only the matching receipt. No full Madrid import, Domestic resume,
-journal ingestion, current-state assertion, serving cutover, ClickHouse change,
-or source cleanup is authorized.
+Apply materializes the exact 1,000 rows once and recomputes their ordered
+identity immediately before insert. The same transaction persists the source
+rows, exact plan, execution topology, and canonical receipt payload.
+Reconciliation rereads all 1,000 committed row identities in ordinal order and
+requires their digest to match the frozen plan. Receipt and plan files use
+same-directory atomic publication plus byte/SHA-256 verification; an exact
+committed database receipt can repair a partial post-commit file, while a file
+without matching database evidence still fails closed. An ambiguous commit is
+reconciled on a new connection, and exact retries never INSERT again. No full
+Madrid import, Domestic resume, journal ingestion, current-state assertion,
+serving cutover, ClickHouse change, or source cleanup is authorized.
 
 After independent merge, the pilot plan must be frozen from clean latest main.
 Exact Apply authority will be:

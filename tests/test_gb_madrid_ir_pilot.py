@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.global_trademarks import gb_madrid_ir_pilot as madrid
 
@@ -238,11 +238,51 @@ class GBMadridIRPilotTests(unittest.TestCase):
         self.assertEqual(digest, hashlib.sha256(receipt.read_bytes()).hexdigest())
         self.assertEqual(madrid.safety.atomic_publish_receipt(receipt, payload), digest)
 
+        receipt.write_bytes(b'{"partial":')
+        with self.assertRaisesRegex(RuntimeError, "conflicts with DB evidence"):
+            madrid.safety.atomic_publish_receipt(receipt, payload)
+        repaired = madrid.safety.atomic_publish_receipt(
+            receipt, payload, repair_from_db_evidence=True
+        )
+        self.assertEqual(receipt.read_bytes(), madrid.safety.receipt_bytes(payload))
+        self.assertEqual(repaired, digest)
+
+    def test_plan_freeze_is_atomic_verified_and_never_reused(self) -> None:
+        path = self.root / "plan.json"
+        payload = {"kind": "FROZEN_NO_APPLY", "nonce": "new-authority-only"}
+        digest = madrid.safety.atomic_freeze_plan(path, payload)
+        self.assertEqual(path.read_bytes(), madrid.safety.receipt_bytes(payload))
+        self.assertEqual(digest, hashlib.sha256(path.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(RuntimeError, "refuse reuse"):
+            madrid.safety.atomic_freeze_plan(path, payload)
+
     def test_non_e_postgres_topology_is_rejected(self) -> None:
         value = topology()
         value["data_mount_source"] = r"D:\docker\volumes\postgres"
         value["data_mount_host_drive"] = "D"
         self.assertFalse(madrid.safety.validate_frozen_topology(value))
+
+    def test_apply_topology_rejects_wrong_cluster_endpoint_and_placement(self) -> None:
+        expected = topology()
+        for changed in (
+            {**expected, "system_identifier": "987654321"},
+            {**expected, "configured_port": 5544},
+            {
+                **expected,
+                "data_mount_source": r"D:\docker\postgres",
+                "data_mount_host_drive": "D",
+            },
+        ):
+            with (
+                self.subTest(changed=changed),
+                patch.object(
+                    madrid.safety,
+                    "capture_e_postgres_topology",
+                    return_value=changed,
+                ),
+                self.assertRaisesRegex(RuntimeError, "topology or cluster endpoint drifted"),
+            ):
+                madrid.safety.verify_e_postgres_topology(object(), expected)
 
     def test_live_topology_binds_dsn_cluster_container_and_e_mount(self) -> None:
         inspect = {
@@ -314,6 +354,99 @@ class GBMadridIRPilotTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "not E-backed"):
                 madrid.safety.capture_e_postgres_topology(object())
+
+    def test_committed_state_reconciliation_recomputes_exact_ordered_digest(self) -> None:
+        evidence = proof(self.root, ("ACCEPTED",))
+        plan = self.plan(evidence, madrid.prefix_summary(evidence))
+        records = list(madrid.source_rows.ordered_source_records(evidence, madrid.STREAM))[
+            : madrid.PILOT_SOURCE_ROWS
+        ]
+
+        class Cursor:
+            def __init__(self, *, swap_first: bool = False) -> None:
+                self.swap_first = swap_first
+                self.query = ""
+
+            def execute(self, query: str, _params: tuple) -> None:
+                self.query = query
+
+            def fetchall(self) -> list[dict]:
+                rows = [
+                    {
+                        "source_row_ordinal": row[0],
+                        "record_kind": row[1],
+                        "source_row_sha256": row[-1],
+                        "historical_source_only": True,
+                        "current_state_verified": False,
+                    }
+                    for row in records
+                ]
+                if self.swap_first:
+                    rows[0]["source_row_sha256"] = "f" * 64
+                return rows
+
+            def fetchone(self) -> dict:
+                return {
+                    "source_stream": madrid.STREAM,
+                    "source_member": plan["source_member"],
+                    "stage_manifest_sha256": plan["stage_manifest_sha256"],
+                    "stage_rows_sha256": plan["stage_rows_sha256"],
+                    "stage_quarantine_sha256": plan["stage_quarantine_sha256"],
+                    "expected_source_rows": plan["source_total_rows"],
+                    "expected_accepted_rows": plan["source_expected_accepted_rows"],
+                    "expected_quarantine_rows": plan["source_expected_quarantine_rows"],
+                    "checkpoint_source_ordinal": madrid.PILOT_SOURCE_ROWS,
+                    "rows_committed": madrid.PILOT_SOURCE_ROWS,
+                    "accepted_committed": madrid.PILOT_SOURCE_ROWS,
+                    "quarantine_committed": 0,
+                    "status": "RUNNING",
+                }
+
+        madrid._verify_committed_state(Cursor(), plan, plan["source_zip_sha256"])
+        with self.assertRaisesRegex(RuntimeError, "committed state drift"):
+            madrid._verify_committed_state(Cursor(swap_first=True), plan, plan["source_zip_sha256"])
+
+    def test_ambiguous_commit_reconciles_and_retry_does_not_insert(self) -> None:
+        evidence = proof(self.root, ("ACCEPTED",))
+        plan = self.plan(evidence, madrid.prefix_summary(evidence))
+        plan_sha = "c" * 64
+        reserve = {"E": {"free_bytes": 20, "reserve_bytes": 5}}
+        payload = madrid._receipt_payload(plan, plan_sha, reserve)
+        receipt = self.root / "receipt.json"
+        with (
+            patch.object(madrid, "RECEIPT", receipt),
+            patch.object(madrid.domestic, "require_live_clean_main"),
+            patch.object(
+                madrid.domestic,
+                "verify_apply_disk_reserve",
+                return_value=reserve,
+            ),
+            patch.object(
+                madrid,
+                "_reconcile_committed",
+                side_effect=(None, payload),
+            ) as reconcile,
+            patch("app.db.postgres_conn", side_effect=ConnectionError("commit outcome unknown")),
+        ):
+            result = madrid.apply_pilot(evidence, plan, plan_sha)
+        self.assertEqual(result["receipt_sha256"], madrid.safety.receipt_sha256(payload))
+        self.assertEqual(reconcile.call_count, 2)
+
+        no_insert = Mock(side_effect=AssertionError("retry attempted INSERT"))
+        with (
+            patch.object(madrid, "RECEIPT", receipt),
+            patch.object(madrid.domestic, "require_live_clean_main"),
+            patch.object(
+                madrid.domestic,
+                "verify_apply_disk_reserve",
+                return_value=reserve,
+            ),
+            patch.object(madrid, "_reconcile_committed", return_value=payload),
+            patch("app.db.postgres_conn", no_insert),
+        ):
+            retried = madrid.apply_pilot(evidence, plan, plan_sha)
+        self.assertEqual(retried["receipt_sha256"], result["receipt_sha256"])
+        no_insert.assert_not_called()
 
 
 if __name__ == "__main__":

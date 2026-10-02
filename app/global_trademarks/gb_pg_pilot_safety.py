@@ -229,16 +229,48 @@ def receipt_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(receipt_bytes(payload)).hexdigest()
 
 
-def atomic_publish_receipt(path: Path, payload: dict[str, Any]) -> str:
-    """Publish a complete immutable receipt without replacing any existing file."""
+def atomic_publish_receipt(
+    path: Path, payload: dict[str, Any], *, repair_from_db_evidence: bool = False
+) -> str:
+    """Publish exact bytes, optionally repairing a partial post-commit file."""
     expected = receipt_bytes(payload)
     digest = hashlib.sha256(expected).hexdigest()
     if path.exists():
+        if path.is_file() and path.read_bytes() == expected:
+            return digest
+        require(repair_from_db_evidence, "receipt file conflicts with DB evidence")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(expected)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if repair_from_db_evidence:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)
+    except FileExistsError:
         require(
             path.is_file() and path.read_bytes() == expected,
             "receipt file conflicts with DB evidence",
         )
-        return digest
+    finally:
+        temporary.unlink(missing_ok=True)
+    require(
+        path.is_file()
+        and path.read_bytes() == expected
+        and hashlib.sha256(path.read_bytes()).hexdigest() == digest,
+        "published receipt bytes do not match DB evidence",
+    )
+    return digest
+
+
+def atomic_freeze_plan(path: Path, payload: dict[str, Any]) -> str:
+    """Create one immutable plan through a same-directory atomic hard link."""
+    require(not path.exists(), "governed plan already exists; refuse reuse")
+    expected = receipt_bytes(payload)
+    digest = hashlib.sha256(expected).hexdigest()
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -247,13 +279,14 @@ def atomic_publish_receipt(path: Path, payload: dict[str, Any]) -> str:
             stream.flush()
             os.fsync(stream.fileno())
         os.link(temporary, path)
-    except FileExistsError:
-        require(
-            path.is_file() and path.read_bytes() == expected,
-            "receipt file conflicts with DB evidence",
-        )
     finally:
         temporary.unlink(missing_ok=True)
+    require(
+        path.is_file()
+        and path.read_bytes() == expected
+        and hashlib.sha256(path.read_bytes()).hexdigest() == digest,
+        "frozen plan bytes failed verification",
+    )
     return digest
 
 
