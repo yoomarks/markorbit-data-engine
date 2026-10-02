@@ -1,0 +1,48 @@
+# GB UKIPO journal 2026/033 PostgreSQL pilot (#855 / #910)
+
+The first database admission is one complete accepted issue, `2026-033`. It is
+not a registry-current import. Every notice remains an immutable journal
+observation with `journal_observation_only=true` and
+`current_state_verified=false`.
+
+The operator accepts only a separately authorized and completed E structured
+stage. It rehashes the E issue JSONL and all stage/raw identities, parses every
+detail row, and verifies every referenced original image against F by byte size
+and SHA-256. It preserves issue/ZIP/member/detail/row lineage, UK versus WO mark
+identity, raw journal title and registration-date text, mark text, goods by
+class, all applicant/representative occurrences, and ordered visual bindings.
+
+The frozen V2 plan binds the exact PostgreSQL cluster system identifier,
+configured endpoint, server address and port, data directory, Docker container
+image and volume identity. Apply rechecks that evidence inside the database
+transaction. It also reuses Storage Topology V2 and the exact accepted #837
+Docker durable-data relocation receipt, checks the current Docker Desktop root
+and durable VHDX on E, and proves the selected PostgreSQL volume is under that
+accepted Docker root. A matching database name by itself is never sufficient.
+
+The issue schema, every row, the exact plan, execution target evidence, receipt
+payload and receipt SHA-256 are committed in one PostgreSQL transaction. Any
+schema, count, ordered-row lineage, visual, currentness, cluster, endpoint or
+topology mismatch rolls back the entire issue. The external receipt is then
+published from the committed payload through a verified temporary file and an
+atomic replace. If publication is interrupted after commit, rerunning the same
+exact plan reconciles the committed state and republishes the receipt without
+recreating schema or reinserting rows; an exact receipt is idempotent, and a
+strict partial prefix can be repaired. Any other receipt conflict fails closed.
+Preflight and plan freeze still require all pilot tables to be absent.
+
+The pilot authorizes no other journal issue, historical-stock mutation,
+ClickHouse write, serving cutover, source cleanup, or current-state assertion.
+
+After the journal E-stage is independently accepted and this PR is merged, the
+pilot plan must be frozen from clean live `origin/main`. Exact Apply authority
+will be:
+
+```text
+GO #855 GB-JOURNAL-PILOT-2026-033 <plan-sha> ISSUE-ONLY-ROLLBACK
+```
+
+The former V1 plan/token is invalid after this implementation change and must
+not be reused. A new plan and exact token are required. An independent
+source-to-database audit is required after Apply. Only then may an issue-wise
+plan for the remaining accepted journals be frozen.
