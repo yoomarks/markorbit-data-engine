@@ -52,19 +52,12 @@ def _configuration_error(message: str) -> HTTPException:
     )
 
 
-def require_integration_auth(
-    authorization: str | None = Header(default=None, alias="Authorization"),
+def _require_configured_bearer(
+    *,
+    authorization: str | None,
+    integration_api_keys: str,
 ) -> None:
-    settings = get_settings()
-    mode = settings.integration_auth_mode.strip().lower()
-    if mode == AUTH_MODE_DISABLED:
-        return
-    if mode != AUTH_MODE_REQUIRED:
-        raise _configuration_error(
-            "INTEGRATION_AUTH_MODE must be either 'disabled' or 'required'."
-        )
-
-    keys = _configured_api_keys(settings.integration_api_keys)
+    keys = _configured_api_keys(integration_api_keys)
     if not keys:
         raise _configuration_error(
             "INTEGRATION_API_KEYS must contain at least one key when authentication is required."
@@ -84,3 +77,37 @@ def require_integration_auth(
             },
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def _validated_auth_mode() -> tuple[Any, str]:
+    settings = get_settings()
+    mode = settings.integration_auth_mode.strip().lower()
+    if mode not in {AUTH_MODE_DISABLED, AUTH_MODE_REQUIRED}:
+        raise _configuration_error(
+            "INTEGRATION_AUTH_MODE must be either 'disabled' or 'required'."
+        )
+    return settings, mode
+
+
+def require_integration_auth(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    settings, mode = _validated_auth_mode()
+    if mode == AUTH_MODE_DISABLED:
+        return
+
+    _require_configured_bearer(
+        authorization=authorization,
+        integration_api_keys=settings.integration_api_keys,
+    )
+
+
+def require_admin_control_auth(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> None:
+    """Require bearer authentication for control-plane writes in every mode."""
+    settings, _mode = _validated_auth_mode()
+    _require_configured_bearer(
+        authorization=authorization,
+        integration_api_keys=settings.integration_api_keys,
+    )

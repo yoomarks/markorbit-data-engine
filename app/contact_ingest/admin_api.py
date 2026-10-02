@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 import threading
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.contact_ingest.country_inference import ensure_country_inference_schema
@@ -23,6 +23,7 @@ from app.contact_ingest.task_queue import (
     scan_contact_incoming,
     start_contact_task_scanner,
 )
+from app.integration_security import require_admin_control_auth
 
 
 router = APIRouter(tags=["contact-admin"])
@@ -115,7 +116,10 @@ def admin_contact_task_detail(task_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/api/admin/contacts/scan")
+@router.post(
+    "/api/admin/contacts/scan",
+    dependencies=[Depends(require_admin_control_auth)],
+)
 def admin_contact_scan():
     # The Control Center expects this endpoint to return the real scan metrics.
     # Automatic periodic discovery already runs in the background; the explicit
@@ -123,7 +127,11 @@ def admin_contact_scan():
     return scan_contact_incoming()
 
 
-@router.post("/api/admin/contacts/tasks/batch-apply", status_code=202)
+@router.post(
+    "/api/admin/contacts/tasks/batch-apply",
+    status_code=202,
+    dependencies=[Depends(require_admin_control_auth)],
+)
 def admin_contact_batch_apply():
     """Queue every currently READY contact task as one sequential background batch."""
     ready_tasks = list_contact_tasks(status="READY", limit=1000)
@@ -151,7 +159,11 @@ def admin_contact_batch_apply():
     }
 
 
-@router.post("/api/admin/contacts/tasks/{task_id}/apply", status_code=202)
+@router.post(
+    "/api/admin/contacts/tasks/{task_id}/apply",
+    status_code=202,
+    dependencies=[Depends(require_admin_control_auth)],
+)
 def admin_contact_apply(task_id: str):
     """Queue one explicit contact import without holding the browser request open."""
     try:

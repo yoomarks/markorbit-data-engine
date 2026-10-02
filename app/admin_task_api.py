@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.admin_domain_tasks import queue_admin_domain_task, request_admin_domain_stop
+from app.integration_security import require_admin_control_auth
 from app.us.target_bulk_task_control import (
     resumable_target_bulk_task,
     resume_target_bulk_task,
@@ -71,7 +72,11 @@ def _queue_us_application_target_task(
     raise ValueError(f"Unsupported US Application action: {action}")
 
 
-@router.post("/{domain}/{action}", status_code=202)
+@router.post(
+    "/{domain}/{action}",
+    status_code=202,
+    dependencies=[Depends(require_admin_control_auth)],
+)
 def admin_domain_task(
     domain: str,
     action: str,
@@ -111,7 +116,11 @@ def us_application_target_bulk_active():
     }
 
 
-@router.post("/US_APPLICATION/BULK/{run_id}/APPROVE", status_code=202)
+@router.post(
+    "/US_APPLICATION/BULK/{run_id}/APPROVE",
+    status_code=202,
+    dependencies=[Depends(require_admin_control_auth)],
+)
 def us_application_target_bulk_approve(
     run_id: str,
     plan_sha256: str = Query(min_length=64, max_length=64),
@@ -122,7 +131,11 @@ def us_application_target_bulk_approve(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/US_APPLICATION/BULK/{run_id}/RESUME", status_code=202)
+@router.post(
+    "/US_APPLICATION/BULK/{run_id}/RESUME",
+    status_code=202,
+    dependencies=[Depends(require_admin_control_auth)],
+)
 def us_application_target_bulk_resume(run_id: str):
     try:
         return resume_target_bulk_task(run_id=run_id)
