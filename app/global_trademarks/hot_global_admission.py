@@ -17,7 +17,7 @@ FULL_INDEX_MAX_RECORDS = FULL_INDEX_PAGE_SIZE * FULL_INDEX_MAX_PAGES
 TABLE = "markorbit_facts.global_trademark_hot_observation"
 SOURCE = "LA_DIPO_WOPUBLISH_TRADEMARKS"
 _SHA = re.compile(r"^[0-9a-f]{64}$")
-_LA_ID = re.compile(r"^LA[0-9]{3,10}$")
+_LA_ID = re.compile(r"^LA(?:M)?[0-9]{3,10}$")
 _ALLOWED_RECORD = frozenset(
     {
         "source_record_id",

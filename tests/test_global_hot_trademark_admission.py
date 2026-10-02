@@ -264,6 +264,13 @@ def test_full_index_contract_accepts_actual_last_page_size_and_1471st_page():
     assert all(item["registration_number"] is None for item in last.records)
 
 
+def test_full_index_contract_accepts_official_madrid_source_identity():
+    value = full_page(page=3)
+    value["records"][0]["source_record_id"] = "LAM1764514"
+    normalized = normalize(value)
+    assert normalized.records[0]["source_record_id"] == "LAM1764514"
+
+
 def test_full_index_gate_blocks_old_uint8_production_schema_without_writes():
     client = HotGlobalClient(full_ready=False)
     with pytest.raises(RuntimeError, match="UInt16"):
