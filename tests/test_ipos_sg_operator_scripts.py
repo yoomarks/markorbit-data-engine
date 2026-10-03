@@ -72,3 +72,17 @@ def test_ipos_sg_run_requires_clean_exact_main_for_production_refresh() -> None:
     assert "git status --porcelain=v1" in source
     assert "Working tree must be clean for the controlled Singapore production refresh." in source
     assert "execution_main_sha = $executionMainSha" in source
+
+
+def test_ipos_sg_run_requires_frozen_plan_and_exact_authority_before_docker() -> None:
+    source = _script("run-ipos-sg.ps1")
+    assert "[string]$PlanPath = ''" in source
+    assert "[string]$PlanSha = ''" in source
+    assert "[string]$AuthorityToken = ''" in source
+    assert "app.snapshot_delta.ipos_sg_refresh_plan" in source
+    assert "--validate-apply" in source
+    assert "Exact frozen SG refresh plan, SHA and authority token are required." in source
+    assert source.index("python @planArgs") < source.index(
+        "docker compose ps --status running -q worker"
+    )
+    assert source.index("python @planArgs") < source.index("$cnSample = Get-CnServingSample")
