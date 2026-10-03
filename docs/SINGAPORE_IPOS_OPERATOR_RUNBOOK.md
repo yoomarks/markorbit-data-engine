@@ -35,9 +35,31 @@ The operator records the DAG version and completed task sequence in success/fail
 
 For a controlled production refresh, run from a clean checkout whose `HEAD` and local `origin/main` both equal the reviewed current main SHA:
 
+Freeze a source/current/archive-bound one-shot plan from clean authoritative main, then supply its
+exact token to the production wrapper. The freeze performs only public metadata/one-row source
+probes and local evidence checks; it does not resolve an export URL or download the CSV.
+
 ```powershell
-.\scripts\run-ipos-sg.ps1 -ExpectedMainSha <40-character-current-main-sha>
+python -m app.snapshot_delta.ipos_sg_refresh_plan `
+  --freeze-plan D:\yoomarks\governed-plans\849\sg-one-shot-refresh-plan-r1.json `
+  --repo . `
+  --state-dir F:\MarkOrbitData\raw\ipos_sg `
+  --expected-main-sha <40-character-current-main-sha> `
+  --weekly-point <accepted-current-weekly-point.json> `
+  --monthly-point <accepted-current-monthly-point.json> `
+  --monthly-restore-receipt <accepted-current-restore-drill.json>
+
+.\scripts\run-ipos-sg.ps1 `
+  -ExpectedMainSha <40-character-current-main-sha> `
+  -PlanPath D:\yoomarks\governed-plans\849\sg-one-shot-refresh-plan-r1.json `
+  -PlanSha <64-character-plan-sha> `
+  -AuthorityToken 'GO #849 SG-CORPUS-REFRESH <64-character-plan-sha> ONE-SHOT-NO-SCHEDULE'
 ```
+
+The wrapper validates the exact plan, token, unchanged accepted current/source/archive evidence and
+clean main before inspecting Docker or selecting the CN regression sample. A changed public source
+or accepted current requires a newly reviewed plan; a successful one-shot run still leaves
+`recurring_schedule_enabled=false`.
 
 The wrapper fails before any SG provider request when `ExpectedMainSha`, `HEAD`, `origin/main`, or working-tree cleanliness do not match. The exact execution SHA is persisted in `acceptance/production_refresh_latest.json`.
 

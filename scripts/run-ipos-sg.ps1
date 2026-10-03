@@ -2,6 +2,9 @@ param(
     [string]$StateDir,
     [switch]$RecoverStaleLock,
     [string]$ExpectedMainSha = '',
+    [string]$PlanPath = '',
+    [string]$PlanSha = '',
+    [string]$AuthorityToken = '',
     [switch]$ContractOnly
 )
 
@@ -253,15 +256,6 @@ if ($ContractOnly) {
 Push-Location $repoRoot
 try {
     $executionMainSha = Assert-ExactMain -ExpectedSha $ExpectedMainSha
-
-    $runningWorker = docker compose ps --status running -q worker
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to inspect Docker Compose worker state."
-    }
-    if ($runningWorker) {
-        throw "A worker container is already running. Finish or stop it before the Singapore IPOS full-corpus run."
-    }
-
     $explicitStateDir = [bool]$StateDir
     $hostState = Resolve-IposSgStateDir -RequestedStateDir $StateDir -RepoRoot $repoRoot
     if (-not (Test-Path -LiteralPath $hostState -PathType Container)) {
@@ -271,6 +265,31 @@ try {
         New-Item -ItemType Directory -Force -Path $hostState | Out-Null
     }
     $hostState = (Resolve-Path -LiteralPath $hostState).Path
+
+    if (-not $PlanPath -or -not $PlanSha -or -not $AuthorityToken) {
+        throw "Exact frozen SG refresh plan, SHA and authority token are required."
+    }
+    $planArgs = @(
+        "-m", "app.snapshot_delta.ipos_sg_refresh_plan",
+        "--validate-apply",
+        "--repo", $repoRoot,
+        "--state-dir", $hostState,
+        "--plan", $PlanPath,
+        "--plan-sha", $PlanSha,
+        "--authority-token", $AuthorityToken
+    )
+    python @planArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Singapore refresh plan or exact authority validation failed before runtime access."
+    }
+
+    $runningWorker = docker compose ps --status running -q worker
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect Docker Compose worker state."
+    }
+    if ($runningWorker) {
+        throw "A worker container is already running. Finish or stop it before the Singapore IPOS full-corpus run."
+    }
 
     $apiPortRaw = Resolve-EnvFileValue -Name 'API_PORT' -RepoRoot $repoRoot
     $apiPort = if ($apiPortRaw) { [int]$apiPortRaw } else { 8080 }
