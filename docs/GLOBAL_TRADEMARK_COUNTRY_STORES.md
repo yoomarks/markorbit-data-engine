@@ -127,7 +127,12 @@ an ingestion source because the official data is richer and newer.
 
 - `UKIPO_OPEN_DATA_2018`: historical thin baseline; ingestion is implemented.
 - `UKIPO_COMPARABLE_RIGHTS`: source is planned but its dedicated loader is not implemented yet.
-- `UKIPO_WEEKLY`: source is available but incremental current-state ingestion is not implemented.
+- `UKIPO_WEEKLY`: issue-atomic recurring ingestion is implemented for newly staged
+  UKIPO journal observations. Each governed run binds the exact F raw ZIP, E
+  structured stage, E-backed PostgreSQL target and accepted issue-set prestate;
+  after commit verification it moves the raw ZIP from F incoming to F archive.
+  Journal data remains `journal_observation_only=true` and must not be exposed as
+  verified current registry state.
 - `UKIPO_DETAIL_PAGE`: future demand-driven enrichment only.
 - TM-Link GB remains reference-only.
 
