@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.global_trademarks import gb_domestic_full_resume as domestic
+from app.global_trademarks import gb_historical_e_stage as e_stage
 from app.global_trademarks import gb_journal_e_stage as stage
 from app.global_trademarks import gb_journal_full as full
 from app.global_trademarks import gb_journal_pilot as pilot
@@ -369,7 +370,7 @@ def apply(plan: dict[str, Any], plan_sha: str) -> dict[str, Any]:
         )
         receipt = existing
     else:
-        domestic.write_json_exclusive(path, receipt)
+        e_stage.write_json_exclusive(path, receipt)
     return {**receipt, "receipt_path": str(path), "receipt_sha256": sha256_file(path)}
 
 
@@ -394,7 +395,7 @@ def main() -> None:
             args.manifest is not None and args.freeze_plan.parent.resolve() == GOV.resolve(),
             "freeze requires manifest and governed #875 destination",
         )
-        domestic.write_json_exclusive(args.freeze_plan, make_plan(args.manifest, args.manifest_sha))
+        e_stage.write_json_exclusive(args.freeze_plan, make_plan(args.manifest, args.manifest_sha))
         print("GB_JOURNAL_WEEKLY_PLAN_SHA256=" + sha256_file(args.freeze_plan), flush=True)
         return
     require(

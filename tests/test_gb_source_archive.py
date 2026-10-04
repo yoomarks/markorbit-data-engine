@@ -10,6 +10,9 @@ from app.global_trademarks import gb_source_archive as archive
 
 
 class GBSourceArchiveTests(unittest.TestCase):
+    def test_operator_uses_existing_exclusive_json_writer(self) -> None:
+        self.assertTrue(callable(archive.e_stage.write_json_exclusive))
+
     def test_inspection_requires_exact_incoming_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

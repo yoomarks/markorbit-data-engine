@@ -20,6 +20,9 @@ class FakeCursor:
 
 
 class GBJournalWeeklyTests(unittest.TestCase):
+    def test_operator_uses_existing_exclusive_json_writer(self) -> None:
+        self.assertTrue(callable(weekly.e_stage.write_json_exclusive))
+
     def test_issue_set_binds_complete_ordered_prefix(self) -> None:
         rows = [
             {
