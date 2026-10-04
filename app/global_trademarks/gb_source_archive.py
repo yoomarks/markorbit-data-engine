@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from app.global_trademarks import gb_domestic_full_resume as domestic
+from app.global_trademarks import gb_historical_e_stage as e_stage
 from app.global_trademarks import gb_postgres_target as target
 from app.global_trademarks import gb_stock_snapshot_v2 as stock
 
@@ -349,7 +350,7 @@ def apply(plan: dict[str, Any], plan_sha: str) -> dict[str, Any]:
     }
     GOV.mkdir(parents=True, exist_ok=True)
     require(not RECEIPT.exists(), "GB raw archive receipt already exists")
-    domestic.write_json_exclusive(RECEIPT, receipt)
+    e_stage.write_json_exclusive(RECEIPT, receipt)
     return {**receipt, "receipt_path": str(RECEIPT), "receipt_sha256": sha256_file(RECEIPT)}
 
 
@@ -375,7 +376,7 @@ def main() -> None:
             "freeze plan must be under governed #875",
         )
         plan = make_plan()
-        domestic.write_json_exclusive(args.freeze_plan, plan)
+        e_stage.write_json_exclusive(args.freeze_plan, plan)
         print("GB_RAW_ARCHIVE_PLAN_SHA256=" + sha256_file(args.freeze_plan), flush=True)
         print("GB_RAW_ARCHIVE_PLAN_STATUS=FROZEN_NO_APPLY", flush=True)
         return
