@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
 from typing import Any, Callable
@@ -442,38 +443,66 @@ def applicant_index_ready_for_epoch(
     )
 
 
-def applicant_name_lookup_ready_for_epoch(
+def _complete_name_lookup_record_for_epoch(
     epoch: USApplicantServingEpoch,
     *,
     connection_factory: Callable[..., Any] = postgres_conn,
-) -> bool:
+    require_latest_run: bool = False,
+) -> dict[str, Any] | None:
     with connection_factory() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT payload, metrics
+                SELECT status, payload, metrics, finished_at
                 FROM control.job_run
-                WHERE job_type = %s AND status = 'SUCCESS'
-                ORDER BY finished_at DESC NULLS LAST, started_at DESC
+                WHERE job_type = %s AND (%s OR status = 'SUCCESS')
+                ORDER BY CASE WHEN %s THEN started_at ELSE finished_at END DESC NULLS LAST,
+                         started_at DESC, run_id DESC
                 LIMIT 1
                 """,
-                (BACKFILL_JOB_TYPE,),
+                (BACKFILL_JOB_TYPE, require_latest_run, require_latest_run),
             )
             row = cur.fetchone()
-    if not row:
-        return False
+    if not row or (require_latest_run and row.get("status") != "SUCCESS"):
+        return None
     payload = dict(row.get("payload") or {})
     metrics = dict(row.get("metrics") or {})
     source_epoch = dict(payload.get("source_epoch") or {})
     completeness = dict(metrics.get("completeness") or {})
     lookup = dict(completeness.get("name_lookup") or {})
-    return (
+    complete = (
         str(source_epoch.get("token") or "") == epoch.token
         and str(metrics.get("source_epoch_token") or "") == epoch.token
         and completeness.get("complete") is True
         and completeness.get("name_lookup_complete") is True
         and lookup.get("complete") is True
     )
+    return dict(row) if complete else None
+
+
+def applicant_name_lookup_ready_for_epoch(
+    epoch: USApplicantServingEpoch,
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> bool:
+    return _complete_name_lookup_record_for_epoch(
+        epoch, connection_factory=connection_factory
+    ) is not None
+
+
+def applicant_name_lookup_observed_at_for_epoch(
+    epoch: USApplicantServingEpoch,
+    *,
+    connection_factory: Callable[..., Any] = postgres_conn,
+) -> datetime | None:
+    """Materialization observation time, not source coverage-through or freshness."""
+    row = _complete_name_lookup_record_for_epoch(
+        epoch, connection_factory=connection_factory, require_latest_run=True
+    )
+    observed_at = row.get("finished_at") if row else None
+    if not isinstance(observed_at, datetime) or observed_at.utcoffset() is None:
+        return None
+    return observed_at
 
 
 def _within_reconciliation_limit(receipt: dict[str, Any], target_field: str) -> bool:

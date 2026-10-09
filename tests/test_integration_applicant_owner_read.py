@@ -1,13 +1,16 @@
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
 import app.integration_api as integration_api
+import app.us.applicant_owner_read as us_owner
 from app.applicant_owner_read import OwnerReadConflict, OwnerReadUnavailable
 from app.integration_g0_contract import g0_contract_descriptor
 from app.integration_owner_read import owner_read_http_error, reject_unknown_query
+from app.us.applicant_candidate_backfill_control import USApplicantServingEpoch
 
 
 def _request(path: str, query: str = "") -> Request:
@@ -20,6 +23,34 @@ def _request(path: str, query: str = "") -> Request:
     })
     request.state.request_id = "hop-request-1"
     return request
+
+
+def test_us_name_route_preserves_real_owner_empty_page(monkeypatch):
+    epoch = USApplicantServingEpoch("accepted-run", "a" * 64, 310, "audit-v1")
+    observed_at = datetime(2026, 9, 6, 1, 2, 3, tzinfo=timezone.utc)
+    client = SimpleNamespace(query=lambda *_args, **_kwargs: SimpleNamespace(
+        column_names=[], result_rows=[],
+    ))
+    monkeypatch.setattr(us_owner, "current_us_applicant_serving_epoch", lambda: epoch)
+    monkeypatch.setattr(us_owner, "applicant_index_ready_for_epoch", lambda _epoch: True)
+    monkeypatch.setattr(us_owner, "applicant_name_lookup_ready_for_epoch", lambda _epoch: True)
+    monkeypatch.setattr(us_owner, "applicant_name_lookup_observed_at_for_epoch", lambda _epoch: observed_at)
+    monkeypatch.setattr(integration_api, "accepted_us_target_read_client", lambda: client)
+    body = integration_api.integration_us_applicants_by_name(
+        _request("/api/v1/us/applicants/by-name", "name=Nobody+Here&requester_workspace_id=ws-1"),
+        name="Nobody Here", requester_workspace_id="ws-1", page_size=50, cursor=None,
+    )
+    assert body["fact_state"] == "observed"
+    assert body["payload"]["results"] == []
+    assert body["payload"]["source_snapshot"] == {
+        "source_version": us_owner._epoch_version(epoch),
+        "observed_at": "2026-09-06T01:02:03Z",
+    }
+    assert body["payload"]["provenance"]["result_count"] == 0
+    assert body["payload"]["query"]["request_context"] == {
+        "requester_workspace_id": "ws-1", "request_id": "hop-request-1",
+    }
+    assert body["legal_conclusion"] is False
 
 
 def test_owner_read_routes_are_get_only_and_g0_declared():

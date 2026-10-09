@@ -15,6 +15,7 @@ from app.applicant_owner_read import (
 from app.applicant_name_lookup import US_APPLICANT_NAME_LOOKUP_TABLE
 from app.us.applicant_candidate_backfill_control import (
     applicant_index_ready_for_epoch, applicant_name_lookup_ready_for_epoch,
+    applicant_name_lookup_observed_at_for_epoch,
     current_us_applicant_serving_epoch,
 )
 from app.us.applicant_candidate_index import (
@@ -262,12 +263,19 @@ def discover_applicants_by_name(
         limit=capacity + 1,
     )
     if not candidate_keys:
-        _assert_same_name_lookup_epoch(before)
         if cursor is not None:
+            _assert_same_name_lookup_epoch(before)
             raise OwnerReadUnavailable(
                 "US Applicant NAME cursor resolved to an empty page under the same serving epoch"
             )
-        return OwnerReadResult("not_found", None)
+        observed_at = applicant_name_lookup_observed_at_for_epoch(before)
+        _assert_same_name_lookup_epoch(before)
+        if observed_at is None:
+            return OwnerReadResult("not_found", None)
+        return OwnerReadResult("observed", page_payload(
+            query=query, snapshot=source_snapshot(source_version, observed_at),
+            results=[], next_cursor=None, engine_version=engine_version(),
+        ))
     page_keys = candidate_keys[:capacity]
     has_extra = len(candidate_keys) > capacity
     rows_by_key = _candidate_rows_for_keys(client, page_keys)
