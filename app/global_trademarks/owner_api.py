@@ -19,6 +19,11 @@ from app.global_trademarks.hot_global_admission import (
 )
 from app.global_trademarks.hot_global_api import admission_router, read_router
 from app.integration_security import AUTH_MODE_REQUIRED, MIN_API_KEY_LENGTH
+from app.reference_data.wipo_mgs_admission import require_wipo_mgs_ready
+from app.reference_data.wipo_mgs_api import (
+    read_router as wipo_mgs_read_router,
+    router as wipo_mgs_admission_router,
+)
 
 
 def _keys(value: str) -> tuple[str, ...]:
@@ -47,6 +52,7 @@ def require_global_hot_owner_ready() -> None:
     client = clickhouse_client()
     try:
         require_hot_global_ready(client)
+        require_wipo_mgs_ready(client)
     finally:
         close = getattr(client, "close", None)
         if callable(close):
@@ -71,6 +77,8 @@ def create_global_hot_owner_app() -> FastAPI:
     )
     owner.include_router(admission_router)
     owner.include_router(read_router)
+    owner.include_router(wipo_mgs_admission_router)
+    owner.include_router(wipo_mgs_read_router)
 
     @owner.get("/api/v1/health/global-hot", include_in_schema=False)
     def global_hot_health() -> dict[str, str]:

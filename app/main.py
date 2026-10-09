@@ -16,7 +16,10 @@ from app.integration_api import router as integration_router
 from app.integration_security import require_admin_control_auth
 from app.cn.citation_relation_admission_api import router as citation_relation_admission_router
 from app.cn.trademark_gazette_admission_api import router as trademark_gazette_admission_router
-from app.global_trademarks.hot_global_api import admission_router as global_hot_admission_router, read_router as global_hot_read_router
+from app.global_trademarks.hot_global_api import (
+    admission_router as global_hot_admission_router,
+    read_router as global_hot_read_router,
+)
 from app.integration_runtime import install_integration_runtime
 from app.integration_transport import install_integration_transport
 from app.us.alert_api import router as us_alert_router
