@@ -16,16 +16,18 @@ SHA-256, and contain one bounded `WIPO_MGS_SNAPSHOT_V1` language/class snapshot.
 the fixed WIPO endpoint and scope, source identity, class/language consistency, localized term
 identity, raw field preservation, jurisdiction status consistency and record uniqueness.
 
-Migration `026_wipo_mgs_reference.sql` creates
-`markorbit_facts.wipo_mgs_term_observation` on `hot_global_only`. Rows are append-only observations;
-language-specific acceptance and rejection sets are never merged across languages. Replay of the
-same source snapshot is idempotent, partial insertion is recoverable by source term ID, and a
-different older snapshot for the same language/class is rejected.
+The guarded `install_wipo_mgs_schema` operator path creates
+`markorbit_facts.wipo_mgs_term_observation` on `hot_global_only` only after the production disk and
+policy pass readiness checks. The DDL is deliberately excluded from the default ClickHouse bootstrap
+directory because development and CI containers do not own the production `hot_global` disk. Rows
+are append-only observations; language-specific acceptance and rejection sets are never merged
+across languages. Replay of the same source snapshot is idempotent, partial insertion is recoverable
+by source term ID, and a different older snapshot for the same language/class is rejected.
 
-The endpoint never installs schema. Apply the ClickHouse migration through the normal operator
-process before enabling a publisher. Knowledge source collection and Data Engine publication must
-run as separate Jobs with separate credentials. No live WIPO collection or production admission is
-authorized merely because this contract exists.
+The admission endpoint never installs schema. Run the guarded schema installer through the managed
+Data Engine operator process before enabling a publisher. Knowledge source collection and Data
+Engine publication must run as separate Jobs with separate credentials. No live WIPO collection or
+production admission is authorized merely because this contract exists.
 
 Authenticated integration consumers read the latest admitted snapshot for each language/class
 scope through:
