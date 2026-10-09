@@ -41,6 +41,7 @@ from app.cn.discovery_preliminary_publication import (
     execute_page,
 )
 from app.component_versions import component_versions
+from app.data_scope_contract import data_scope_contract
 from app.db import clickhouse_client
 from app.discovery_contract import DiscoveryContractError, DiscoveryCursorError
 from app.integration_contract import CONTRACT_VERSION, SERVICE_ROLE, SOURCE_OWNER
@@ -226,6 +227,7 @@ def integration_contract() -> dict[str, Any]:
             resource["path"] for resource in descriptor["query_contract"]["resources"]
         ],
         "foundation_contracts": {
+            "data_use_scope": data_scope_contract(),
             "temporal_relationship": temporal_relationship_contract(),
             "read_query_capability": read_query_capability_contract(),
         },
