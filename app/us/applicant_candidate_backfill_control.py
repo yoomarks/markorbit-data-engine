@@ -447,21 +447,23 @@ def _complete_name_lookup_record_for_epoch(
     epoch: USApplicantServingEpoch,
     *,
     connection_factory: Callable[..., Any] = postgres_conn,
+    require_latest_run: bool = False,
 ) -> dict[str, Any] | None:
     with connection_factory() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT payload, metrics, finished_at
+                SELECT status, payload, metrics, finished_at
                 FROM control.job_run
-                WHERE job_type = %s AND status = 'SUCCESS'
-                ORDER BY finished_at DESC NULLS LAST, started_at DESC
+                WHERE job_type = %s AND (%s OR status = 'SUCCESS')
+                ORDER BY CASE WHEN %s THEN started_at ELSE finished_at END DESC NULLS LAST,
+                         started_at DESC, run_id DESC
                 LIMIT 1
                 """,
-                (BACKFILL_JOB_TYPE,),
+                (BACKFILL_JOB_TYPE, require_latest_run, require_latest_run),
             )
             row = cur.fetchone()
-    if not row:
+    if not row or (require_latest_run and row.get("status") != "SUCCESS"):
         return None
     payload = dict(row.get("payload") or {})
     metrics = dict(row.get("metrics") or {})
@@ -494,7 +496,9 @@ def applicant_name_lookup_observed_at_for_epoch(
     connection_factory: Callable[..., Any] = postgres_conn,
 ) -> datetime | None:
     """Materialization observation time, not source coverage-through or freshness."""
-    row = _complete_name_lookup_record_for_epoch(epoch, connection_factory=connection_factory)
+    row = _complete_name_lookup_record_for_epoch(
+        epoch, connection_factory=connection_factory, require_latest_run=True
+    )
     observed_at = row.get("finished_at") if row else None
     if not isinstance(observed_at, datetime) or observed_at.utcoffset() is None:
         return None

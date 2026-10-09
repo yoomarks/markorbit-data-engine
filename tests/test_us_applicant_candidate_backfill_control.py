@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import contextmanager
+from types import SimpleNamespace
+import json
+import sqlite3
 
 import pytest
 
@@ -180,6 +184,7 @@ def test_name_lookup_readiness_requires_its_nested_complete_receipt():
 
 def _complete_name_lookup_row(epoch):
     return {
+        "status": "SUCCESS",
         "payload": {"source_epoch": epoch.to_dict()},
         "metrics": {
             "source_epoch_token": epoch.token,
@@ -201,10 +206,13 @@ def test_name_lookup_observation_uses_matching_complete_durable_record():
     ) == row["finished_at"]
     sql, params = cursor.executions[0]
     assert "finished_at" in sql and "status = 'SUCCESS'" in sql and "LIMIT 1" in sql
-    assert params == (control.BACKFILL_JOB_TYPE,)
+    assert params == (control.BACKFILL_JOB_TYPE, True, True)
 
 
 @pytest.mark.parametrize("path,value", [
+    ("status", "RUNNING"),
+    ("status", "FAILED"),
+    ("status", None),
     ("payload.source_epoch.token", "wrong-epoch"),
     ("metrics.source_epoch_token", "wrong-epoch"),
     ("metrics.completeness.complete", False),
@@ -225,6 +233,61 @@ def test_name_lookup_observation_rejects_unknown_or_unbound_evidence(path, value
     assert applicant_name_lookup_observed_at_for_epoch(
         epoch, connection_factory=_factory(FakeCursor(one_row=row))
     ) is None
+
+
+def test_name_lookup_observation_orders_latest_run_before_old_success():
+    # Execute the production SELECT; SQLite adapts only driver placeholders/row decoding.
+    epoch = _epoch()
+    receipt = _complete_name_lookup_row(epoch)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("ATTACH DATABASE ':memory:' AS control")
+    conn.execute("CREATE TABLE control.job_run (run_id TEXT, job_type TEXT, status TEXT, "
+                 "payload TEXT, metrics TEXT, started_at TEXT, finished_at TEXT)")
+    for run_id, status, started, finished in [
+        ("old", "SUCCESS", "2026-09-05T00:00:00Z", "2026-09-06T01:02:03Z"),
+        ("new", "RUNNING", "2026-09-07T00:00:00Z", None),
+    ]:
+        conn.execute("INSERT INTO control.job_run VALUES (?, ?, ?, ?, ?, ?, ?)", (
+            run_id, control.BACKFILL_JOB_TYPE, status, json.dumps(receipt["payload"]),
+            json.dumps(receipt["metrics"]), started, finished,
+        ))
+
+    def decoded(row):
+        if row is None:
+            return None
+        result = dict(row)
+        for field in ["payload", "metrics"]:
+            result[field] = json.loads(result[field])
+        if result["finished_at"] is not None:
+            result["finished_at"] = datetime.fromisoformat(result["finished_at"])
+        return result
+
+    @contextmanager
+    def cursor_reader():
+        cursor = conn.cursor()
+        try:
+            yield SimpleNamespace(
+                execute=lambda sql, params: cursor.execute(sql.replace("%s", "?"), params),
+                fetchone=lambda: decoded(cursor.fetchone()),
+            )
+        finally:
+            cursor.close()
+
+    @contextmanager
+    def factory():
+        yield SimpleNamespace(cursor=cursor_reader)
+
+    try:
+        assert applicant_name_lookup_ready_for_epoch(epoch, connection_factory=factory) is True
+        assert applicant_name_lookup_observed_at_for_epoch(epoch, connection_factory=factory) is None
+        conn.execute("UPDATE control.job_run SET status='SUCCESS', finished_at=? WHERE run_id='new'",
+                     ("2026-09-08T01:02:03Z",))
+        assert applicant_name_lookup_observed_at_for_epoch(
+            epoch, connection_factory=factory
+        ) == datetime(2026, 9, 8, 1, 2, 3, tzinfo=timezone.utc)
+    finally:
+        conn.close()
 
 
 def test_name_lookup_observation_requires_a_durable_record():
