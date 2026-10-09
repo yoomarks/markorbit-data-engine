@@ -232,6 +232,7 @@ def _patch_us_epoch(monkeypatch, values=None):
         monkeypatch.setattr(us_owner, "current_us_applicant_serving_epoch", lambda: next(iterator))
     monkeypatch.setattr(us_owner, "applicant_index_ready_for_epoch", lambda _epoch: True)
     monkeypatch.setattr(us_owner, "applicant_name_lookup_ready_for_epoch", lambda _epoch: True)
+    monkeypatch.setattr(us_owner, "applicant_name_lookup_observed_at_for_epoch", lambda _epoch: None)
 
 
 def test_us_same_name_different_address_stays_distinct_review_candidate():
@@ -391,6 +392,22 @@ def test_us_name_discovery_cursor_rejects_epoch_change(monkeypatch):
         )
 
 
+def test_us_name_empty_continuation_is_not_accepted_as_complete(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    rows = [_us_owner_row("90000001", address="1 Main St"), _us_owner_row("90000002", address="2 Main St")]
+    first = us_owner.discover_applicants_by_name(
+        FakeClient(_us_name_discovery_responder(rows)),
+        workspace_id="ws-1", request_id="req-empty-cursor",
+        name="Example Holdings LLC", page_size=1,
+    )
+    assert first.payload["next_cursor"]
+    with pytest.raises(OwnerReadUnavailable, match="cursor resolved to an empty page"):
+        us_owner.discover_applicants_by_name(
+            FakeClient(lambda _sql: []), workspace_id="ws-1", request_id="req-empty-cursor",
+            name="Example Holdings LLC", page_size=1, cursor=first.payload["next_cursor"],
+        )
+
+
 def test_us_name_discovery_not_found_is_explicit(monkeypatch):
     _patch_us_epoch(monkeypatch)
     result = us_owner.discover_applicants_by_name(
@@ -401,6 +418,31 @@ def test_us_name_discovery_not_found_is_explicit(monkeypatch):
     assert result.payload is None
 
 
+def test_us_name_discovery_empty_page_preserves_durable_observation(monkeypatch):
+    _patch_us_epoch(monkeypatch)
+    observed_at = _ts(6)
+    monkeypatch.setattr(
+        us_owner, "applicant_name_lookup_observed_at_for_epoch",
+        lambda epoch: observed_at if epoch == _us_epoch() else None,
+    )
+    result = us_owner.discover_applicants_by_name(
+        FakeClient(lambda _sql: []), workspace_id="ws-1", request_id="req-empty",
+        name="Nobody Here",
+    )
+    assert result.fact_state == "observed"
+    assert result.payload["results"] == []
+    assert result.payload["next_cursor"] is None
+    assert result.payload["source_snapshot"] == {
+        "source_version": us_owner._epoch_version(_us_epoch()),
+        "observed_at": "2026-09-06T01:02:03Z",
+    }
+    assert result.payload["provenance"]["result_count"] == 0
+    assert result.payload["provenance"]["source_snapshot"] == result.payload["source_snapshot"]
+    assert result.payload["query"]["request_context"] == {
+        "requester_workspace_id": "ws-1", "request_id": "req-empty",
+    }
+
+
 def test_us_name_discovery_requires_lookup_readiness(monkeypatch):
     monkeypatch.setattr(us_owner, "current_us_applicant_serving_epoch", _us_epoch)
     monkeypatch.setattr(us_owner, "applicant_index_ready_for_epoch", lambda _epoch: True)
@@ -409,6 +451,21 @@ def test_us_name_discovery_requires_lookup_readiness(monkeypatch):
         us_owner.discover_applicants_by_name(
             FakeClient(lambda _sql: []), workspace_id="ws-1", request_id="req-not-ready",
             name="Example Holdings LLC",
+        )
+
+
+def test_us_name_empty_observation_aborts_when_epoch_changes(monkeypatch):
+    epoch = _us_epoch()
+    changed = USApplicantServingEpoch(
+        bulk_run_id=epoch.bulk_run_id, plan_sha256="b" * 64,
+        checkpoint_sequence=epoch.checkpoint_sequence, final_audit_version=epoch.final_audit_version,
+    )
+    _patch_us_epoch(monkeypatch, [epoch, changed])
+    monkeypatch.setattr(us_owner, "applicant_name_lookup_observed_at_for_epoch", lambda _epoch: _ts(6))
+    with pytest.raises(OwnerReadUnavailable, match="epoch changed"):
+        us_owner.discover_applicants_by_name(
+            FakeClient(lambda _sql: []), workspace_id="ws-1", request_id="req-empty-drift",
+            name="Nobody Here",
         )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 import app.us.applicant_candidate_backfill_control as control
@@ -10,6 +12,7 @@ from app.us.applicant_candidate_backfill_control import (
     _name_lookup_cursor_from_run,
     applicant_index_ready_for_epoch,
     applicant_name_lookup_ready_for_epoch,
+    applicant_name_lookup_observed_at_for_epoch,
     current_us_applicant_serving_epoch,
     start_backfill_run,
 )
@@ -173,6 +176,61 @@ def test_name_lookup_readiness_requires_its_nested_complete_receipt():
     assert (
         applicant_name_lookup_ready_for_epoch(epoch, connection_factory=_factory(complete)) is True
     )
+
+
+def _complete_name_lookup_row(epoch):
+    return {
+        "payload": {"source_epoch": epoch.to_dict()},
+        "metrics": {
+            "source_epoch_token": epoch.token,
+            "completeness": {
+                "complete": True, "name_lookup_complete": True,
+                "name_lookup": {"complete": True},
+            },
+        },
+        "finished_at": datetime(2026, 9, 6, 1, 2, 3, tzinfo=timezone.utc),
+    }
+
+
+def test_name_lookup_observation_uses_matching_complete_durable_record():
+    epoch = _epoch()
+    row = _complete_name_lookup_row(epoch)
+    cursor = FakeCursor(one_row=row)
+    assert applicant_name_lookup_observed_at_for_epoch(
+        epoch, connection_factory=_factory(cursor)
+    ) == row["finished_at"]
+    sql, params = cursor.executions[0]
+    assert "finished_at" in sql and "status = 'SUCCESS'" in sql and "LIMIT 1" in sql
+    assert params == (control.BACKFILL_JOB_TYPE,)
+
+
+@pytest.mark.parametrize("path,value", [
+    ("payload.source_epoch.token", "wrong-epoch"),
+    ("metrics.source_epoch_token", "wrong-epoch"),
+    ("metrics.completeness.complete", False),
+    ("metrics.completeness.name_lookup_complete", False),
+    ("metrics.completeness.name_lookup.complete", False),
+    ("finished_at", None),
+    ("finished_at", "2026-09-06T01:02:03Z"),
+    ("finished_at", datetime(2026, 9, 6, 1, 2, 3)),
+])
+def test_name_lookup_observation_rejects_unknown_or_unbound_evidence(path, value):
+    epoch = _epoch()
+    row = _complete_name_lookup_row(epoch)
+    target = row
+    parts = path.split(".")
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] = value
+    assert applicant_name_lookup_observed_at_for_epoch(
+        epoch, connection_factory=_factory(FakeCursor(one_row=row))
+    ) is None
+
+
+def test_name_lookup_observation_requires_a_durable_record():
+    assert applicant_name_lookup_observed_at_for_epoch(
+        _epoch(), connection_factory=_factory(FakeCursor())
+    ) is None
 
 
 def test_name_lookup_resume_cursor_is_independent_from_candidate_cursor():
