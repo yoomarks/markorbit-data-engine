@@ -245,7 +245,11 @@ def _term(value: Any, nice_class: int, language: str, request_language: str) -> 
         raise WipoMgsAdmissionError("rawPayload identity/class does not match the normalized term")
     if raw.get("txt") != value.get("termText"):
         raise WipoMgsAdmissionError("rawPayload text does not match the normalized term")
-    if raw.get("lng") not in (language, request_language):
+    raw_language = raw.get("lng")
+    if not isinstance(raw_language, str) or raw_language.casefold() not in {
+        language.casefold(),
+        request_language.casefold(),
+    }:
         raise WipoMgsAdmissionError("rawPayload language does not match the snapshot scope")
     for normalized_name, raw_name in (
         ("seq", "seq"),

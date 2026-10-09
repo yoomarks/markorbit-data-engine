@@ -37,6 +37,7 @@ def configure(monkeypatch, settings: AuthSettings | None = None):
     monkeypatch.setattr(integration_security, "get_settings", lambda: values)
     monkeypatch.setattr(owner_api, "clickhouse_client", lambda: client)
     monkeypatch.setattr(owner_api, "require_hot_global_ready", lambda value: checks.append(value))
+    monkeypatch.setattr(owner_api, "require_wipo_mgs_ready", lambda value: checks.append(value))
     return client, checks
 
 
@@ -101,8 +102,11 @@ def test_owner_entrypoint_is_only_existing_global_routes_not_cn_runtime():
     paths = {route.path for route in owner_api.app.routes}
     assert paths == {
         "/api/admin/v2/fact-admissions/global/observations",
+        "/api/admin/v2/fact-admissions/reference/wipo-mgs/snapshots",
         "/api/v1/global/trademarks/{jurisdiction}/{source_record_id}",
         "/api/v1/health/global-hot",
+        "/api/v1/reference/wipo-mgs/terms",
+        "/api/v1/reference/wipo-mgs/terms/{source_term_id}",
     }
     source = Path("app/global_trademarks/owner_api.py").read_text(encoding="utf-8")
     assert "main_core" not in source and "from app.main" not in source
@@ -146,7 +150,7 @@ def test_owner_uses_exact_global_routers_and_independent_bearer_scopes(monkeypat
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            assert checks == [scoped]
+            assert checks == [scoped, scoped]
             status, body = await request(app, "GET", "/api/v1/health/global-hot")
             assert status == 200
             assert body == {
@@ -155,7 +159,7 @@ def test_owner_uses_exact_global_routers_and_independent_bearer_scopes(monkeypat
                 "contract_version": CONTRACT_VERSION,
                 "storage_placement": "hot_global",
             }
-            assert len(checks) == 2
+            assert len(checks) == 4
             write = "/api/admin/v2/fact-admissions/global/observations"
             read = "/api/v1/global/trademarks/ZZ/LA55159"
             assert (await request(app, "POST", write, payload={}))[0] == 401
@@ -187,7 +191,7 @@ def test_health_fails_closed_if_hot_global_becomes_unavailable_after_startup(mon
 
     async def scenario():
         async with app.router.lifespan_context(app):
-            assert checks == [scoped]
+            assert checks == [scoped, scoped]
 
             def not_ready(_client):
                 raise RuntimeError("private operational detail should not reach health callers")

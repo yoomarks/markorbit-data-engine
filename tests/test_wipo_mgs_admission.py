@@ -32,7 +32,7 @@ def term(*, identity: str, language: str, text: str, accepted=(), rejected=()):
     raw = {
         "id": int(identity),
         "cls": 1,
-        "lng": language,
+        "lng": language.upper(),
         "seq": 15,
         "src": "NICE",
         "txt": text,
@@ -222,8 +222,8 @@ def test_observed_at_is_timezone_aware_and_table_partition_is_bounded():
     assert "PARTITION BY nice_class" in DDL
 
 
-def test_main_registers_the_versioned_mgs_fact_admission_route():
-    from app.main import app
+def test_global_hot_owner_registers_the_versioned_mgs_fact_admission_route():
+    from app.global_trademarks.owner_api import app
 
     route = next(
         item

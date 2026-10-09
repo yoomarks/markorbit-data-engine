@@ -5,8 +5,9 @@ Issue: #847. Consumer: Knowledge #903. Existing DE fact-admission owner: #841.
 ## Boundary
 
 The dedicated ASGI entrypoint is `app.global_trademarks.owner_api:app`. It
-reuses the existing Global Hot fact-admission and read routers and the same
-ClickHouse truth table. It **does not** add an acquisition worker, a second
+reuses the existing Global Hot fact-admission and read routers and also serves
+the WIPO MGS reference-data admission/read contract on the same governed storage
+owner. It **does not** add an acquisition worker, a second
 schema, a second currentness model, or a privileged backdoor into
 `app.main_core`. Its health endpoint is `GET /api/v1/health/global-hot`.
 It does not expose CN, US, or other Data Engine routes and does not mutate
@@ -30,8 +31,9 @@ must remain on their accepted source until independently cut over.
    connection is not evidence of target residency.
 4. Confirm `hot_global` exists with at least 20% free space,
    `hot_global_only` resolves exclusively to `hot_global`, and the
-   existing `markorbit_facts.global_trademark_hot_observation` table uses
-   that policy. The app enforces these gates before binding.
+   existing `markorbit_facts.global_trademark_hot_observation` and
+   `markorbit_facts.wipo_mgs_term_observation` tables use that policy. The app
+   enforces these gates before binding.
 5. Only after the operator separately authorizes this service deployment,
    start the existing module on the approved internal/loopback interface:
 

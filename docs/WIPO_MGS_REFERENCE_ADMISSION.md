@@ -10,6 +10,10 @@ POST /api/admin/v2/fact-admissions/reference/wipo-mgs/snapshots
 Authorization: Bearer <fact-admission key>
 ```
 
+Production exposes this route from the dedicated `app.global_trademarks.owner_api:app` runtime,
+which owns the accepted `hot_global` target. It is intentionally not attached to the shared
+CN/US application startup path.
+
 It accepts `WIPO_MGS_STRUCTURED_ADMISSION_V1` only. The payload must identify
 `MARKORBIT_KNOWLEDGE` as source owner, carry the exact Knowledge raw-evidence canonical URI and
 SHA-256, and contain one bounded `WIPO_MGS_SNAPSHOT_V1` language/class snapshot. The server validates
