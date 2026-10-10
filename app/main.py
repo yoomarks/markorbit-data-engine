@@ -28,6 +28,7 @@ from app.us_assignment.api import router as us_assignment_router
 from app.us_assignment.audit_api import router as us_assignment_audit_router
 from app.us_ttab.api import router as us_ttab_router
 from app.us_ttab.audit_api import router as us_ttab_audit_router
+from app.tmclass.api import router as tmclass_admission_router
 
 
 _LEGACY_CONTROL_WRITE_PATHS = frozenset(
@@ -69,6 +70,7 @@ _core.app.include_router(citation_relation_admission_router)
 _core.app.include_router(trademark_gazette_admission_router)
 _core.app.include_router(global_hot_admission_router)
 _core.app.include_router(global_hot_read_router)
+_core.app.include_router(tmclass_admission_router)
 _core.app.include_router(integration_router)
 _core.app.include_router(us_alert_router)
 _core.app.include_router(us_case_360_router)
