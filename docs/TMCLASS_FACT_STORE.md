@@ -26,3 +26,17 @@ python -m app.tmclass.import_cli /evidence/tmclass-source-evidence-bundle.json
 The importer validates the bundle identity and count before admitting its individual evidence
 packages. Replays are idempotent by Knowledge `rawArtifactId`; changed source bytes must arrive as a
 new immutable RawArtifact version.
+
+For a resumable live-corpus backfill, watch the Knowledge bundle directory and write hash-bound
+receipts outside it:
+
+```bash
+python -m app.tmclass.import_corpus_cli /evidence/tmclass-bundles \
+  --receipt-root /data/control/tmclass-import-receipts \
+  --capture-complete /evidence/tmclass-live/COMPLETE.json \
+  --continuous
+```
+
+Only a receipt whose bundle SHA-256 still matches is skipped. A changed bundle behind an existing
+receipt fails closed; an interrupted admission can be replayed because individual Knowledge
+evidence identities are idempotent.
